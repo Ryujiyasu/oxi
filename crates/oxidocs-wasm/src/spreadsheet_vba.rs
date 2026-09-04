@@ -18,7 +18,7 @@ use oxivba_core::{
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CellAddress {
     sheet: usize,
     row: u32,
@@ -286,6 +286,9 @@ enum HostObject {
     Application,
     WorksheetFunction,
     DebugConsole,
+    /// `ActiveWindow`: the one view a browser host has, whose only state
+    /// worth keeping is where its panes are frozen.
+    Window,
 }
 
 /// What `Range.Copy` set aside, as it stood when it was copied. Excel keeps a
@@ -347,6 +350,15 @@ struct WorkbookHost<'a> {
     enable_events: bool,
     display_alerts: bool,
     calculation: i64,
+    /// Which sheets are protected, and with what password (`""` for none).
+    /// Runtime state rather than part of the workbook: the file format's own
+    /// protection is not read in, so this is what a MACRO has done, which is
+    /// what a macro then runs into.
+    protected: Vec<Option<String>>,
+    /// The cells a macro has UNLOCKED. Every cell starts locked -- asked of
+    /// Excel, `Range("A1").Locked` is True on a fresh sheet -- so it is the
+    /// exceptions that are kept.
+    unlocked: std::collections::HashSet<CellAddress>,
     /// What a macro has written across the bottom of the window, while it is
     /// the macro's to write. Nothing here means the bar is Excel's own again,
     /// which is what it answers `False` to say.
@@ -404,6 +416,8 @@ impl<'a> WorkbookHost<'a> {
                 column: 0,
             },
             screen_updating: true,
+            protected: Vec::new(),
+            unlocked: std::collections::HashSet::new(),
             enable_events: true,
             display_alerts: true,
             calculation: -4105,
@@ -445,6 +459,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::DefinedName(_) => "Name",
                 HostObject::Workbook => "Workbook",
                 HostObject::Application => "Application",
+                HostObject::Window => "Window",
                 HostObject::WorksheetFunction => "WorksheetFunction",
                 HostObject::DebugConsole => "Debug",
             }
@@ -1186,6 +1201,13 @@ impl<'a> WorkbookHost<'a> {
             held.rsplit_once('!')
                 .is_some_and(|(_, leaf)| leaf.eq_ignore_ascii_case(name))
         })
+    }
+
+    fn is_window(&self, object: &ObjectRef) -> bool {
+        matches!(
+            self.objects.get(object.handle as usize),
+            Some(HostObject::Window)
+        )
     }
 
     fn is_application(&self, object: &ObjectRef) -> bool {
@@ -3656,7 +3678,24 @@ impl<'a> WorkbookHost<'a> {
         })))
     }
 
+    /// Whether a sheet is protected against writing this cell.
+    ///
+    /// Asked of Excel, after `ActiveSheet.Protect "pw"` writing a locked cell
+    /// is error 1004 and the cell keeps its value, writing an UNLOCKED cell
+    /// goes through, and reading either is fine.
+    fn write_is_protected(&self, address: CellAddress) -> bool {
+        self.protected
+            .get(address.sheet)
+            .is_some_and(Option::is_some)
+            && !self.unlocked.contains(&address)
+    }
+
     fn set_cell_value(&mut self, address: CellAddress, value: CellValue) -> Result<(), String> {
+        if self.write_is_protected(address) {
+            return Err(
+                "the cell is locked and the sheet is protected; unprotect it first".to_string(),
+            );
+        }
         self.wrote = true;
         let sheet = self
             .workbook
@@ -5794,6 +5833,37 @@ impl Host for WorkbookHost<'_> {
                     self.recalculate();
                     return Ok(Some(Value::Boolean(true)));
                 }
+                // `Protect [password]` and `Unprotect [password]`. Measured:
+                // a wrong password on Unprotect is error 1004 and leaves the
+                // sheet protected; no password either way is fine; and
+                // `r = ActiveSheet.Protect("pw")` answers Empty, not the True
+                // the doing-members give.
+                if name.eq_ignore_ascii_case("protect") {
+                    let password = match args.first() {
+                        None | Some(Value::Missing) => String::new(),
+                        Some(value) => shown_text(value, None),
+                    };
+                    if self.protected.len() <= sheet {
+                        self.protected.resize(sheet + 1, None);
+                    }
+                    self.protected[sheet] = Some(password);
+                    return Ok(Some(Value::Empty));
+                }
+                if name.eq_ignore_ascii_case("unprotect") {
+                    let offered = match args.first() {
+                        None | Some(Value::Missing) => String::new(),
+                        Some(value) => shown_text(value, None),
+                    };
+                    if let Some(Some(held)) = self.protected.get(sheet) {
+                        if *held != offered {
+                            return Err(
+                                "the password supplied is not correct for this sheet".to_string(),
+                            );
+                        }
+                        self.protected[sheet] = None;
+                    }
+                    return Ok(Some(Value::Empty));
+                }
                 // Selecting a sheet is activating it, and it answers True:
                 // asked of Excel, `r = ActiveSheet.Select` is a Boolean.
                 if name.eq_ignore_ascii_case("select") {
@@ -6261,6 +6331,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("activesheet") {
             return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
         }
+        if name.eq_ignore_ascii_case("activewindow") {
+            return Ok(Some(self.object(HostObject::Window)));
+        }
         if name.eq_ignore_ascii_case("thisworkbook") || name.eq_ignore_ascii_case("activeworkbook")
         {
             return Ok(Some(self.object(HostObject::Workbook)));
@@ -6603,6 +6676,35 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(None);
         }
+        if self.is_window(receiver) {
+            let sheet = &self.workbook.sheets[self.active_sheet];
+            // Measured: a fresh window answers False / 0 / 0; after selecting
+            // B3 and freezing, SplitRow is 2 and SplitColumn 1 -- the rows
+            // above and the columns left of the active cell; after selecting
+            // row 2, 1 and 0.
+            if name.eq_ignore_ascii_case("freezepanes") {
+                return Ok(Some(Value::Boolean(
+                    sheet.frozen_rows > 0 || sheet.frozen_cols > 0,
+                )));
+            }
+            if name.eq_ignore_ascii_case("splitrow") {
+                return Ok(Some(Value::Integer(i64::from(sheet.frozen_rows))));
+            }
+            if name.eq_ignore_ascii_case("splitcolumn") {
+                return Ok(Some(Value::Integer(i64::from(sheet.frozen_cols))));
+            }
+            if name.eq_ignore_ascii_case("activesheet") {
+                return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
+            }
+            return Ok(None);
+        }
+        if let Some(sheet) = self.worksheet(receiver) {
+            if name.eq_ignore_ascii_case("protectcontents") {
+                return Ok(Some(Value::Boolean(
+                    self.protected.get(sheet).is_some_and(Option::is_some),
+                )));
+            }
+        }
         if self.is_application(receiver) {
             if name.eq_ignore_ascii_case("worksheetfunction") {
                 return Ok(Some(self.object(HostObject::WorksheetFunction)));
@@ -6917,6 +7019,20 @@ impl Host for WorkbookHost<'_> {
                     }))
                 });
         }
+        // Every cell starts locked, and a range whose cells disagree answers
+        // Null, the way Bold does.
+        if name.eq_ignore_ascii_case("locked") {
+            let mut seen: Option<bool> = None;
+            for address in range.addresses() {
+                let locked = !self.unlocked.contains(&address);
+                match seen {
+                    None => seen = Some(locked),
+                    Some(held) if held == locked => {}
+                    Some(_) => return Ok(Some(Value::Null)),
+                }
+            }
+            return Ok(Some(seen.map(Value::Boolean).unwrap_or(Value::Boolean(true))));
+        }
         if name.eq_ignore_ascii_case("wraptext") {
             // A range whose cells disagree answers Null, as Bold and
             // NumberFormat already do — measured on a pair where only one of
@@ -7088,6 +7204,31 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if self.is_window(receiver) && name.eq_ignore_ascii_case("freezepanes") {
+            let Some(freeze) = style_face_boolean(&value, "Window.FreezePanes")? else {
+                return Ok(true);
+            };
+            let sheet = self.active_sheet;
+            let at = self.active_cell;
+            let held = &mut self.workbook.sheets[sheet];
+            if !freeze {
+                held.frozen_rows = 0;
+                held.frozen_cols = 0;
+                return Ok(true);
+            }
+            // The panes freeze above and to the left of the active cell: B3
+            // gives two rows and one column, and a whole selected row gives
+            // its rows and no columns. From A1 Excel instead splits the
+            // visible window down the middle -- 21 rows and 13 columns on the
+            // machine measured -- which is the window's size and not the
+            // sheet's, and a browser host has no window to halve. Nothing is
+            // frozen for A1 here, and that is a known limit.
+            let rows = at.row.saturating_sub(1);
+            let cols = at.column;
+            held.frozen_rows = rows;
+            held.frozen_cols = cols;
+            return Ok(true);
+        }
         match self.objects.get(receiver.handle as usize) {
             Some(HostObject::Blocks(handle)) => {
                 let handle = *handle;
@@ -7407,6 +7548,19 @@ impl Host for WorkbookHost<'_> {
             self.set_range_style(range, |_, style| {
                 style.vertical_align = Some(named.to_string());
             })?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("locked") {
+            let Some(locked) = style_face_boolean(&value, "Range.Locked")? else {
+                return Ok(true);
+            };
+            for address in range.addresses() {
+                if locked {
+                    self.unlocked.remove(&address);
+                } else {
+                    self.unlocked.insert(address);
+                }
+            }
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("wraptext") {
@@ -10829,6 +10983,92 @@ mod tests {
         }
         // A real date field beside one is still a date.
         assert_eq!(shown_as(Some("m/d/yyyy h:mm AM/PM")), ShownAs::Moment);
+    }
+
+    /// A protected sheet refuses a locked cell and takes an unlocked one.
+    ///
+    /// Measured against Excel: every cell starts Locked; after `Protect "pw"`
+    /// writing a locked cell is 1004 and the value stays, writing an unlocked
+    /// one goes through, reading either is fine; `Unprotect "wrong"` is 1004
+    /// and leaves the sheet protected; and no password either way is fine.
+    /// `r = Protect("pw")` answers Empty, unlike the members that answer True.
+    ///
+    /// Held as runtime state rather than in the workbook, because the file's
+    /// own protection is not read in: this is what a macro DID, which is what
+    /// a macro then runs into.
+    #[test]
+    fn a_protected_sheet_refuses_a_locked_cell() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               On Error Resume Next
+               Range(\"A1\").Value = 1
+               out = Range(\"A1\").Locked & \"|\" & ActiveSheet.ProtectContents & \"|\"
+               Range(\"B1\").Locked = False
+               out = out & TypeName(Range(\"A1:B1\").Locked) & \"|\"
+               ActiveSheet.Protect \"pw\"
+               Range(\"A1\").Value = 99
+               out = out & Err.Number & \"/\" & CStr(Range(\"A1\").Value) & \"|\"
+               Err.Clear
+               Range(\"B1\").Value = 77
+               out = out & Err.Number & \"/\" & CStr(Range(\"B1\").Value) & \"|\"
+               Err.Clear
+               ActiveSheet.Unprotect \"wrong\"
+               out = out & Err.Number & \"/\" & ActiveSheet.ProtectContents & \"|\"
+               Err.Clear
+               ActiveSheet.Unprotect \"pw\"
+               Range(\"A1\").Value = 5
+               out = out & Err.Number & \"/\" & ActiveSheet.ProtectContents
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// Panes freeze above and to the left of the active cell.
+    ///
+    /// Measured against Excel: a fresh window is False / 0 / 0; after
+    /// selecting B3 and freezing, SplitRow is 2 and SplitColumn 1; after
+    /// selecting row 2, 1 and 0; and unfreezing puts both back to 0.
+    ///
+    /// From A1 Excel splits the visible window down the middle, which is the
+    /// window's size and not the sheet's; a browser host has no window to
+    /// halve and freezes nothing there. A known limit.
+    #[test]
+    fn panes_freeze_above_and_left_of_the_active_cell() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               out = ActiveWindow.FreezePanes & \"/\" & ActiveWindow.SplitRow & \"/\" &                      ActiveWindow.SplitColumn & \"|\"
+               Range(\"B3\").Select
+               ActiveWindow.FreezePanes = True
+               out = out & ActiveWindow.FreezePanes & \"/\" & ActiveWindow.SplitRow & \"/\" &                      ActiveWindow.SplitColumn & \"|\"
+               ActiveWindow.FreezePanes = False
+               out = out & ActiveWindow.SplitRow & \"|\"
+               Rows(2).Select
+               ActiveWindow.FreezePanes = True
+               out = out & ActiveWindow.SplitRow & \"/\" & ActiveWindow.SplitColumn
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(answer, Value::String("False/0/0|True/2/1|0|1/0".to_string()));
     }
 
     /// `Application.Goto` brings a range to the front.
