@@ -1382,6 +1382,13 @@ fn picture_fill_box(sh: &Shape) -> (f32, f32, f32, f32) {
     (sh.x + x0, sh.y + y0, x1 - x0, y1 - y0)
 }
 
+/// S-JUSTSTYLE: a justified line is drawn in its paragraph's weight and slant,
+/// with the synthesised-bold pen, unless this is set -- which restores the
+/// older behaviour of drawing every justified line regular and upright.
+fn juststyle_on() -> bool {
+    std::env::var("OXI_JUSTSTYLE_DISABLE").is_err()
+}
+
 /// A justified line keeps its own indent unless this is set.
 fn justind_on() -> bool {
     std::env::var("OXI_JUSTIND_DISABLE").is_err()
@@ -4511,6 +4518,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
     let scale = render_dpi as f64 / 72.0;
 
     for (si, slide) in pres.slides.iter().enumerate() {
+        // ★The debug log's OUTER coordinate. Every slide is drawn into its own
+        // canvas, so a y in the log names a band in some slide and not in any
+        // particular one -- which is how an hour went into reading another
+        // slide's body text as proof that this slide's pen was working.
+        if draw_debug().is_some() {
+            eprintln!("=== slide {} ===", si + 1);
+        }
         // A fractional page is ROUNDED, not ceiled, and that is the better
         // of the two (2026-08-27, measured then reverted).
         //
@@ -5153,6 +5167,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     } else {
                                         left_x
                                     };
+                                    // A justified line with runs of MIXED style
+                                    // still takes the paragraph's, because the
+                                    // stretch is computed for the line as a
+                                    // whole; what it must not do is take no
+                                    // style at all.
                                     draw_text_justify(
                                         mem_dc,
                                         jx,
@@ -5162,6 +5181,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         fs,
                                         &family,
                                         color.as_deref(),
+                                        para_weight,
+                                        para_italic,
+                                        para_ul,
                                         scale,
                                     );
                                 } else {
@@ -17216,7 +17238,24 @@ fn draw_color_run(
 
     // Ordinary characters in the same line keep the base font, and its own
     // ascent -- the two faces do not share one.
-    let base = create_font_for_wiu(family, font_size, weight, italic, underline, scale);
+    // S-FAUXPEN on this path too, by the rule `draw_text_baseline_wiu` states:
+    // draw the REGULAR face so GDI adds no emboldening of its own, and sweep it
+    // over a disc whose diameter is PowerPoint's `size/35` pen. The sweep is
+    // for GLYPHS only -- a COLR emoji keeps its single pass, because
+    // PowerPoint thickens a bold run's text and leaves the colour bitmap
+    // alone.
+    let faux_pen_r = if !fauxpen_off() && weight >= 700 && needs_faux_bold(family, italic) {
+        FAUX_BOLD_PEN_EM * font_size * scale as f32 / 2.0
+    } else {
+        0.0
+    };
+    let base_weight = if faux_pen_r > 0.0 { 400 } else { weight };
+    let pen_offsets = if faux_pen_r > 0.0 {
+        dilation_offsets(faux_pen_r)
+    } else {
+        vec![(0, 0)]
+    };
+    let base = create_font_for_wiu(family, font_size, base_weight, italic, underline, scale);
     let base_y = if base.is_invalid() {
         emoji_y
     } else {
@@ -17303,16 +17342,18 @@ fn draw_color_run(
                 let wch = ch.encode_utf16(&mut buf);
                 unsafe {
                     let old = SelectObject(dc, base);
-                    let _ = ExtTextOutW(
-                        dc,
-                        pen,
-                        base_y,
-                        ETO_OPTIONS(0),
-                        None,
-                        PCWSTR(wch.as_ptr()),
-                        wch.len() as u32,
-                        None,
-                    );
+                    for (ox, oy) in &pen_offsets {
+                        let _ = ExtTextOutW(
+                            dc,
+                            pen + ox,
+                            base_y + oy,
+                            ETO_OPTIONS(0),
+                            None,
+                            PCWSTR(wch.as_ptr()),
+                            wch.len() as u32,
+                            None,
+                        );
+                    }
                     SelectObject(dc, old);
                 }
             }
@@ -17372,6 +17413,12 @@ fn draw_text_baseline_wiu(
         0.0
     };
     let draw_weight = if faux_pen_r > 0.0 { 400 } else { weight };
+    if draw_debug().is_some_and(|w| text.contains(w.as_str())) {
+        eprintln!(
+            "     faux_pen_r={faux_pen_r:.3} draw_weight={draw_weight} needs_faux={} scale={scale}",
+            needs_faux_bold(family, italic),
+        );
+    }
     let font = create_font_for_wiu(family, font_size, draw_weight, italic, underline, scale);
     if let Some(want) = draw_debug() {
         if text.contains(want.as_str()) {
@@ -17494,6 +17541,17 @@ fn draw_text_baseline_wiu(
     } else {
         vec![(0, 0)]
     };
+    // What this path actually painted, and with how many passes. `OXI_DRAW_DEBUG`
+    // takes a substring, or `*` for everything -- and the `*` form is the one
+    // that matters, because the question it answers is "is this the code that
+    // drew what I am looking at", which a filtered log cannot answer.
+    if draw_debug().is_some_and(|w| w == "*" || text.contains(w.as_str())) {
+        eprintln!(
+            "     WIU y={y} off={} {:?}",
+            offsets.len(),
+            &text.chars().take(18).collect::<String>()
+        );
+    }
     if let Some(dx) = dx {
         unsafe {
             for (ox, oy) in &offsets {
@@ -17544,6 +17602,7 @@ fn draw_text_baseline(
 /// justify stretches the gaps between words; the final line of a paragraph is
 /// left-aligned (handled by the caller via the last-line flag).
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn draw_text_justify(
     dc: windows::Win32::Graphics::Gdi::HDC,
     left_x: i32,
@@ -17553,12 +17612,35 @@ fn draw_text_justify(
     font_size: f32,
     family: &str,
     color: Option<&str>,
+    weight: i32,
+    italic: bool,
+    underline: bool,
     scale: f64,
 ) {
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
     use windows::core::PCWSTR;
-    let font = create_font_for(family, font_size, scale);
+    // S-FAUXPEN here as well: when the face a bold request resolves to is not
+    // itself bold, PowerPoint draws the REGULAR outline and strokes it with a
+    // `size/35` pen, so the face is asked for at 400 and the sweep below adds
+    // the whole pen. A justified line used to get neither.
+    let styled = juststyle_on();
+    let weight = if styled { weight } else { 400 };
+    let italic = styled && italic;
+    let underline = styled && underline;
+    let faux_pen_r = if styled && !fauxpen_off() && weight >= 700 && needs_faux_bold(family, italic)
+    {
+        FAUX_BOLD_PEN_EM * font_size * scale as f32 / 2.0
+    } else {
+        0.0
+    };
+    let draw_weight = if faux_pen_r > 0.0 { 400 } else { weight };
+    let offsets = if faux_pen_r > 0.0 {
+        dilation_offsets(faux_pen_r)
+    } else {
+        vec![(0, 0)]
+    };
+    let font = create_font_for_wiu(family, font_size, draw_weight, italic, underline, scale);
     if font.is_invalid() {
         return;
     }
@@ -17577,7 +17659,9 @@ fn draw_text_justify(
     if words.len() <= 1 {
         let wtext: Vec<u16> = text.encode_utf16().collect();
         unsafe {
-            let _ = TextOutW(dc, left_x, y, &wtext);
+            for (ox, oy) in &offsets {
+                let _ = TextOutW(dc, left_x + ox, y + oy, &wtext);
+            }
         }
         unsafe {
             SelectObject(dc, old_font);
@@ -17616,25 +17700,31 @@ fn draw_text_justify(
         if hmtx {
             if let Some(dx) = font_adv::line_hmtx_dx_px(word, font_size, family, scale, 0.0) {
                 unsafe {
-                    let _ = ExtTextOutW(
-                        dc,
-                        x,
-                        y,
-                        ETO_OPTIONS(0),
-                        None,
-                        PCWSTR(wtext.as_ptr()),
-                        wtext.len() as u32,
-                        Some(dx.as_ptr()),
-                    );
+                    for (ox, oy) in &offsets {
+                        let _ = ExtTextOutW(
+                            dc,
+                            x + ox,
+                            y + oy,
+                            ETO_OPTIONS(0),
+                            None,
+                            PCWSTR(wtext.as_ptr()),
+                            wtext.len() as u32,
+                            Some(dx.as_ptr()),
+                        );
+                    }
                 }
             } else {
                 unsafe {
-                    let _ = TextOutW(dc, x, y, &wtext);
+                    for (ox, oy) in &offsets {
+                        let _ = TextOutW(dc, x + ox, y + oy, &wtext);
+                    }
                 }
             }
         } else {
             unsafe {
-                let _ = TextOutW(dc, x, y, &wtext);
+                for (ox, oy) in &offsets {
+                    let _ = TextOutW(dc, x + ox, y + oy, &wtext);
+                }
             }
         }
         x += word_ws[i];

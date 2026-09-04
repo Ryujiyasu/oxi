@@ -424,6 +424,17 @@ function paintLines(entry, k) {
 // and these are those four.
 const CHART_COLORS = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
 
+// What the FILE says this bar is, before what the theme would cycle. A deck
+// picks one bar out by colour -- the point the author is arguing for -- so a
+// palette cycle draws the opposite of the intent.
+function pointColor(sr, ci, si, multi) {
+  for (const pc of (sr.point_colors || [])) {
+    if (pc && pc[0] === ci && pc[1]) return '#' + pc[1];
+  }
+  if (sr.color) return '#' + sr.color;
+  return CHART_COLORS[(multi ? si : ci) % CHART_COLORS.length];
+}
+
 // A bar chart, from the numbers the parser already puts in the IR.
 //
 // The demo drew nothing at all where a chart sat -- half of the pitch deck's
@@ -452,12 +463,18 @@ function paintChart(shape, chart, k) {
   let top = 0;
   for (const sr of series) for (const v of sr.values) top = Math.max(top, v || 0);
   if (top <= 0) return false;
+  // The axis the FILE pins, when it pins one -- a deck comparing near-equal
+  // numbers does exactly that, and drawing it from zero instead shows the
+  // reader a different comparison than the author composed. Otherwise round
+  // the top up to 1, 2, 2.5 or 5 times a power of ten.
   const steps = 5;
-  // Round the top up to 1, 2, 2.5 or 5 times a power of ten -- the steps a
-  // reader expects on an axis, and what PowerPoint puts on this deck's chart
-  // (four SSIM values under 0.85, drawn against 0 to 1).
+  const pinnedLo = (chart.val_min === null || chart.val_min === undefined) ? null : chart.val_min;
+  const pinnedHi = (chart.val_max === null || chart.val_max === undefined) ? null : chart.val_max;
   const mag = Math.pow(10, Math.floor(Math.log10(top)));
-  const nice = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= top) || 10 * mag;
+  const autoHi = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= top) || 10 * mag;
+  const lo = pinnedLo === null ? 0 : pinnedLo;
+  const nice = (pinnedHi === null ? autoHi : pinnedHi) - lo;
+  if (!(nice > 0)) return false;
   const decimals = Math.max(0, Math.min(3, Math.ceil(-Math.log10(nice / steps))));
 
   ctx.save();
@@ -472,8 +489,8 @@ function paintChart(shape, chart, k) {
   ctx.font = `${10 * k}px system-ui, sans-serif`;
   ctx.textAlign = 'right';
   for (let i = 0; i <= steps; i++) {
-    const v = nice * i / steps;
-    const gy = plot.y + plot.h - plot.h * (v / nice);
+    const v = lo + nice * i / steps;
+    const gy = plot.y + plot.h - plot.h * ((v - lo) / nice);
     ctx.strokeStyle = i === 0 ? 'rgba(0,0,0,.45)' : 'rgba(0,0,0,.12)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(plot.x, gy); ctx.lineTo(plot.x + plot.w, gy); ctx.stroke();
@@ -488,11 +505,10 @@ function paintChart(shape, chart, k) {
     series.forEach((sr, si) => {
       const v = sr.values[ci];
       if (v == null) return;
-      const bh = plot.h * (v / nice);
+      const bh = plot.h * Math.max(0, Math.min(1, (v - lo) / nice));
       const bx = plot.x + slot * ci + slot * 0.19 + bw * si;
       const by = plot.y + plot.h - bh;
-      ctx.fillStyle = series.length === 1
-        ? CHART_COLORS[ci % CHART_COLORS.length] : CHART_COLORS[si % CHART_COLORS.length];
+      ctx.fillStyle = pointColor(sr, ci, si, series.length > 1);
       ctx.fillRect(bx, by, bw, bh);
       ctx.fillStyle = '#111';
       ctx.font = `${10 * k}px system-ui, sans-serif`;
