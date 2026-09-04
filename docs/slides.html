@@ -134,6 +134,7 @@ body.presenting #presrail { display: block }
   <span class="sp"></span>
   <button id="btnOpen" data-i18n="open">Open</button>
   <button id="btnPresent" data-i18n="present" disabled>Present</button>
+  <button id="btnClose" data-i18n="close" hidden>Close</button>
   <a class="btn" href="./docs.html" data-i18n="wordApp">Word app</a>
   <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
   <span class="lang">
@@ -175,7 +176,8 @@ const I18N = {
     choose: 'Choose a .pptx', sample: 'Try a sample',
     note: 'Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
     loading: 'Loading the engine…', parsing: 'Parsing…',
-    prev: 'Previous', next: 'Next', present: 'Present',
+    prev: 'Previous', next: 'Next', present: 'Present', close: 'Close',
+    kept: name => `${name} — reopened from this browser`,
     parsed: (n, s) => `${n} slides, ${s} shapes`,
     slideOf: (a, b) => `Slide ${a} / ${b}`,
     badType: 'That is not a .pptx file.',
@@ -188,7 +190,8 @@ const I18N = {
     choose: '.pptx を選ぶ', sample: 'サンプルを開く',
     note: 'Oxi はオープンソースです。このページの描画エンジンは PowerPoint 自身の出力とスライド単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
-    prev: '前へ', next: '次へ', present: 'プレゼン開始',
+    prev: '前へ', next: '次へ', present: 'プレゼン開始', close: '閉じる',
+    kept: name => `${name} — このブラウザに保存されていたものを開きました`,
     parsed: (n, s) => `${n} スライド / ${s} 図形`,
     slideOf: (a, b) => `${a} / ${b} 枚目`,
     badType: '.pptx ファイルではありません。',
@@ -592,6 +595,7 @@ function render() {
     rail.appendChild(thumb);
   });
   rail.querySelectorAll('.thumb')[current].scrollIntoView({ block: 'nearest' });
+  try { localStorage.setItem('oxislides.slide', String(current)); } catch (e) {}
   document.getElementById('prescur').textContent = current + 1;
   document.getElementById('presrail').style.width =
     ((current + 1) / pres.slides.length * 100) + '%';
@@ -606,18 +610,73 @@ await init();
 msgEl.hidden = true;
 btnSample.disabled = false;
 
-async function open(name, bytes) {
+/* ---- keeping the open deck ------------------------------------------------
+   A reload used to empty the page, which is the wrong behaviour in the one
+   place it matters: mid-talk, a stray refresh meant finding the file again in
+   a dialog. The bytes go into this browser's own IndexedDB -- the same place
+   they already were, still never sent anywhere -- and the slide number into
+   localStorage, so a reload comes back where it left off.
+
+   It is deliberate that this is easy to undo: "Close" forgets the file, and a
+   shared machine should not keep someone's document by accident. */
+
+const KEEP_DB = 'oxislides', KEEP_STORE = 'deck';
+
+function keepDb() {
+  return new Promise((resolve, reject) => {
+    const rq = indexedDB.open(KEEP_DB, 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore(KEEP_STORE);
+    rq.onsuccess = () => resolve(rq.result);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
+async function keepDeck(name, bytes) {
+  try {
+    const db = await keepDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(KEEP_STORE, 'readwrite');
+      tx.objectStore(KEEP_STORE).put({ name, bytes }, 'current');
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) { /* a browser with no storage still shows the deck */ }
+}
+
+async function keptDeck() {
+  try {
+    const db = await keepDb();
+    return await new Promise((resolve, reject) => {
+      const rq = db.transaction(KEEP_STORE).objectStore(KEEP_STORE).get('current');
+      rq.onsuccess = () => resolve(rq.result || null);
+      rq.onerror = () => reject(rq.error);
+    });
+  } catch (e) { return null; }
+}
+
+async function forgetDeck() {
+  try {
+    const db = await keepDb();
+    db.transaction(KEEP_STORE, 'readwrite').objectStore(KEEP_STORE).delete('current');
+  } catch (e) { /* nothing to forget */ }
+  try { localStorage.removeItem('oxislides.slide'); } catch (e) {}
+}
+
+async function open(name, bytes, opts) {
   try {
     say(t('parsing'));
     pres = parse_presentation(bytes);
     let shapes = 0;
     for (const s of pres.slides) shapes += s.shapes.length;
-    current = 0;
+    current = (opts && opts.at) || 0;
+    if (current >= pres.slides.length) current = 0;
     document.getElementById('docName').textContent = name;
-    say(t('parsed')(pres.slides.length, shapes));
+    say((opts && opts.restored) ? t('kept')(name) : t('parsed')(pres.slides.length, shapes));
     document.getElementById('btnPresent').disabled = false;
+    document.getElementById('btnClose').hidden = false;
     document.getElementById('prestot').textContent = pres.slides.length;
     render();
+    if (!(opts && opts.restored)) keepDeck(name, bytes);
   } catch (e) {
     say(t('failed') + e.message, true);
   }
@@ -723,8 +782,33 @@ document.getElementById('canvas').addEventListener('mousemove', () => {
 let rt;
 window.addEventListener('resize', () => { if (pres) { clearTimeout(rt); rt = setTimeout(render, 120); } });
 
+document.getElementById('btnClose').onclick = async () => {
+  await forgetDeck();
+  pres = null;
+  current = 0;
+  document.getElementById('docName').textContent = t('noFile');
+  document.getElementById('btnPresent').disabled = true;
+  document.getElementById('btnClose').hidden = true;
+  document.getElementById('canvas').innerHTML = '';
+  rail.innerHTML = '';
+  rail.style.display = 'none';
+  const d = document.getElementById('drop');
+  if (d) document.getElementById('canvas').appendChild(d);
+  msgEl.hidden = true;
+};
+
 applyLang();
-window.__oxiSlidesReady = true;
+
+// Put back whatever this browser was last showing, before anything else asks
+// for a file.
+(async () => {
+  const kept = await keptDeck();
+  if (!kept || !kept.bytes) { window.__oxiSlidesReady = true; return; }
+  let at = 0;
+  try { at = parseInt(localStorage.getItem('oxislides.slide') || '0', 10) || 0; } catch (e) {}
+  await open(kept.name, new Uint8Array(kept.bytes), { restored: true, at });
+  window.__oxiSlidesReady = true;
+})();
 </script>
 </body>
 </html>
