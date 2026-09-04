@@ -302,6 +302,18 @@ enum HostObject {
     Hyperlinks(HyperlinkScope),
     /// `Range.Validation`, for the cells of a range.
     Validation(CellRange),
+    /// `Range.FormatConditions`: the conditional formats reaching a range.
+    FormatConditions(CellRange),
+    /// One conditional format, by the number it was given when added.
+    FormatCondition(u64),
+    /// The font or the fill a conditional format puts on.
+    ConditionFont(u64),
+    ConditionInterior(u64),
+    /// `Range.DisplayFormat`: how the cells look with their conditional
+    /// formats worked out, and its font and fill.
+    DisplayFormat(CellRange),
+    DisplayFont(CellRange),
+    DisplayInterior(CellRange),
     /// `Range.Characters(Start, Length)`: a stretch of one cell's text.
     Characters(CellAddress, u32, Option<u32>),
     /// The font of that stretch.
@@ -1149,6 +1161,78 @@ fn formula_number(formula: &str) -> Option<f64> {
     }
 }
 
+
+/// One conditional format, as `FormatConditions.Add` makes it and a macro
+/// reads it back. Held beside the workbook: the file's own are not read in
+/// and these are not drawn or saved -- a known limit -- but `DisplayFormat`
+/// works them out for a macro that asks.
+#[derive(Debug, Clone)]
+struct Condition {
+    id: u64,
+    sheet: usize,
+    /// The blocks it applies to. Deleting the conditions of one cell of a
+    /// block leaves the rest, so a condition can come to apply to several.
+    applies: Vec<CellRange>,
+    /// xlCellValue 1, xlExpression 2, xlColorScale 3, xlDataBar 4, xlTop10 5,
+    /// xlIconSets 6, xlUniqueValues 8, xlTextString 9, xlBlanksCondition 10,
+    /// xlAboveAverageCondition 12, xlNoBlanksCondition 13,
+    /// xlErrorsCondition 16, xlNoErrorsCondition 17.
+    kind: i64,
+    operator: Option<i64>,
+    formula1: Option<String>,
+    formula2: Option<String>,
+    text: Option<String>,
+    /// xlContains 0, xlDoesNotContain 1, xlBeginsWith 2, xlEndsWith 3.
+    text_operator: Option<i64>,
+    rank: i64,
+    dupe_unique: i64,
+    stop_if_true: bool,
+    /// Its priority among the sheet's conditions. Excel gives each a
+    /// number and keeps the numbers rather than the order: a new condition
+    /// takes one past the highest, moving one to `p` pushes every condition
+    /// at `p` or below one further, and a deleted one leaves a gap.
+    priority: i64,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strikethrough: Option<bool>,
+    font_color: Option<String>,
+    fill: Option<String>,
+}
+
+/// A condition's formula as Excel keeps it: everything gets its `=`, and a
+/// text that is not a formula is quoted -- measured, `2` is kept as `=2`,
+/// `abc` as `="abc"` and `A1>0` (no `=`) as `="A1>0"`.
+fn kept_condition_formula(formula: &str) -> String {
+    if formula.starts_with('=') {
+        return formula.to_string();
+    }
+    if plain_number(formula.trim()).is_some() {
+        return format!("={}", formula.trim());
+    }
+    format!("=\"{}\"", formula.replace('"', "\"\""))
+}
+
+/// Which of number, text and Boolean a cell's value is, in the order Excel
+/// compares them: every number is below every text, and every text below
+/// every Boolean -- measured, `abc` passes a `> 2` condition.
+fn comparison_key(value: &Value) -> (u8, f64, String) {
+    match value {
+        Value::Boolean(held) => (2, f64::from(*held), String::new()),
+        Value::String(text) => (1, 0.0, text.to_lowercase()),
+        Value::Empty => (0, 0.0, String::new()),
+        other => (0, any_number(other).unwrap_or(0.0), String::new()),
+    }
+}
+
+fn compare_as_excel(left: &Value, right: &Value) -> Ordering {
+    let (left, right) = (comparison_key(left), comparison_key(right));
+    left.0
+        .cmp(&right.0)
+        .then_with(|| left.1.partial_cmp(&right.1).unwrap_or(Ordering::Equal))
+        .then_with(|| left.2.cmp(&right.2))
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -1240,6 +1324,9 @@ struct WorkbookHost<'a> {
     links: Vec<Link>,
     /// The data validation on each cell that has one.
     validations: std::collections::HashMap<CellAddress, Validation>,
+    /// The conditional formats, in order of priority within each sheet.
+    conditions: Vec<Condition>,
+    next_condition: u64,
     /// The number the next hyperlink gets.
     next_link: u64,
     /// Whether a hyperlink has ever been added: the `Hyperlink` style joins
@@ -1318,6 +1405,8 @@ impl<'a> WorkbookHost<'a> {
             notes,
             links: Vec::new(),
             validations: std::collections::HashMap::new(),
+            conditions: Vec::new(),
+            next_condition: 1,
             next_link: 1,
             linked_once: false,
             split: SplitSettings::default(),
@@ -1370,6 +1459,26 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Hyperlink(_) => "Hyperlink",
                 HostObject::Hyperlinks(_) => "Hyperlinks",
                 HostObject::Validation(_) => "Validation",
+                HostObject::FormatConditions(_) => "FormatConditions",
+                HostObject::FormatCondition(id) => match self
+                    .conditions
+                    .iter()
+                    .find(|condition| condition.id == id)
+                    .map(|condition| condition.kind)
+                {
+                    Some(3) => "ColorScale",
+                    Some(4) => "Databar",
+                    Some(5) => "Top10",
+                    Some(6) => "IconSetCondition",
+                    Some(8) => "UniqueValues",
+                    Some(12) => "AboveAverage",
+                    _ => "FormatCondition",
+                },
+                HostObject::ConditionFont(_) => "Font",
+                HostObject::ConditionInterior(_) => "Interior",
+                HostObject::DisplayFormat(_) => "DisplayFormat",
+                HostObject::DisplayFont(_) => "Font",
+                HostObject::DisplayInterior(_) => "Interior",
                 HostObject::Characters(..) => "Characters",
                 HostObject::CharactersFont(..) => "Font",
                 HostObject::Comment(_) => "Comment",
@@ -2591,6 +2700,703 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Some(Value::Empty));
         }
         Ok(None)
+    }
+
+    fn conditions_range(&self, object: &ObjectRef) -> Option<CellRange> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::FormatConditions(range)) => Some(*range),
+            _ => None,
+        }
+    }
+
+    fn condition_id(&self, object: &ObjectRef) -> Option<(u64, Option<StyleFace>)> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::FormatCondition(id)) => Some((*id, None)),
+            Some(HostObject::ConditionFont(id)) => Some((*id, Some(StyleFace::Font))),
+            Some(HostObject::ConditionInterior(id)) => Some((*id, Some(StyleFace::Interior))),
+            _ => None,
+        }
+    }
+
+    fn display_format_of(&self, object: &ObjectRef) -> Option<(CellRange, Option<StyleFace>)> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::DisplayFormat(range)) => Some((*range, None)),
+            Some(HostObject::DisplayFont(range)) => Some((*range, Some(StyleFace::Font))),
+            Some(HostObject::DisplayInterior(range)) => Some((*range, Some(StyleFace::Interior))),
+            _ => None,
+        }
+    }
+
+    fn condition_index(&self, id: u64) -> Result<usize, String> {
+        self.conditions
+            .iter()
+            .position(|condition| condition.id == id)
+            .ok_or_else(|| "the conditional format has been deleted".to_string())
+    }
+
+    /// The conditions reaching a range, in priority order -- measured,
+    /// `Range("A1:B4").FormatConditions.Count` is 1 for a condition on A1:A4
+    /// and `Range("B1").FormatConditions.Count` is 0.
+    fn conditions_reaching(&self, range: CellRange) -> Vec<u64> {
+        self.conditions
+            .iter()
+            .filter(|condition| {
+                condition.sheet == range.sheet
+                    && condition
+                        .applies
+                        .iter()
+                        .any(|block| ranges_overlap(*block, range))
+            })
+            .map(|condition| condition.id)
+            .collect()
+    }
+
+    /// Take a range out of every condition's reach, dropping a condition
+    /// left with nothing.
+    fn drop_conditions_on(&mut self, range: CellRange) {
+        for condition in &mut self.conditions {
+            if condition.sheet != range.sheet {
+                continue;
+            }
+            let mut kept = Vec::new();
+            for block in condition.applies.drain(..) {
+                if !ranges_overlap(block, range) {
+                    kept.push(block);
+                    continue;
+                }
+                // What is left of the block once the range is cut out, as up
+                // to four blocks around the hole.
+                let hole = CellRange {
+                    sheet: block.sheet,
+                    start_row: block.start_row.max(range.start_row),
+                    end_row: block.end_row.min(range.end_row),
+                    start_column: block.start_column.max(range.start_column),
+                    end_column: block.end_column.min(range.end_column),
+                };
+                if hole.start_row > block.start_row {
+                    kept.push(CellRange { end_row: hole.start_row - 1, ..block });
+                }
+                if hole.end_row < block.end_row {
+                    kept.push(CellRange { start_row: hole.end_row + 1, ..block });
+                }
+                if hole.start_column > block.start_column {
+                    kept.push(CellRange {
+                        start_row: hole.start_row,
+                        end_row: hole.end_row,
+                        end_column: hole.start_column - 1,
+                        ..block
+                    });
+                }
+                if hole.end_column < block.end_column {
+                    kept.push(CellRange {
+                        start_row: hole.start_row,
+                        end_row: hole.end_row,
+                        start_column: hole.end_column + 1,
+                        ..block
+                    });
+                }
+            }
+            condition.applies = kept;
+        }
+        self.conditions.retain(|condition| !condition.applies.is_empty());
+    }
+
+    /// `FormatConditions.Add(Type, Operator, Formula1, Formula2, String,
+    /// TextOperator)` and the shorter `AddColorScale`, `AddDatabar`,
+    /// `AddIconSetCondition`, `AddTop10`, `AddUniqueValues`,
+    /// `AddAboveAverage`.
+    ///
+    /// Measured: a cell-value condition wants an operator and Formula1, and
+    /// Formula2 for `Between`, each missing one being 449; an expression
+    /// wants Formula1; a type or operator outside the known ones is 5;
+    /// `StopIfTrue` starts True; the new condition comes last in priority.
+    fn add_condition(
+        &mut self,
+        range: CellRange,
+        kind: i64,
+        args: &[Value],
+    ) -> Result<Value, String> {
+        Self::range_cell_count(range)?;
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let text_of = |value: &Value| -> Result<String, String> {
+            match value {
+                Value::String(text) => Ok(text.clone()),
+                value if any_number(value).is_some() => Ok(shown_text(value, None)),
+                _ => Err("a condition's formula is text".to_string()),
+            }
+        };
+        let (operator, formula1, formula2, text, text_operator) = match kind {
+            1 => {
+                let operator = match given(1) {
+                    None => return Err(host_error(449, "Operator is not optional")),
+                    Some(value) => sort_number(value, "FormatConditions Operator")?,
+                };
+                if !(1..=8).contains(&operator) {
+                    return Err(host_error(5, format!("{operator} is not a condition operator")));
+                }
+                let formula1 = match given(2) {
+                    None => return Err(host_error(449, "Formula1 is not optional")),
+                    Some(value) => kept_condition_formula(&text_of(value)?),
+                };
+                let formula2 = match given(3) {
+                    None if matches!(operator, 1 | 2) => {
+                        return Err(host_error(449, "Formula2 is not optional"))
+                    }
+                    None => None,
+                    Some(value) => Some(kept_condition_formula(&text_of(value)?)),
+                };
+                (Some(operator), Some(formula1), formula2, None, None)
+            }
+            2 => {
+                let formula1 = match given(2) {
+                    None => return Err(host_error(449, "Formula1 is not optional")),
+                    Some(value) => kept_condition_formula(&text_of(value)?),
+                };
+                (None, Some(formula1), None, None, None)
+            }
+            9 => {
+                let text = match given(4) {
+                    None => return Err(host_error(449, "String is not optional")),
+                    Some(value) => text_of(value)?,
+                };
+                let text_operator = match given(5) {
+                    None => 0,
+                    Some(value) => sort_number(value, "FormatConditions TextOperator")?,
+                };
+                (None, None, None, Some(text), Some(text_operator))
+            }
+            3..=6 | 8 | 10 | 12 | 13 | 16 | 17 => (None, None, None, None, None),
+            other => return Err(host_error(5, format!("{other} is not a kind of condition"))),
+        };
+        let id = self.next_condition;
+        self.next_condition += 1;
+        let priority = self.last_condition_priority(range.sheet) + 1;
+        self.conditions.push(Condition {
+            id,
+            sheet: range.sheet,
+            applies: vec![range],
+            kind,
+            operator,
+            formula1,
+            formula2,
+            text,
+            text_operator,
+            rank: 10,
+            dupe_unique: 0,
+            stop_if_true: true,
+            priority,
+            bold: None,
+            italic: None,
+            underline: None,
+            strikethrough: None,
+            font_color: None,
+            fill: None,
+        });
+        Ok(self.object(HostObject::FormatCondition(id)))
+    }
+
+    /// Whether a condition holds for one cell.
+    fn condition_holds(&self, condition: &Condition, at: CellAddress) -> bool {
+        let cell = self.cell_here(at.sheet, at.row, at.column);
+        let value = cell
+            .as_ref()
+            .map(|cell| from_cell_value(&cell.value))
+            .unwrap_or(Value::Empty);
+        // Formulas are written against the top-left cell of the block the
+        // condition applies to, and move with the cell: measured, `=F1>1` on
+        // F1:F3 is `=F2>1` for F2.
+        let corner = condition
+            .applies
+            .first()
+            .map(|block| (block.start_row, block.start_column))
+            .unwrap_or((at.row, at.column));
+        let worked_out = |formula: &str| -> Option<Value> {
+            let expression = formula.strip_prefix('=').unwrap_or(formula);
+            let moved = translate_formula_references(
+                expression,
+                i64::from(at.row) - i64::from(corner.0),
+                i64::from(at.column) - i64::from(corner.1),
+            )
+            .unwrap_or_else(|_| expression.to_string());
+            match oxicells_core::formula::evaluate_expression(
+                self.workbook,
+                at.sheet,
+                &moved,
+                self.now,
+            )? {
+                oxicells_calc::Value::Number(number) => Some(Value::Double(number)),
+                oxicells_calc::Value::Text(text) => Some(Value::String(text)),
+                oxicells_calc::Value::Logical(state) => Some(Value::Boolean(state)),
+                oxicells_calc::Value::Blank => Some(Value::Empty),
+                oxicells_calc::Value::Error(_) => None,
+            }
+        };
+        match condition.kind {
+            1 => {
+                let Some(first) = condition.formula1.as_deref().and_then(worked_out) else {
+                    return false;
+                };
+                let held = if matches!(value, Value::Empty) { Value::Double(0.0) } else { value };
+                let against_first = compare_as_excel(&held, &first);
+                match condition.operator.unwrap_or(3) {
+                    1 | 2 => {
+                        let Some(second) = condition.formula2.as_deref().and_then(worked_out) else {
+                            return false;
+                        };
+                        let (low, high) = if compare_as_excel(&first, &second) == Ordering::Greater {
+                            (second, first)
+                        } else {
+                            (first, second)
+                        };
+                        let inside = compare_as_excel(&held, &low) != Ordering::Less
+                            && compare_as_excel(&held, &high) != Ordering::Greater;
+                        if condition.operator == Some(1) { inside } else { !inside }
+                    }
+                    3 => against_first == Ordering::Equal,
+                    4 => against_first != Ordering::Equal,
+                    5 => against_first == Ordering::Greater,
+                    6 => against_first == Ordering::Less,
+                    7 => against_first != Ordering::Less,
+                    _ => against_first != Ordering::Greater,
+                }
+            }
+            2 => matches!(
+                condition.formula1.as_deref().and_then(worked_out),
+                Some(Value::Boolean(true))
+            ) || matches!(
+                condition.formula1.as_deref().and_then(worked_out),
+                Some(Value::Double(number)) if number != 0.0
+            ),
+            9 => {
+                let shown = cell
+                    .as_ref()
+                    .map(|cell| {
+                        shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref())
+                    })
+                    .unwrap_or_default()
+                    .to_lowercase();
+                let wanted = condition.text.clone().unwrap_or_default().to_lowercase();
+                match condition.text_operator.unwrap_or(0) {
+                    1 => !shown.contains(&wanted),
+                    2 => shown.starts_with(&wanted),
+                    3 => shown.ends_with(&wanted),
+                    _ => shown.contains(&wanted),
+                }
+            }
+            10 => matches!(value, Value::Empty),
+            13 => !matches!(value, Value::Empty),
+            16 => matches!(value, Value::Error(_)),
+            17 => !matches!(value, Value::Error(_)),
+            _ => false,
+        }
+    }
+
+    /// The dress a cell shows once its conditions are worked out: the
+    /// conditions in priority order, each that holds putting on what it sets
+    /// and has not been set by one above it, and a `StopIfTrue` condition
+    /// that holds ending the walk.
+    fn displayed_dress(&self, at: CellAddress) -> (Dress, Option<String>, bool) {
+        let base = self
+            .cell_here(at.sheet, at.row, at.column)
+            .map(|cell| (Dress::of_style(&cell.style), cell.style.bg_color.clone(), cell.style.strikethrough))
+            .unwrap_or_else(|| (Dress::of_style(&CellStyle::default()), None, false));
+        let (mut dress, mut fill, mut strikethrough) = base;
+        let (mut set_bold, mut set_italic, mut set_underline, mut set_strike, mut set_colour, mut set_fill) =
+            (false, false, false, false, false, false);
+        for condition in self.conditions.iter().filter(|condition| {
+            condition.sheet == at.sheet
+                && condition
+                    .applies
+                    .iter()
+                    .any(|block| range_within(CellRange::single(at), *block))
+        }) {
+            if !self.condition_holds(condition, at) {
+                continue;
+            }
+            if let (Some(bold), false) = (condition.bold, set_bold) {
+                dress.bold = bold;
+                set_bold = true;
+            }
+            if let (Some(italic), false) = (condition.italic, set_italic) {
+                dress.italic = italic;
+                set_italic = true;
+            }
+            if let (Some(underline), false) = (condition.underline, set_underline) {
+                dress.underline = underline;
+                set_underline = true;
+            }
+            if let (Some(struck), false) = (condition.strikethrough, set_strike) {
+                strikethrough = struck;
+                set_strike = true;
+            }
+            if let (Some(colour), false) = (&condition.font_color, set_colour) {
+                dress.color = Some(colour.clone());
+                set_colour = true;
+            }
+            if let (Some(colour), false) = (&condition.fill, set_fill) {
+                fill = Some(colour.clone());
+                set_fill = true;
+            }
+            if condition.stop_if_true {
+                break;
+            }
+        }
+        (dress, fill, strikethrough)
+    }
+
+    /// What `FormatConditions` answers to.
+    fn conditions_member(
+        &mut self,
+        range: CellRange,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        if name.eq_ignore_ascii_case("count") {
+            return Ok(Some(Value::Integer(self.conditions_reaching(range).len() as i64)));
+        }
+        if name.eq_ignore_ascii_case("item") {
+            let [wanted] = args else {
+                return Err("FormatConditions.Item takes one number".to_string());
+            };
+            let index = positive_index(wanted, "FormatConditions index")? as usize;
+            let reaching = self.conditions_reaching(range);
+            let Some(&id) = reaching.get(index - 1) else {
+                return Err(format!("there is no conditional format number {index} here"));
+            };
+            return Ok(Some(self.object(HostObject::FormatCondition(id))));
+        }
+        if name.eq_ignore_ascii_case("add") {
+            let kind = match args.first() {
+                None | Some(Value::Missing) => return Err(host_error(449, "Type is not optional")),
+                Some(value) => sort_number(value, "FormatConditions Type")?,
+            };
+            return self.add_condition(range, kind, args).map(Some);
+        }
+        let shorter = [
+            ("addcolorscale", 3),
+            ("adddatabar", 4),
+            ("addtop10", 5),
+            ("addiconsetcondition", 6),
+            ("adduniquevalues", 8),
+            ("addaboveaverage", 12),
+        ];
+        if let Some((_, kind)) = shorter.iter().find(|(member, _)| name.eq_ignore_ascii_case(member)) {
+            return self.add_condition(range, *kind, &[]).map(Some);
+        }
+        if name.eq_ignore_ascii_case("delete") {
+            self.drop_conditions_on(range);
+            return Ok(Some(Value::Empty));
+        }
+        if name.eq_ignore_ascii_case("parent") {
+            return Ok(Some(self.object(HostObject::Range(range))));
+        }
+        Ok(None)
+    }
+
+    /// The highest priority number among a sheet's conditions, 0 for none.
+    fn last_condition_priority(&self, sheet: usize) -> i64 {
+        self.conditions
+            .iter()
+            .filter(|condition| condition.sheet == sheet)
+            .map(|condition| condition.priority)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Give a condition a priority, pushing the sheet's others at that
+    /// number or below one further -- measured, moving the second of two to
+    /// 1 leaves the first at 2, and moving it to 1 again after it went last
+    /// (3) leaves the first at 3.
+    fn set_condition_priority(&mut self, index: usize, priority: i64) {
+        let sheet = self.conditions[index].sheet;
+        let priority = priority.max(1);
+        for (at, condition) in self.conditions.iter_mut().enumerate() {
+            if at != index && condition.sheet == sheet && condition.priority >= priority {
+                condition.priority += 1;
+            }
+        }
+        self.conditions[index].priority = priority;
+        self.conditions.sort_by_key(|condition| condition.priority);
+    }
+
+    /// What one conditional format answers to, and what its font and fill
+    /// answer to.
+    fn condition_member(
+        &mut self,
+        id: u64,
+        face: Option<StyleFace>,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let index = self.condition_index(id)?;
+        if let Some(face) = face {
+            let condition = &self.conditions[index];
+            // Measured: what a condition does not set reads False for the
+            // Booleans and Null for the rest.
+            let answer = match (face, name.to_ascii_lowercase().as_str()) {
+                (StyleFace::Font, "bold") => Value::Boolean(condition.bold.unwrap_or(false)),
+                (StyleFace::Font, "italic") => Value::Boolean(condition.italic.unwrap_or(false)),
+                (StyleFace::Font, "strikethrough") => {
+                    Value::Boolean(condition.strikethrough.unwrap_or(false))
+                }
+                (StyleFace::Font, "underline") => match condition.underline {
+                    Some(true) => Value::Integer(UNDERLINE_SINGLE),
+                    Some(false) => Value::Integer(UNDERLINE_NONE),
+                    None => Value::Null,
+                },
+                (StyleFace::Font, "color") => match &condition.font_color {
+                    Some(colour) => Value::Integer(colour_to_packed(Some(colour)).unwrap_or(0)),
+                    None => Value::Null,
+                },
+                (StyleFace::Font, "colorindex") => match &condition.font_color {
+                    Some(colour) => Value::Integer(
+                        colour_to_packed(Some(colour)).map(nearest_palette_index).unwrap_or(1),
+                    ),
+                    None => Value::Null,
+                },
+                (StyleFace::Font, "size" | "name") => Value::Null,
+                (StyleFace::Interior, "color") => match &condition.fill {
+                    Some(colour) => Value::Integer(colour_to_packed(Some(colour)).unwrap_or(0)),
+                    None => Value::Null,
+                },
+                (StyleFace::Interior, "colorindex") => match &condition.fill {
+                    Some(colour) => Value::Integer(
+                        colour_to_packed(Some(colour)).map(nearest_palette_index).unwrap_or(1),
+                    ),
+                    None => Value::Null,
+                },
+                (StyleFace::Interior, "pattern") => Value::Null,
+                (_, "parent") => self.object(HostObject::FormatCondition(id)),
+                _ => return Ok(None),
+            };
+            return Ok(Some(answer));
+        }
+        let condition = &self.conditions[index];
+        let answer = if name.eq_ignore_ascii_case("type") {
+            Value::Integer(condition.kind)
+        } else if name.eq_ignore_ascii_case("operator") {
+            match condition.operator {
+                Some(operator) => Value::Integer(operator),
+                None => return Err("this kind of condition has no operator".to_string()),
+            }
+        } else if name.eq_ignore_ascii_case("formula1") {
+            match &condition.formula1 {
+                Some(formula) => Value::String(formula.clone()),
+                None => return Err("this condition has no Formula1".to_string()),
+            }
+        } else if name.eq_ignore_ascii_case("formula2") {
+            match &condition.formula2 {
+                Some(formula) => Value::String(formula.clone()),
+                None => return Err("this condition has no Formula2".to_string()),
+            }
+        } else if name.eq_ignore_ascii_case("text") {
+            Value::String(condition.text.clone().unwrap_or_default())
+        } else if name.eq_ignore_ascii_case("textoperator") {
+            Value::Integer(condition.text_operator.unwrap_or(0))
+        } else if name.eq_ignore_ascii_case("rank") {
+            Value::Integer(condition.rank)
+        } else if name.eq_ignore_ascii_case("dupeunique") {
+            Value::Integer(condition.dupe_unique)
+        } else if name.eq_ignore_ascii_case("stopiftrue") {
+            Value::Boolean(condition.stop_if_true)
+        } else if name.eq_ignore_ascii_case("priority") {
+            Value::Integer(condition.priority)
+        } else if name.eq_ignore_ascii_case("appliesto") {
+            let applies = condition.applies.clone();
+            if applies.len() == 1 {
+                self.object(HostObject::Range(applies[0]))
+            } else {
+                self.blocks_object(applies)?
+            }
+        } else if name.eq_ignore_ascii_case("parent") {
+            let first = condition.applies[0];
+            self.object(HostObject::Range(first))
+        } else if name.eq_ignore_ascii_case("font") {
+            self.object(HostObject::ConditionFont(id))
+        } else if name.eq_ignore_ascii_case("interior") {
+            self.object(HostObject::ConditionInterior(id))
+        } else if name.eq_ignore_ascii_case("setfirstpriority") {
+            self.set_condition_priority(index, 1);
+            Value::Empty
+        } else if name.eq_ignore_ascii_case("setlastpriority") {
+            let last = self.last_condition_priority(condition.sheet) + 1;
+            self.conditions[index].priority = last;
+            self.conditions.sort_by_key(|condition| condition.priority);
+            Value::Empty
+        } else if name.eq_ignore_ascii_case("delete") {
+            self.conditions.remove(index);
+            Value::Empty
+        } else if name.eq_ignore_ascii_case("modify") {
+            // `Modify Type, Operator, Formula1, Formula2`: the same reading as
+            // Add, put over what is there, keeping the dress and the place.
+            let held = self.conditions[index].clone();
+            let kind = match args.first() {
+                None | Some(Value::Missing) => held.kind,
+                Some(value) => sort_number(value, "FormatCondition Type")?,
+            };
+            let range = held.applies[0];
+            let made = self.add_condition(range, kind, args)?;
+            let Value::Object(made) = made else {
+                return Err("the modified condition could not be made".to_string());
+            };
+            let made_index = self.condition_id(&made).and_then(|(id, _)| self.condition_index(id).ok());
+            let Some(made_index) = made_index else {
+                return Err("the modified condition could not be found".to_string());
+            };
+            // Measured: a modified condition goes to the end of the
+            // priorities, which is where the fresh one already is.
+            let mut fresh = self.conditions.remove(made_index);
+            fresh.id = held.id;
+            fresh.applies = held.applies;
+            fresh.stop_if_true = held.stop_if_true;
+            fresh.bold = held.bold;
+            fresh.italic = held.italic;
+            fresh.underline = held.underline;
+            fresh.strikethrough = held.strikethrough;
+            fresh.font_color = held.font_color;
+            fresh.fill = held.fill;
+            let index = self.condition_index(held.id)?;
+            self.conditions.remove(index);
+            self.conditions.push(fresh);
+            Value::Empty
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(answer))
+    }
+
+    /// Set a part of a conditional format: its `StopIfTrue`, its `Priority`,
+    /// or what its font and fill put on. Measured: a condition's font takes
+    /// no size and no name -- both are 1004.
+    fn set_condition(
+        &mut self,
+        id: u64,
+        face: Option<StyleFace>,
+        name: &str,
+        value: Value,
+    ) -> Result<bool, String> {
+        let index = self.condition_index(id)?;
+        match face {
+            None => {
+                if name.eq_ignore_ascii_case("stopiftrue") {
+                    if let Some(stop) = style_face_boolean(&value, "FormatCondition.StopIfTrue")? {
+                        self.conditions[index].stop_if_true = stop;
+                    }
+                    return Ok(true);
+                }
+                if name.eq_ignore_ascii_case("priority") {
+                    let priority = sort_number(&value, "FormatCondition.Priority")?;
+                    self.set_condition_priority(index, priority);
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+            Some(StyleFace::Font) => {
+                let condition = &mut self.conditions[index];
+                if name.eq_ignore_ascii_case("bold") {
+                    condition.bold = style_face_boolean(&value, "Font.Bold")?.or(condition.bold);
+                } else if name.eq_ignore_ascii_case("italic") {
+                    condition.italic = style_face_boolean(&value, "Font.Italic")?.or(condition.italic);
+                } else if name.eq_ignore_ascii_case("strikethrough") {
+                    condition.strikethrough =
+                        style_face_boolean(&value, "Font.Strikethrough")?.or(condition.strikethrough);
+                } else if name.eq_ignore_ascii_case("underline") {
+                    condition.underline = Some(match &value {
+                        Value::Boolean(held) => *held,
+                        value if any_whole_number(value).is_some() => {
+                            any_whole_number(value).unwrap_or_default() != UNDERLINE_NONE
+                        }
+                        _ => return Err("Font.Underline takes True, False, or an underline style".to_string()),
+                    });
+                } else if name.eq_ignore_ascii_case("color") {
+                    condition.font_color = style_color(&value, "Font.Color")?;
+                } else if name.eq_ignore_ascii_case("colorindex") {
+                    condition.font_color = palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
+                } else if name.eq_ignore_ascii_case("size") || name.eq_ignore_ascii_case("name") {
+                    return Err("a conditional format cannot change the font's size or face".to_string());
+                } else {
+                    return Ok(false);
+                }
+                Ok(true)
+            }
+            Some(StyleFace::Interior) => {
+                let condition = &mut self.conditions[index];
+                if name.eq_ignore_ascii_case("color") {
+                    condition.fill = style_color(&value, "Interior.Color")?;
+                } else if name.eq_ignore_ascii_case("colorindex") {
+                    condition.fill = palette_choice(&value, COLOUR_NONE, "Interior.ColorIndex")?;
+                } else if name.eq_ignore_ascii_case("pattern") {
+                    // Solid or none is all the fill this build keeps.
+                    if any_whole_number(&value) == Some(COLOUR_NONE) {
+                        condition.fill = None;
+                    }
+                } else {
+                    return Ok(false);
+                }
+                Ok(true)
+            }
+            Some(StyleFace::Borders(_)) => Ok(false),
+        }
+    }
+
+    /// What `Range.DisplayFormat` and its font and fill answer to: the dress
+    /// every cell shows, or Null where the cells differ.
+    fn display_format_member(
+        &mut self,
+        range: CellRange,
+        face: Option<StyleFace>,
+        name: &str,
+    ) -> Result<Option<Value>, String> {
+        Self::range_cell_count(range)?;
+        match face {
+            None => {
+                if name.eq_ignore_ascii_case("font") {
+                    return Ok(Some(self.object(HostObject::DisplayFont(range))));
+                }
+                if name.eq_ignore_ascii_case("interior") {
+                    return Ok(Some(self.object(HostObject::DisplayInterior(range))));
+                }
+                if name.eq_ignore_ascii_case("parent") {
+                    return Ok(Some(self.object(HostObject::Range(range))));
+                }
+                Ok(None)
+            }
+            Some(face) => {
+                let shown: Vec<(Dress, Option<String>, bool)> =
+                    range.addresses().map(|at| self.displayed_dress(at)).collect();
+                let uniform = |pick: &dyn Fn(&(Dress, Option<String>, bool)) -> Value| -> Value {
+                    let first = pick(&shown[0]);
+                    if shown.iter().all(|one| pick(one) == first) { first } else { Value::Null }
+                };
+                let answer = match (face, name.to_ascii_lowercase().as_str()) {
+                    (StyleFace::Font, "bold") => uniform(&|one| Value::Boolean(one.0.bold)),
+                    (StyleFace::Font, "italic") => uniform(&|one| Value::Boolean(one.0.italic)),
+                    (StyleFace::Font, "strikethrough") => uniform(&|one| Value::Boolean(one.2)),
+                    (StyleFace::Font, "underline") => uniform(&|one| {
+                        Value::Integer(if one.0.underline { UNDERLINE_SINGLE } else { UNDERLINE_NONE })
+                    }),
+                    (StyleFace::Font, "color") => uniform(&|one| {
+                        Value::Integer(colour_to_packed(one.0.color.as_deref()).unwrap_or(BLACK))
+                    }),
+                    (StyleFace::Interior, "color") => uniform(&|one| {
+                        Value::Integer(colour_to_packed(one.1.as_deref()).unwrap_or(WHITE))
+                    }),
+                    (StyleFace::Interior, "colorindex") => uniform(&|one| match colour_to_packed(one.1.as_deref()) {
+                        Some(packed) => Value::Integer(nearest_palette_index(packed)),
+                        None => Value::Integer(COLOUR_NONE),
+                    }),
+                    (StyleFace::Interior, "pattern") => uniform(&|one| {
+                        Value::Integer(if one.1.is_some() { 1 } else { COLOUR_NONE })
+                    }),
+                    (_, "parent") => self.object(HostObject::DisplayFormat(range)),
+                    _ => return Ok(None),
+                };
+                Ok(Some(answer))
+            }
+        }
     }
 
     fn validation_range(&self, object: &ObjectRef) -> Option<CellRange> {
@@ -6837,6 +7643,7 @@ impl<'a> WorkbookHost<'a> {
         let clear_formats = clear_formats
             && (!clear_contents || self.cell_protection(range.sheet).is_none());
         if clear_formats {
+            self.drop_conditions_on(range);
             self.unlocked.retain(|held| {
                 held.sheet != range.sheet
                     || !(range.start_row..=range.end_row).contains(&held.row)
@@ -7135,6 +7942,33 @@ impl<'a> WorkbookHost<'a> {
             })
             .collect();
         self.validations = moved_validations.into_iter().collect();
+        for condition in &mut self.conditions {
+            if condition.sheet != sheet {
+                continue;
+            }
+            condition.applies.retain_mut(|block| {
+                let (near, far, crossing) = if sideways {
+                    (block.start_column + 1, block.end_column + 1, block.start_row)
+                } else {
+                    (block.start_row, block.end_row, block.start_column + 1)
+                };
+                if !taking_part(crossing) {
+                    return true;
+                }
+                let (Some(near), Some(far)) = (moved(near), moved(far)) else {
+                    return false;
+                };
+                if sideways {
+                    block.start_column = near - 1;
+                    block.end_column = far - 1;
+                } else {
+                    block.start_row = near;
+                    block.end_row = far;
+                }
+                true
+            });
+        }
+        self.conditions.retain(|condition| !condition.applies.is_empty());
         self.links.retain_mut(|link| {
             if link.anchor.sheet != sheet {
                 return true;
@@ -8741,6 +9575,31 @@ impl<'a> WorkbookHost<'a> {
                     self.validations.remove(&to);
                 }
             }
+            // The conditions on the cell come along as conditions of their
+            // own on the new cell: measured, a copied cell answers
+            // `AppliesTo.Address` for itself alone.
+            let to_one = CellRange::single(to);
+            self.drop_conditions_on(to_one);
+            let carried: Vec<Condition> = self
+                .conditions
+                .iter()
+                .filter(|condition| {
+                    condition.sheet == from.sheet
+                        && condition
+                            .applies
+                            .iter()
+                            .any(|block| range_within(CellRange::single(from), *block))
+                })
+                .cloned()
+                .collect();
+            for mut condition in carried {
+                condition.id = self.next_condition;
+                self.next_condition += 1;
+                condition.sheet = to.sheet;
+                condition.applies = vec![to_one];
+                condition.priority = self.last_condition_priority(to.sheet) + 1;
+                self.conditions.push(condition);
+            }
             let (from_one, to_one) = (CellRange::single(from), CellRange::single(to));
             self.links.retain(|link| !ranges_equal(link.anchor, to_one));
             if let Some(link) = self.links.iter().find(|link| ranges_equal(link.anchor, from_one)) {
@@ -9053,6 +9912,15 @@ impl Host for WorkbookHost<'_> {
             if let Some(range) = self.validation_range(receiver) {
                 return self.validation_member(range, name, args);
             }
+            if let Some(range) = self.conditions_range(receiver) {
+                return self.conditions_member(range, name, args);
+            }
+            if let Some((id, face)) = self.condition_id(receiver) {
+                return self.condition_member(id, face, name, args);
+            }
+            if let Some((range, face)) = self.display_format_of(receiver) {
+                return self.display_format_member(range, face, name);
+            }
             if let Some((at, start, length)) = self.characters_font_of(receiver) {
                 return self.characters_font_member(at, start, length, name);
             }
@@ -9266,6 +10134,16 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("validation") && args.is_empty() {
                     return Ok(Some(self.object(HostObject::Validation(range))));
+                }
+                if name.eq_ignore_ascii_case("formatconditions") {
+                    return match args {
+                        [] => Ok(Some(self.object(HostObject::FormatConditions(range)))),
+                        [wanted] => self.conditions_member(range, "item", std::slice::from_ref(wanted)),
+                        _ => Err("FormatConditions expects zero or one argument".to_string()),
+                    };
+                }
+                if name.eq_ignore_ascii_case("displayformat") && args.is_empty() {
+                    return Ok(Some(self.object(HostObject::DisplayFormat(range))));
                 }
                 if name.eq_ignore_ascii_case("hyperlinks") {
                     let scope = HyperlinkScope::Range(range);
@@ -9636,6 +10514,19 @@ impl Host for WorkbookHost<'_> {
                 Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
             } else if receiver.is_some_and(|receiver| self.validation_range(receiver).is_some()) {
                 Some(&["Type", "AlertStyle", "Operator", "Formula1", "Formula2"][..])
+            } else if receiver.is_some_and(|receiver| self.conditions_range(receiver).is_some()) {
+                Some(
+                    &[
+                        "Type",
+                        "Operator",
+                        "Formula1",
+                        "Formula2",
+                        "String",
+                        "TextOperator",
+                        "DateOperator",
+                        "ScopeType",
+                    ][..],
+                )
             } else {
                 Some(&["Before", "After", "Count"][..])
             }
@@ -9705,6 +10596,10 @@ impl Host for WorkbookHost<'_> {
             && receiver.is_some_and(|receiver| self.validation_range(receiver).is_some())
         {
             Some(&["Type", "AlertStyle", "Operator", "Formula1", "Formula2"][..])
+        } else if name.eq_ignore_ascii_case("modify")
+            && receiver.is_some_and(|receiver| self.condition_id(receiver).is_some())
+        {
+            Some(&["Type", "Operator", "Formula1", "Formula2", "String", "TextOperator"][..])
         } else if name.eq_ignore_ascii_case("addcomment") {
             Some(&["Text"][..])
         } else if name.eq_ignore_ascii_case("text")
@@ -9787,6 +10682,15 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(range) = self.validation_range(receiver) {
             return self.validation_member(range, name, &[]);
+        }
+        if let Some(range) = self.conditions_range(receiver) {
+            return self.conditions_member(range, name, &[]);
+        }
+        if let Some((id, face)) = self.condition_id(receiver) {
+            return self.condition_member(id, face, name, &[]);
+        }
+        if let Some((range, face)) = self.display_format_of(receiver) {
+            return self.display_format_member(range, face, name);
         }
         if let Some((at, start, length)) = self.characters_font_of(receiver) {
             return self.characters_font_member(at, start, length, name);
@@ -10353,6 +11257,12 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("validation") {
             return Ok(Some(self.object(HostObject::Validation(range))));
         }
+        if name.eq_ignore_ascii_case("formatconditions") {
+            return Ok(Some(self.object(HostObject::FormatConditions(range))));
+        }
+        if name.eq_ignore_ascii_case("displayformat") {
+            return Ok(Some(self.object(HostObject::DisplayFormat(range))));
+        }
         if name.eq_ignore_ascii_case("hyperlinks") {
             return Ok(Some(self.object(HostObject::Hyperlinks(HyperlinkScope::Range(range)))));
         }
@@ -10628,6 +11538,9 @@ impl Host for WorkbookHost<'_> {
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
         if let Some(range) = self.validation_range(receiver) {
             return self.set_validation(range, name, value);
+        }
+        if let Some((id, face)) = self.condition_id(receiver) {
+            return self.set_condition(id, face, name, value);
         }
         if let Some((at, start, length)) = self.characters_of(receiver) {
             if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("caption") {
@@ -11285,6 +12198,13 @@ impl Host for WorkbookHost<'_> {
             let mut items = Vec::new();
             for id in self.links_in(scope) {
                 items.push(self.object(HostObject::Hyperlink(id)));
+            }
+            return Ok(Some(items));
+        }
+        if let Some(range) = self.conditions_range(receiver) {
+            let mut items = Vec::new();
+            for id in self.conditions_reaching(range) {
+                items.push(self.object(HostObject::FormatCondition(id)));
             }
             return Ok(Some(items));
         }
@@ -13323,6 +14243,25 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastecolumnwidths" => 8,
         "xlpastevaluesandnumberformats" => 12,
         "xlpastecomments" => -4144,
+        // Conditional formats.
+        "xlcellvalue" => 1,
+        "xlexpression" => 2,
+        "xlcolorscale" => 3,
+        "xldatabar" => 4,
+        "xltop10" => 5,
+        "xliconsets" => 6,
+        "xluniquevalues" => 8,
+        "xltextstring" => 9,
+        "xlblankscondition" => 10,
+        "xltimeperiod" => 11,
+        "xlaboveaveragecondition" => 12,
+        "xlnoblankscondition" => 13,
+        "xlerrorscondition" => 16,
+        "xlnoerrorscondition" => 17,
+        "xlcontains" => 0,
+        "xldoesnotcontain" => 1,
+        "xlbeginswith" => 2,
+        "xlendswith" => 3,
         // Data validation.
         "xlvalidateinputonly" => 0,
         "xlvalidatewholenumber" => 1,
@@ -15307,6 +16246,64 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// Conditional formats are added, read, worked out and taken away as
+    /// Excel does it.
+    ///
+    /// Measured against Excel: `Add` answers a FormatCondition whose Formula1
+    /// is kept with its `=`; `Count` is the number of conditions reaching the
+    /// range; a condition's font and fill are set on it, not on the cells,
+    /// and `DisplayFormat` shows them where the condition holds -- text
+    /// counts as above any number; two conditions layer in priority order,
+    /// with `SetFirstPriority` reordering; `Between` without Formula2 is 449;
+    /// deleting one cell's conditions cuts it out of the block; a copy takes
+    /// the conditions along for itself; and `ClearFormats` takes them away.
+    #[test]
+    fn conditional_formats_are_added_read_worked_out_and_taken_away() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, fc As Object, fc2 As Object
+               On Error Resume Next
+               Range(\"A1\").Value = 1
+               Range(\"A2\").Value = 3
+               Range(\"A3\").Value = \"abc\"
+               Set fc = Range(\"A1:A4\").FormatConditions.Add(Type:=xlCellValue, Operator:=xlGreater, Formula1:=\"2\")
+               fc.Font.Bold = True
+               fc.Interior.Color = 65535
+               out = TypeName(fc) & \"/\" & fc.Formula1 & \"/\" & fc.AppliesTo.Address & \"/\" & fc.Priority & \"/\" & fc.StopIfTrue & \"|\"
+               out = out & Range(\"A1:B4\").FormatConditions.Count & Range(\"B1\").FormatConditions.Count & \"/\" & Range(\"A2\").Font.Bold & \"/\" & Range(\"A2\").DisplayFormat.Font.Bold & Range(\"A1\").DisplayFormat.Font.Bold & Range(\"A3\").DisplayFormat.Font.Bold & \"/\" & Range(\"A2\").DisplayFormat.Interior.Color & \"|\"
+               Set fc2 = Range(\"A1:A4\").FormatConditions.Add(Type:=xlExpression, Formula1:=\"=$A1<2\")
+               fc2.Font.Italic = True
+               fc2.Interior.Color = 255
+               fc2.SetFirstPriority
+               out = out & fc.Priority & fc2.Priority & \"/\" & Range(\"A1:A4\").FormatConditions(1).Formula1 & \"/\" & Range(\"A1\").DisplayFormat.Font.Italic & Range(\"A1\").DisplayFormat.Interior.Color & \"|\"
+               Range(\"A5\").FormatConditions.Add Type:=1, Operator:=1, Formula1:=\"1\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A3\").FormatConditions.Delete
+               out = out & Range(\"A1:A4\").FormatConditions.Count & Range(\"A3\").FormatConditions.Count & \"/\" & fc.AppliesTo.Address & \"|\"
+               Range(\"A1\").Copy Range(\"C1\")
+               out = out & Range(\"C1\").FormatConditions.Count & \"/\" & Range(\"C1\").FormatConditions(1).AppliesTo.Address & \"|\"
+               Range(\"A1\").ClearFormats
+               out = out & Range(\"A1\").FormatConditions.Count & \"/\" & Range(\"A1:A4\").FormatConditions.Count
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "FormatCondition/=2/$A$1:$A$4/1/True|10/False/TrueFalseTrue/65535|21/=$A1<2/True255|449|20/$A$1:$A$2,$A$4|2/$C$1|0/2"
+                    .to_string()
+            )
         );
     }
 
