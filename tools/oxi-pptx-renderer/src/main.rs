@@ -2534,6 +2534,16 @@ thread_local! {
     static PART_IDS: std::cell::RefCell<Vec<PartId>> = const {
         std::cell::RefCell::new(Vec::new())
     };
+    /// Typefaces the deck FILED parts for, and the subset of those the
+    /// machine serves at EVERY filed slot. The advance chain's cloud source
+    /// must not answer for a filed family the machine only half-serves:
+    /// d24's break measured "Fira Sans" off the cloud's lone Regular
+    /// (44.35pt for its planner cell) while PowerPoint wraps it with the
+    /// deck's Medium part (45.17pt; the cell is 44.75).
+    static FILED_TYPEFACES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+    static FULLY_SERVED: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
     /// What the parts we did NOT load claim to be. A part is skipped when the
     /// machine already has that family, on the premise that the installed copy
     /// stands in for it -- so its identity still has to be visible, or a rule
@@ -2657,6 +2667,13 @@ fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)>
         return pick(family, false).map(|(face, _)| (face, 700));
     }
     None
+}
+
+/// S-SKIPWHOLE: a typeface's embedded parts are skipped only when the machine
+/// serves EVERY slot the deck filed for it; setting this restores the per-slot
+/// skip, which can leave a family half cloud, half embedded.
+fn skipwhole_on() -> bool {
+    std::env::var("OXI_SKIPWHOLE_DISABLE").is_err()
 }
 
 /// S-SKIPBOLD: a request whose honest part was SKIPPED goes to the installed
@@ -2856,7 +2873,8 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     // Which families the MACHINE already has, asked before anything private is
     // added (see `family_installed`).
     let installed: std::collections::HashSet<(&str, bool, bool)> = if skipembed_on() {
-        pres.embedded_fonts
+        let per_slot: std::collections::HashSet<(&str, bool, bool)> = pres
+            .embedded_fonts
             .iter()
             .map(|f| (f.typeface.as_str(), f.bold, f.italic))
             .filter(|(f, b, i)| {
@@ -2866,7 +2884,49 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                     family_installed(f)
                 }
             })
-            .collect()
+            .collect();
+        FILED_TYPEFACES.with(|f| {
+            let mut f = f.borrow_mut();
+            for font in &pres.embedded_fonts {
+                f.insert(font.typeface.clone());
+            }
+        });
+        if skipwhole_on() {
+            // S-SKIPWHOLE: all-or-nothing per typeface. A machine that can
+            // serve only SOME of a typeface's slots does not get to serve any
+            // of them: d24's cloud cache holds one Fira Sans (Regular), its
+            // deck files four slots, and PowerPoint's own fresh export draws
+            // the body with the deck's part (w=500 subsets), not the cloud
+            // Regular. Where the machine serves every filed slot (d15 Barlow,
+            // d28 Open Sans, d47 Caladea) it wins as before.
+            let mut filed: std::collections::HashMap<&str, Vec<(bool, bool)>> =
+                std::collections::HashMap::new();
+            for font in &pres.embedded_fonts {
+                filed
+                    .entry(font.typeface.as_str())
+                    .or_default()
+                    .push((font.bold, font.italic));
+            }
+            let whole: std::collections::HashSet<(&str, bool, bool)> = pres
+                .embedded_fonts
+                .iter()
+                .map(|f| (f.typeface.as_str(), f.bold, f.italic))
+                .filter(|(f, _b, _i)| {
+                    filed[f]
+                        .iter()
+                        .all(|(sb, si)| per_slot.contains(&(*f, *sb, *si)))
+                })
+                .collect();
+            FULLY_SERVED.with(|fs| {
+                let mut fs = fs.borrow_mut();
+                for (f, _b, _i) in &whole {
+                    fs.insert((*f).to_string());
+                }
+            });
+            whole
+        } else {
+            per_slot
+        }
     } else {
         Default::default()
     };
@@ -15287,7 +15347,17 @@ struct GdiFaceMetrics;
 #[cfg(windows)]
 impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
     fn advance_em(&self, family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
-        cloudadv_on()
+        // ★The cloud table answers only for a family the deck did not file,
+        // or one the machine serves at EVERY filed slot (S-SKIPWHOLE's
+        // measurement half). A half-served family belongs to the deck's own
+        // parts: d24's "Fira Sans" (cloud holds one Regular; the deck files
+        // four slots of Medium/Bold) measured its planner cell at the cloud
+        // Regular's 44.35pt and kept it on one line, where PowerPoint's own
+        // export wraps it at the embedded Medium's 45.17 (cell 44.75).
+        let cloud_ok = !skipwhole_on()
+            || !FILED_TYPEFACES.with(|f| f.borrow().contains(family))
+            || FULLY_SERVED.with(|f| f.borrow().contains(family));
+        (cloudadv_on() && cloud_ok)
             .then(|| cloud_advance_em(family, bold, italic, ch))
             .flatten()
             // ★The tables measured from the machine's own font FILES, which
