@@ -176,7 +176,7 @@ const I18N = {
     note: 'Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
     loading: 'Loading the engine…', parsing: 'Parsing…',
     prev: 'Previous', next: 'Next', present: 'Present',
-    parsed: (n, s, ms) => `${n} slides, ${s} shapes — parsed in ${ms} ms`,
+    parsed: (n, s) => `${n} slides, ${s} shapes`,
     slideOf: (a, b) => `Slide ${a} / ${b}`,
     badType: 'That is not a .pptx file.',
     failed: 'Could not open the presentation: ',
@@ -189,7 +189,7 @@ const I18N = {
     note: 'Oxi はオープンソースです。このページの描画エンジンは PowerPoint 自身の出力とスライド単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
     prev: '前へ', next: '次へ', present: 'プレゼン開始',
-    parsed: (n, s, ms) => `${n} スライド / ${s} 図形 — ${ms} ms で解析`,
+    parsed: (n, s) => `${n} スライド / ${s} 図形`,
     slideOf: (a, b) => `${a} / ${b} 枚目`,
     badType: '.pptx ファイルではありません。',
     failed: 'プレゼンテーションを開けませんでした: ',
@@ -609,14 +609,12 @@ btnSample.disabled = false;
 async function open(name, bytes) {
   try {
     say(t('parsing'));
-    const t0 = performance.now();
     pres = parse_presentation(bytes);
-    const ms = (performance.now() - t0).toFixed(1);
     let shapes = 0;
     for (const s of pres.slides) shapes += s.shapes.length;
     current = 0;
     document.getElementById('docName').textContent = name;
-    say(t('parsed')(pres.slides.length, shapes, ms));
+    say(t('parsed')(pres.slides.length, shapes));
     document.getElementById('btnPresent').disabled = false;
     document.getElementById('prestot').textContent = pres.slides.length;
     render();
