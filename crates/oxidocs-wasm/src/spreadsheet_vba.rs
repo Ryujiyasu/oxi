@@ -5516,11 +5516,46 @@ impl Host for WorkbookHost<'_> {
                     }
                     return self.paste_held(args).map(Some);
                 }
+                // True, like every other member that DOES something: asked
+                // of Excel, `r = ActiveSheet.Calculate` and
+                // `r = ActiveSheet.Activate` are both Booleans.
                 if name.eq_ignore_ascii_case("calculate") {
                     self.recalculate();
-                    return Ok(Some(Value::Empty));
+                    return Ok(Some(Value::Boolean(true)));
+                }
+                // Selecting a sheet is activating it, and it answers True:
+                // asked of Excel, `r = ActiveSheet.Select` is a Boolean.
+                if name.eq_ignore_ascii_case("select") {
+                    if !args.is_empty() {
+                        return Err("Worksheet.Select does not accept arguments".to_string());
+                    }
+                    self.active_sheet = sheet;
+                    self.selection = CellRange::single(CellAddress {
+                        sheet,
+                        row: 1,
+                        column: 0,
+                    });
+                    self.active_cell = self.selection.first();
+                    return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("showalldata") {
+                    // Nothing hidden, nothing to show: asked of Excel,
+                    // `ShowAllData` is error 1004 on a sheet with no rows
+                    // hidden -- and 1004 even after an AutoFilter has been
+                    // applied, as long as it has hidden nothing. It asks about
+                    // the hidden ROWS, not about the filter.
+                    //
+                    // Only the member refuses. Turning a filter off goes
+                    // through the same helper and must not, which is what a
+                    // test caught when the refusal was put down there.
+                    let anything_hidden = self
+                        .workbook
+                        .sheets
+                        .get(sheet)
+                        .is_some_and(|worksheet| worksheet.rows.iter().any(|row| row.hidden));
+                    if !anything_hidden {
+                        return Err("no filtered data to show on this worksheet".to_string());
+                    }
                     self.show_all_rows(sheet)?;
                     return Ok(Some(Value::Empty));
                 }
@@ -5553,7 +5588,7 @@ impl Host for WorkbookHost<'_> {
                         column: 0,
                     });
                     self.active_cell = self.selection.first();
-                    return Ok(Some(Value::Empty));
+                    return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("usedrange") {
                     if !args.is_empty() {
