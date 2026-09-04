@@ -26190,7 +26190,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let prev_is_digit = prev_digit_local || prev_frag_digit;
                     flush_word!(style);
                     let cur_is_cjk = kinsoku::is_cjk_ideograph_or_kana(ch);
+                    // S1316 (2026-09-05, default ON, opt-out OXI_S1316_DISABLE): Word puts
+                    // no auto-space on the side of a digit/Latin run that touches a
+                    // RUBY field. DERIVED (`_pb_autospace_gen.py`, (資料代)50(円) with
+                    // ruby on both / left / right / neither neighbour, body and cell):
+                    // neither +2.52/+2.57, both -0.12/+0.05, left only 0/+2.57, right
+                    // only +2.52/+0.17. correspondence__04a3e3e1's '(資料代50円)' cell
+                    // line carries two ruby fields around '50': Word 0, Oxi +5.
+                    let s1316_ruby_adjacent = std::env::var("OXI_S1316_DISABLE").is_err()
+                        && (style.ruby_field
+                            || current_line.fragments.last().map_or(false, |f| f.style.ruby_field));
                     if cur_is_cjk
+                        && !s1316_ruby_adjacent
                         && ((prev_is_alpha && para_style.auto_space_de)
                             || (prev_is_digit && para_style.auto_space_dn))
                     {
@@ -27307,7 +27318,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s95_de_fires = ch_is_alpha && para_style.auto_space_de;
                     let s95_dn_fires = ch_is_digit && para_style.auto_space_dn;
                     if word_style.is_none() && (s95_de_fires || s95_dn_fires) {
-                        let prev_is_cjk_ideo = current_line.fragments.last().map_or(false, |f| {
+                        // S1316: a ruby field on either side suppresses the auto-space.
+                        let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
+                            && (style.ruby_field
+                                || current_line.fragments.last().map_or(false, |f| f.style.ruby_field));
+                        let prev_is_cjk_ideo = !s1316_adj && current_line.fragments.last().map_or(false, |f| {
                             f.text
                                 .chars()
                                 .last()
@@ -35411,6 +35426,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // path historically did not, causing d77a58 w_i=47 wrap mismatch
                                     // (5 lines Oxi vs 6 lines Word).
                                     let mut prev_char_emitted: Option<char> = None;
+                                    let mut prev_char_ruby = false; // S1316: the emitted char came from a ruby field
                                     // S443: the widened oikomi must fire ONLY on tab-bearing
                                     // (list-marker) paragraphs. 3a4f has hanging-indent paras
                                     // but ZERO hanging+tab paras; gating oikomi on hanging
@@ -35708,6 +35724,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 current_line_chars.clear();
                                                 is_first_line = false;
                                                 prev_char_emitted = None;
+                                                prev_char_ruby = false;
                                                 continue;
                                             }
                                             // S443 (2026-05-30, SHIP, default ON, opt-out OXI_S443_DISABLE):
@@ -35762,6 +35779,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     },
                                                 );
                                                 prev_char_emitted = Some(ch);
+                                                prev_char_ruby = run.style.ruby_field;
                                                 continue;
                                             }
                                             // S763: metrics keep the legacy quote class, EXCEPT for
@@ -36135,8 +36153,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     || (prev_alpha && cur_cjk_ideo);
                                                 let dn_boundary = (prev_cjk_ideo && cur_digit)
                                                     || (prev_digit && cur_cjk_ideo);
-                                                if (de_boundary && para.style.auto_space_de)
-                                                    || (dn_boundary && para.style.auto_space_dn)
+                                                // S1316: no auto-space against a ruby field.
+                                                let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
+                                                    && (prev_char_ruby || run.style.ruby_field);
+                                                if !s1316_adj
+                                                    && ((de_boundary && para.style.auto_space_de)
+                                                        || (dn_boundary && para.style.auto_space_dn))
                                                 {
                                                     if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
                                                     {
@@ -37604,6 +37626,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     }
                                                     if consumed {
                                                         prev_char_emitted = Some(ch);
+                                                        prev_char_ruby = run.style.ruby_field;
                                                         continue;
                                                     }
                                                 }
@@ -37685,6 +37708,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                     ));
                                                     prev_char_emitted = Some(ch);
+                                                    prev_char_ruby = run.style.ruby_field;
                                                     continue;
                                                 }
                                             }
@@ -37698,6 +37722,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 },
                                             );
                                             prev_char_emitted = Some(ch);
+                                            prev_char_ruby = run.style.ruby_field;
                                         }
                                         if !buf.is_empty() {
                                             current_line.push((
@@ -42751,6 +42776,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // Without this the line-count estimate under-counts vs render, re-introducing
         // the Fix C estimate<render mismatch this function exists to prevent.
         let mut prev_char_emitted: Option<char> = None;
+        let mut prev_char_ruby = false; // S1316: the emitted char came from a ruby field
         // Session 123 (2026-05-20): mirror the S118 jc=both wrap-decision lookahead
         // from the cell renderer (mod.rs:6722-6727 and 6864-6895). Without this
         // mirror, count_cell_lines predicts more lines than the renderer emits
@@ -42842,6 +42868,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 line_nonempty = true;
                 line_has_ruby |= s1312_run_ruby;
                 prev_char_emitted = None;
+                prev_char_ruby = false;
                 s1082_gpos += n;
                 continue;
             }
@@ -42875,6 +42902,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     line_nonempty = false;
                     is_first_line = false;
                     prev_char_emitted = None;
+                    prev_char_ruby = false;
                     current_line_chars.clear();
                     buf_chars.clear();
                     continue;
@@ -42908,6 +42936,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     line_nonempty = true;
                 line_has_ruby |= s1312_run_ruby;
                     prev_char_emitted = Some(ch);
+                    prev_char_ruby = run.style.ruby_field;
                     continue;
                 }
                 // S763 + S1052 estimate mirror — the classification MUST match
@@ -43056,8 +43085,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let cur_digit = ch.is_ascii_digit();
                     let de_boundary = (prev_cjk_ideo && cur_alpha) || (prev_alpha && cur_cjk_ideo);
                     let dn_boundary = (prev_cjk_ideo && cur_digit) || (prev_digit && cur_cjk_ideo);
-                    if (de_boundary && para.style.auto_space_de)
-                        || (dn_boundary && para.style.auto_space_dn)
+                    // S1316: no auto-space against a ruby field.
+                    let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
+                        && (prev_char_ruby || run.style.ruby_field);
+                    if !s1316_adj
+                        && ((de_boundary && para.style.auto_space_de)
+                            || (dn_boundary && para.style.auto_space_dn))
                     {
                         if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
                             s1175_autospace(
@@ -43452,6 +43485,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     font_size,
                 });
                 prev_char_emitted = Some(ch);
+                prev_char_ruby = run.style.ruby_field;
             }
             if buf_nonempty {
                 line_x += buf_w;
