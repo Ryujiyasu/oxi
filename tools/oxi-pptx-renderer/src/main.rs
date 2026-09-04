@@ -1825,7 +1825,12 @@ unsafe fn draw_custom_geometry_gdi(
         .and_then(parse_hex_rgb)
         .map(|c| CreateSolidBrush(COLORREF(colorref(c.0, c.1, c.2))));
     let border_w = sh.border_width.unwrap_or(0.0);
-    let border_pen = if border_w > 0.0 {
+    // A TRANSLUCENT border cannot be stroked with a pen: it is composited in
+    // its own pass after the fill (S-LNALPHA), so the opaque pass strokes
+    // nothing.
+    let border_translucent =
+        lnalpha_on() && border_w > 0.0 && sh.border_alpha.is_some_and(|a| a < 0.995);
+    let border_pen = if border_w > 0.0 && !border_translucent {
         let c = sh
             .border_color
             .as_deref()
@@ -1910,7 +1915,138 @@ unsafe fn draw_custom_geometry_gdi(
     if let Some(brush) = fill_brush {
         let _ = DeleteObject(brush);
     }
+    if border_translucent && drew {
+        stroke_geometry_alpha(dc, sh, scale);
+    }
     drew
+}
+
+/// S-LNALPHA: a border's `<a:alpha>` is composited, unless this is set, which
+/// restores stroking it opaque.
+fn lnalpha_on() -> bool {
+    std::env::var("OXI_LNALPHA_DISABLE").is_err()
+}
+
+/// Stroke the shape's outline into a coverage mask and composite it at the
+/// border's colour and alpha. The mask is stroked by the SAME path emitters
+/// the opaque pass uses.
+#[cfg(windows)]
+unsafe fn stroke_geometry_alpha(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, scale: f64) {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::*;
+
+    let alpha = sh.border_alpha.unwrap_or(1.0).clamp(0.0, 1.0);
+    let border_w = sh.border_width.unwrap_or(0.0);
+    if alpha <= 0.004 || border_w <= 0.0 {
+        return;
+    }
+    let (cr, cg, cb) = sh
+        .border_color
+        .as_deref()
+        .and_then(parse_hex_rgb)
+        .unwrap_or((0, 0, 0));
+    // The slide surface's size, from the bitmap selected into the DC.
+    let hbm = GetCurrentObject(dc, OBJ_BITMAP);
+    let mut bm = BITMAP::default();
+    if GetObjectW(
+        HGDIOBJ(hbm.0),
+        std::mem::size_of::<BITMAP>() as i32,
+        Some((&mut bm as *mut BITMAP).cast()),
+    ) == 0
+    {
+        return;
+    }
+    let (slide_w, slide_h) = (bm.bmWidth, bm.bmHeight);
+    if slide_w <= 0 || slide_h <= 0 {
+        return;
+    }
+    let (w, h) = (slide_w as usize, slide_h as usize);
+
+    let mask_dc = CreateCompatibleDC(dc);
+    let mut info = BITMAPINFO::default();
+    info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    info.bmiHeader.biWidth = slide_w;
+    info.bmiHeader.biHeight = -slide_h;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB.0;
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let bmp = match CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+        Ok(b) if !bits.is_null() => b,
+        _ => {
+            let _ = DeleteDC(mask_dc);
+            return;
+        }
+    };
+    let old_bmp = SelectObject(mask_dc, bmp);
+    let px = std::slice::from_raw_parts_mut(bits.cast::<u8>(), w * h * 4);
+    px.fill(0);
+
+    let pen = outline_pen(
+        (border_w as f64 * scale).round().max(1.0) as i32,
+        0x00FF_FFFF,
+        sh.border_dash.as_deref(),
+        border_w as f64 * scale,
+        None,
+    );
+    let old_pen = SelectObject(mask_dc, pen);
+    let old_brush = SelectObject(mask_dc, GetStockObject(NULL_BRUSH));
+    let mut stroked = false;
+    if let Some(geom) = drawable_geometry(sh) {
+        for path in &geom.paths {
+            if path.commands.is_empty() {
+                continue;
+            }
+            let _ = BeginPath(mask_dc);
+            emit_geom_path_gdi(mask_dc, sh, path, scale);
+            let _ = EndPath(mask_dc);
+            let _ = StrokePath(mask_dc);
+            stroked = true;
+        }
+    }
+    if !stroked {
+        let _ = BeginPath(mask_dc);
+        if emit_shape_path(mask_dc, sh, scale) {
+            let _ = EndPath(mask_dc);
+            let _ = StrokePath(mask_dc);
+            stroked = true;
+        } else {
+            let _ = AbortPath(mask_dc);
+        }
+    }
+    if !stroked {
+        // The box, exactly as the legacy border pass strokes it.
+        let x = (f64::from(sh.x) * scale).round() as i32;
+        let y = (f64::from(sh.y) * scale).round() as i32;
+        let ew = (f64::from(sh.width) * scale).round() as i32;
+        let eh = (f64::from(sh.height) * scale).round() as i32;
+        let _ = Rectangle(mask_dc, x, y, x + ew, y + eh);
+        stroked = true;
+    }
+    let _ = GdiFlush();
+    SelectObject(mask_dc, old_brush);
+    SelectObject(mask_dc, old_pen);
+    let _ = DeleteObject(pen);
+    if stroked {
+        for i in 0..w * h {
+            let m = px[i * 4];
+            let a = (f32::from(m) * alpha) as u32;
+            px[i * 4] = ((u32::from(cb) * a + 127) / 255) as u8;
+            px[i * 4 + 1] = ((u32::from(cg) * a + 127) / 255) as u8;
+            px[i * 4 + 2] = ((u32::from(cr) * a + 127) / 255) as u8;
+            px[i * 4 + 3] = a as u8;
+        }
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        let _ = AlphaBlend(dc, 0, 0, slide_w, slide_h, mask_dc, 0, 0, slide_w, slide_h, blend);
+    }
+    SelectObject(mask_dc, old_bmp);
+    let _ = DeleteObject(bmp);
+    let _ = DeleteDC(mask_dc);
 }
 
 /// Emit ONE `a:path` into the DC's current path, WITHOUT painting it.
@@ -4890,6 +5026,31 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
             }
             SetBkMode(mem_dc, TRANSPARENT);
 
+            // The IR's shapes, one line each: what the slide is ABOUT to
+            // draw, before any painter gets a vote. `OXI_SHAPES_DEBUG=N`
+            // prints slide N only; `*` prints every slide.
+            if let Ok(want) = std::env::var("OXI_SHAPES_DEBUG") {
+                if want == "*" || want == (si + 1).to_string() {
+                    for (sj, sh) in slide.shapes.iter().enumerate() {
+                        eprintln!(
+                            "SHAPE s{} #{sj} at {:.0},{:.0} {:.0}x{:.0} rot={:.0} fill={:?} grad={} cust={} shadow={} kind={}",
+                            si + 1, sh.x, sh.y, sh.width, sh.height,
+                            sh.rotation, sh.fill_color,
+                            sh.gradient.is_some(), sh.custom_geometry.is_some(),
+                            sh.shadow.is_some(),
+                            match &sh.content {
+                                ShapeContent::AutoShape { .. } => "auto",
+                                ShapeContent::TextBox { .. } => "text",
+                                ShapeContent::Table { .. } => "table",
+                                ShapeContent::Image { .. } => "image",
+                                ShapeContent::Chart { .. } => "chart",
+                                ShapeContent::Unsupported { .. } => "unsupported",
+                                ShapeContent::Placeholder => "placeholder",
+                            }
+                        );
+                    }
+                }
+            }
             for sh in &slide.shapes {
                 let x = (sh.x as f64 * scale).round() as i32;
                 let y = (sh.y as f64 * scale).round() as i32;
@@ -5128,7 +5289,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                 // Border
                 let border_w = sh.border_width.unwrap_or(0.0);
-                if !drew_preset && border_w > 0.0 {
+                // A TRANSLUCENT border composites instead of stroking -- this
+                // legacy pass is where a translucent-FILL shape's outline is
+                // drawn (the geometry painter declines those), so d49's pill
+                // (fill alpha 0, ring white at 35.3%) arrives exactly here.
+                if !drew_preset
+                    && border_w > 0.0
+                    && lnalpha_on()
+                    && sh.border_alpha.is_some_and(|a| a < 0.995)
+                {
+                    stroke_geometry_alpha(mem_dc, sh, scale);
+                } else if !drew_preset && border_w > 0.0 {
                     let col = sh
                         .border_color
                         .as_deref()

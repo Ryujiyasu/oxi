@@ -477,6 +477,11 @@ pub struct Shape {
     /// `a:effectLst/a:outerShdw`, drawn under the shape's own fill.
     #[serde(default)]
     pub shadow: Option<ShapeShadow>,
+    /// `<a:alpha>` inside the border's `a:ln/a:solidFill`, 0..1. None = opaque.
+    /// d49's site pill is the specimen: a 3pt white ring at 35.3% over black,
+    /// drawn opaque white until this was carried.
+    #[serde(default)]
+    pub border_alpha: Option<f32>,
     /// Image source crop (a:blipFill/a:srcRect l,t,r,b), normalized to 0..1.
     /// Only meaningful for ShapeContent::Image. None = full source image.
     /// Word render-truth (01__Biology deck, 2026-08): a full-bleed background

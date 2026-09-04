@@ -1068,6 +1068,7 @@ fn parse_slide(
     let mut shape_fill_color: Option<String> = None;
     let mut shape_fill_alpha: Option<f32> = None;
     let mut shape_border_color: Option<String> = None;
+    let mut shape_border_alpha: Option<f32> = None;
     let mut shape_border_width: Option<f32> = None;
     let mut shape_border_dash: Option<String> = None;
     let mut shape_head_end: Option<LineEnd> = None;
@@ -1478,6 +1479,14 @@ fn parse_slide(
                     "alpha" if in_outer_shdw => {
                         if let Some(v) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
                             shape_shadow_alpha = (v / 100000.0).clamp(0.0, 1.0);
+                        }
+                    }
+                    "alpha" if in_ln && in_sp_pr => {
+                        // The BORDER's translucency (a:ln/a:solidFill/a:alpha).
+                        // d49's site pill is a 3pt white ring at 35.3% over
+                        // black; opaque it reads as a chalk outline.
+                        if let Some(v) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            shape_border_alpha = Some((v / 100000.0).clamp(0.0, 1.0));
                         }
                     }
                     "alpha" if in_run && !in_highlight => {
@@ -2247,6 +2256,14 @@ fn parse_slide(
                             shape_shadow_alpha = (v / 100000.0).clamp(0.0, 1.0);
                         }
                     }
+                    "alpha" if in_ln && in_sp_pr => {
+                        // The BORDER's translucency (a:ln/a:solidFill/a:alpha).
+                        // d49's site pill is a 3pt white ring at 35.3% over
+                        // black; opaque it reads as a chalk outline.
+                        if let Some(v) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            shape_border_alpha = Some((v / 100000.0).clamp(0.0, 1.0));
+                        }
+                    }
                     "alpha" if in_run && !in_highlight => {
                         if let Some(v) = get_attr(&e, "val") {
                             if let Ok(pc) = v.parse::<f32>() {
@@ -2985,6 +3002,7 @@ fn parse_slide(
                             fill_color: shape_fill_color.take(),
                             fill_alpha: shape_fill_alpha.take(),
                             border_color: shape_border_color.take(),
+                            border_alpha: shape_border_alpha.take(),
                             border_width: shape_border_width.take(),
                             border_dash: shape_border_dash.take(),
                             head_end: shape_head_end.take(),
@@ -3166,6 +3184,7 @@ fn parse_slide(
                             fill_color: shape_fill_color.take(),
                             fill_alpha: shape_fill_alpha.take(),
                             border_color: shape_border_color.take(),
+                            border_alpha: shape_border_alpha.take(),
                             border_width: shape_border_width.take(),
                             border_dash: shape_border_dash.take(),
                             head_end: shape_head_end.take(),
@@ -3713,6 +3732,7 @@ fn parse_inherited_shapes(
     let mut src_rect: Option<(f32, f32, f32, f32)> = None;
     let mut fill_rect: Option<(f32, f32, f32, f32)> = None;
     let mut ln_color: Option<String> = None;
+    let mut ln_alpha: Option<f32> = None;
     let mut ln_width: Option<f32> = None;
     let mut ln_no_fill = false;
     let mut in_sp_pr = false;
@@ -4011,6 +4031,7 @@ fn parse_inherited_shapes(
                                             fill_alpha
                                         },
                                         border_color: bc,
+                                        border_alpha: ln_alpha.take(),
                                         border_width: bw,
                                         // Group members carry no dash yet; the
                                         // corpus states prstDash on top-level
@@ -4213,6 +4234,7 @@ fn parse_inherited_shapes(
                     src_rect = None;
                     fill_rect = None;
                     ln_color = None;
+                    ln_alpha = None;
                     ln_width = None;
                     ln_no_fill = false;
                     // ★Reset the geometry / gradient accumulators per CANDIDATE,
@@ -4473,6 +4495,11 @@ fn parse_inherited_shapes(
                         .cloned()
                         .unwrap_or_else(|| scheme_color_to_hex(&val))
                 });
+            }
+            "alpha" if ln_depth > 0 => {
+                if let Some(v) = get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                    ln_alpha = Some((v / 100000.0).clamp(0.0, 1.0));
+                }
             }
             "alpha" if in_ig_shdw => {
                 if let Some(v) = get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()) {
