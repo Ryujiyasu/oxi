@@ -19,6 +19,13 @@
 //! sparse, sorted by code point, and holding only the characters the face
 //! really contains.
 
+// These are MEASUREMENTS, and four of them land near a mathematical constant
+// by coincidence: a 0.318 em advance is what Georgia, Constantia and Palatino
+// Linotype set several characters at, and clippy reads it as a hand-written
+// `FRAC_1_PI` (0.31831). Rounding the data to please the lint would be the
+// wrong repair -- the table has to say what the file says.
+#![allow(clippy::approx_constant)]
+
 /// Calibri (calibri.ttf).
 static CALIBRI: [f32; 95] = [
     0.22607, 0.32568, 0.40088, 0.49805, 0.50684, 0.71484, 0.68213, 0.22070, 0.30322, 0.30322,

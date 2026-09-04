@@ -248,6 +248,16 @@ def main() -> None:
     print("//! Latin-1 Supplement and the punctuation Western text is set with --")
     print("//! sparse, sorted by code point, and holding only the characters the face")
     print("//! really contains.")
+    # A measured advance can land near a mathematical constant by coincidence:
+    # 0.318 em is what several serif faces set some characters at, and clippy
+    # reads it as a hand-written `FRAC_1_PI`. The table has to say what the
+    # file says, so the lint is turned off rather than the data rounded.
+    print("")
+    print("// These are MEASUREMENTS, and some land near a mathematical constant by")
+    print("// coincidence -- 0.318 em is an advance several serif faces really use,")
+    print("// and clippy reads it as a hand-written `FRAC_1_PI` (0.31831). Rounding")
+    print("// the data to please the lint would be the wrong repair.")
+    print("#![allow(clippy::approx_constant)]")
     print()
     for family, bold, italic, row, extra, src in rows:
         const = re.sub(r"[^A-Z0-9]", "_", family.upper())

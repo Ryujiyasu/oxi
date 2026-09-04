@@ -598,6 +598,15 @@ pub struct Chart {
     /// (1:2:4), the default gives their square roots (1:1.414:2).
     #[serde(default = "default_chart_size_represents")]
     pub size_represents: String,
+    /// c:valAx/c:scaling/c:min and /c:max — the value axis PINNED, which a
+    /// deck does to make small differences readable. Ignoring them is not a
+    /// neutral default: a deck that pins 0.7..0.9 gets four bars spanning the
+    /// whole plot in PowerPoint and four bars of nearly equal height from an
+    /// engine that scales from zero.
+    #[serde(default)]
+    pub val_min: Option<f64>,
+    #[serde(default)]
+    pub val_max: Option<f64>,
     /// c:stockChart/c:hiLowLines — when present Word draws one vertical
     /// rule per category spanning the MIN..MAX of every series at that
     /// category. Word render-truth (chart_stock K1, 2026-08-10): Q1
@@ -764,6 +773,16 @@ pub struct ChartSeries {
     /// chart type.
     #[serde(default)]
     pub sizes: Vec<f64>,
+    /// c:ser/c:spPr/a:solidFill/a:srgbClr — the colour the FILE gives this
+    /// series, instead of the theme's cycle.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// c:ser/c:dPt — a colour for one point of the series, by index. A deck
+    /// picks one bar out this way (the pitch deck paints its own result rust
+    /// and the three it is compared against grey), so a palette cycle draws
+    /// the opposite of what the author meant.
+    #[serde(default)]
+    pub point_colors: Vec<(u32, String)>,
 }
 
 /// A DrawingML table (a:tbl). Cell text is stored as paragraphs per cell so

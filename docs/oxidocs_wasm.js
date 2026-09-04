@@ -1,6 +1,44 @@
 /* @ts-self-types="./oxidocs_wasm.d.ts" */
 
 /**
+ * Where the engine breaks one paragraph's lines, for a box `width_pt` wide.
+ *
+ * The browser has been wrapping slide text with its own text layout, so what
+ * a person edits on screen is not what the renderer -- or PowerPoint --
+ * produces. This is the engine's own break test
+ * (`pptx-master-unit-break-law`: each glyph's advance rounded to 1/8 pt, then
+ * summed), running where there is no font system.
+ *
+ * Returns `null` when the metrics tables cannot measure the text, which is
+ * most families: the tables carry the faces that were measured from their
+ * real files, and a guess here would break lines PowerPoint keeps. A caller
+ * that gets null must say the wrap is the browser's, not the engine's.
+ *
+ * `runs` is the paragraph's runs, so a line carrying a bold word is measured
+ * per run rather than wholly in one weight.
+ * @param {string} text
+ * @param {number} font_size
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @param {number} width_pt
+ * @param {any} runs
+ * @param {any} advances
+ * @returns {any}
+ */
+export function break_slide_paragraph(text, font_size, family, bold, italic, width_pt, runs, advances) {
+    const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.break_slide_paragraph(ptr0, len0, font_size, ptr1, len1, bold, italic, width_pt, runs, advances);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * Build a .docx from a content structure.
  * `content`: JS array of block objects:
  *   { type: "paragraph", runs: [{text, bold?, italic?, underline?, strikethrough?, font_family?, font_size?, color?}], alignment?, heading_level?, line_height? }
@@ -171,6 +209,32 @@ export function edit_pptx(data, edits) {
 }
 
 /**
+ * Edit a .pptx and break paragraphs in it, returning the modified bytes.
+ *
+ * `edits` replaces run text; `splits` cuts a paragraph in two at a character
+ * offset, which is what Enter means. Both are applied to the same save, and
+ * the text edit lands first so a split counts the characters the file will
+ * actually carry.
+ * @param {Uint8Array} data
+ * @param {any} edits
+ * @param {any} splits
+ * @param {any} merges
+ * @param {any} formats
+ * @returns {Uint8Array}
+ */
+export function edit_pptx_with_splits(data, edits, splits, merges, formats) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.edit_pptx_with_splits(ptr0, len0, edits, splits, merges, formats);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
  * Fast text edit + re-layout using cached document (skips docx parse).
  * Returns layout result. Also updates the cached docx bytes.
  * @param {number} paragraph_index
@@ -211,8 +275,9 @@ export function edit_xlsx(data, edits) {
  *
  * `run_spreadsheet_vba` hands back the whole workbook rather than a list of
  * edits, so the difference against the original file is worked out here.
- * Styling and merged cells ride along in the original XML untouched, and a
- * change to those is not written back.
+ * Everything the difference covers is written: values and formulas, but also
+ * fills and fonts, merges, row heights and column widths, what is hidden,
+ * frozen panes, the filter, the defined names and which sheets are shown.
  * @param {Uint8Array} data
  * @param {any} workbook
  * @returns {Uint8Array}
@@ -295,6 +360,37 @@ export function layout_document(data) {
     const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.layout_document(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Lay out one text shape the way the engine does, for the browser to draw.
+ *
+ * `shape` is a `Shape` from `parse_presentation`, `paragraphs` its
+ * paragraphs, and `master` / `ph_levels` the inherited outline levels. The
+ * answer is one entry per LINE -- its text, where it starts, its baseline,
+ * and which paragraph and character offset it came from, so a click can be
+ * mapped back to a run.
+ *
+ * `complete` says whether EVERY paragraph was measured. A shape that comes
+ * back incomplete must not be drawn as if it were the engine's layout: the
+ * measured tables cover 17 of the 142 families the corpora name, and the rest
+ * are still the browser's own wrap.
+ * @param {any} shape
+ * @param {any} paragraphs
+ * @param {any} master
+ * @param {any} ph_levels
+ * @param {string} default_family
+ * @param {any} advances
+ * @returns {any}
+ */
+export function layout_slide_shape(shape, paragraphs, master, ph_levels, default_family, advances) {
+    const ptr0 = passStringToWasm0(default_family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.layout_slide_shape(shape, paragraphs, master, ph_levels, ptr0, len0, advances);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -435,20 +531,62 @@ export function preview_hanko(name) {
 }
 
 /**
+ * Reads the macros in an `.xlsm` / `.xlam` / `.docm` and says what they could
+ * reach. Nothing is executed.
+ *
+ * Returns an error only when the bytes are not an Office package. A package
+ * with no macros in it is not an error: it answers with an empty report,
+ * because "there are no macros" is exactly what a caller wants to hear.
+ * @param {Uint8Array} _package
+ * @returns {any}
+ */
+export function read_macro_safety(_package) {
+    const ptr0 = passArray8ToWasm0(_package, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.read_macro_safety(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Recalculate every formula in a workbook and hand the workbook back.
+ *
+ * The browser holds a sheet as this IR while it is being edited, so this is
+ * how a typed `=A1+B1` gets an answer: without it the editor would have to
+ * write the file out and read it back to find out what it had just computed.
+ * Cross-sheet references resolve, because the whole workbook goes across.
+ * @param {any} workbook
+ * @param {number | null} [now]
+ * @returns {any}
+ */
+export function recalculate_spreadsheet(workbook, now) {
+    const ret = wasm.recalculate_spreadsheet(workbook, !isLikeNone(now), isLikeNone(now) ? 0 : now);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * Execute VBA source against an OxiCells workbook IR.
  * @param {any} workbook
  * @param {string} source
  * @param {string} procedure
  * @param {any} args
  * @param {number} active_sheet
+ * @param {string | null} [file_name]
  * @returns {any}
  */
-export function run_spreadsheet_vba(workbook, source, procedure, args, active_sheet) {
+export function run_spreadsheet_vba(workbook, source, procedure, args, active_sheet, file_name) {
     const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passStringToWasm0(procedure, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.run_spreadsheet_vba(workbook, ptr0, len0, ptr1, len1, args, active_sheet);
+    var ptr2 = isLikeNone(file_name) ? 0 : passStringToWasm0(file_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len2 = WASM_VECTOR_LEN;
+    const ret = wasm.run_spreadsheet_vba(workbook, ptr0, len0, ptr1, len1, args, active_sheet, ptr2, len2);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -472,6 +610,124 @@ export function set_docx_comments(data, comments) {
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
+}
+
+/**
+ * Put rows or columns into a sheet, or take them out, and hand the workbook
+ * back.
+ *
+ * `at` counts rows from one and columns from zero, as the IR does. A negative
+ * `count` takes them out.
+ *
+ * The whole workbook goes across because the change reaches all of it: a
+ * formula on any sheet that names this one has to follow the rows it names.
+ * That is a cost worth paying here in a way it would not be per keystroke —
+ * nobody inserts a row sixty times a second.
+ * @param {any} workbook
+ * @param {string} sheet
+ * @param {boolean} rows
+ * @param {number} at
+ * @param {number} count
+ * @returns {any}
+ */
+export function shift_band(workbook, sheet, rows, at, count) {
+    const ptr0 = passStringToWasm0(sheet, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.shift_band(workbook, ptr0, len0, rows, at, count);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * What the compiled tables say one character advances, in EM units.
+ *
+ * The page measures faces itself; this lets it check that measuring against a
+ * face the tables also carry, instead of trusting a canvas it never verified.
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @param {string} ch
+ * @returns {number | undefined}
+ */
+export function slide_face_advance(family, bold, italic, ch) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(ch, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.slide_face_advance(ptr0, len0, bold, italic, ptr1, len1);
+    return ret === 0x100000001 ? undefined : ret;
+}
+
+/**
+ * Whether the engine can measure this family at all, so a caller can tell a
+ * person which text on the page is laid out by the engine and which is not.
+ * @param {string} family
+ * @returns {boolean}
+ */
+export function slide_family_measurable(family) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.slide_family_measurable(ptr0, len0);
+    return ret !== 0;
+}
+
+/**
+ * Where each character of one laid-out line starts, in points from its `x`.
+ *
+ * `line` is a `PlacedLine` from [`layout_slide_shape`] and `advances` the same
+ * measured faces that call was given. The answer is the engine's own placement
+ * -- each advance on the master unit, which is what PowerPoint measures and
+ * draws on (see `glyph_offsets_pt`) -- so a page that draws from it puts the
+ * glyphs where the break already assumed they were.
+ *
+ * Null when a face cannot be measured; the caller then has to fall back to its
+ * own measuring and should say the answer is not the engine's.
+ * @param {any} line
+ * @param {any} advances
+ * @returns {any}
+ */
+export function slide_glyph_offsets(line, advances) {
+    const ret = wasm.slide_glyph_offsets(line, advances);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Move a formula's relative references as Excel does when a cell is copied.
+ *
+ * The browser needs this to fill a formula down a column: `=B2+C2` dragged one
+ * row must become `=B3+C3`, while `=$B$2` must not move. A formula the engine
+ * cannot parse comes back as an error rather than unchanged, because copying
+ * it verbatim would keep relative references Excel would have moved — which
+ * looks like it worked and is wrong.
+ * @param {string} formula
+ * @param {number} rows
+ * @param {number} columns
+ * @returns {string}
+ */
+export function translate_formula(formula, rows, columns) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(formula, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.translate_formula(ptr0, len0, rows, columns);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
 }
 
 /**
@@ -547,6 +803,10 @@ function __wbg_get_imports() {
             const ret = typeof(arg0) === 'function';
             return ret;
         },
+        __wbg___wbindgen_is_null_0b605fc6b167c56f: function(arg0) {
+            const ret = arg0 === null;
+            return ret;
+        },
         __wbg___wbindgen_is_object_781bc9f159099513: function(arg0) {
             const val = arg0;
             const ret = typeof(val) === 'object' && val !== null;
@@ -589,6 +849,10 @@ function __wbg_get_imports() {
             const ret = arg0.call(arg1);
             return ret;
         }, arguments); },
+        __wbg_codePointAt_3925396be3b2c733: function(arg0, arg1) {
+            const ret = arg0.codePointAt(arg1 >>> 0);
+            return ret;
+        },
         __wbg_done_08ce71ee07e3bd17: function(arg0) {
             const ret = arg0.done;
             return ret;
@@ -676,6 +940,10 @@ function __wbg_get_imports() {
         },
         __wbg_iterator_d8f549ec8fb061b1: function() {
             const ret = Symbol.iterator;
+            return ret;
+        },
+        __wbg_length_15d3fc853a68bbbc: function(arg0) {
+            const ret = arg0.length;
             return ret;
         },
         __wbg_length_b3416cf66a5452c8: function(arg0) {

@@ -5015,6 +5015,15 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
 
     // Per-`c:ser` state
     let mut in_ser = false;
+    let mut in_val_ax = false;
+    let mut val_min: Option<f64> = None;
+    let mut val_max: Option<f64> = None;
+    let mut in_dpt = false;
+    let mut in_ser_sppr = false;
+    let mut dpt_idx: Option<u32> = None;
+    let mut dpt_color: Option<String> = None;
+    let mut ser_color: Option<String> = None;
+    let mut ser_point_colors: Vec<(u32, String)> = Vec::new();
     // Which cache we're collecting: "tx" | "cat" | "val" | ""
     let mut ser_target = "";
     let mut ser_name: Option<String> = None;
@@ -5112,7 +5121,18 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                         ser_line_none = false;
                         ser_marker_none = false;
                         in_ser_ln = false;
+                        ser_color = None;
+                        ser_point_colors.clear();
+                        in_ser_sppr = false;
+                        in_dpt = false;
                     }
+                    "valAx" => in_val_ax = true,
+                    "dPt" if in_ser => {
+                        in_dpt = true;
+                        dpt_idx = None;
+                        dpt_color = None;
+                    }
+                    "spPr" if in_ser && !in_dpt && !in_dlbls => in_ser_sppr = true,
                     "ln" if in_ser && !in_dlbls => in_ser_ln = true,
                     "noFill" if in_ser_ln => ser_line_none = true,
                     "tx" if in_ser => ser_target = "tx",
@@ -5198,6 +5218,46 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             if let Ok(n) = v.parse::<f64>() {
                                 hole_size = Some(n);
                             }
+                        }
+                    }
+                    // <c:min val="0.7"/> / <c:max val="0.9"/> inside
+                    // <c:valAx><c:scaling>. Only the VALUE axis is read -- a
+                    // category axis carries the same element names -- and the
+                    // tag has to match exactly, since `minorTickMark` and
+                    // friends share the prefix. Self-closing, so this is the
+                    // `Event::Empty` arm and not the `Start` one.
+                    "min" if in_val_ax => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(n) = v.parse::<f64>() {
+                                val_min = Some(n);
+                            }
+                        }
+                    }
+                    "max" if in_val_ax => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(n) = v.parse::<f64>() {
+                                val_max = Some(n);
+                            }
+                        }
+                    }
+                    // <c:idx val="0"/> inside <c:dPt>, and the colour that
+                    // follows it. `idx` also names the SERIES, so it is only
+                    // read while a data point is open.
+                    "idx" if in_dpt => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(n) = v.parse::<u32>() {
+                                dpt_idx = Some(n);
+                            }
+                        }
+                    }
+                    "srgbClr" if in_dpt => {
+                        if dpt_color.is_none() {
+                            dpt_color = get_attr(&e, "val");
+                        }
+                    }
+                    "srgbClr" if in_ser_sppr => {
+                        if ser_color.is_none() {
+                            ser_color = get_attr(&e, "val");
                         }
                     }
                     // <c:bubbleScale val="200"/> and <c:sizeRepresents
@@ -5382,10 +5442,20 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                                 line_none: ser_line_none,
                                 marker_none: ser_marker_none,
                                 sizes: std::mem::take(&mut ser_sizes),
+                                color: ser_color.take(),
+                                point_colors: std::mem::take(&mut ser_point_colors),
                             });
                             in_ser_ln = false;
                         }
                     }
+                    "valAx" => in_val_ax = false,
+                    "dPt" if in_dpt => {
+                        in_dpt = false;
+                        if let (Some(i), Some(c)) = (dpt_idx.take(), dpt_color.take()) {
+                            ser_point_colors.push((i, c));
+                        }
+                    }
+                    "spPr" if in_ser_sppr => in_ser_sppr = false,
                     "barChart" => {
                         in_bar_chart = false;
                     }
@@ -5411,6 +5481,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     }
 
     Ok(Chart {
+        val_min,
+        val_max,
         chart_type: chart_type.unwrap_or_else(default_chart_type),
         bar_dir: bar_dir.unwrap_or_else(default_chart_bar_dir),
         grouping: grouping.unwrap_or_else(default_chart_grouping),
