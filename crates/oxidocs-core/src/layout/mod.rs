@@ -17529,7 +17529,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // Wiring only the render half would leave the page-fit
                     // estimate disagreeing with what is drawn.
                     let s949_ascii = grid_pitch.is_none()
-                        || (!para.style.snap_to_grid && std::env::var("OXI_S1305").is_ok())
+                        || (!para.style.snap_to_grid
+                            && std::env::var("OXI_S1305_DISABLE").is_err()
+                            && std::env::var("OXI_S1306_DISABLE").is_err())
                         || (page.doc_grid_no_type
                             && !self.doc_body_has_real_cjk
                             && std::env::var("OXI_S949_DISABLE").is_err());
@@ -29352,7 +29354,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // reached from paragraphs that HAVE text, and cost 0.0266 across
             // three documents (d1e8ac8 −0.0177, ed025 −0.0065, kojin −0.0031).
             // The measurement is about blank separators; the rule stays there.
-            let s1305 = !para_style.snap_to_grid && std::env::var("OXI_S1305").is_ok();
+            let s1305 = !para_style.snap_to_grid
+                && std::env::var("OXI_S1305_DISABLE").is_err()
+                && std::env::var("OXI_S1306_DISABLE").is_err();
             let s949_ascii = grid_pitch.is_none()
                 || s1305
                 || (grid_no_type
@@ -29966,18 +29970,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // reached from paragraphs that HAVE text, and cost 0.0266
                         // over three documents. The measurement is about blank
                         // separators, so the rule lives in the blank branch.
-                        // ★HELD OPT-IN (`OXI_S1305=1`), default OFF. The rule is
-                        // measured, and on the one document the narrowed scope
-                        // touches it moves the blank's advance the RIGHT way
-                        // (Word 12.75; S1305 gives 12.50, the old reading 13.62)
-                        // -- but that same document's TITLE advance moves +1.12
-                        // with it and the sentinel comes out at −0.0177. The
-                        // coupled quantity is not identified, and a gate that is
-                        // negative does not ship, however good the local reading.
+                        // ★SHIPPED AS A PAIR WITH S1306b (default ON; either
+                        // OXI_S1305_DISABLE or OXI_S1306_DISABLE turns it off). Alone
+                        // it measured −0.0177 on d1e8ac8: the blank's advance moved
+                        // the RIGHT way (Word 12.75; 12.50 vs the old 13.62) but that
+                        // document's 14pt x1.5 heading was 1.7pt SHORT of its grid
+                        // cells and the two errors had been cancelling. S1306b puts
+                        // the heading on its cells (29.2); alone THAT costs −0.0448 as
+                        // the blanks' excess is exposed; the two together come out
+                        // +0.0063 on the same document. Neither half ships alone.
                         let metrics = self.metrics_for_para_mark_g(
                             &rpr_ref,
                             para_style,
-                            std::env::var("OXI_S1305").is_ok(),
+                            std::env::var("OXI_S1305_DISABLE").is_err()
+                                && std::env::var("OXI_S1306_DISABLE").is_err(),
                         );
                         raw_max = metrics.word_line_height_no_grid(font_size);
                     } else {
@@ -30011,7 +30017,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     Some(f) => (f - 1.0).abs() < 0.001,
                     None => true,
                 };
-                if snap_to_grid && is_single_line {
+                // S1306b: the SAME law on the other path. A paragraph whose
+                // `raw_spaced_tw` accumulator is not in play (`use_cumulative_basis`
+                // false) takes `line_height` from here instead, and this gate --
+                // "grid snap only for single spacing" -- is the reading the sweep
+                // falsified. `d1e8ac8`'s 14pt x1.5 heading under a 14.6pt
+                // linesAndChars grid is such a paragraph: it never reaches the
+                // accumulator, so wiring only that site left it at 27.5 where the
+                // law says 2 cells = 29.2.
+                // ★Both sites needed it. The first attempt wired this one and was
+                // judged "no effect" against a probe arm that takes the OTHER path
+                // -- the specimen has to be one the site actually decides.
+                // ★SCOPE: lines that hold text. The sweep's eight arms are all text
+                // lines; a BLANK paragraph under a multiplier in a linesAndChars grid
+                // was not swept, and `creative__13152ea1` says it does not follow the
+                // law as written -- Word advances its four 12pt x1.15 blanks
+                // 21.00 / 21.75 / 21.75 / **18.75** (the last one a bare cell) where
+                // the law gives 21.56 x 4, and that 3pt spills its one page. Blank
+                // lines keep the old path until they are measured (S1305's territory).
+                let s1306 = std::env::var("OXI_S1306_DISABLE").is_err()
+                    && line.fragments.iter().any(|f| !f.text.trim().is_empty());
+                if snap_to_grid && (is_single_line || (s1306 && !grid_no_type)) {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
                             // S571 (2026-06-14): a NO-TYPE docGrid does NOT snap each
@@ -30165,6 +30191,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             } else {
                                 (h_tw / p_tw).ceil()
                             };
+                            if s1306 && !is_single_line {
+                                // Cells from the UNMULTIPLIED natural; the
+                                // multiplier then competes with them as a floor.
+                                let nat_tw = ((base - tol) * 20.0).round();
+                                let nat_cells = (nat_tw / p_tw).ceil().max(1.0);
+                                return pitch * nat_cells.max(line_spacing.unwrap_or(1.0));
+                            }
                             return cells.max(1.0) * pitch;
                         }
                     }
