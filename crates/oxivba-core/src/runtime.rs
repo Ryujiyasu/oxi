@@ -2531,21 +2531,13 @@ impl<'a> Runtime<'a> {
                     return err_property(frame, name, span.line);
                 }
                 self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
-                    error(
-                        RuntimeErrorKind::Unsupported,
-                        format!("host property is not available: {}.{name}", receiver.kind),
-                        Some(span.line),
-                    )
+                    no_such_member(format!("host property is not available: {}.{name}", receiver.kind), Some(span.line))
                 })
             }
             Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
                 let receiver = current_with_object(frame, span.line)?;
                 self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
-                    error(
-                        RuntimeErrorKind::Unsupported,
-                        format!("host property is not available: {}.{name}", receiver.kind),
-                        Some(span.line),
-                    )
+                    no_such_member(format!("host property is not available: {}.{name}", receiver.kind), Some(span.line))
                 })
             }
             _ => Err(error(
@@ -2647,11 +2639,7 @@ impl<'a> Runtime<'a> {
                             span.line,
                         )?
                         .ok_or_else(|| {
-                            error(
-                                RuntimeErrorKind::Unsupported,
-                                format!("host method is not available: {}.{name}", receiver.kind),
-                                Some(span.line),
-                            )
+                            no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
                         })
                     }
                     Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
@@ -2664,11 +2652,7 @@ impl<'a> Runtime<'a> {
                             span.line,
                         )?
                         .ok_or_else(|| {
-                            error(
-                                RuntimeErrorKind::Unsupported,
-                                format!("host method is not available: {}.{name}", receiver.kind),
-                                Some(span.line),
-                            )
+                            no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
                         })
                     }
                     // `Split(text, ",")(1)` — what a call handed back,
@@ -2719,11 +2703,7 @@ impl<'a> Runtime<'a> {
                 }
                 self.host_call(Some(&receiver), name, &[], span.line)?
                     .ok_or_else(|| {
-                        error(
-                            RuntimeErrorKind::Unsupported,
-                            format!("host method is not available: {}.{name}", receiver.kind),
-                            Some(span.line),
-                        )
+                        no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
                     })
             }
             Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
@@ -2732,11 +2712,7 @@ impl<'a> Runtime<'a> {
                     return Ok(value);
                 }
                 self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
-                    error(
-                        RuntimeErrorKind::Unsupported,
-                        format!("host member is not available: {}.{name}", receiver.kind),
-                        Some(span.line),
-                    )
+                    no_such_member(format!("host member is not available: {}.{name}", receiver.kind), Some(span.line))
                 })
             }
             _ => Err(error(
@@ -8232,6 +8208,25 @@ fn compare_mode(
         ));
     }
     Ok(mode != 0)
+}
+
+/// An object was asked for a member it has not got.
+///
+/// Excel answers 438 to that, not the 445 every other Unsupported here maps to
+/// -- measured by reading each of the 256 members this host claims on a Range
+/// and asking Excel the same: `Range("A1").Bold`, `.Average`, `.CutCopyMode`
+/// and twenty more all answer 438 there.
+///
+/// 445 is what is left for what it says, "does not support this ACTION": an
+/// object that has the member and will not do the thing.
+fn no_such_member(message: String, line: Option<u32>) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::Unsupported,
+        message,
+        line,
+        vba_number: Some(438),
+        vba_source: Some("VBA".to_string()),
+    }
 }
 
 fn invalid_procedure_call(message: String, line: Option<u32>) -> RuntimeError {

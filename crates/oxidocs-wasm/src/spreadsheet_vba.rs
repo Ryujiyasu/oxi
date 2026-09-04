@@ -6665,7 +6665,15 @@ impl Host for WorkbookHost<'_> {
                     "Range.Count cannot hold {count} cells; ask CountLarge"
                 ));
             }
-            return Ok(Some(Value::Integer(count as i64)));
+            // And `CountLarge` says so in its TYPE: asked of Excel,
+            // `TypeName(Range("A1").CountLarge)` is LongLong where `Count` is
+            // a Long. It could not say that here until the runtime had a
+            // LongLong of its own.
+            return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                Value::LongLong(count as i64)
+            } else {
+                Value::Integer(count as i64)
+            }));
         }
         // Every range has these, not only one made of several blocks: asked
         // of Excel, `Range("A1").Areas.Count` is 1 and its one area is A1.
