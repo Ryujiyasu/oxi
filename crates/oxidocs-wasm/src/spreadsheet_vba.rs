@@ -11389,7 +11389,73 @@ impl<'a> WorkbookHost<'a> {
     /// did before, which was raise 438 and leave the macro broken -- a macro
     /// asking to autofit wants the column widened, and a width slightly
     /// different from Excel's is a far smaller wrong than no width at all.
-    fn auto_fit(&mut self, range: CellRange) -> Result<Value, String> {
+    /// `Range.AutoFit`: the rows or the columns of the range, whichever it
+    /// is -- `Rows(9).AutoFit`, `Columns("A").AutoFit`, or a block's
+    /// `.Rows` / `.Columns`. Measured: a block that is neither is 1004.
+    fn auto_fit(&mut self, range: CellRange, sense: Option<RangeAxis>) -> Result<Value, String> {
+        let axis = match sense {
+            Some(RangeAxis::Rows) => ShiftAxis::Rows,
+            Some(RangeAxis::Columns) => ShiftAxis::Columns,
+            None => Self::hidden_band(range)
+                .map_err(|_| host_error(1004, "AutoFit method of Range class failed"))?,
+        };
+        match axis {
+            ShiftAxis::Rows => self.auto_fit_rows(range),
+            ShiftAxis::Columns => self.auto_fit_columns(range),
+        }
+    }
+
+    /// The height a row takes to show what is in it: for each cell the row
+    /// Excel gives that cell's font (the measured table the renderer draws
+    /// by), times the lines a wrapped cell breaks into at its line breaks,
+    /// and never less than the row the sheet's own font asks for.
+    ///
+    /// Measured: an empty row set to 30 comes back to 18.75; a 20-point
+    /// cell asks 33; three wrapped lines of 11-point text ask 56.25. How
+    /// many lines a long text wraps into at the column's width is not
+    /// worked out here -- only the breaks the text carries -- which is the
+    /// one thing this falls short of Excel on.
+    fn auto_fit_rows(&mut self, range: CellRange) -> Result<Value, String> {
+        use oxicells_core::row_defaults::font_default_row_px;
+        let sheet_index = range.sheet;
+        let (face, size) = {
+            let sheet = &self.workbook.sheets[sheet_index];
+            match sheet.normal_font.clone() {
+                Some(font) => font,
+                None => (
+                    self.workbook.default_style.font_name.clone().unwrap_or_else(|| "Calibri".to_string()),
+                    self.workbook.default_style.font_size.unwrap_or(11.0),
+                ),
+            }
+        };
+        let default_px = self.workbook.sheets[sheet_index].default_row_height / 0.75;
+        let base_px = font_default_row_px(&face, size).map(f32::from).unwrap_or(default_px);
+        let sheet = &mut self.workbook.sheets[sheet_index];
+        for row in &mut sheet.rows {
+            if !(range.start_row..=range.end_row).contains(&row.index) {
+                continue;
+            }
+            let mut px = base_px;
+            for cell in &row.cells {
+                let cell_face = cell.style.font_name.as_deref().unwrap_or(&face);
+                let cell_size = cell.style.font_size.unwrap_or(size);
+                let Some(font_px) = font_default_row_px(cell_face, cell_size) else {
+                    continue;
+                };
+                let lines = if cell.style.wrap_text {
+                    cell.value.display().matches('\n').count() as f32 + 1.0
+                } else {
+                    1.0
+                };
+                px = px.max(f32::from(font_px) * lines);
+            }
+            row.height = Some(px * 0.75);
+            row.custom_height = false;
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    fn auto_fit_columns(&mut self, range: CellRange) -> Result<Value, String> {
         const FLOOR: f64 = 5.88;
         for column in range.start_column..=range.end_column {
             let mut widest = 0usize;
@@ -13605,7 +13671,8 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Range.AutoFit does not accept arguments".to_string());
                     }
-                    return self.auto_fit(range).map(Some);
+                    let sense = self.range_sense(receiver);
+                    return self.auto_fit(range, sense).map(Some);
                 }
                 if name.eq_ignore_ascii_case("group") {
                     return self.group_range(range, true).map(Some);

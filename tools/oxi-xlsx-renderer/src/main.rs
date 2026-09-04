@@ -20,7 +20,7 @@ use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Sheet, Workbook};
 use oxicells_core::parser::parse_xlsx;
 
 mod graph;
-mod row_defaults;
+use oxicells_core::row_defaults;
 
 /// A stored column width already carries the gutter either side of a cell's
 /// text, so it is not the width a person types into Excel: typing 10 stores

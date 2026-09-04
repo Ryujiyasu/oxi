@@ -8,6 +8,7 @@ pub mod fill;
 pub mod formula;
 pub mod ir;
 pub mod parser;
+pub mod row_defaults;
 
 pub mod bands;
 

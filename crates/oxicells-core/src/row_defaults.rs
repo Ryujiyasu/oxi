@@ -2,6 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+//! The height Excel gives an untouched row, per font — measured data shared
+//! by the renderer and by the editor's `AutoFit`.
+//!
 //! The height Excel gives an untouched row, per font. A sheet that does not
 //! pin its default row height (customHeight) has the stated number thrown
 //! away; the height is derived from the standard font of the columns. These
@@ -401,7 +404,7 @@ static FONT_BOLD_ROW_PX: &[(&str, u16, u16, u16)] = &[
 ];
 
 /// The measured default row height for a font, in 96-dpi pixels.
-pub(crate) fn font_default_row_px(face: &str, size: f32) -> Option<u16> {
+pub fn font_default_row_px(face: &str, size: f32) -> Option<u16> {
     found(face, size).map(|(_, _, px, _)| *px)
 }
 
@@ -413,7 +416,7 @@ pub(crate) fn font_default_row_px(face: &str, size: f32) -> Option<u16> {
 /// accounts for two thirds of the table and nothing accounts for the rest, so
 /// the measurements stand as the data. The weight is taken into account here
 /// and not in the row height, which is not measured for it.
-pub(crate) fn font_line_box(face: &str, size: f32, bold: bool) -> Option<(u16, u16)> {
+pub fn font_line_box(face: &str, size: f32, bold: bool) -> Option<(u16, u16)> {
     if bold {
         let size_q = (size * 4.0).round() as u16;
         if let Some((_, _, px, baseline)) = FONT_BOLD_ROW_PX
@@ -544,7 +547,7 @@ static RAISED_ROW_PX: &[(&str, u16, u16)] = &[
 ];
 
 /// The row a raised or lowered run asks for, when the sweep has measured it.
-pub(crate) fn raised_row_px(face: &str, size: f32) -> Option<u16> {
+pub fn raised_row_px(face: &str, size: f32) -> Option<u16> {
     let size_q = (size * 4.0).round() as u16;
     if let Some((_, _, px)) = RAISED_ROW_PX
         .iter()
