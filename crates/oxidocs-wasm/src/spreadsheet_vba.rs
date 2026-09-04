@@ -12,8 +12,8 @@ use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
 use oxivba_core::{
-    parse_module, vba_date_text, vba_number_text, ArrayDimension, ArrayValue, Host, ModuleItem, ObjectRef,
-    Runtime, Value,
+    host_error, parse_module, vba_date_text, vba_number_text, ArrayDimension, ArrayValue, Host,
+    ModuleItem, ObjectRef, Runtime, Value,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -289,6 +289,86 @@ enum HostObject {
     /// `ActiveWindow`: the one view a browser host has, whose only state
     /// worth keeping is where its panes are frozen.
     Window,
+    /// The note on one cell, held by the cell rather than by its place in
+    /// the list, since adding and deleting shuffle the list about.
+    Comment(CellAddress),
+    /// The notes on one sheet.
+    Comments(usize),
+}
+
+/// What `Worksheet.Protect` was asked for.
+///
+/// Measured against Excel, the flags divide the sheet three ways. `Contents`
+/// covers the cells: with it, a LOCKED cell refuses a write, every cell
+/// refuses a format, the columns refuse a width, the rows a height, the sheet
+/// an insert, a delete, a sort and a merge -- each of the `Allow` flags
+/// letting one of those through again -- and `Contents:=False` lets all of
+/// them through. `UserInterfaceOnly` lifts all of that for macros and leaves
+/// it for the person. `DrawingObjects` covers the notes: a protected sheet
+/// refuses `AddComment` even with `UserInterfaceOnly`, even on an unlocked
+/// cell, and even with `Contents:=False`, and only `DrawingObjects:=False`
+/// lets one be added.
+#[derive(Debug, Clone)]
+struct Protection {
+    password: String,
+    contents: bool,
+    drawing_objects: bool,
+    user_interface_only: bool,
+    allow_formatting_cells: bool,
+    allow_formatting_columns: bool,
+    allow_formatting_rows: bool,
+    allow_inserting_columns: bool,
+    allow_inserting_rows: bool,
+    allow_deleting_columns: bool,
+    allow_deleting_rows: bool,
+    allow_sorting: bool,
+}
+
+impl Protection {
+    /// Read off `Protect`'s arguments in their declared order: Password,
+    /// DrawingObjects, Contents, Scenarios, UserInterfaceOnly, then the
+    /// Allow flags -- FormattingCells, FormattingColumns, FormattingRows,
+    /// InsertingColumns, InsertingRows, InsertingHyperlinks, DeletingColumns,
+    /// DeletingRows, Sorting, Filtering, UsingPivotTables.
+    fn asked(args: &[Value]) -> Result<Self, String> {
+        let flag = |index: usize, default: bool| -> Result<bool, String> {
+            match args.get(index) {
+                None | Some(Value::Missing) => Ok(default),
+                Some(value) => Ok(style_face_boolean(value, "Worksheet.Protect")?.unwrap_or(default)),
+            }
+        };
+        Ok(Self {
+            password: match args.first() {
+                None | Some(Value::Missing) => String::new(),
+                Some(value) => shown_text(value, None),
+            },
+            drawing_objects: flag(1, true)?,
+            contents: flag(2, true)?,
+            user_interface_only: flag(4, false)?,
+            allow_formatting_cells: flag(5, false)?,
+            allow_formatting_columns: flag(6, false)?,
+            allow_formatting_rows: flag(7, false)?,
+            allow_inserting_columns: flag(8, false)?,
+            allow_inserting_rows: flag(9, false)?,
+            allow_deleting_columns: flag(11, false)?,
+            allow_deleting_rows: flag(12, false)?,
+            allow_sorting: flag(13, false)?,
+        })
+    }
+}
+
+/// A note a macro can read and write.
+///
+/// Kept beside the workbook rather than in it: the IR holds only the notes a
+/// sheet keeps pinned open, placed for drawing, and a note a macro adds has
+/// no place on the sheet until someone gives it one. So what a macro adds is
+/// held for the macro's own reading and is not drawn or saved -- a known
+/// limit, the same one the sheet's own protection has.
+#[derive(Debug, Clone)]
+struct Note {
+    at: CellAddress,
+    text: String,
+    visible: bool,
 }
 
 /// What `Range.Copy` set aside, as it stood when it was copied. Excel keeps a
@@ -297,6 +377,10 @@ enum HostObject {
 struct Clipboard {
     /// Row-major, one entry per cell of the copied block.
     cells: Vec<Option<Cell>>,
+    /// The note on each of those cells, in the same order.
+    notes: Vec<Option<Note>>,
+    /// Whether each of those cells was unlocked, in the same order.
+    unlocked: Vec<bool>,
     rows: u32,
     columns: u32,
     /// Where it came from, so a formula can be moved by the right offset.
@@ -350,15 +434,16 @@ struct WorkbookHost<'a> {
     enable_events: bool,
     display_alerts: bool,
     calculation: i64,
-    /// Which sheets are protected, and with what password (`""` for none).
-    /// Runtime state rather than part of the workbook: the file format's own
-    /// protection is not read in, so this is what a MACRO has done, which is
-    /// what a macro then runs into.
-    protected: Vec<Option<String>>,
+    /// Which sheets are protected, and how. Runtime state rather than part
+    /// of the workbook: the file format's own protection is not read in, so
+    /// this is what a MACRO has done, which is what a macro then runs into.
+    protected: Vec<Option<Protection>>,
     /// The cells a macro has UNLOCKED. Every cell starts locked -- asked of
     /// Excel, `Range("A1").Locked` is True on a fresh sheet -- so it is the
     /// exceptions that are kept.
     unlocked: std::collections::HashSet<CellAddress>,
+    /// The notes on every sheet, in the order they were added.
+    notes: Vec<Note>,
     /// What a macro has written across the bottom of the window, while it is
     /// the macro's to write. Nothing here means the bar is Excel's own again,
     /// which is what it answers `False` to say.
@@ -399,6 +484,7 @@ impl<'a> WorkbookHost<'a> {
                 "active sheet index is out of range: {active_sheet}"
             ));
         }
+        let notes = notes_pinned_open(workbook);
         Ok(Self {
             workbook,
             active_sheet,
@@ -418,6 +504,7 @@ impl<'a> WorkbookHost<'a> {
             screen_updating: true,
             protected: Vec::new(),
             unlocked: std::collections::HashSet::new(),
+            notes,
             enable_events: true,
             display_alerts: true,
             calculation: -4105,
@@ -460,6 +547,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Workbook => "Workbook",
                 HostObject::Application => "Application",
                 HostObject::Window => "Window",
+                HostObject::Comment(_) => "Comment",
+                HostObject::Comments(_) => "Comments",
                 HostObject::WorksheetFunction => "WorksheetFunction",
                 HostObject::DebugConsole => "Debug",
             }
@@ -1043,6 +1132,10 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("worksheet") || name.eq_ignore_ascii_case("parent") {
             return Ok(Some(self.object(HostObject::Worksheet(areas[0].sheet))));
         }
+        // Measured: `Range("A1,C1").Comment` answers the note on A1.
+        if name.eq_ignore_ascii_case("comment") && args.is_empty() {
+            return Ok(Some(self.comment_of(areas[0])));
+        }
         // What a many-block range holds is its FIRST block's: asked of Excel,
         // `.Value` answers for that block alone. What it SHOWS is the uniform
         // answer over all of them, the same rule one block follows about its
@@ -1201,6 +1294,178 @@ impl<'a> WorkbookHost<'a> {
             held.rsplit_once('!')
                 .is_some_and(|(_, leaf)| leaf.eq_ignore_ascii_case(name))
         })
+    }
+
+    fn comment_cell(&self, object: &ObjectRef) -> Option<CellAddress> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Comment(at)) => Some(*at),
+            _ => None,
+        }
+    }
+
+    fn comments_sheet(&self, object: &ObjectRef) -> Option<usize> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Comments(sheet)) => Some(*sheet),
+            _ => None,
+        }
+    }
+
+    fn note_at(&self, at: CellAddress) -> Option<usize> {
+        self.notes.iter().position(|note| note.at == at)
+    }
+
+    /// The notes on a sheet, in the order `Comments(1)` counts them.
+    fn notes_on(&self, sheet: usize) -> Vec<usize> {
+        let mut held: Vec<usize> = (0..self.notes.len())
+            .filter(|&index| self.notes[index].at.sheet == sheet)
+            .collect();
+        // ORDER_RULE
+        held.sort_by_key(|&index| (self.notes[index].at.row, self.notes[index].at.column));
+        held
+    }
+
+    /// The note a range answers for: the one on its cell, or Nothing. A
+    /// range of several cells is Nothing whatever is on them -- measured,
+    /// `Range("A1:B2").Comment` is Nothing with a note on A1.
+    fn comment_of(&mut self, range: CellRange) -> Value {
+        if !range.is_single() {
+            return Value::Nothing;
+        }
+        let at = CellAddress {
+            sheet: range.sheet,
+            row: range.start_row,
+            column: range.start_column,
+        };
+        match self.note_at(at) {
+            Some(_) => self.object(HostObject::Comment(at)),
+            None => Value::Nothing,
+        }
+    }
+
+    /// `Range.AddComment [Text]`: one cell, not yet carrying a note.
+    fn add_comment(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        if !range.is_single() {
+            return Err(host_error(5, "Range.AddComment needs a single cell"));
+        }
+        let at = CellAddress {
+            sheet: range.sheet,
+            row: range.start_row,
+            column: range.start_column,
+        };
+        if self.note_at(at).is_some() {
+            return Err("the cell already has a comment".to_string());
+        }
+        if self.objects_protected(at.sheet) {
+            return Err("the sheet is protected; unprotect it first".to_string());
+        }
+        // Only text: measured, `AddComment 42` and `AddComment True` are both
+        // 1004 and leave the cell without a note.
+        let text = match args.first() {
+            None | Some(Value::Missing) => String::new(),
+            Some(Value::String(text)) => text.clone(),
+            Some(_) => return Err("Range.AddComment needs text".to_string()),
+        };
+        self.notes.push(Note {
+            at,
+            text,
+            visible: false,
+        });
+        Ok(self.object(HostObject::Comment(at)))
+    }
+
+    /// Take the notes off every cell of a range.
+    fn clear_comments(&mut self, range: CellRange) {
+        self.notes.retain(|note| {
+            note.at.sheet != range.sheet
+                || !(range.start_row..=range.end_row).contains(&note.at.row)
+                || !(range.start_column..=range.end_column).contains(&note.at.column)
+        });
+    }
+
+    /// What one note answers to.
+    fn comment_member(
+        &mut self,
+        at: CellAddress,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let Some(index) = self.note_at(at) else {
+            return Err("the comment has been deleted".to_string());
+        };
+        if name.eq_ignore_ascii_case("text") {
+            // Under protection a note is read but not written, and the write
+            // is passed over in SILENCE: measured, `Comment.Text "edited"` on
+            // a protected sheet raises nothing and changes nothing, while
+            // `Visible` and `Delete` both go through.
+            let writing = args.first().is_some_and(|value| !matches!(value, Value::Missing));
+            if writing && self.objects_protected(at.sheet) {
+                return Ok(Some(Value::String(self.notes[index].text.clone())));
+            }
+            return self.note_text(index, args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("visible") {
+            return Ok(Some(Value::Boolean(self.notes[index].visible)));
+        }
+        if name.eq_ignore_ascii_case("parent") {
+            return Ok(Some(self.object(HostObject::Range(CellRange::single(at)))));
+        }
+        if name.eq_ignore_ascii_case("delete") {
+            self.notes.remove(index);
+            return Ok(Some(Value::Empty));
+        }
+        Ok(None)
+    }
+
+    /// `Comment.Text [Text], [Start], [Overwrite]`, as Excel actually does it,
+    /// which is not as its documentation says.
+    ///
+    /// Measured on a note reading `hello world`: with no text, or an empty
+    /// one, it answers what the note says and changes nothing. With text and
+    /// no start it replaces the whole. With a start and `Overwrite` LEFT OUT
+    /// the text goes in at that character and everything after it is
+    /// dropped -- `"Z", 6` gives `helloZ`; a start past the end appends,
+    /// without complaint. With `Overwrite:=False` given, the text goes in at
+    /// that character and the rest is kept -- `"AB", 3, False` gives
+    /// `heABllo world`. `Overwrite:=True` is error 5 however it is asked, as
+    /// is a start of 0. A text that is not a string is 1004. What it answers
+    /// is the text after the change.
+    fn note_text(&mut self, index: usize, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let text = match given(0) {
+            None => return Ok(Value::String(self.notes[index].text.clone())),
+            Some(Value::String(text)) if text.is_empty() => {
+                return Ok(Value::String(self.notes[index].text.clone()))
+            }
+            Some(Value::String(text)) => text.clone(),
+            Some(_) => return Err("Comment.Text needs text".to_string()),
+        };
+        let overwrite = match given(2) {
+            None => None,
+            Some(value) => style_face_boolean(value, "Comment.Text Overwrite")?,
+        };
+        if overwrite == Some(true) {
+            return Err(host_error(5, "Comment.Text cannot overwrite"));
+        }
+        let held = &mut self.notes[index].text;
+        let Some(start) = given(1) else {
+            *held = text;
+            return Ok(Value::String(held.clone()));
+        };
+        let start = sort_number(start, "Comment.Text Start")?;
+        if start < 1 {
+            return Err(host_error(5, "Comment.Text cannot start before the first character"));
+        }
+        let before: String = held.chars().take(start as usize - 1).collect();
+        let after: String = if overwrite == Some(false) {
+            held.chars().skip(start as usize - 1).collect()
+        } else {
+            String::new()
+        };
+        *held = format!("{before}{text}{after}");
+        Ok(Value::String(held.clone()))
     }
 
     fn is_window(&self, object: &ObjectRef) -> bool {
@@ -3511,6 +3776,12 @@ impl<'a> WorkbookHost<'a> {
 
         let needle = find_value_text(what);
         let replacement_text = find_value_text(replacement);
+        // Measured: `Replace` on a protected sheet changes nothing and raises
+        // nothing -- not even in cells that are unlocked, and not even when
+        // every cell of the range is.
+        if self.cell_protection(range.sheet).is_some() {
+            return Ok(Value::Boolean(false));
+        }
         let mut changed = false;
         for address in range.addresses() {
             let formula = self
@@ -3678,16 +3949,109 @@ impl<'a> WorkbookHost<'a> {
         })))
     }
 
+    /// The protection standing between a macro and a sheet's CELLS, if any:
+    /// none when the sheet is not protected, when it was protected with
+    /// `Contents:=False`, or with `UserInterfaceOnly:=True`.
+    fn cell_protection(&self, sheet: usize) -> Option<&Protection> {
+        self.protected
+            .get(sheet)?
+            .as_ref()
+            .filter(|held| held.contents && !held.user_interface_only)
+    }
+
+    /// Whether the sheet's notes are protected. `UserInterfaceOnly` does not
+    /// lift this one, and neither does `Contents:=False`.
+    fn objects_protected(&self, sheet: usize) -> bool {
+        self.protected
+            .get(sheet)
+            .and_then(Option::as_ref)
+            .is_some_and(|held| held.drawing_objects)
+    }
+
     /// Whether a sheet is protected against writing this cell.
     ///
     /// Asked of Excel, after `ActiveSheet.Protect "pw"` writing a locked cell
     /// is error 1004 and the cell keeps its value, writing an UNLOCKED cell
     /// goes through, and reading either is fine.
     fn write_is_protected(&self, address: CellAddress) -> bool {
-        self.protected
-            .get(address.sheet)
-            .is_some_and(Option::is_some)
-            && !self.unlocked.contains(&address)
+        self.cell_protection(address.sheet).is_some() && !self.unlocked.contains(&address)
+    }
+
+    /// Refuse the whole of an operation that touches a locked cell: Clear,
+    /// ClearFormats and a paste are all-or-nothing -- measured, a paste onto
+    /// a block with one locked cell writes none of the block.
+    fn guard_locked_cells(&self, range: CellRange, doing: &str) -> Result<(), String> {
+        if self.cell_protection(range.sheet).is_none() {
+            return Ok(());
+        }
+        if range.addresses().any(|address| self.write_is_protected(address)) {
+            return Err(format!(
+                "{doing} touches a locked cell on a protected sheet; unprotect it first"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Formatting is refused on EVERY cell of a protected sheet, locked or
+    /// not, unless `AllowFormattingCells` was given.
+    fn guard_formats(&self, sheet: usize, doing: &str) -> Result<(), String> {
+        match self.cell_protection(sheet) {
+            Some(held) if !held.allow_formatting_cells => Err(format!(
+                "{doing} is not allowed on a protected sheet; unprotect it first"
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    fn guard_column_formats(&self, sheet: usize, doing: &str) -> Result<(), String> {
+        match self.cell_protection(sheet) {
+            Some(held) if !held.allow_formatting_columns => Err(format!(
+                "{doing} is not allowed on a protected sheet; unprotect it first"
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    fn guard_row_formats(&self, sheet: usize, doing: &str) -> Result<(), String> {
+        match self.cell_protection(sheet) {
+            Some(held) if !held.allow_formatting_rows => Err(format!(
+                "{doing} is not allowed on a protected sheet; unprotect it first"
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Inserting and deleting each have their own Allow flag, per axis.
+    fn guard_structure(&self, sheet: usize, sideways: bool, inserting: bool) -> Result<(), String> {
+        let Some(held) = self.cell_protection(sheet) else {
+            return Ok(());
+        };
+        let allowed = match (sideways, inserting) {
+            (true, true) => held.allow_inserting_columns,
+            (false, true) => held.allow_inserting_rows,
+            (true, false) => held.allow_deleting_columns,
+            (false, false) => held.allow_deleting_rows,
+        };
+        if allowed {
+            return Ok(());
+        }
+        Err(format!(
+            "{} {} is not allowed on a protected sheet; unprotect it first",
+            if inserting { "inserting" } else { "deleting" },
+            if sideways { "columns" } else { "rows" },
+        ))
+    }
+
+    /// A sort is refused on a protected sheet even over unlocked cells, unless
+    /// `AllowSorting` was given -- and then only over unlocked ones.
+    fn guard_sort(&self, range: CellRange) -> Result<(), String> {
+        let Some(held) = self.cell_protection(range.sheet) else {
+            return Ok(());
+        };
+        if !held.allow_sorting {
+            return Err("sorting is not allowed on a protected sheet; unprotect it first".to_string());
+        }
+        self.guard_locked_cells(range, "Range.Sort")
     }
 
     fn set_cell_value(&mut self, address: CellAddress, value: CellValue) -> Result<(), String> {
@@ -3841,6 +4205,11 @@ impl<'a> WorkbookHost<'a> {
     ) -> Result<(), String> {
         Self::range_cell_count(range)?;
         let block = InputBlock::of(value, operation)?;
+        // A block with a locked cell in it is not refused whole: measured,
+        // `Range("A4:A6").Value = 3` over locked A4 and A6 and unlocked A5
+        // writes A5 and then raises 1004. So each unlocked cell is written and
+        // the refusal comes at the end.
+        let mut refused = false;
         for row_step in 0..=(range.end_row - range.start_row) {
             for column_step in 0..=(range.end_column - range.start_column) {
                 let address = CellAddress {
@@ -3848,6 +4217,10 @@ impl<'a> WorkbookHost<'a> {
                     row: range.start_row + row_step,
                     column: range.start_column + column_step,
                 };
+                if self.write_is_protected(address) {
+                    refused = true;
+                    continue;
+                }
                 let from_row = if block.rows == 1 { 0 } else { row_step as usize };
                 let from_column = if block.columns == 1 {
                     0
@@ -3888,6 +4261,11 @@ impl<'a> WorkbookHost<'a> {
                     }
                 }
             }
+        }
+        if refused {
+            return Err(
+                "the cell is locked and the sheet is protected; unprotect it first".to_string(),
+            );
         }
         Ok(())
     }
@@ -3930,6 +4308,7 @@ impl<'a> WorkbookHost<'a> {
         mut update: impl FnMut(CellAddress, &mut CellStyle),
     ) -> Result<(), String> {
         Self::range_cell_count(range)?;
+        self.guard_formats(range.sheet, "formatting cells")?;
         for address in range.addresses() {
             let sheet = self
                 .workbook
@@ -4058,6 +4437,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn set_range_column_width(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+        self.guard_column_formats(range.sheet, "setting a column width")?;
         let sheet = self
             .workbook
             .sheets
@@ -4102,6 +4482,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn set_range_row_height(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+        self.guard_row_formats(range.sheet, "setting a row height")?;
         let sheet = self
             .workbook
             .sheets
@@ -4148,6 +4529,26 @@ impl<'a> WorkbookHost<'a> {
         clear_formats: bool,
     ) -> Result<(), String> {
         Self::range_cell_count(range)?;
+        // Measured: `Clear` over an unlocked cell and a locked one clears
+        // neither and raises; over unlocked cells alone it goes through, even
+        // though it takes the formats off, which `Font.Bold = True` on the
+        // same cell may not.
+        self.guard_locked_cells(range, if clear_contents { "Range.Clear" } else { "Range.ClearFormats" })?;
+        // Locked is one of the formats, and comes back with the rest: measured
+        // on an unprotected sheet, an unlocked cell reads Locked again after
+        // `ClearFormats` and after `Clear`, and not after `ClearContents`.
+        // Under protection the two part ways: `ClearFormats` still takes the
+        // formats off and relocks the cell, and `Clear` takes only the
+        // contents -- the cell stays unlocked and stays bold.
+        let clear_formats = clear_formats
+            && (!clear_contents || self.cell_protection(range.sheet).is_none());
+        if clear_formats {
+            self.unlocked.retain(|held| {
+                held.sheet != range.sheet
+                    || !(range.start_row..=range.end_row).contains(&held.row)
+                    || !(range.start_column..=range.end_column).contains(&held.column)
+            });
+        }
         let sheet = self
             .workbook
             .sheets
@@ -4205,6 +4606,7 @@ impl<'a> WorkbookHost<'a> {
 
     fn insert_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let sideways = Self::shift_direction(range, args, true)?;
+        self.guard_structure(range.sheet, sideways, true)?;
         self.shift_cells(range, sideways, true)?;
         // True, the way Excel answers every member that acts.
         Ok(Value::Boolean(true))
@@ -4212,6 +4614,7 @@ impl<'a> WorkbookHost<'a> {
 
     fn delete_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let sideways = Self::shift_direction(range, args, false)?;
+        self.guard_structure(range.sheet, sideways, false)?;
         self.shift_cells(range, sideways, false)?;
         Ok(Value::Empty)
     }
@@ -4367,6 +4770,58 @@ impl<'a> WorkbookHost<'a> {
             } else {
                 merge.start_row = start;
                 merge.end_row = end;
+            }
+            true
+        });
+
+        // The notes and the unlocking move with their cells, and go when
+        // their cells go.
+        let sheet = range.sheet;
+        self.unlocked = self
+            .unlocked
+            .iter()
+            .filter_map(|held| {
+                if held.sheet != sheet {
+                    return Some(*held);
+                }
+                let (along, crossing) = if sideways {
+                    (held.column + 1, held.row)
+                } else {
+                    (held.row, held.column + 1)
+                };
+                if !taking_part(crossing) {
+                    return Some(*held);
+                }
+                let along = moved(along)?;
+                Some(if sideways {
+                    CellAddress {
+                        column: along - 1,
+                        ..*held
+                    }
+                } else {
+                    CellAddress { row: along, ..*held }
+                })
+            })
+            .collect();
+        self.notes.retain_mut(|note| {
+            if note.at.sheet != sheet {
+                return true;
+            }
+            let (along, crossing) = if sideways {
+                (note.at.column + 1, note.at.row)
+            } else {
+                (note.at.row, note.at.column + 1)
+            };
+            if !taking_part(crossing) {
+                return true;
+            }
+            let Some(along) = moved(along) else {
+                return false;
+            };
+            if sideways {
+                note.at.column = along - 1;
+            } else {
+                note.at.row = along;
             }
             true
         });
@@ -4605,6 +5060,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn sort_range(&mut self, range: CellRange, args: &[Value]) -> Result<(), String> {
+        self.guard_sort(range)?;
         let given = |index: usize| match args.get(index) {
             Some(Value::Missing) | None => None,
             Some(value) => Some(value),
@@ -4778,8 +5234,18 @@ impl<'a> WorkbookHost<'a> {
                     .cloned()
             })
             .collect();
+        let notes = source
+            .addresses()
+            .map(|address| self.note_at(address).map(|index| self.notes[index].clone()))
+            .collect();
+        let unlocked = source
+            .addresses()
+            .map(|address| self.unlocked.contains(&address))
+            .collect();
         self.clipboard = Some(Clipboard {
             cells,
+            notes,
+            unlocked,
             rows: source.end_row - source.start_row + 1,
             columns: source.end_column - source.start_column + 1,
             origin: CellAddress {
@@ -4844,6 +5310,19 @@ impl<'a> WorkbookHost<'a> {
             );
         };
 
+        if !carries.column_widths {
+            let landing = CellRange {
+                sheet: target.sheet,
+                start_row: target.start_row,
+                start_column: target.start_column,
+                end_row: target.start_row + down * rows - 1,
+                end_column: target.start_column + across * columns - 1,
+            };
+            if let Err(refused) = self.guard_locked_cells(landing, "Range.PasteSpecial") {
+                self.clipboard = Some(clipboard);
+                return Err(refused);
+            }
+        }
         if carries.column_widths {
             // Nothing about the cells changes: only how wide the columns they
             // sit in are.
@@ -4877,11 +5356,12 @@ impl<'a> WorkbookHost<'a> {
             for block_column in 0..across {
                 for row in 0..rows {
                     for column in 0..columns {
-                        let held = if transpose {
-                            clipboard.cells.get((column * clipboard.columns + row) as usize)
+                        let taken = if transpose {
+                            (column * clipboard.columns + row) as usize
                         } else {
-                            clipboard.cells.get((row * clipboard.columns + column) as usize)
+                            (row * clipboard.columns + column) as usize
                         };
+                        let held = clipboard.cells.get(taken);
                         let address = CellAddress {
                             sheet: target.sheet,
                             row: target.start_row + block_row * rows + row,
@@ -4904,6 +5384,24 @@ impl<'a> WorkbookHost<'a> {
                             skip_blanks,
                             operation,
                         )?;
+                        // Locked is one of the formats, and comes with them.
+                        if carries.styles && self.cell_protection(address.sheet).is_none() {
+                            if clipboard.unlocked.get(taken).copied().unwrap_or(false) {
+                                self.unlocked.insert(address);
+                            } else {
+                                self.unlocked.remove(&address);
+                            }
+                        }
+                        if carries.comments && !self.objects_protected(address.sheet) {
+                            if let Some(index) = self.note_at(address) {
+                                self.notes.remove(index);
+                            }
+                            if let Some(Some(note)) = clipboard.notes.get(taken) {
+                                let mut note = note.clone();
+                                note.at = address;
+                                self.notes.push(note);
+                            }
+                        }
                     }
                 }
             }
@@ -4931,6 +5429,11 @@ impl<'a> WorkbookHost<'a> {
         if skip_blanks && blank {
             return Ok(());
         }
+        // Measured: on a protected sheet a paste onto an unlocked cell puts
+        // the value down and none of the dress -- not the bold, not the
+        // number format, not Locked -- and `xlPasteFormats` there changes
+        // nothing and raises nothing.
+        let dressing = carries.styles && self.cell_protection(address.sheet).is_none();
         let sheet = &mut self.workbook.sheets[address.sheet];
         sheet.col_count = sheet.col_count.max(address.column as usize + 1);
         let row = match sheet.rows.iter().position(|row| row.index == address.row) {
@@ -4970,7 +5473,7 @@ impl<'a> WorkbookHost<'a> {
             .find(|cell| cell.col == address.column)
             .unwrap();
 
-        if carries.styles {
+        if dressing {
             let coming = held.map(|held| held.style.clone()).unwrap_or_default();
             // The edges are part of the dress, and one kind of paste leaves
             // them behind: asked of Excel, `xlPasteAllExceptBorders` carries
@@ -5409,6 +5912,7 @@ impl<'a> WorkbookHost<'a> {
         if range.is_single() {
             return Ok(());
         }
+        self.guard_formats(range.sheet, "merging cells")?;
         let sheet = self
             .workbook
             .sheets
@@ -5569,15 +6073,38 @@ impl<'a> WorkbookHost<'a> {
             .addresses()
             .map(|address| self.take_cell(address))
             .collect::<Vec<_>>();
-        for (address, cell) in source.addresses().zip(carried) {
-            self.put_cell(
-                CellAddress {
-                    sheet: destination.sheet,
-                    row: (i64::from(address.row) + down) as u32,
-                    column: (i64::from(address.column) + across) as u32,
-                },
-                cell,
-            )?;
+        let notes = source
+            .addresses()
+            .map(|address| self.note_at(address).map(|index| self.notes.remove(index)))
+            .collect::<Vec<_>>();
+        let unlocked = source
+            .addresses()
+            .map(|address| self.unlocked.remove(&address))
+            .collect::<Vec<_>>();
+        for (((address, cell), note), was_unlocked) in source
+            .addresses()
+            .zip(carried)
+            .zip(notes)
+            .zip(unlocked)
+        {
+            let landing = CellAddress {
+                sheet: destination.sheet,
+                row: (i64::from(address.row) + down) as u32,
+                column: (i64::from(address.column) + across) as u32,
+            };
+            self.put_cell(landing, cell)?;
+            if let Some(index) = self.note_at(landing) {
+                self.notes.remove(index);
+            }
+            if let Some(mut note) = note {
+                note.at = landing;
+                self.notes.push(note);
+            }
+            if was_unlocked {
+                self.unlocked.insert(landing);
+            } else {
+                self.unlocked.remove(&landing);
+            }
         }
 
         let from_sheet = self.workbook.sheets[source.sheet].name.clone();
@@ -5722,6 +6249,7 @@ impl<'a> WorkbookHost<'a> {
         };
         let row_offset = i64::from(destination.start_row) - i64::from(source.start_row);
         let column_offset = i64::from(destination.start_column) - i64::from(source.start_column);
+        self.guard_locked_cells(destination, "Range.Copy")?;
         let worksheet = self
             .workbook
             .sheets
@@ -5755,6 +6283,9 @@ impl<'a> WorkbookHost<'a> {
                     .unwrap_or_else(|| Ok((CellValue::Empty, CellStyle::default(), None)))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // On a protected sheet the value arrives and the dress does not; see
+        // `paste_cell`.
+        let dressing = self.cell_protection(destination.sheet).is_none();
         for (address, (value, style, formula)) in destination.addresses().zip(copied) {
             self.set_cell_value(address, value)?;
             let sheet = &mut self.workbook.sheets[address.sheet];
@@ -5764,13 +6295,155 @@ impl<'a> WorkbookHost<'a> {
                 .find(|row| row.index == address.row)
                 .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == address.column))
                 .expect("set_cell_value creates the destination cell");
-            cell.style = style;
+            if dressing {
+                cell.style = style;
+            }
             if formula.is_some() {
                 cell.value = CellValue::Empty;
             }
             cell.formula = formula;
         }
+        if dressing {
+            self.carry_side_tables(source, destination);
+        } else if !self.objects_protected(destination.sheet) {
+            self.carry_notes(source, destination);
+        }
         Ok(Value::Empty)
+    }
+
+    /// The notes alone, for a copy whose dress is not allowed through.
+    fn carry_notes(&mut self, source: CellRange, destination: CellRange) {
+        let pairs: Vec<(CellAddress, CellAddress)> =
+            source.addresses().zip(destination.addresses()).collect();
+        for (from, to) in pairs {
+            if from == to {
+                continue;
+            }
+            if let Some(index) = self.note_at(to) {
+                self.notes.remove(index);
+            }
+            if let Some(index) = self.note_at(from) {
+                let mut note = self.notes[index].clone();
+                note.at = to;
+                self.notes.push(note);
+            }
+        }
+    }
+
+    /// What a copy carries besides the cells: the note on each, and whether
+    /// each is locked -- Locked being a format, and a note going with its
+    /// cell.
+    fn carry_side_tables(&mut self, source: CellRange, destination: CellRange) {
+        let pairs: Vec<(CellAddress, CellAddress)> =
+            source.addresses().zip(destination.addresses()).collect();
+        for (from, to) in pairs {
+            if from == to {
+                continue;
+            }
+            if self.unlocked.contains(&from) {
+                self.unlocked.insert(to);
+            } else {
+                self.unlocked.remove(&to);
+            }
+            if let Some(index) = self.note_at(to) {
+                self.notes.remove(index);
+            }
+            if let Some(index) = self.note_at(from) {
+                let mut note = self.notes[index].clone();
+                note.at = to;
+                self.notes.push(note);
+            }
+        }
+    }
+
+    /// `Comments(n)` / `Comments.Item(n)`.
+    fn comment_item(&mut self, sheet: usize, wanted: &Value) -> Result<Value, String> {
+        let index = positive_index(wanted, "Comments index")? as usize;
+        let held = self.notes_on(sheet);
+        let Some(&note) = held.get(index - 1) else {
+            return Err(format!("the sheet has no comment number {index}"));
+        };
+        let at = self.notes[note].at;
+        Ok(self.object(HostObject::Comment(at)))
+    }
+
+    /// `Range.NoteText [Text], [Start], [Length]`, on the range's top-left
+    /// cell.
+    ///
+    /// Reading with a start and length answers that slice of the note.
+    /// Writing with a start puts the text in at that character and drops the
+    /// rest, the way `Comment.Text` does with `Overwrite` left out --
+    /// measured, `NoteText "xyz", 2` on `n2` gives `nxyz`.
+    fn note_text_member(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let at = CellAddress {
+            sheet: range.sheet,
+            row: range.start_row,
+            column: range.start_column,
+        };
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let start = match given(1) {
+            None => None,
+            Some(value) => Some(sort_number(value, "Range.NoteText Start")?),
+        };
+        if let Some(start) = start {
+            if start < 1 {
+                return Err(host_error(5, "Range.NoteText cannot start before the first character"));
+            }
+        }
+        match given(0) {
+            None => {
+                let held = self
+                    .note_at(at)
+                    .map(|index| self.notes[index].text.clone())
+                    .unwrap_or_default();
+                let from = start.unwrap_or(1) as usize - 1;
+                let taken: String = match given(2) {
+                    None => held.chars().skip(from).collect(),
+                    Some(length) => {
+                        let length = sort_number(length, "Range.NoteText Length")?;
+                        if length < 0 {
+                            return Err(host_error(5, "Range.NoteText cannot take a negative length"));
+                        }
+                        held.chars().skip(from).take(length as usize).collect()
+                    }
+                };
+                Ok(Value::String(taken))
+            }
+            Some(text) => {
+                // The old door is guarded like the cell: measured, `NoteText
+                // "nt"` on a locked cell of a protected sheet is 1004.
+                if self.write_is_protected(at) {
+                    return Err(
+                        "the cell is locked and the sheet is protected; unprotect it first"
+                            .to_string(),
+                    );
+                }
+                let text = shown_text(text, None);
+                // An empty text takes the note away altogether.
+                if text.is_empty() {
+                    self.clear_comments(CellRange::single(at));
+                    return Ok(Value::String(text));
+                }
+                let text = match (self.note_at(at), start) {
+                    (Some(index), Some(start)) => {
+                        let kept: String =
+                            self.notes[index].text.chars().take(start as usize - 1).collect();
+                        format!("{kept}{text}")
+                    }
+                    _ => text,
+                };
+                match self.note_at(at) {
+                    Some(index) => self.notes[index].text = text.clone(),
+                    None => {
+                        self.add_comment(CellRange::single(at), &[Value::String(text.clone())])?;
+                    }
+                }
+                Ok(Value::String(text))
+            }
+        }
     }
 }
 
@@ -5833,20 +6506,27 @@ impl Host for WorkbookHost<'_> {
                     self.recalculate();
                     return Ok(Some(Value::Boolean(true)));
                 }
-                // `Protect [password]` and `Unprotect [password]`. Measured:
-                // a wrong password on Unprotect is error 1004 and leaves the
-                // sheet protected; no password either way is fine; and
-                // `r = ActiveSheet.Protect("pw")` answers Empty, not the True
-                // the doing-members give.
-                if name.eq_ignore_ascii_case("protect") {
-                    let password = match args.first() {
-                        None | Some(Value::Missing) => String::new(),
-                        Some(value) => shown_text(value, None),
+                if name.eq_ignore_ascii_case("comments") {
+                    return match args {
+                        [] => Ok(Some(self.object(HostObject::Comments(sheet)))),
+                        [wanted] => self.comment_item(sheet, wanted).map(Some),
+                        _ => Err("Comments expects zero or one argument".to_string()),
                     };
+                }
+                // `Protect [password, ...]` and `Unprotect [password]`.
+                // Measured: a wrong password on Unprotect is error 1004 and
+                // leaves the sheet protected; no password either way is fine;
+                // `Protect` on a sheet already protected changes nothing, not
+                // even the password; and `r = ActiveSheet.Protect("pw")`
+                // answers Empty, not the True the doing-members give.
+                if name.eq_ignore_ascii_case("protect") {
+                    let asked = Protection::asked(args)?;
                     if self.protected.len() <= sheet {
                         self.protected.resize(sheet + 1, None);
                     }
-                    self.protected[sheet] = Some(password);
+                    if self.protected[sheet].is_none() {
+                        self.protected[sheet] = Some(asked);
+                    }
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("unprotect") {
@@ -5855,7 +6535,7 @@ impl Host for WorkbookHost<'_> {
                         Some(value) => shown_text(value, None),
                     };
                     if let Some(Some(held)) = self.protected.get(sheet) {
-                        if *held != offered {
+                        if held.password != offered {
                             return Err(
                                 "the password supplied is not correct for this sheet".to_string(),
                             );
@@ -5958,6 +6638,21 @@ impl Host for WorkbookHost<'_> {
                 && name.eq_ignore_ascii_case("names")
             {
                 return self.names_object_or_item(args).map(Some);
+            }
+            if let Some(at) = self.comment_cell(receiver) {
+                return self.comment_member(at, name, args);
+            }
+            if let Some(sheet) = self.comments_sheet(receiver) {
+                if name.eq_ignore_ascii_case("count") {
+                    return Ok(Some(Value::Integer(self.notes_on(sheet).len() as i64)));
+                }
+                if name.eq_ignore_ascii_case("item") {
+                    let [wanted] = args else {
+                        return Err("Comments.Item takes one number".to_string());
+                    };
+                    return self.comment_item(sheet, wanted).map(Some);
+                }
+                return Ok(None);
             }
             if self.is_names(receiver) {
                 if name.eq_ignore_ascii_case("add") {
@@ -6110,6 +6805,30 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("cut") {
                     return self.cut_range(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("addcomment") {
+                    return self.add_comment(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("comment") && args.is_empty() {
+                    return Ok(Some(self.comment_of(range)));
+                }
+                // Answers True, as `Clear` does.
+                if name.eq_ignore_ascii_case("clearcomments") {
+                    if !args.is_empty() {
+                        return Err("Range.ClearComments does not accept arguments".to_string());
+                    }
+                    // Passed over in silence on a protected sheet, like a
+                    // write to the note's text.
+                    if !self.objects_protected(range.sheet) {
+                        self.clear_comments(range);
+                    }
+                    return Ok(Some(Value::Boolean(true)));
+                }
+                // The older way to a note: `NoteText` alone reads it (an empty
+                // string where there is none) and `NoteText "x"` writes it,
+                // adding the note when the cell has none.
+                if name.eq_ignore_ascii_case("notetext") {
+                    return self.note_text_member(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("autofit") {
                     if !args.is_empty() {
                         return Err("Range.AutoFit does not accept arguments".to_string());
@@ -6246,6 +6965,7 @@ impl Host for WorkbookHost<'_> {
                         return Err("Range.Clear does not accept arguments".to_string());
                     }
                     self.clear_range(range, true, true)?;
+                    self.clear_comments(range);
                     return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("autofilter") {
@@ -6485,6 +7205,37 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowIndex", "ColumnIndex"][..])
         } else if name.eq_ignore_ascii_case("msgbox") {
             Some(&["Prompt", "Buttons", "Title", "HelpFile", "Context"][..])
+        } else if name.eq_ignore_ascii_case("addcomment") {
+            Some(&["Text"][..])
+        } else if name.eq_ignore_ascii_case("text")
+            && receiver.is_some_and(|receiver| self.comment_cell(receiver).is_some())
+        {
+            Some(&["Text", "Start", "Overwrite"][..])
+        } else if name.eq_ignore_ascii_case("notetext") {
+            Some(&["Text", "Start", "Length"][..])
+        } else if name.eq_ignore_ascii_case("protect") {
+            Some(
+                &[
+                    "Password",
+                    "DrawingObjects",
+                    "Contents",
+                    "Scenarios",
+                    "UserInterfaceOnly",
+                    "AllowFormattingCells",
+                    "AllowFormattingColumns",
+                    "AllowFormattingRows",
+                    "AllowInsertingColumns",
+                    "AllowInsertingRows",
+                    "AllowInsertingHyperlinks",
+                    "AllowDeletingColumns",
+                    "AllowDeletingRows",
+                    "AllowSorting",
+                    "AllowFiltering",
+                    "AllowUsingPivotTables",
+                ][..],
+            )
+        } else if name.eq_ignore_ascii_case("unprotect") {
+            Some(&["Password"][..])
         } else {
             None
         };
@@ -6525,6 +7276,15 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Integer(
                     self.workbook.defined_names.len() as i64
                 )));
+            }
+            return Ok(None);
+        }
+        if let Some(at) = self.comment_cell(receiver) {
+            return self.comment_member(at, name, &[]);
+        }
+        if let Some(sheet) = self.comments_sheet(receiver) {
+            if name.eq_ignore_ascii_case("count") {
+                return Ok(Some(Value::Integer(self.notes_on(sheet).len() as i64)));
             }
             return Ok(None);
         }
@@ -6699,9 +7459,29 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(sheet) = self.worksheet(receiver) {
+            if name.eq_ignore_ascii_case("comments") {
+                return Ok(Some(self.object(HostObject::Comments(sheet))));
+            }
+            // What the sheet was protected with. `ProtectContents` is False
+            // for a sheet protected with `Contents:=False`, and
+            // `ProtectionMode` is the `UserInterfaceOnly` flag.
             if name.eq_ignore_ascii_case("protectcontents") {
                 return Ok(Some(Value::Boolean(
-                    self.protected.get(sheet).is_some_and(Option::is_some),
+                    self.protected
+                        .get(sheet)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|held| held.contents),
+                )));
+            }
+            if name.eq_ignore_ascii_case("protectdrawingobjects") {
+                return Ok(Some(Value::Boolean(self.objects_protected(sheet))));
+            }
+            if name.eq_ignore_ascii_case("protectionmode") {
+                return Ok(Some(Value::Boolean(
+                    self.protected
+                        .get(sheet)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|held| held.user_interface_only),
                 )));
             }
         }
@@ -6936,6 +7716,12 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("hasformula") {
             return self.range_has_formula(range).map(Some);
+        }
+        if name.eq_ignore_ascii_case("comment") {
+            return Ok(Some(self.comment_of(range)));
+        }
+        if name.eq_ignore_ascii_case("notetext") {
+            return self.note_text_member(range, &[]).map(Some);
         }
         if name.eq_ignore_ascii_case("parent") || name.eq_ignore_ascii_case("worksheet") {
             return Ok(Some(self.object(HostObject::Worksheet(range.sheet))));
@@ -7204,6 +7990,18 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(at) = self.comment_cell(receiver) {
+            if name.eq_ignore_ascii_case("visible") {
+                let Some(index) = self.note_at(at) else {
+                    return Err("the comment has been deleted".to_string());
+                };
+                if let Some(visible) = style_face_boolean(&value, "Comment.Visible")? {
+                    self.notes[index].visible = visible;
+                }
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         if self.is_window(receiver) && name.eq_ignore_ascii_case("freezepanes") {
             let Some(freeze) = style_face_boolean(&value, "Window.FreezePanes")? else {
                 return Ok(true);
@@ -7216,15 +8014,25 @@ impl Host for WorkbookHost<'_> {
                 held.frozen_cols = 0;
                 return Ok(true);
             }
+            // Freezing panes already frozen leaves them where they are:
+            // measured, frozen at A4 and asked again from B2, the split stays
+            // at row 3.
+            if held.frozen_rows > 0 || held.frozen_cols > 0 {
+                return Ok(true);
+            }
             // The panes freeze above and to the left of the active cell: B3
             // gives two rows and one column, and a whole selected row gives
             // its rows and no columns. From A1 Excel instead splits the
-            // visible window down the middle -- 21 rows and 13 columns on the
-            // machine measured -- which is the window's size and not the
-            // sheet's, and a browser host has no window to halve. Nothing is
-            // frozen for A1 here, and that is a known limit.
-            let rows = at.row.saturating_sub(1);
-            let cols = at.column;
+            // visible window down the middle, which is the window's size and
+            // not the sheet's: 21 rows and 13 columns on the machine measured,
+            // in a window Excel opened at its default size. A browser host
+            // has no window to halve, so that default window stands in --
+            // the panes DO freeze, as they do in Excel, which a macro that
+            // reads `FreezePanes` back can see.
+            let (rows, cols) = match (at.row.saturating_sub(1), at.column) {
+                (0, 0) => (21, 13),
+                split => split,
+            };
             held.frozen_rows = rows;
             held.frozen_cols = cols;
             return Ok(true);
@@ -7554,6 +8362,7 @@ impl Host for WorkbookHost<'_> {
             let Some(locked) = style_face_boolean(&value, "Range.Locked")? else {
                 return Ok(true);
             };
+            self.guard_formats(range.sheet, "changing Locked")?;
             for address in range.addresses() {
                 if locked {
                     self.unlocked.remove(&address);
@@ -7702,6 +8511,14 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(Some(cells));
         }
+        if let Some(sheet) = self.comments_sheet(receiver) {
+            let mut items = Vec::new();
+            for index in self.notes_on(sheet) {
+                let at = self.notes[index].at;
+                items.push(self.object(HostObject::Comment(at)));
+            }
+            return Ok(Some(items));
+        }
         // The names come out in the order `Names.Item(1)` counts them, which
         // Excel sorts by the name itself rather than by when it was given:
         // adding zebra, alpha, middle and Beta walks alpha Beta middle zebra.
@@ -7814,6 +8631,34 @@ fn cells_index(value: &Value) -> Result<i64, String> {
 /// `Range.Hidden` is NOT one of these, though it looks like one: asked the
 /// same way, a hidden row given `Null` comes BACK. It is the one entrance of
 /// the seven where `Null` does something, so it reads the Option itself.
+/// The notes the file keeps pinned open, which are the only ones the IR
+/// reads: a macro asking `Range("A1").Comment` on a workbook that has one there
+/// should find it.
+fn notes_pinned_open(workbook: &Workbook) -> Vec<Note> {
+    let mut notes = Vec::new();
+    for (sheet, held) in workbook.sheets.iter().enumerate() {
+        for comment in &held.comments {
+            let text = comment
+                .text
+                .paragraphs
+                .iter()
+                .map(|paragraph| paragraph.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            notes.push(Note {
+                at: CellAddress {
+                    sheet,
+                    row: comment.cell.0 + 1,
+                    column: comment.cell.1,
+                },
+                text,
+                visible: true,
+            });
+        }
+    }
+    notes
+}
+
 fn style_face_boolean(value: &Value, property: &str) -> Result<Option<bool>, String> {
     match value {
         Value::Boolean(asked) => Ok(Some(*asked)),
@@ -9766,6 +10611,9 @@ struct PasteWhat {
     /// The number format on its own, where the rest of the dress stays.
     number_format: bool,
     column_widths: bool,
+    /// The notes on the cells. Measured: `xlPasteAll` and `xlPasteComments`
+    /// carry them, `xlPasteValues` and `xlPasteFormats` do not.
+    comments: bool,
 }
 
 impl PasteWhat {
@@ -9777,6 +10625,7 @@ impl PasteWhat {
             borders: false,
             number_format: false,
             column_widths: false,
+            comments: false,
         };
         Ok(match kind {
             -4104 => Self {
@@ -9784,6 +10633,11 @@ impl PasteWhat {
                 formulas: true,
                 styles: true,
                 borders: true,
+                comments: true,
+                ..nothing
+            },
+            -4144 => Self {
+                comments: true,
                 ..nothing
             },
             -4163 => Self {
@@ -9799,6 +10653,7 @@ impl PasteWhat {
                 values: true,
                 formulas: true,
                 styles: true,
+                comments: true,
                 ..nothing
             },
             8 => Self {
@@ -11035,6 +11890,145 @@ mod tests {
         );
     }
 
+    /// A note is added, read, edited, moved and taken away as Excel does it.
+    ///
+    /// Measured against Excel: `Range("A1").Comment` is Nothing until
+    /// `AddComment`, which answers a Comment whose Text is the note and whose
+    /// Parent is the cell; a second `AddComment` on the same cell is 1004 and
+    /// on two cells is 5; `Comment.Text "ab", 2` on `hello` gives `hab`
+    /// (Overwrite left out drops the rest) and `"AB", 3, False` on
+    /// `hello world` gives `heABllo world`; `Comments` counts in row order,
+    /// A1 C1 B2 for notes added C1 A1 B2; `Clear` takes a note with it and
+    /// `ClearContents` does not; an inserted row moves it; and `NoteText ""`
+    /// deletes it.
+    #[test]
+    fn a_note_is_added_read_edited_moved_and_taken_away() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, c As Object, k As Object
+               On Error Resume Next
+               out = (Range(\"A1\").Comment Is Nothing) & \"|\"
+               Range(\"C1\").AddComment \"c\"
+               Set c = Range(\"A1\").AddComment(\"hello\")
+               out = out & TypeName(c) & \"/\" & c.Text & \"/\" & c.Parent.Address & \"|\"
+               Range(\"A1\").AddComment \"again\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"D1:D2\").AddComment \"two\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               c.Text \"ab\", 2
+               out = out & c.Text & \"|\"
+               c.Text \"hello world\"
+               c.Text \"AB\", 3, False
+               out = out & c.Text & \"|\"
+               Range(\"B2\").AddComment \"b\"
+               For Each k In ActiveSheet.Comments
+                 out = out & k.Parent.Address(False, False)
+               Next
+               out = out & \"|\" & ActiveSheet.Comments.Count & \"|\"
+               Range(\"A1\").ClearContents
+               out = out & (Range(\"A1\").Comment Is Nothing)
+               Range(\"A1\").Clear
+               out = out & (Range(\"A1\").Comment Is Nothing) & \"|\"
+               Rows(1).Insert
+               out = out & (Range(\"C1\").Comment Is Nothing) & Range(\"C2\").Comment.Text & \"|\"
+               Range(\"C2\").NoteText \"\"
+               out = out & (Range(\"C2\").Comment Is Nothing) & ActiveSheet.Comments.Count
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "True|Comment/hello/$A$1|1004|5|hab|heABllo world|A1C1B2|3|FalseTrue|Truec|True1"
+                    .to_string()
+            )
+        );
+    }
+
+    /// Protection covers more than a write to a locked cell.
+    ///
+    /// Measured against Excel with the sheet protected: formatting any cell
+    /// is 1004, locked or not; a block written over locked and unlocked cells
+    /// writes the unlocked ones and then raises; `Clear` on an unlocked cell
+    /// goes through and leaves it unlocked; inserting a row is 1004 unless
+    /// `AllowInsertingRows`; `Replace` changes nothing and raises nothing;
+    /// `Protect` again changes nothing, not even the password;
+    /// `Contents:=False` leaves the cells free and `ProtectContents` False;
+    /// `UserInterfaceOnly` frees the macro; and `AddComment` is refused under
+    /// all of those, and allowed only with `DrawingObjects:=False`.
+    #[test]
+    fn protection_covers_formats_structure_and_notes() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               On Error Resume Next
+               Range(\"A1\").Value = 7
+               Range(\"A2\").Locked = False
+               Range(\"A2\").Value = 7
+               ActiveSheet.Protect \"pw\"
+               Range(\"A2\").Font.Bold = True
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A1:A2\").Value = 3
+               out = out & Err.Number & \"/\" & Range(\"A1\").Value & \"/\" & Range(\"A2\").Value & \"|\"
+               Err.Clear
+               Range(\"A2\").Clear
+               out = out & Err.Number & \"/\" & Range(\"A2\").Locked & \"|\"
+               Err.Clear
+               Rows(3).Insert
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A1\").Replace 7, 8
+               out = out & Err.Number & \"/\" & Range(\"A1\").Value & \"|\"
+               Err.Clear
+               ActiveSheet.Protect \"other\"
+               ActiveSheet.Unprotect \"pw\"
+               out = out & Err.Number & \"/\" & ActiveSheet.ProtectContents & \"|\"
+               Err.Clear
+               ActiveSheet.Protect Contents:=False
+               Range(\"A1\").Font.Bold = True
+               out = out & Err.Number & \"/\" & ActiveSheet.ProtectContents & \"|\"
+               Err.Clear
+               Range(\"A5\").AddComment \"no\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               ActiveSheet.Unprotect
+               ActiveSheet.Protect UserInterfaceOnly:=True, AllowInsertingRows:=True
+               Range(\"A1\").Value = 9
+               Rows(3).Insert
+               out = out & Err.Number & \"/\" & Range(\"A1\").Value & \"/\" & ActiveSheet.ProtectionMode & \"|\"
+               Err.Clear
+               ActiveSheet.Unprotect
+               ActiveSheet.Protect DrawingObjects:=False
+               Range(\"A5\").AddComment \"yes\"
+               out = out & Err.Number & \"/\" & Range(\"A5\").Comment.Text
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "1004|1004/7/3|0/False|1004|0/7|0/False|0/False|1004|0/9/True|0/yes".to_string()
+            )
+        );
+    }
+
     /// Panes freeze above and to the left of the active cell.
     ///
     /// Measured against Excel: a fresh window is False / 0 / 0; after
@@ -11043,7 +12037,7 @@ mod tests {
     ///
     /// From A1 Excel splits the visible window down the middle, which is the
     /// window's size and not the sheet's; a browser host has no window to
-    /// halve and freezes nothing there. A known limit.
+    /// halve and stands Excel's default window in, 21 rows by 13 columns.
     #[test]
     fn panes_freeze_above_and_left_of_the_active_cell() {
         let mut workbook = workbook();
@@ -11058,6 +12052,10 @@ mod tests {
                out = out & ActiveWindow.SplitRow & \"|\"
                Rows(2).Select
                ActiveWindow.FreezePanes = True
+               out = out & ActiveWindow.SplitRow & \"/\" & ActiveWindow.SplitColumn & \"|\"
+               ActiveWindow.FreezePanes = False
+               Range(\"A1\").Select
+               ActiveWindow.FreezePanes = True
                out = out & ActiveWindow.SplitRow & \"/\" & ActiveWindow.SplitColumn
                Ask = out
              End Function
@@ -11068,7 +12066,7 @@ mod tests {
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
             execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
         };
-        assert_eq!(answer, Value::String("False/0/0|True/2/1|0|1/0".to_string()));
+        assert_eq!(answer, Value::String("False/0/0|True/2/1|0|1/0|21/13".to_string()));
     }
 
     /// `Application.Goto` brings a range to the front.

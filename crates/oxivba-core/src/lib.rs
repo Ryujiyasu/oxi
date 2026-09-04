@@ -43,7 +43,8 @@ pub use lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 pub use parser::parse_module;
 pub use safety::{assess, assess_project, Capability, SafetyReport, Signal};
 pub use runtime::{
-    execute, execute_with_host, is_builtin_function, vba_date_text, vba_number_text, ArrayDimension,
+    execute, execute_with_host, host_error, is_builtin_function, vba_date_text, vba_number_text,
+    ArrayDimension,
     ArrayValue, Host, ObjectRef,
     Runtime, RuntimeError, RuntimeErrorKind, Value,
 };

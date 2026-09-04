@@ -3257,7 +3257,7 @@ impl<'a> Runtime<'a> {
             return Ok(None);
         };
         host.call(receiver, name, args)
-            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+            .map_err(|message| host_failure(message, line))
     }
 
     fn host_call_named(
@@ -3277,7 +3277,7 @@ impl<'a> Runtime<'a> {
             return Ok(None);
         };
         host.call_named(receiver, name, args, argument_names)
-            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+            .map_err(|message| host_failure(message, line))
     }
 
     fn host_get(
@@ -3318,7 +3318,7 @@ impl<'a> Runtime<'a> {
             return Ok(None);
         };
         host.get(receiver, name)
-            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+            .map_err(|message| host_failure(message, line))
     }
 
     fn host_set(
@@ -3359,7 +3359,7 @@ impl<'a> Runtime<'a> {
             return Ok(false);
         };
         host.set(receiver, name, value)
-            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+            .map_err(|message| host_failure(message, line))
     }
 
     fn host_set_indexed(
@@ -3377,7 +3377,7 @@ impl<'a> Runtime<'a> {
             return Ok(false);
         };
         host.set_indexed(receiver, name, args, value)
-            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+            .map_err(|message| host_failure(message, line))
     }
 
     fn host_enumerate(
@@ -3401,7 +3401,7 @@ impl<'a> Runtime<'a> {
             return Ok(None);
         };
         host.enumerate(receiver)
-            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+            .map_err(|message| host_failure(message, line))
     }
 
     fn internal_call(
@@ -3743,6 +3743,39 @@ impl<'a> Runtime<'a> {
             Ok(())
         }
     }
+}
+
+/// How a host says WHICH error a member raises, when it is not the 1004
+/// every host error is otherwise. Excel's own members do raise others --
+/// `Comment.Text` given a start of 0 is 5, and so is `AddComment` on two
+/// cells -- and a host matching them has to be able to say so. The message
+/// it hands back starts with this marker and the number.
+pub fn host_error(number: i64, message: impl Into<String>) -> String {
+    format!("{HOST_ERROR_MARK}{number}:{}", message.into())
+}
+
+const HOST_ERROR_MARK: &str = "vba-error:";
+
+/// A host's refusal as a runtime error: 1004 unless the host said otherwise.
+///
+/// A numbered refusal carries VBA's own description for that number, which
+/// is what `Err.Description` reads in Excel -- `Invalid procedure call or
+/// argument` for 5 -- rather than the host's account of why.
+fn host_failure(message: String, line: u32) -> RuntimeError {
+    if let Some(rest) = message.strip_prefix(HOST_ERROR_MARK) {
+        if let Some((number, _)) = rest.split_once(':') {
+            if let Ok(number) = number.parse::<i64>() {
+                return RuntimeError {
+                    kind: RuntimeErrorKind::Host,
+                    message: vba_error_description(number).to_string(),
+                    line: Some(line),
+                    vba_number: Some(number),
+                    vba_source: None,
+                };
+            }
+        }
+    }
+    error(RuntimeErrorKind::Host, message, Some(line))
 }
 
 fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) -> RuntimeError {
@@ -9600,6 +9633,10 @@ mod tests {
                     }
                     return Ok(Some(Self::cell_object(row as u32, column as u32)));
                 }
+                // A member whose refusal is Excel's error 5, not 1004.
+                if name.eq_ignore_ascii_case("addcomment") {
+                    return Err(host_error(5, "AddComment needs a single cell"));
+                }
                 return Ok(None);
             }
             if name.eq_ignore_ascii_case("range") || name.eq_ignore_ascii_case("evaluate") {
@@ -11564,6 +11601,27 @@ mod tests {
         assert_eq!(failure.kind, RuntimeErrorKind::Host);
         assert_eq!(failure.line, Some(2));
         assert!(failure.message.contains("invalid Range address"));
+    }
+
+    /// A host may name the number its refusal carries, where Excel's own
+    /// member raises something other than 1004.
+    #[test]
+    fn a_host_refusal_may_carry_its_own_error_number() {
+        let module = parse_module(
+            "Public Function Numbered() As Variant
+               On Error Resume Next
+               Range(\"A1\").AddComment \"x\"
+               Numbered = Err.Number & \"/\" & Err.Description
+             End Function
+",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = execute_with_host(&module, "Numbered", vec![], &mut host).unwrap();
+        assert_eq!(
+            value,
+            Value::String("5/Invalid procedure call or argument".to_string())
+        );
     }
 
     #[test]
