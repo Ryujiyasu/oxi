@@ -101,7 +101,7 @@ impl LookupTable {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum BorderSelection {
     All,
     EdgeLeft,
@@ -300,6 +300,134 @@ enum HostObject {
     Comments(usize),
 }
 
+
+/// The workbook theme's twelve colours, packed the way VBA counts them, in
+/// the order `ThemeColor` numbers them: 1 is the light text/background, 2 the
+/// dark one, 3 and 4 the second pair, 5 to 10 the six accents, 11 and 12 the
+/// two hyperlink colours. Measured by setting `Interior.ThemeColor` to each
+/// and reading `Interior.Color` back; this is the Office theme of 2023.
+const THEME_COLOURS: [i64; 12] = [
+    16_777_215, 0, 15_263_976, 4_270_094, 8_544_277, 3_305_961, 2_386_713, 13_999_631,
+    9_644_960, 3_057_486, 8_812_614, 8_216_726,
+];
+
+/// Which theme colour a number names, or error 9 for one the theme has not.
+fn theme_colour(value: &Value) -> Result<usize, String> {
+    let asked = any_whole_number(value)
+        .ok_or_else(|| "ThemeColor takes a theme colour by number".to_string())?;
+    if !(1..=12).contains(&asked) {
+        return Err(host_error(9, format!("there is no theme colour {asked}")));
+    }
+    Ok(asked as usize)
+}
+
+/// A tint as given, checked and then quantised the way Excel keeps it: a
+/// sixteen-bit fraction cut towards zero, so that 0.8 reads back
+/// 0.799981688894314 and 0.4 reads back 0.399975585192419.
+fn tint_asked(value: &Value) -> Result<f64, String> {
+    let asked = any_number(value).ok_or_else(|| "TintAndShade takes a number".to_string())?;
+    if !asked.is_finite() || !(-1.0..=1.0).contains(&asked) {
+        return Err(host_error(5, "TintAndShade runs from -1 to 1"));
+    }
+    Ok(asked)
+}
+
+fn quantised_tint(tint: f64) -> f64 {
+    (tint * 32_767.0).trunc() / 32_767.0
+}
+
+/// A colour with a tint on it, as Excel works it out.
+///
+/// Excel goes through hue, lightness and saturation in the classic Win32
+/// way -- integer arithmetic on a 0..240 scale -- and moves the lightness:
+/// towards 240 by the tint's share for a positive tint, towards 0 for a
+/// negative one, the result truncated. The tint applied is the one given,
+/// not the sixteen-bit one read back. Matched to 34 measured points over an
+/// accent, black and a second accent, including the ones a floating-point
+/// HLS gets wrong by one or two.
+fn tinted(colour: i64, tint: f64) -> i64 {
+    const HLSMAX: i64 = 240;
+    const RGBMAX: i64 = 255;
+    // No tint, no round trip: the conversion is lossy, and Excel hands the
+    // theme colour back exactly.
+    if tint == 0.0 {
+        return colour;
+    }
+    let (r, g, b) = (colour & 0xff, (colour >> 8) & 0xff, (colour >> 16) & 0xff);
+    let cmax = r.max(g).max(b);
+    let cmin = r.min(g).min(b);
+    let lightness = ((cmax + cmin) * HLSMAX + RGBMAX) / (2 * RGBMAX);
+    let (hue, saturation) = if cmax == cmin {
+        (0, 0)
+    } else {
+        let saturation = if lightness <= HLSMAX / 2 {
+            ((cmax - cmin) * HLSMAX + (cmax + cmin) / 2) / (cmax + cmin)
+        } else {
+            ((cmax - cmin) * HLSMAX + (2 * RGBMAX - cmax - cmin) / 2) / (2 * RGBMAX - cmax - cmin)
+        };
+        let delta = |channel: i64| ((cmax - channel) * (HLSMAX / 6) + (cmax - cmin) / 2) / (cmax - cmin);
+        let (red, green, blue) = (delta(r), delta(g), delta(b));
+        let mut hue = if r == cmax {
+            blue - green
+        } else if g == cmax {
+            HLSMAX / 3 + red - blue
+        } else {
+            2 * HLSMAX / 3 + green - red
+        };
+        if hue < 0 {
+            hue += HLSMAX;
+        }
+        if hue > HLSMAX {
+            hue -= HLSMAX;
+        }
+        (hue, saturation)
+    };
+    let moved = if tint < 0.0 {
+        lightness as f64 * (1.0 + tint)
+    } else {
+        lightness as f64 * (1.0 - tint) + HLSMAX as f64 * tint
+    };
+    let lightness = (moved.floor() as i64).clamp(0, HLSMAX);
+    if saturation == 0 {
+        let grey = ((lightness * RGBMAX + HLSMAX / 2) / HLSMAX).clamp(0, RGBMAX);
+        return grey | (grey << 8) | (grey << 16);
+    }
+    let magic2 = if lightness <= HLSMAX / 2 {
+        (lightness * (HLSMAX + saturation) + HLSMAX / 2) / HLSMAX
+    } else {
+        lightness + saturation - (lightness * saturation + HLSMAX / 2) / HLSMAX
+    };
+    let magic1 = 2 * lightness - magic2;
+    let hue_to_rgb = |mut hue: i64| -> i64 {
+        if hue < 0 {
+            hue += HLSMAX;
+        }
+        if hue > HLSMAX {
+            hue -= HLSMAX;
+        }
+        if hue < HLSMAX / 6 {
+            magic1 + ((magic2 - magic1) * hue + HLSMAX / 12) / (HLSMAX / 6)
+        } else if hue < HLSMAX / 2 {
+            magic2
+        } else if hue < 2 * HLSMAX / 3 {
+            magic1 + ((magic2 - magic1) * (2 * HLSMAX / 3 - hue) + HLSMAX / 12) / (HLSMAX / 6)
+        } else {
+            magic1
+        }
+    };
+    let channel = |hue: i64| ((hue_to_rgb(hue) * RGBMAX + HLSMAX / 2) / HLSMAX).clamp(0, RGBMAX);
+    let (red, green, blue) = (channel(hue + HLSMAX / 3), channel(hue), channel(hue - HLSMAX / 3));
+    red | (green << 8) | (blue << 16)
+}
+
+/// Which painted part of a cell a theme colour was given to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Paint {
+    Font,
+    Interior,
+    Edge(BorderSelection),
+}
+
 /// What `Worksheet.Protect` was asked for.
 ///
 /// Measured against Excel, the flags divide the sheet three ways. `Contents`
@@ -427,6 +555,10 @@ struct BuiltInStyle {
     borders: Option<[Option<(&'static str, i64)>; 4]>,
     alignment: bool,
     protection: bool,
+    /// Where the font's colour is the theme's: its number.
+    font_theme: Option<usize>,
+    /// Where the fill is the theme's: its number and the tint.
+    fill_theme: Option<(usize, f64)>,
 }
 
 struct StyleFont {
@@ -460,7 +592,13 @@ const fn bold_font(color: Option<i64>, size: f32) -> Option<StyleFont> {
     })
 }
 
-const fn tint(name: &'static str, local: &'static str, fill: i64) -> BuiltInStyle {
+const fn tint(
+    name: &'static str,
+    local: &'static str,
+    fill: i64,
+    accent: usize,
+    shade: f64,
+) -> BuiltInStyle {
     BuiltInStyle {
         name,
         local,
@@ -470,10 +608,12 @@ const fn tint(name: &'static str, local: &'static str, fill: i64) -> BuiltInStyl
         borders: None,
         alignment: false,
         protection: false,
+        font_theme: None,
+        fill_theme: Some((accent, shade)),
     }
 }
 
-const fn accent(name: &'static str, local: &'static str, fill: i64) -> BuiltInStyle {
+const fn accent(name: &'static str, local: &'static str, fill: i64, accent: usize) -> BuiltInStyle {
     BuiltInStyle {
         name,
         local,
@@ -483,6 +623,8 @@ const fn accent(name: &'static str, local: &'static str, fill: i64) -> BuiltInSt
         borders: None,
         alignment: false,
         protection: false,
+        font_theme: Some(1),
+        fill_theme: Some((accent, 0.0)),
     }
 }
 
@@ -496,6 +638,30 @@ const fn numbered(name: &'static str, local: &'static str, format: &'static str)
         borders: None,
         alignment: false,
         protection: false,
+        font_theme: None,
+        fill_theme: None,
+    }
+}
+
+/// A style whose colours are all given as numbers.
+const fn plain(
+    name: &'static str,
+    local: &'static str,
+    font: Option<StyleFont>,
+    fill: Option<Option<i64>>,
+    borders: Option<[Option<(&'static str, i64)>; 4]>,
+) -> BuiltInStyle {
+    BuiltInStyle {
+        name,
+        local,
+        number: None,
+        font,
+        fill,
+        borders,
+        alignment: false,
+        protection: false,
+        font_theme: None,
+        fill_theme: None,
     }
 }
 
@@ -507,137 +673,113 @@ const ACCENT1: i64 = 8_544_277;
 /// Japanese name, kana by reading and kanji by code point. Every colour, size
 /// and edge is what `Range` answered after the style was applied.
 const BUILT_IN_STYLES: [BuiltInStyle; 47] = [
-    tint("20% - アクセント 1", "20% - アクセント 1", 16_115_392),
-    tint("20% - アクセント 2", "20% - アクセント 2", 14_017_275),
-    tint("20% - アクセント 3", "20% - アクセント 3", 13_168_833),
-    tint("20% - アクセント 4", "20% - アクセント 4", 16_510_410),
-    tint("20% - アクセント 5", "20% - アクセント 5", 15_716_082),
-    tint("20% - アクセント 6", "20% - アクセント 6", 13_693_658),
-    tint("40% - アクセント 1", "40% - アクセント 1", 15_453_315),
-    tint("40% - アクセント 2", "40% - アクセント 2", 11_323_383),
-    tint("40% - アクセント 3", "40% - アクセント 3", 9_364_099),
-    tint("40% - アクセント 4", "40% - アクセント 4", 16_309_396),
-    tint("40% - アクセント 5", "40% - アクセント 5", 14_524_132),
-    tint("40% - アクセント 6", "40% - アクセント 6", 10_675_893),
-    tint("60% - アクセント 1", "60% - アクセント 1", 14_791_492),
-    tint("60% - アクセント 2", "60% - アクセント 2", 8_628_721),
-    tint("60% - アクセント 3", "60% - アクセント 3", 5_886_791),
-    tint("60% - アクセント 4", "60% - アクセント 4", 15_977_313),
-    tint("60% - アクセント 5", "60% - アクセント 5", 13_463_000),
-    tint("60% - アクセント 6", "60% - アクセント 6", 7_592_334),
-    accent("アクセント 1", "アクセント 1", ACCENT1),
-    accent("アクセント 2", "アクセント 2", 3_305_961),
-    accent("アクセント 3", "アクセント 3", 2_386_713),
-    accent("アクセント 4", "アクセント 4", 13_999_631),
-    accent("アクセント 5", "アクセント 5", 9_644_960),
-    accent("アクセント 6", "アクセント 6", 3_057_486),
+    tint("20% - アクセント 1", "20% - アクセント 1", 16_115_392, 5, 0.8),
+    tint("20% - アクセント 2", "20% - アクセント 2", 14_017_275, 6, 0.8),
+    tint("20% - アクセント 3", "20% - アクセント 3", 13_168_833, 7, 0.8),
+    tint("20% - アクセント 4", "20% - アクセント 4", 16_510_410, 8, 0.8),
+    tint("20% - アクセント 5", "20% - アクセント 5", 15_716_082, 9, 0.8),
+    tint("20% - アクセント 6", "20% - アクセント 6", 13_693_658, 10, 0.8),
+    tint("40% - アクセント 1", "40% - アクセント 1", 15_453_315, 5, 0.6),
+    tint("40% - アクセント 2", "40% - アクセント 2", 11_323_383, 6, 0.6),
+    tint("40% - アクセント 3", "40% - アクセント 3", 9_364_099, 7, 0.6),
+    tint("40% - アクセント 4", "40% - アクセント 4", 16_309_396, 8, 0.6),
+    tint("40% - アクセント 5", "40% - アクセント 5", 14_524_132, 9, 0.6),
+    tint("40% - アクセント 6", "40% - アクセント 6", 10_675_893, 10, 0.6),
+    tint("60% - アクセント 1", "60% - アクセント 1", 14_791_492, 5, 0.4),
+    tint("60% - アクセント 2", "60% - アクセント 2", 8_628_721, 6, 0.4),
+    tint("60% - アクセント 3", "60% - アクセント 3", 5_886_791, 7, 0.4),
+    tint("60% - アクセント 4", "60% - アクセント 4", 15_977_313, 8, 0.4),
+    tint("60% - アクセント 5", "60% - アクセント 5", 13_463_000, 9, 0.4),
+    tint("60% - アクセント 6", "60% - アクセント 6", 7_592_334, 10, 0.4),
+    accent("アクセント 1", "アクセント 1", ACCENT1, 5),
+    accent("アクセント 2", "アクセント 2", 3_305_961, 6),
+    accent("アクセント 3", "アクセント 3", 2_386_713, 7),
+    accent("アクセント 4", "アクセント 4", 13_999_631, 8),
+    accent("アクセント 5", "アクセント 5", 9_644_960, 9),
+    accent("アクセント 6", "アクセント 6", 3_057_486, 10),
     BuiltInStyle {
-        name: "タイトル",
-        local: "タイトル",
-        number: None,
-        font: Some(StyleFont {
-            bold: false,
-            italic: false,
-            size: 18.0,
-            name: Some("游ゴシック Light"),
-            color: Some(DARK2),
-        }),
-        fill: None,
-        borders: None,
-        alignment: false,
-        protection: false,
+        font_theme: Some(4),
+        ..plain(
+            "タイトル",
+            "タイトル",
+            Some(StyleFont {
+                bold: false,
+                italic: false,
+                size: 18.0,
+                name: Some("游ゴシック Light"),
+                color: Some(DARK2),
+            }),
+            None,
+            None,
+        )
     },
     BuiltInStyle {
-        name: "チェック セル",
-        local: "チェック セル",
-        number: None,
-        font: bold_font(Some(WHITE_LONG), 11.0),
-        fill: Some(Some(10_855_845)),
-        borders: Some([
-            Some(("double", 4_144_959)),
-            Some(("double", 4_144_959)),
-            Some(("double", 4_144_959)),
-            Some(("double", 4_144_959)),
-        ]),
-        alignment: false,
-        protection: false,
+        font_theme: Some(1),
+        ..plain(
+            "チェック セル",
+            "チェック セル",
+            bold_font(Some(WHITE_LONG), 11.0),
+            Some(Some(10_855_845)),
+            Some([
+                Some(("double", 4_144_959)),
+                Some(("double", 4_144_959)),
+                Some(("double", 4_144_959)),
+                Some(("double", 4_144_959)),
+            ]),
+        )
     },
-    BuiltInStyle {
-        name: "どちらでもない",
-        local: "どちらでもない",
-        number: None,
-        font: themed_font(Some(22_428)),
-        fill: Some(Some(10_284_031)),
-        borders: None,
-        alignment: false,
-        protection: false,
-    },
+    plain(
+        "どちらでもない",
+        "どちらでもない",
+        themed_font(Some(22_428)),
+        Some(Some(10_284_031)),
+        None,
+    ),
     numbered("Percent", "パーセント", "0%"),
-    BuiltInStyle {
-        name: "メモ",
-        local: "メモ",
-        number: None,
-        font: NO_FONT_CHANGE,
-        fill: Some(Some(13_434_879)),
-        borders: Some([
+    plain(
+        "メモ",
+        "メモ",
+        NO_FONT_CHANGE,
+        Some(Some(13_434_879)),
+        Some([
             Some(("thin", 11_711_154)),
             Some(("thin", 11_711_154)),
             Some(("thin", 11_711_154)),
             Some(("thin", 11_711_154)),
         ]),
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "リンク セル",
-        local: "リンク セル",
-        number: None,
-        font: themed_font(Some(32_250)),
-        fill: None,
-        borders: Some([None, None, Some(("double", 98_559)), None]),
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "入力",
-        local: "入力",
-        number: None,
-        font: themed_font(Some(7_749_439)),
-        fill: Some(Some(10_079_487)),
-        borders: Some([
+    ),
+    plain(
+        "リンク セル",
+        "リンク セル",
+        themed_font(Some(32_250)),
+        None,
+        Some([None, None, Some(("double", 98_559)), None]),
+    ),
+    plain(
+        "入力",
+        "入力",
+        themed_font(Some(7_749_439)),
+        Some(Some(10_079_487)),
+        Some([
             Some(("thin", 8_355_711)),
             Some(("thin", 8_355_711)),
             Some(("thin", 8_355_711)),
             Some(("thin", 8_355_711)),
         ]),
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "出力",
-        local: "出力",
-        number: None,
-        font: bold_font(Some(4_144_959), 11.0),
-        fill: Some(Some(15_921_906)),
-        borders: Some([
+    ),
+    plain(
+        "出力",
+        "出力",
+        bold_font(Some(4_144_959), 11.0),
+        Some(Some(15_921_906)),
+        Some([
             Some(("thin", 4_144_959)),
             Some(("thin", 4_144_959)),
             Some(("thin", 4_144_959)),
             Some(("thin", 4_144_959)),
         ]),
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "悪い",
-        local: "悪い",
-        number: None,
-        font: themed_font(Some(393_372)),
-        fill: Some(Some(13_551_615)),
-        borders: None,
-        alignment: false,
-        protection: false,
-    },
+    ),
+    plain("悪い", "悪い", themed_font(Some(393_372)), Some(Some(13_551_615)), None),
     numbered("Comma [0]", "桁区切り", "#,##0_);[Red](#,##0)"),
     numbered("Comma", "桁区切り [0.00]", "#,##0.00_);[Red](#,##0.00)"),
     BuiltInStyle {
@@ -649,110 +791,79 @@ const BUILT_IN_STYLES: [BuiltInStyle; 47] = [
         borders: Some([None, None, None, None]),
         alignment: true,
         protection: true,
+        font_theme: None,
+        fill_theme: None,
+    },
+    plain("良い", "良い", themed_font(Some(24_832)), Some(Some(13_561_798)), None),
+    BuiltInStyle {
+        font_theme: Some(4),
+        ..plain(
+            "見出し 1",
+            "見出し 1",
+            bold_font(Some(DARK2), 15.0),
+            None,
+            Some([None, None, Some(("thick", ACCENT1)), None]),
+        )
     },
     BuiltInStyle {
-        name: "良い",
-        local: "良い",
-        number: None,
-        font: themed_font(Some(24_832)),
-        fill: Some(Some(13_561_798)),
-        borders: None,
-        alignment: false,
-        protection: false,
+        font_theme: Some(4),
+        ..plain(
+            "見出し 2",
+            "見出し 2",
+            bold_font(Some(DARK2), 13.0),
+            None,
+            Some([None, None, Some(("thick", 15_122_020)), None]),
+        )
     },
     BuiltInStyle {
-        name: "見出し 1",
-        local: "見出し 1",
-        number: None,
-        font: bold_font(Some(DARK2), 15.0),
-        fill: None,
-        borders: Some([None, None, Some(("thick", ACCENT1)), None]),
-        alignment: false,
-        protection: false,
+        font_theme: Some(4),
+        ..plain(
+            "見出し 3",
+            "見出し 3",
+            bold_font(Some(DARK2), 11.0),
+            None,
+            Some([None, None, Some(("medium", 14_791_492)), None]),
+        )
     },
     BuiltInStyle {
-        name: "見出し 2",
-        local: "見出し 2",
-        number: None,
-        font: bold_font(Some(DARK2), 13.0),
-        fill: None,
-        borders: Some([None, None, Some(("thick", 15_122_020)), None]),
-        alignment: false,
-        protection: false,
+        font_theme: Some(4),
+        ..plain("見出し 4", "見出し 4", bold_font(Some(DARK2), 11.0), None, None)
     },
-    BuiltInStyle {
-        name: "見出し 3",
-        local: "見出し 3",
-        number: None,
-        font: bold_font(Some(DARK2), 11.0),
-        fill: None,
-        borders: Some([None, None, Some(("medium", 14_791_492)), None]),
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "見出し 4",
-        local: "見出し 4",
-        number: None,
-        font: bold_font(Some(DARK2), 11.0),
-        fill: None,
-        borders: None,
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "計算",
-        local: "計算",
-        number: None,
-        font: bold_font(Some(32_250), 11.0),
-        fill: Some(Some(15_921_906)),
-        borders: Some([
+    plain(
+        "計算",
+        "計算",
+        bold_font(Some(32_250), 11.0),
+        Some(Some(15_921_906)),
+        Some([
             Some(("thin", 8_355_711)),
             Some(("thin", 8_355_711)),
             Some(("thin", 8_355_711)),
             Some(("thin", 8_355_711)),
         ]),
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "説明文",
-        local: "説明文",
-        number: None,
-        font: Some(StyleFont {
+    ),
+    plain(
+        "説明文",
+        "説明文",
+        Some(StyleFont {
             bold: false,
             italic: true,
             size: 11.0,
             name: None,
             color: Some(8_355_711),
         }),
-        fill: None,
-        borders: None,
-        alignment: false,
-        protection: false,
-    },
-    BuiltInStyle {
-        name: "警告文",
-        local: "警告文",
-        number: None,
-        font: themed_font(Some(255)),
-        fill: None,
-        borders: None,
-        alignment: false,
-        protection: false,
-    },
+        None,
+        None,
+    ),
+    plain("警告文", "警告文", themed_font(Some(255)), None, None),
     numbered("Currency [0]", "通貨", "$#,##0_);[Red]($#,##0)"),
     numbered("Currency", "通貨 [0.00]", "$#,##0.00_);[Red]($#,##0.00)"),
-    BuiltInStyle {
-        name: "集計",
-        local: "集計",
-        number: None,
-        font: bold_font(None, 11.0),
-        fill: None,
-        borders: Some([None, Some(("thin", ACCENT1)), Some(("double", ACCENT1)), None]),
-        alignment: false,
-        protection: false,
-    },
+    plain(
+        "集計",
+        "集計",
+        bold_font(None, 11.0),
+        None,
+        Some([None, Some(("thin", ACCENT1)), Some(("double", ACCENT1)), None]),
+    ),
 ];
 
 /// Where `Normal` sits in the table.
@@ -862,6 +973,11 @@ struct WorkbookHost<'a> {
     /// The style each cell was last given, by its place in the table; a cell
     /// not listed wears `Normal`.
     styled: std::collections::HashMap<CellAddress, usize>,
+    /// Where a cell's colour came from the theme: the theme colour's number
+    /// and the tint on it, for each part of the cell so painted. A colour
+    /// given as a number is not here, and the theme questions answer
+    /// accordingly.
+    theme_paint: std::collections::HashMap<(CellAddress, Paint), (usize, f64)>,
     /// What a macro has written across the bottom of the window, while it is
     /// the macro's to write. Nothing here means the bar is Excel's own again,
     /// which is what it answers `False` to say.
@@ -925,6 +1041,7 @@ impl<'a> WorkbookHost<'a> {
             notes,
             split: SplitSettings::default(),
             styled: std::collections::HashMap::new(),
+            theme_paint: std::collections::HashMap::new(),
             enable_events: true,
             display_alerts: true,
             calculation: -4105,
@@ -1728,6 +1845,74 @@ impl<'a> WorkbookHost<'a> {
         })
     }
 
+    /// The theme colour and tint every cell of a range agrees on for one
+    /// painted part: None when they disagree, Some(None) when none of them
+    /// has one.
+    fn uniform_theme_paint(
+        &self,
+        range: CellRange,
+        paint: Paint,
+    ) -> Result<Option<Option<(usize, f64)>>, String> {
+        Self::range_cell_count(range)?;
+        let mut first: Option<Option<(usize, f64)>> = None;
+        for address in range.addresses() {
+            let held = self.theme_paint.get(&(address, paint)).copied();
+            if first.is_some_and(|seen| seen != held) {
+                return Ok(None);
+            }
+            first = Some(held);
+        }
+        Ok(Some(first.flatten()))
+    }
+
+    fn forget_theme_paint(&mut self, range: CellRange, paint: Paint) {
+        for address in range.addresses() {
+            self.theme_paint.remove(&(address, paint));
+        }
+    }
+
+    /// Paint a part of every cell from the theme, and remember that it was.
+    /// Measured: giving a theme colour puts the tint back to 0, and giving a
+    /// tint keeps the theme colour -- or, where there was none, tints the
+    /// part's plain colour, black for writing and edges.
+    fn paint_from_theme(
+        &mut self,
+        range: CellRange,
+        paint: Paint,
+        theme: Option<usize>,
+        tint: Option<f64>,
+    ) -> Result<(), String> {
+        Self::range_cell_count(range)?;
+        for address in range.addresses() {
+            let (held_theme, held_tint) = self
+                .theme_paint
+                .get(&(address, paint))
+                .copied()
+                .unwrap_or((if paint == Paint::Interior { 1 } else { 2 }, 0.0));
+            let (theme, tint) = match (theme, tint) {
+                (Some(theme), _) => (theme, 0.0),
+                (None, Some(tint)) => (held_theme, tint),
+                (None, None) => (held_theme, held_tint),
+            };
+            let colour = colour_from_packed(tinted(THEME_COLOURS[theme - 1], tint));
+            let one = CellRange::single(address);
+            match paint {
+                Paint::Font => {
+                    self.set_range_style(one, |_, style| style.font_color = Some(colour.clone()))?
+                }
+                Paint::Interior => {
+                    self.set_range_style(one, |_, style| style.bg_color = Some(colour.clone()))?
+                }
+                Paint::Edge(selection) => self.set_range_style(one, |at, style| {
+                    recolour_selected_borders(style, at, range, selection, Some(&colour));
+                })?,
+            }
+            self.theme_paint
+                .insert((address, paint), (theme, quantised_tint(tint)));
+        }
+        Ok(())
+    }
+
     fn style_index(&self, object: &ObjectRef) -> Option<usize> {
         match self.objects.get(object.handle as usize) {
             Some(HostObject::Style(index)) => Some(*index),
@@ -1861,11 +2046,38 @@ impl<'a> WorkbookHost<'a> {
                 self.unlocked.remove(&address);
             }
         }
+        let (font_theme, fill_theme, paints_font, paints_fill) = (
+            style.font_theme,
+            style.fill_theme,
+            style.font.is_some(),
+            style.fill.is_some(),
+        );
         for address in range.addresses() {
             if index == NORMAL_STYLE {
                 self.styled.remove(&address);
             } else {
                 self.styled.insert(address, index);
+            }
+            if paints_font {
+                match font_theme {
+                    Some(theme) => {
+                        self.theme_paint.insert((address, Paint::Font), (theme, 0.0));
+                    }
+                    None => {
+                        self.theme_paint.remove(&(address, Paint::Font));
+                    }
+                }
+            }
+            if paints_fill {
+                match fill_theme {
+                    Some((theme, shade)) => {
+                        self.theme_paint
+                            .insert((address, Paint::Interior), (theme, quantised_tint(shade)));
+                    }
+                    None => {
+                        self.theme_paint.remove(&(address, Paint::Interior));
+                    }
+                }
             }
         }
         Ok(())
@@ -5131,23 +5343,34 @@ impl<'a> WorkbookHost<'a> {
             let cell = row.cells.iter().find(|held| held.col == column)?;
             Some(cell.style.clone())
         };
+        // Where both cells draw the shared edge, the heavier line is the one
+        // seen: measured, a cell with a thin top under a cell with a double
+        // bottom answers its top as the double line.
+        let heavier = |own: Option<BorderLine>, other: Option<BorderLine>| -> Option<BorderLine> {
+            let weight = |line: &Option<BorderLine>| match line {
+                None => 0,
+                Some(line) => match border_kind(Some(line)).1 {
+                    1 => 1,
+                    -4138 => 3,
+                    4 => 4,
+                    _ => 2,
+                },
+            };
+            if weight(&other) > weight(&own) { other } else { own }
+        };
         let mut style = dress_at(address.row, address.column).unwrap_or_default();
-        if style.border_top.is_none() && address.row > 1 {
-            style.border_top =
-                dress_at(address.row - 1, address.column).and_then(|above| above.border_bottom);
+        if address.row > 1 {
+            let above = dress_at(address.row - 1, address.column).and_then(|above| above.border_bottom);
+            style.border_top = heavier(style.border_top.take(), above);
         }
-        if style.border_left.is_none() && address.column > 0 {
-            style.border_left =
-                dress_at(address.row, address.column - 1).and_then(|left| left.border_right);
+        if address.column > 0 {
+            let left = dress_at(address.row, address.column - 1).and_then(|left| left.border_right);
+            style.border_left = heavier(style.border_left.take(), left);
         }
-        if style.border_bottom.is_none() {
-            style.border_bottom =
-                dress_at(address.row + 1, address.column).and_then(|below| below.border_top);
-        }
-        if style.border_right.is_none() {
-            style.border_right =
-                dress_at(address.row, address.column + 1).and_then(|right| right.border_left);
-        }
+        let below = dress_at(address.row + 1, address.column).and_then(|below| below.border_top);
+        style.border_bottom = heavier(style.border_bottom.take(), below);
+        let right = dress_at(address.row, address.column + 1).and_then(|right| right.border_left);
+        style.border_right = heavier(style.border_right.take(), right);
         style
     }
 
@@ -5339,6 +5562,11 @@ impl<'a> WorkbookHost<'a> {
                     || !(range.start_column..=range.end_column).contains(&held.column)
             });
             self.styled.retain(|held, _| {
+                held.sheet != range.sheet
+                    || !(range.start_row..=range.end_row).contains(&held.row)
+                    || !(range.start_column..=range.end_column).contains(&held.column)
+            });
+            self.theme_paint.retain(|(held, _), _| {
                 held.sheet != range.sheet
                     || !(range.start_row..=range.end_row).contains(&held.row)
                     || !(range.start_column..=range.end_column).contains(&held.column)
@@ -7148,6 +7376,16 @@ impl<'a> WorkbookHost<'a> {
                     self.styled.remove(&to);
                 }
             }
+            let paints: Vec<(Paint, (usize, f64))> = self
+                .theme_paint
+                .iter()
+                .filter(|((held, _), _)| *held == from)
+                .map(|((_, paint), painted)| (*paint, *painted))
+                .collect();
+            self.theme_paint.retain(|(held, _), _| *held != to);
+            for (paint, painted) in paints {
+                self.theme_paint.insert((to, paint), painted);
+            }
             if let Some(index) = self.note_at(to) {
                 self.notes.remove(index);
             }
@@ -8169,6 +8407,20 @@ impl Host for WorkbookHost<'_> {
                     })
                 });
             }
+            // Measured: an edge not painted from the theme answers Null.
+            if name.eq_ignore_ascii_case("themecolor") {
+                return match self.uniform_theme_paint(range, Paint::Edge(selection))? {
+                    Some(Some((theme, _))) => Ok(Some(Value::Integer(theme as i64))),
+                    _ => Ok(Some(Value::Null)),
+                };
+            }
+            if name.eq_ignore_ascii_case("tintandshade") {
+                return match self.uniform_theme_paint(range, Paint::Edge(selection))? {
+                    None => Ok(Some(Value::Null)),
+                    Some(Some((_, tint))) => Ok(Some(Value::Double(tint))),
+                    Some(None) => Ok(Some(Value::Double(0.0))),
+                };
+            }
             // Measured: an edge with no line answers Color 0 and ColorIndex
             // xlColorIndexNone; edges that disagree answer 0 too, not Null --
             // and that 0 is a Double, where the others are Longs.
@@ -8271,6 +8523,28 @@ impl Host for WorkbookHost<'_> {
                     .uniform_style(range, |style| style.font_color.clone())
                     .map(|value| Some(style_color_value(value, BLACK)));
             }
+            // Measured: a font never coloured answers ThemeColor 2, the dark
+            // text colour; one coloured by number is error 5; one coloured
+            // from the theme answers its number. TintAndShade is 0 wherever
+            // there is no theme colour.
+            if name.eq_ignore_ascii_case("themecolor") {
+                return match self.uniform_theme_paint(range, Paint::Font)? {
+                    None => Ok(Some(Value::Null)),
+                    Some(Some((theme, _))) => Ok(Some(Value::Integer(theme as i64))),
+                    Some(None) => match self.uniform_style(range, |style| style.font_color.clone())? {
+                        Some(None) => Ok(Some(Value::Integer(2))),
+                        Some(Some(_)) => Err(host_error(5, "the font's colour is not a theme colour")),
+                        None => Ok(Some(Value::Null)),
+                    },
+                };
+            }
+            if name.eq_ignore_ascii_case("tintandshade") {
+                return match self.uniform_theme_paint(range, Paint::Font)? {
+                    None => Ok(Some(Value::Null)),
+                    Some(Some((_, tint))) => Ok(Some(Value::Double(tint))),
+                    Some(None) => Ok(Some(Value::Double(0.0))),
+                };
+            }
             if name.eq_ignore_ascii_case("colorindex") {
                 // Excel names a colour by the nearest of its 56. A cell that
                 // names none answers 1 — the palette's black — rather than
@@ -8289,6 +8563,27 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(range) = self.range_interior(receiver) {
+            // Measured: a cell with no fill answers ThemeColor xlNone; one
+            // filled by number answers 0; one filled from the theme answers
+            // its number.
+            if name.eq_ignore_ascii_case("themecolor") {
+                return match self.uniform_theme_paint(range, Paint::Interior)? {
+                    None => Ok(Some(Value::Null)),
+                    Some(Some((theme, _))) => Ok(Some(Value::Integer(theme as i64))),
+                    Some(None) => match self.uniform_style(range, |style| style.bg_color.clone())? {
+                        Some(None) => Ok(Some(Value::Integer(COLOUR_NONE))),
+                        Some(Some(_)) => Ok(Some(Value::Integer(0))),
+                        None => Ok(Some(Value::Null)),
+                    },
+                };
+            }
+            if name.eq_ignore_ascii_case("tintandshade") {
+                return match self.uniform_theme_paint(range, Paint::Interior)? {
+                    None => Ok(Some(Value::Null)),
+                    Some(Some((_, tint))) => Ok(Some(Value::Double(tint))),
+                    Some(None) => Ok(Some(Value::Double(0.0))),
+                };
+            }
             if name.eq_ignore_ascii_case("color") {
                 return self
                     .uniform_style(range, |style| style.bg_color.clone())
@@ -9083,7 +9378,18 @@ impl Host for WorkbookHost<'_> {
             // colour: measured, `Borders(xlEdgeBottom).Color = 255` on a bare
             // cell reads back LineStyle 1, Weight 2, Color 255. A colour
             // outside the range -- -1, 16777216 -- reads back 0.
+            if name.eq_ignore_ascii_case("themecolor") {
+                let theme = theme_colour(&value)?;
+                self.paint_from_theme(range, Paint::Edge(selection), Some(theme), None)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("tintandshade") {
+                let tint = tint_asked(&value)?;
+                self.paint_from_theme(range, Paint::Edge(selection), None, Some(tint))?;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("color") || name.eq_ignore_ascii_case("colorindex") {
+                self.forget_theme_paint(range, Paint::Edge(selection));
                 let colour = if name.eq_ignore_ascii_case("color") {
                     let Some(asked) = any_number(&value) else {
                         return Err("Borders.Color must be an RGB color number".to_string());
@@ -9104,8 +9410,19 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         }
         if let Some(range) = self.range_font(receiver) {
+            if name.eq_ignore_ascii_case("themecolor") {
+                let theme = theme_colour(&value)?;
+                self.paint_from_theme(range, Paint::Font, Some(theme), None)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("tintandshade") {
+                let tint = tint_asked(&value)?;
+                self.paint_from_theme(range, Paint::Font, None, Some(tint))?;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("colorindex") {
                 let colour = palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
+                self.forget_theme_paint(range, Paint::Font);
                 self.set_range_style(range, |_, style| style.font_color = colour.clone())?;
                 return Ok(true);
             }
@@ -9188,19 +9505,32 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("color") {
                 let value = style_color(&value, "Font.Color")?;
+                self.forget_theme_paint(range, Paint::Font);
                 self.set_range_style(range, |_, style| style.font_color = value.clone())?;
                 return Ok(true);
             }
             return Ok(false);
         }
         if let Some(range) = self.range_interior(receiver) {
+            if name.eq_ignore_ascii_case("themecolor") {
+                let theme = theme_colour(&value)?;
+                self.paint_from_theme(range, Paint::Interior, Some(theme), None)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("tintandshade") {
+                let tint = tint_asked(&value)?;
+                self.paint_from_theme(range, Paint::Interior, None, Some(tint))?;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("color") {
                 let value = style_color(&value, "Interior.Color")?;
+                self.forget_theme_paint(range, Paint::Interior);
                 self.set_range_style(range, |_, style| style.bg_color = value.clone())?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("colorindex") {
                 let colour = palette_choice(&value, COLOUR_NONE, "Interior.ColorIndex")?;
+                self.forget_theme_paint(range, Paint::Interior);
                 self.set_range_style(range, |_, style| style.bg_color = colour.clone())?;
                 return Ok(true);
             }
@@ -13455,6 +13785,123 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// A tint moves a theme colour the way Excel moves it.
+    ///
+    /// Every pair is a colour Excel answered for `Interior.Color` after
+    /// `ThemeColor` and `TintAndShade` were set: the first accent under
+    /// sixteen tints, black under eleven, the fourth accent under seven. The
+    /// ones a floating-point HLS gets wrong by one or two are in here.
+    #[test]
+    fn a_tint_moves_a_theme_colour_the_way_excel_does() {
+        let accent1 = 8_544_277;
+        let accent4 = 13_999_631;
+        let measured: [(i64, f64, i64); 34] = [
+            (accent1, 0.8, 16_115_392),
+            (accent1, 0.6, 15_453_315),
+            (accent1, 0.4, 14_791_492),
+            (accent1, 0.5, 15_122_020),
+            (accent1, 0.25, 13_539_874),
+            (accent1, -0.25, 6_375_440),
+            (accent1, -0.5, 4_206_603),
+            (accent1, 0.9, 16_446_176),
+            (accent1, -0.9, 854_530),
+            (accent1, 0.35, 14_593_078),
+            (accent1, 1.0, 16_777_215),
+            (accent1, -1.0, 0),
+            (accent1, 0.05, 9_530_391),
+            (accent1, -0.05, 8_018_708),
+            (accent1, 0.75, 15_916_720),
+            (accent1, -0.75, 2_037_509),
+            (0, 0.8, 13_421_772),
+            (0, 0.6, 10_066_329),
+            (0, 0.4, 6_710_886),
+            (0, 0.5, 8_421_504),
+            (0, 0.25, 4_210_752),
+            (0, -0.25, 0),
+            (0, 0.9, 15_132_390),
+            (0, 0.35, 5_855_577),
+            (0, 1.0, 16_777_215),
+            (0, 0.05, 855_309),
+            (0, 0.75, 12_566_463),
+            (accent4, 0.8, 16_510_410),
+            (accent4, 0.6, 16_309_396),
+            (accent4, 0.4, 15_977_313),
+            (accent4, 0.5, 16_110_458),
+            (accent4, 0.25, 15_842_872),
+            (accent4, -0.25, 10_384_908),
+            (accent4, -0.5, 6_901_511),
+        ];
+        for (colour, tint, expected) in measured {
+            assert_eq!(tinted(colour, tint), expected, "{colour} tinted {tint}");
+        }
+        assert_eq!(quantised_tint(0.8), 26_213.0 / 32_767.0);
+        assert_eq!(quantised_tint(0.4), 13_106.0 / 32_767.0);
+        assert_eq!(quantised_tint(-0.25), -8_191.0 / 32_767.0);
+    }
+
+    /// Theme colours are set and read on a font, a fill and an edge.
+    ///
+    /// Measured against Excel: a bare font answers ThemeColor 2 and a bare
+    /// fill xlNone; a colour given by number answers error 5 on the font and
+    /// 0 on the fill; giving a theme colour puts the tint back to 0; a tint
+    /// on a bare font tints black; a theme colour out of the twelve is error
+    /// 9 and a tint past 1 is error 5; `ClearFormats` forgets; a copy carries;
+    /// and `20% - アクセント 1` is the first accent at eight tenths.
+    #[test]
+    fn theme_colours_are_set_and_read() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, v As Variant
+               On Error Resume Next
+               out = Range(\"A1\").Font.ThemeColor & \"/\" & Range(\"A1\").Interior.ThemeColor & \"|\"
+               Range(\"A1\").Interior.ThemeColor = 5
+               Range(\"A1\").Interior.TintAndShade = 0.6
+               Range(\"A1\").Interior.ThemeColor = 6
+               out = out & Range(\"A1\").Interior.TintAndShade & \"/\" & Range(\"A1\").Interior.Color & \"|\"
+               Range(\"A2\").Font.ThemeColor = 5
+               Range(\"A2\").Font.TintAndShade = -0.25
+               out = out & Range(\"A2\").Font.Color & \"/\" & Range(\"A2\").Font.ThemeColor & \"|\"
+               Range(\"A3\").Font.TintAndShade = 0.5
+               out = out & Range(\"A3\").Font.Color & \"/\" & Range(\"A3\").Font.ThemeColor & \"|\"
+               Range(\"A4\").Font.Color = 255
+               v = Range(\"A4\").Font.ThemeColor
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A5\").Interior.Color = 255
+               out = out & Range(\"A5\").Interior.ThemeColor & \"|\"
+               Range(\"A6\").Interior.ThemeColor = 13
+               out = out & Err.Number
+               Err.Clear
+               Range(\"A6\").Interior.TintAndShade = 1.5
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A7\").Borders(9).ThemeColor = 5
+               Range(\"A7\").Borders(9).TintAndShade = 0.4
+               out = out & Range(\"A7\").Borders(9).Color & \"/\" & Range(\"A7\").Borders(9).ThemeColor & \"|\"
+               Range(\"A8\").Style = \"20% - アクセント 1\"
+               out = out & Range(\"A8\").Interior.ThemeColor & \"/\" & Range(\"A8\").Interior.TintAndShade & \"/\" & Range(\"A8\").Font.ThemeColor & \"|\"
+               Range(\"A8\").Copy Range(\"B8\")
+               Range(\"A8\").ClearFormats
+               out = out & Range(\"A8\").Interior.ThemeColor & \"/\" & Range(\"B8\").Interior.ThemeColor
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "2/-4142|0/3305961|6375440/5|8421504/2|5|0|95|14791492/5|5/0.799981688894314/2|-4142/5"
+                    .to_string()
+            )
         );
     }
 
