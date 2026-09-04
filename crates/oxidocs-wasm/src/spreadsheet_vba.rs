@@ -5743,7 +5743,10 @@ impl Host for WorkbookHost<'_> {
                         self.selection = range;
                     }
                     self.active_cell = range.first();
-                    return Ok(Some(Value::Empty));
+                    // It answers True, like the other doing-members: asked of
+                    // Excel, `r = Range("A2").Activate` is a Boolean and the
+                    // active cell is A2 afterwards.
+                    return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("areas") {
                     return match args {
@@ -5817,19 +5820,23 @@ impl Host for WorkbookHost<'_> {
                     self.set_range_input(range, Value::Empty, "range assignment", FormulaStyle::A1)?;
                     return Ok(Some(Value::Empty));
                 }
+                // These answer True, not nothing: asked of Excel,
+                // `r = Range("A1").Clear` is a Boolean and so is
+                // `.ClearFormats`. `ClearContents` is the odd one and answers
+                // Empty, which is what it already did.
                 if name.eq_ignore_ascii_case("clearformats") {
                     if !args.is_empty() {
                         return Err("Range.ClearFormats does not accept arguments".to_string());
                     }
                     self.clear_range(range, false, true)?;
-                    return Ok(Some(Value::Empty));
+                    return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("clear") {
                     if !args.is_empty() {
                         return Err("Range.Clear does not accept arguments".to_string());
                     }
                     self.clear_range(range, true, true)?;
-                    return Ok(Some(Value::Empty));
+                    return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("autofilter") {
                     return self.auto_filter(range, args).map(Some);

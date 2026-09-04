@@ -2530,15 +2530,36 @@ impl<'a> Runtime<'a> {
                 if is_err_object(&receiver) {
                     return err_property(frame, name, span.line);
                 }
-                self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
-                    no_such_member(format!("host property is not available: {}.{name}", receiver.kind), Some(span.line))
-                })
+                if let Some(value) = self.host_get(&receiver, name, span.line)? {
+                    return Ok(value);
+                }
+                // A METHOD named without brackets is still that method.
+                // `r = Range("A1").Clear` clears the cells and hands back
+                // True, and so do `Copy`, `Cut`, `Activate` and `ClearFormats`
+                // -- asked of Excel, every one of them answers a Boolean from
+                // a plain read. Only the property path was tried here, so all
+                // of them answered 438 instead: the member was there, and the
+                // door it was behind was not opened.
+                if let Some(value) = self.host_call(Some(&receiver), name, &[], span.line)? {
+                    return Ok(value);
+                }
+                Err(no_such_member(
+                    format!("host property is not available: {}.{name}", receiver.kind),
+                    Some(span.line),
+                ))
             }
             Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
                 let receiver = current_with_object(frame, span.line)?;
-                self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
-                    no_such_member(format!("host property is not available: {}.{name}", receiver.kind), Some(span.line))
-                })
+                if let Some(value) = self.host_get(&receiver, name, span.line)? {
+                    return Ok(value);
+                }
+                if let Some(value) = self.host_call(Some(&receiver), name, &[], span.line)? {
+                    return Ok(value);
+                }
+                Err(no_such_member(
+                    format!("host property is not available: {}.{name}", receiver.kind),
+                    Some(span.line),
+                ))
             }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
