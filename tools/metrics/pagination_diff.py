@@ -178,6 +178,13 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
         _raw = wp["text"] or ""
         _ruby = _raw.find("")
         wt = normalize_text(_raw[:_ruby] if _ruby > 0 else _raw)
+        # 2026-09-04: a paragraph that STARTS with the placeholder has no
+        # prefix to salvage, but it does have a SUFFIX -- Word reads
+        # "プログラム" where Oxi carries "就労プログラム". Prefix-matching the
+        # remainder paired correspondence__04a3e3e1's row-10 cell paragraph
+        # with "プログラム日程の変更について" two pages on (a manufactured +1,
+        # the doc's only remaining miss). Such a paragraph matches by suffix.
+        _suffix = _ruby == 0
         # 2026-09-02: Word's Range.Text collapses a RUBY BASE to a single
         # , so the Word side reads "男もすなるというものを" where Oxi
         # carries the base itself ("男もすなる日記というものを"). Prefix equality
@@ -211,7 +218,10 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
                     n = min(len(wt), len(ot))
                     if n < MIN_MATCH_LEN:
                         continue
-                    if wt[:n] != ot[:n]:
+                    if _suffix:
+                        if not ot.endswith(wt):
+                            continue
+                    elif wt[:n] != ot[:n]:
                         continue
                     # Capacity: how many times the matched prefix appears
                     # in the Oxi record's text (≥1 by construction).
