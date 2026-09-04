@@ -300,6 +300,8 @@ enum HostObject {
     Hyperlink(u64),
     /// The hyperlinks on a sheet, or the ones a range reaches.
     Hyperlinks(HyperlinkScope),
+    /// `Range.Validation`, for the cells of a range.
+    Validation(CellRange),
     /// `Range.Characters(Start, Length)`: a stretch of one cell's text.
     Characters(CellAddress, u32, Option<u32>),
     /// The font of that stretch.
@@ -1095,6 +1097,58 @@ fn character_span(start: u32, length: Option<u32>, text_length: usize) -> (usize
     (from, to)
 }
 
+
+/// The data validation on a cell, as `Range.Validation` sets and reads it.
+///
+/// Held per cell beside the workbook: the file's own validations are not read
+/// in and these are not saved -- a known limit, the same one notes and
+/// hyperlinks have. Two cells validated alike answer as one range.
+#[derive(Debug, Clone, PartialEq)]
+struct Validation {
+    /// xlValidateInputOnly 0, WholeNumber 1, Decimal 2, List 3, Date 4,
+    /// Time 5, TextLength 6, Custom 7.
+    kind: i64,
+    /// xlValidAlertStop 1, Warning 2, Information 3.
+    alert: i64,
+    /// xlBetween 1, NotBetween 2, Equal 3, NotEqual 4, Greater 5, Less 6,
+    /// GreaterEqual 7, LessEqual 8.
+    operator: i64,
+    formula1: String,
+    formula2: String,
+    in_cell_dropdown: bool,
+    ignore_blank: bool,
+    show_input: bool,
+    show_error: bool,
+    input_title: String,
+    input_message: String,
+    error_title: String,
+    error_message: String,
+}
+
+/// A validation's formula as Excel keeps it: a time is written back as its
+/// long form -- measured, `12:00` is kept as `12:00:00 PM` -- and the rest
+/// as given.
+fn kept_validation_formula(kind: i64, formula: &str) -> String {
+    if kind == 5 && !formula.starts_with('=') {
+        if let Some((fraction, _)) = written_time(formula) {
+            return vba_date_text(fraction);
+        }
+    }
+    formula.to_string()
+}
+
+/// The number a validation's formula text stands for: a plain number, or a
+/// date or time as typed.
+fn formula_number(formula: &str) -> Option<f64> {
+    if let Some(number) = plain_number(formula.trim()) {
+        return Some(number);
+    }
+    match written_moment(formula, this_year_now()) {
+        Some((CellValue::Number(number), _)) => Some(number),
+        _ => None,
+    }
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -1184,6 +1238,8 @@ struct WorkbookHost<'a> {
     notes: Vec<Note>,
     /// The hyperlinks on every sheet, in the order they were added.
     links: Vec<Link>,
+    /// The data validation on each cell that has one.
+    validations: std::collections::HashMap<CellAddress, Validation>,
     /// The number the next hyperlink gets.
     next_link: u64,
     /// Whether a hyperlink has ever been added: the `Hyperlink` style joins
@@ -1261,6 +1317,7 @@ impl<'a> WorkbookHost<'a> {
             unlocked: std::collections::HashSet::new(),
             notes,
             links: Vec::new(),
+            validations: std::collections::HashMap::new(),
             next_link: 1,
             linked_once: false,
             split: SplitSettings::default(),
@@ -1312,6 +1369,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Styles => "Styles",
                 HostObject::Hyperlink(_) => "Hyperlink",
                 HostObject::Hyperlinks(_) => "Hyperlinks",
+                HostObject::Validation(_) => "Validation",
                 HostObject::Characters(..) => "Characters",
                 HostObject::CharactersFont(..) => "Font",
                 HostObject::Comment(_) => "Comment",
@@ -2533,6 +2591,386 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Some(Value::Empty));
         }
         Ok(None)
+    }
+
+    fn validation_range(&self, object: &ObjectRef) -> Option<CellRange> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Validation(range)) => Some(*range),
+            _ => None,
+        }
+    }
+
+    /// The one validation every cell of a range carries, or the 1004 Excel
+    /// raises for a cell without one and for a range whose cells differ --
+    /// measured, `Range("D3:D5").Validation.Type` with D5 bare is 1004.
+    fn shared_validation(&self, range: CellRange) -> Result<Validation, String> {
+        Self::range_cell_count(range)?;
+        let mut shared: Option<&Validation> = None;
+        for address in range.addresses() {
+            let held = self
+                .validations
+                .get(&address)
+                .ok_or_else(|| "the range has no data validation".to_string())?;
+            if shared.is_some_and(|shared| shared != held) {
+                return Err("the cells of the range are validated differently".to_string());
+            }
+            shared = Some(held);
+        }
+        shared
+            .cloned()
+            .ok_or_else(|| "the range has no data validation".to_string())
+    }
+
+    /// `Validation.Add Type, AlertStyle, Operator, Formula1, Formula2`, and
+    /// `Modify` with the same arguments over what is there.
+    ///
+    /// Measured: Add on cells already validated is 1004 (Delete first);
+    /// a type outside 0..7, an operator outside 1..8, a numeric type with no
+    /// Formula1 or one that is not a number, a `Between` with no Formula2,
+    /// and a list with an empty Formula1 are 1004 too; Operator left out is
+    /// xlBetween and AlertStyle left out is xlValidAlertStop; the flags all
+    /// start True.
+    fn add_validation(
+        &mut self,
+        range: CellRange,
+        args: &[Value],
+        modifying: bool,
+    ) -> Result<(), String> {
+        Self::range_cell_count(range)?;
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let existing = if modifying {
+            Some(self.shared_validation(range)?)
+        } else {
+            if range.addresses().any(|address| self.validations.contains_key(&address)) {
+                return Err("the range already has data validation; delete it first".to_string());
+            }
+            None
+        };
+        let number_or = |index: usize, held: i64| -> Result<i64, String> {
+            match given(index) {
+                None => Ok(held),
+                Some(value) => sort_number(value, "Validation"),
+            }
+        };
+        let text_or = |index: usize, held: &str| -> Result<String, String> {
+            match given(index) {
+                None => Ok(held.to_string()),
+                Some(Value::String(text)) => Ok(text.clone()),
+                Some(value) if any_number(value).is_some() => Ok(shown_text(value, None)),
+                Some(_) => Err("a validation's formula is text".to_string()),
+            }
+        };
+        let base = existing.clone().unwrap_or(Validation {
+            kind: 0,
+            alert: 1,
+            operator: 1,
+            formula1: String::new(),
+            formula2: String::new(),
+            in_cell_dropdown: true,
+            ignore_blank: true,
+            show_input: true,
+            show_error: true,
+            input_title: String::new(),
+            input_message: String::new(),
+            error_title: String::new(),
+            error_message: String::new(),
+        });
+        let kind = number_or(0, base.kind)?;
+        if !(0..=7).contains(&kind) {
+            return Err(format!("{kind} is not a kind of data validation"));
+        }
+        let alert = number_or(1, base.alert)?;
+        if !(1..=3).contains(&alert) {
+            return Err(format!("{alert} is not a validation alert style"));
+        }
+        let operator = number_or(2, base.operator)?;
+        if !(1..=8).contains(&operator) {
+            return Err(format!("{operator} is not a validation operator"));
+        }
+        let formula1 = text_or(3, &base.formula1)?;
+        let formula2 = text_or(4, &base.formula2)?;
+        if kind != 0 && formula1.is_empty() {
+            return Err("this kind of data validation needs Formula1".to_string());
+        }
+        if matches!(kind, 1 | 2 | 4 | 5 | 6) {
+            for formula in [&formula1, &formula2] {
+                if !formula.is_empty() && formula_number(formula).is_none() && !formula.starts_with('=') {
+                    return Err(format!("{formula:?} is not a number a validation can compare with"));
+                }
+            }
+            // Measured: `Between` and `NotBetween` want both bounds --
+            // `Add Type:=xlValidateWholeNumber, Formula1:="1"` alone is 1004.
+            if matches!(operator, 1 | 2) && formula2.is_empty() {
+                return Err("Between and NotBetween need Formula2 as well".to_string());
+            }
+        }
+        let validation = Validation {
+            kind,
+            alert,
+            operator,
+            formula1: kept_validation_formula(kind, &formula1),
+            formula2: kept_validation_formula(kind, &formula2),
+            ..base
+        };
+        for address in range.addresses() {
+            self.validations.insert(address, validation.clone());
+        }
+        Ok(())
+    }
+
+    /// Whether the cell's value passes its validation, as `Validation.Value`
+    /// answers. Measured: a blank passes with `IgnoreBlank` and fails without;
+    /// a whole number is not 15.5 and not text; a list is matched exactly in
+    /// case, on the cell's text with its ends trimmed, against items kept as
+    /// written; `Between` takes its bounds either way round; a formula in
+    /// Formula1 is worked out afresh.
+    fn validation_passes(&self, at: CellAddress, validation: &Validation) -> bool {
+        let cell = self.cell_here(at.sheet, at.row, at.column);
+        let value = cell
+            .as_ref()
+            .map(|cell| from_cell_value(&cell.value))
+            .unwrap_or(Value::Empty);
+        if matches!(value, Value::Empty) {
+            return validation.ignore_blank;
+        }
+        let number = |formula: &str| -> Option<f64> {
+            match formula.strip_prefix('=') {
+                Some(expression) => match oxicells_core::formula::evaluate_expression(
+                    self.workbook,
+                    at.sheet,
+                    expression,
+                    self.now,
+                ) {
+                    Some(oxicells_calc::Value::Number(number)) => Some(number),
+                    Some(oxicells_calc::Value::Logical(state)) => Some(f64::from(state)),
+                    _ => None,
+                },
+                None => formula_number(formula),
+            }
+        };
+        let compare = |held: f64| -> bool {
+            let Some(first) = number(&validation.formula1) else {
+                return false;
+            };
+            let second = number(&validation.formula2);
+            match validation.operator {
+                1 | 2 => {
+                    let Some(second) = second else {
+                        return false;
+                    };
+                    let (low, high) = (first.min(second), first.max(second));
+                    let inside = held >= low && held <= high;
+                    if validation.operator == 1 { inside } else { !inside }
+                }
+                3 => held == first,
+                4 => held != first,
+                5 => held > first,
+                6 => held < first,
+                7 => held >= first,
+                _ => held <= first,
+            }
+        };
+        match validation.kind {
+            0 => true,
+            1 | 2 | 4 | 5 => match value {
+                Value::Double(held) => {
+                    if validation.kind == 1 && held.fract() != 0.0 {
+                        return false;
+                    }
+                    compare(held)
+                }
+                Value::Integer(held) => compare(held as f64),
+                _ => false,
+            },
+            6 => compare(shown_text(&value, None).chars().count() as f64),
+            3 => {
+                let shown = cell
+                    .as_ref()
+                    .map(|cell| {
+                        shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref())
+                    })
+                    .unwrap_or_default();
+                let shown = shown.trim();
+                self.list_items(at.sheet, &validation.formula1)
+                    .iter()
+                    .any(|item| item == shown)
+            }
+            _ => match validation.formula1.strip_prefix('=') {
+                Some(expression) => matches!(
+                    oxicells_core::formula::evaluate_expression(
+                        self.workbook,
+                        at.sheet,
+                        expression,
+                        self.now,
+                    ),
+                    Some(oxicells_calc::Value::Logical(true))
+                ) || matches!(
+                    oxicells_core::formula::evaluate_expression(
+                        self.workbook,
+                        at.sheet,
+                        expression,
+                        self.now,
+                    ),
+                    Some(oxicells_calc::Value::Number(number)) if number != 0.0
+                ),
+                None => false,
+            },
+        }
+    }
+
+    /// The items a list validation offers: the pieces between commas, kept
+    /// with their spaces, or the shown text of the cells a reference names.
+    fn list_items(&self, sheet: usize, formula: &str) -> Vec<String> {
+        match formula.strip_prefix('=') {
+            None => formula.split(',').map(str::to_string).collect(),
+            Some(reference) => {
+                let reference = reference.replace('$', "");
+                let (sheet, reference) = match reference.rsplit_once('!') {
+                    Some((named, rest)) => {
+                        let named = named.trim_matches('\'');
+                        match self
+                            .workbook
+                            .sheets
+                            .iter()
+                            .position(|held| held.name.eq_ignore_ascii_case(named))
+                        {
+                            Some(sheet) => (sheet, rest.to_string()),
+                            None => return Vec::new(),
+                        }
+                    }
+                    None => (sheet, reference),
+                };
+                let Ok(((start_column, start_row), (end_column, end_row))) =
+                    parse_range_reference(&reference)
+                else {
+                    return Vec::new();
+                };
+                let mut items = Vec::new();
+                for row in start_row..=end_row {
+                    for column in start_column..=end_column {
+                        let shown = self
+                            .cell_here(sheet, row, column)
+                            .map(|cell| {
+                                shown_text(
+                                    &from_cell_value(&cell.value),
+                                    cell.style.number_format.as_deref(),
+                                )
+                            })
+                            .unwrap_or_default();
+                        items.push(shown);
+                    }
+                }
+                items
+            }
+        }
+    }
+
+    /// What `Range.Validation` answers to.
+    fn validation_member(
+        &mut self,
+        range: CellRange,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        if name.eq_ignore_ascii_case("add") {
+            self.add_validation(range, args, false)?;
+            return Ok(Some(Value::Empty));
+        }
+        if name.eq_ignore_ascii_case("modify") {
+            self.add_validation(range, args, true)?;
+            return Ok(Some(Value::Empty));
+        }
+        // Measured: deleting where there is nothing to delete is no error.
+        if name.eq_ignore_ascii_case("delete") {
+            Self::range_cell_count(range)?;
+            for address in range.addresses() {
+                self.validations.remove(&address);
+            }
+            return Ok(Some(Value::Empty));
+        }
+        if name.eq_ignore_ascii_case("parent") {
+            return Ok(Some(self.object(HostObject::Range(range))));
+        }
+        // Measured: a cell with no validation passes.
+        if name.eq_ignore_ascii_case("value") && self.shared_validation(range).is_err() {
+            return Ok(Some(Value::Boolean(true)));
+        }
+        let held = self.shared_validation(range)?;
+        let answer = if name.eq_ignore_ascii_case("type") {
+            Value::Integer(held.kind)
+        } else if name.eq_ignore_ascii_case("alertstyle") {
+            Value::Integer(held.alert)
+        } else if name.eq_ignore_ascii_case("operator") {
+            Value::Integer(held.operator)
+        } else if name.eq_ignore_ascii_case("formula1") {
+            Value::String(held.formula1.clone())
+        } else if name.eq_ignore_ascii_case("formula2") {
+            Value::String(held.formula2.clone())
+        } else if name.eq_ignore_ascii_case("incelldropdown") {
+            Value::Boolean(held.in_cell_dropdown)
+        } else if name.eq_ignore_ascii_case("ignoreblank") {
+            Value::Boolean(held.ignore_blank)
+        } else if name.eq_ignore_ascii_case("showinput") {
+            Value::Boolean(held.show_input)
+        } else if name.eq_ignore_ascii_case("showerror") {
+            Value::Boolean(held.show_error)
+        } else if name.eq_ignore_ascii_case("inputtitle") {
+            Value::String(held.input_title.clone())
+        } else if name.eq_ignore_ascii_case("inputmessage") {
+            Value::String(held.input_message.clone())
+        } else if name.eq_ignore_ascii_case("errortitle") {
+            Value::String(held.error_title.clone())
+        } else if name.eq_ignore_ascii_case("errormessage") {
+            Value::String(held.error_message.clone())
+        } else if name.eq_ignore_ascii_case("value") {
+            Value::Boolean(
+                range
+                    .addresses()
+                    .all(|address| self.validation_passes(address, &held)),
+            )
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(answer))
+    }
+
+    /// Set one part of the validation every cell of a range carries.
+    fn set_validation(&mut self, range: CellRange, name: &str, value: Value) -> Result<bool, String> {
+        let mut held = self.shared_validation(range)?;
+        let flag = || style_face_boolean(&value, "Validation");
+        let text = || -> Result<String, String> {
+            match &value {
+                Value::String(text) => Ok(text.clone()),
+                value if any_number(value).is_some() => Ok(shown_text(value, None)),
+                _ => Err("a validation's messages are text".to_string()),
+            }
+        };
+        if name.eq_ignore_ascii_case("incelldropdown") {
+            held.in_cell_dropdown = flag()?.unwrap_or(held.in_cell_dropdown);
+        } else if name.eq_ignore_ascii_case("ignoreblank") {
+            held.ignore_blank = flag()?.unwrap_or(held.ignore_blank);
+        } else if name.eq_ignore_ascii_case("showinput") {
+            held.show_input = flag()?.unwrap_or(held.show_input);
+        } else if name.eq_ignore_ascii_case("showerror") {
+            held.show_error = flag()?.unwrap_or(held.show_error);
+        } else if name.eq_ignore_ascii_case("inputtitle") {
+            held.input_title = text()?;
+        } else if name.eq_ignore_ascii_case("inputmessage") {
+            held.input_message = text()?;
+        } else if name.eq_ignore_ascii_case("errortitle") {
+            held.error_title = text()?;
+        } else if name.eq_ignore_ascii_case("errormessage") {
+            held.error_message = text()?;
+        } else {
+            return Ok(false);
+        }
+        for address in range.addresses() {
+            self.validations.insert(address, held.clone());
+        }
+        Ok(true)
     }
 
     fn characters_of(&self, object: &ObjectRef) -> Option<(CellAddress, u32, Option<u32>)> {
@@ -6669,6 +7107,34 @@ impl<'a> WorkbookHost<'a> {
                 })
             })
             .collect();
+        let moved_validations: Vec<(CellAddress, Validation)> = self
+            .validations
+            .drain()
+            .filter_map(|(held, validation)| {
+                if held.sheet != sheet {
+                    return Some((held, validation));
+                }
+                let (along, crossing) = if sideways {
+                    (held.column + 1, held.row)
+                } else {
+                    (held.row, held.column + 1)
+                };
+                if !taking_part(crossing) {
+                    return Some((held, validation));
+                }
+                let along = moved(along)?;
+                let landed = if sideways {
+                    CellAddress {
+                        column: along - 1,
+                        ..held
+                    }
+                } else {
+                    CellAddress { row: along, ..held }
+                };
+                Some((landed, validation))
+            })
+            .collect();
+        self.validations = moved_validations.into_iter().collect();
         self.links.retain_mut(|link| {
             if link.anchor.sheet != sheet {
                 return true;
@@ -8267,6 +8733,14 @@ impl<'a> WorkbookHost<'a> {
                 note.at = to;
                 self.notes.push(note);
             }
+            match self.validations.get(&from).cloned() {
+                Some(validation) => {
+                    self.validations.insert(to, validation);
+                }
+                None => {
+                    self.validations.remove(&to);
+                }
+            }
             let (from_one, to_one) = (CellRange::single(from), CellRange::single(to));
             self.links.retain(|link| !ranges_equal(link.anchor, to_one));
             if let Some(link) = self.links.iter().find(|link| ranges_equal(link.anchor, from_one)) {
@@ -8576,6 +9050,9 @@ impl Host for WorkbookHost<'_> {
             if let Some((at, start, length)) = self.characters_of(receiver) {
                 return self.characters_member(at, start, length, name, args);
             }
+            if let Some(range) = self.validation_range(receiver) {
+                return self.validation_member(range, name, args);
+            }
             if let Some((at, start, length)) = self.characters_font_of(receiver) {
                 return self.characters_font_member(at, start, length, name);
             }
@@ -8787,6 +9264,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("characters") {
                     return self.characters_object(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("validation") && args.is_empty() {
+                    return Ok(Some(self.object(HostObject::Validation(range))));
+                }
                 if name.eq_ignore_ascii_case("hyperlinks") {
                     let scope = HyperlinkScope::Range(range);
                     return match args {
@@ -8956,6 +9436,9 @@ impl Host for WorkbookHost<'_> {
                     self.clear_comments(range);
                     let ids = self.links_in(HyperlinkScope::Range(range));
                     self.delete_links(&ids, true)?;
+                    for address in range.addresses() {
+                        self.validations.remove(&address);
+                    }
                     return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("autofilter") {
@@ -9151,6 +9634,8 @@ impl Host for WorkbookHost<'_> {
                 Some(&["Name", "RefersTo"][..])
             } else if receiver.is_some_and(|receiver| self.hyperlink_scope(receiver).is_some()) {
                 Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
+            } else if receiver.is_some_and(|receiver| self.validation_range(receiver).is_some()) {
+                Some(&["Type", "AlertStyle", "Operator", "Formula1", "Formula2"][..])
             } else {
                 Some(&["Before", "After", "Count"][..])
             }
@@ -9216,6 +9701,10 @@ impl Host for WorkbookHost<'_> {
                     "TrailingMinusNumbers",
                 ][..],
             )
+        } else if name.eq_ignore_ascii_case("modify")
+            && receiver.is_some_and(|receiver| self.validation_range(receiver).is_some())
+        {
+            Some(&["Type", "AlertStyle", "Operator", "Formula1", "Formula2"][..])
         } else if name.eq_ignore_ascii_case("addcomment") {
             Some(&["Text"][..])
         } else if name.eq_ignore_ascii_case("text")
@@ -9295,6 +9784,9 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some((at, start, length)) = self.characters_of(receiver) {
             return self.characters_member(at, start, length, name, &[]);
+        }
+        if let Some(range) = self.validation_range(receiver) {
+            return self.validation_member(range, name, &[]);
         }
         if let Some((at, start, length)) = self.characters_font_of(receiver) {
             return self.characters_font_member(at, start, length, name);
@@ -9858,6 +10350,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("characters") {
             return self.characters_object(range, &[]).map(Some);
         }
+        if name.eq_ignore_ascii_case("validation") {
+            return Ok(Some(self.object(HostObject::Validation(range))));
+        }
         if name.eq_ignore_ascii_case("hyperlinks") {
             return Ok(Some(self.object(HostObject::Hyperlinks(HyperlinkScope::Range(range)))));
         }
@@ -10131,6 +10626,9 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(range) = self.validation_range(receiver) {
+            return self.set_validation(range, name, value);
+        }
         if let Some((at, start, length)) = self.characters_of(receiver) {
             if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("caption") {
                 let with = match &value {
@@ -12825,6 +13323,26 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastecolumnwidths" => 8,
         "xlpastevaluesandnumberformats" => 12,
         "xlpastecomments" => -4144,
+        // Data validation.
+        "xlvalidateinputonly" => 0,
+        "xlvalidatewholenumber" => 1,
+        "xlvalidatedecimal" => 2,
+        "xlvalidatelist" => 3,
+        "xlvalidatedate" => 4,
+        "xlvalidatetime" => 5,
+        "xlvalidatetextlength" => 6,
+        "xlvalidatecustom" => 7,
+        "xlvalidalertstop" => 1,
+        "xlvalidalertwarning" => 2,
+        "xlvalidalertinformation" => 3,
+        "xlbetween" => 1,
+        "xlnotbetween" => 2,
+        "xlequal" => 3,
+        "xlnotequal" => 4,
+        "xlgreater" => 5,
+        "xlless" => 6,
+        "xlgreaterequal" => 7,
+        "xllessequal" => 8,
         // TextToColumns.
         "xldelimited" => 1,
         "xlfixedwidth" => 2,
@@ -14789,6 +15307,80 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// Data validation is added, read, checked and taken away as Excel does
+    /// it.
+    ///
+    /// Measured against Excel: a bare cell's `Validation.Type` is 1004; a
+    /// list validation reads back its parts with the flags all True; `Value`
+    /// says whether the cell passes -- a blank passes with `IgnoreBlank`; a
+    /// second `Add` is 1004; `Modify` changes the parts; a whole-number rule
+    /// refuses 15.5 and text; `Between` wants both bounds; a range validated
+    /// unevenly is 1004; a list is matched case-sensitively on the trimmed
+    /// text; a cell with no validation passes; `Clear` takes it and
+    /// `ClearContents` does not; a copy carries it; and an inserted row
+    /// moves it.
+    #[test]
+    fn data_validation_is_added_read_checked_and_taken_away() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, v As Variant
+               On Error Resume Next
+               v = Range(\"D1\").Validation.Type
+               out = Err.Number & \"|\"
+               Err.Clear
+               Range(\"D1\").Validation.Add Type:=xlValidateList, Formula1:=\"a,b,c\"
+               With Range(\"D1\").Validation
+                 out = out & .Type & .AlertStyle & .Operator & \"/\" & .Formula1 & \"/\" & .IgnoreBlank & .InCellDropdown & \"/\" & .Value & \"|\"
+               End With
+               Range(\"D1\").Value = \"B\"
+               out = out & Range(\"D1\").Validation.Value
+               Range(\"D1\").Value = \" b\"
+               out = out & Range(\"D1\").Validation.Value & \"|\"
+               Range(\"D1\").Validation.Add Type:=1, Formula1:=\"1\", Formula2:=\"9\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"D1\").Validation.Modify Type:=1, Operator:=xlGreater, Formula1:=\"10\"
+               out = out & Range(\"D1\").Validation.Type & Range(\"D1\").Validation.Operator & \"/\"
+               Range(\"D1\").Value = 15
+               out = out & Range(\"D1\").Validation.Value
+               Range(\"D1\").Value = 15.5
+               out = out & Range(\"D1\").Validation.Value
+               Range(\"D1\").Value = \"x\"
+               out = out & Range(\"D1\").Validation.Value & \"|\"
+               Range(\"D2\").Validation.Add Type:=1, Formula1:=\"1\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"D3:D4\").Validation.Add Type:=2, Operator:=1, Formula1:=\"1\", Formula2:=\"10\"
+               v = Range(\"D3:D5\").Validation.Type
+               out = out & Err.Number & \"/\" & Range(\"D3:D4\").Validation.Formula2 & \"/\" & Range(\"D5\").Validation.Value & \"|\"
+               Err.Clear
+               Range(\"D3\").Copy Range(\"E3\")
+               Range(\"D3\").ClearContents
+               Range(\"D4\").Clear
+               v = Range(\"D4\").Validation.Type
+               out = out & Range(\"E3\").Validation.Type & Range(\"D3\").Validation.Type & Err.Number & \"|\"
+               Err.Clear
+               Rows(1).Insert
+               out = out & Range(\"D4\").Validation.Type
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "1004|311/a,b,c/TrueTrue/True|FalseTrue|1004|15/TrueFalseFalse|1004|1004/10/True|221004|2"
+                    .to_string()
+            )
         );
     }
 
