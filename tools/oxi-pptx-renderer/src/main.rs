@@ -9008,7 +9008,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let sy = sh.y as f64;
                         let sw = sh.width as f64;
                         let shh = sh.height as f64;
-                        let has_auto_title = chart.series.len() == 1;
+                        // `<c:autoTitleDeleted val="1"/>` means the chart has
+                        // no title, and the deck that found this uses it: Oxi
+                        // drew the series name where PowerPoint draws nothing.
+                        // Three of the chart branches read the series count and
+                        // stopped there.
+                        let has_auto_title = chart.series.len() == 1
+                            && !(chartfile_on() && chart.auto_title_deleted);
                         let has_explicit_title = chart.explicit_title.is_some();
                         // NEGATIVE data (chart_negative N3, 2026-08-10): the
                         // value axis spans zero, the category names hang off
@@ -9619,7 +9625,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let shh = sh.height as f64;
                         let axis_fs = 18.0f32;
                         let axis_family = "Calibri";
-                        let has_auto_title = chart.series.len() == 1;
+                        // `<c:autoTitleDeleted val="1"/>` means the chart has
+                        // no title, and the deck that found this uses it: Oxi
+                        // drew the series name where PowerPoint draws nothing.
+                        // Three of the chart branches read the series count and
+                        // stopped there.
+                        let has_auto_title = chart.series.len() == 1
+                            && !(chartfile_on() && chart.auto_title_deleted);
                         let has_explicit_title = chart.explicit_title.is_some();
                         let is_stacked = chart.grouping == "stacked"
                             || chart.grouping == "percentStacked";
@@ -10164,7 +10176,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let sy = sh.y as f64;
                         let sw = sh.width as f64;
                         let shh = sh.height as f64;
-                        let has_auto_title = chart.series.len() == 1;
+                        // `<c:autoTitleDeleted val="1"/>` means the chart has
+                        // no title, and the deck that found this uses it: Oxi
+                        // drew the series name where PowerPoint draws nothing.
+                        // Three of the chart branches read the series count and
+                        // stopped there.
+                        let has_auto_title = chart.series.len() == 1
+                            && !(chartfile_on() && chart.auto_title_deleted);
                         let has_explicit_title = chart.explicit_title.is_some();
                         let is_100pct = chart.grouping == "percentStacked";
                         let is_stacked = chart.grouping == "stacked" || is_100pct;
@@ -10243,13 +10261,36 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // percentStacked's axis is FIXED at 100, so it must not
                         // go through the nice-range search (whose 5% headroom
                         // would round 100 up to 120).
+                        let pinned = chartfile_on()
+                            && (chart.val_min.is_some() || chart.val_max.is_some());
                         let (axis_min, max_axis, axis_steps) = if is_100pct {
                             // percentStacked: 0%,10%,...,100% (11 labels).
                             (0.0, 100.0, 10usize)
+                        } else if pinned {
+                            // A deck comparing near-equal numbers pins its axis
+                            // so the differences are readable; scaling from zero
+                            // instead draws four bars of nearly equal height
+                            // where PowerPoint draws four that span the plot.
+                            let lo = chart.val_min.unwrap_or(0.0);
+                            let hi = chart
+                                .val_max
+                                .unwrap_or_else(|| nice_axis_max(max_val.max(lo + 1e-9)));
+                            (lo, hi.max(lo + 1e-9), 5usize)
                         } else {
                             nice_axis_range(min_val, max_val, plot_h, VERT_MIN_SPACING)
                         };
                         let axis_span = (max_axis - axis_min).max(1e-9);
+                        // How many decimals the ticks need. Whole numbers are
+                        // right for a 0..25 axis and wrong for a 0.7..0.9 one,
+                        // where every label rounds to the same digit.
+                        let axis_decimals = {
+                            let step = axis_span / axis_steps as f64;
+                            if step >= 1.0 {
+                                0usize
+                            } else {
+                                ((-step.log10()).ceil() as usize).min(3)
+                            }
+                        };
                         // The value gutter is measured from the WIDEST value
                         // label: plot_left = sx + 6.50 + w + 16.70 (the same
                         // rule the horizontal-bar and area branches use, and
@@ -10264,7 +10305,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 let val = axis_min
                                     + (max_axis - axis_min) * i as f64
                                         / axis_steps as f64;
-                                let label = format!("{}", val.round() as i64);
+                                let label = format!("{val:.axis_decimals$}");
                                 let lw = font_adv::line_hmtx_width_pt(
                                     &label, axis_fs, axis_family,
                                 )
@@ -10290,7 +10331,16 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // The category axis sits at the value 0, NOT at the
                         // bottom of the plot (N1: bars grow from y=280.97 and
                         // the category names sit at 280.97+28.68).
-                        let zero_y = val_y(0.0);
+                        //
+                        // ★Unless the file PINS the axis away from zero, in
+                        // which case zero is off the plot entirely and a bar
+                        // grown from it runs past the shape. PowerPoint stands
+                        // such a bar on the axis minimum, which is `plot_bot`.
+                        let zero_y = if pinned && axis_min > 0.0 {
+                            plot_bot
+                        } else {
+                            val_y(0.0)
+                        };
                         for i in 0..=axis_steps {
                             // percentStacked labels the fixed 0..100 scale
                             // as "0%".."100%" (render-truth: '0%' x=96.77 /
@@ -10302,7 +10352,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let label = if is_100pct {
                                 format!("{:.0}%", val)
                             } else {
-                                format!("{}", val.round() as i64)
+                                format!("{val:.axis_decimals$}")
                             };
                             let lw = font_adv::line_hmtx_width_pt(&label, axis_fs, axis_family)
                                 .unwrap_or_else(|| {
@@ -10410,6 +10460,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         } else {
                                             0.0
                                         }
+                                    } else if pinned {
+                                        // A pinned axis does not start at zero,
+                                        // so a bar is as tall as the value ABOVE
+                                        // the axis minimum. Reading it from zero
+                                        // makes a 0.842 on a 0.7..0.9 axis four
+                                        // times the plot height.
+                                        (((v - axis_min).max(0.0)) / axis_span * plot_h)
+                                            .min(plot_h)
                                     } else {
                                         (v / axis_span * plot_h).abs()
                                     };
@@ -10431,18 +10489,33 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     };
                                     let accent_idx =
                                         if vary_points { ci } else { si };
-                                    let col_hex = pres
-                                        .theme_colors
-                                        .get(&format!(
-                                            "accent{}",
-                                            accent_idx + 1
-                                        ))
-                                        .map(|s| s.as_str())
-                                        .or_else(|| {
-                                            DEFAULT_ACCENT
-                                                .get(accent_idx)
-                                                .copied()
-                                        });
+                                    // What the FILE says this bar is, before the
+                                    // theme's cycle. A deck picks one bar out by
+                                    // colour -- the point it is arguing for --
+                                    // and a palette cycle draws the opposite.
+                                    let own = if chartfile_on() {
+                                        series
+                                            .point_colors
+                                            .iter()
+                                            .find(|(i, _)| *i as usize == ci)
+                                            .map(|(_, c)| c.as_str())
+                                            .or(series.color.as_deref())
+                                    } else {
+                                        None
+                                    };
+                                    let col_hex = own.or_else(|| {
+                                        pres.theme_colors
+                                            .get(&format!(
+                                                "accent{}",
+                                                accent_idx + 1
+                                            ))
+                                            .map(|s| s.as_str())
+                                            .or_else(|| {
+                                                DEFAULT_ACCENT
+                                                    .get(accent_idx)
+                                                    .copied()
+                                            })
+                                    });
                                     if let Some(rgb) =
                                         col_hex.and_then(parse_hex_rgb)
                                     {
@@ -10487,11 +10560,32 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         for (si, series) in chart.series.iter().enumerate() {
                             for (ci, v) in series.values.iter().enumerate() {
                                 let accent_idx = if vary_points { ci } else { si };
-                                let col_hex = pres
-                                    .theme_colors
-                                    .get(&format!("accent{}", accent_idx + 1))
-                                    .map(|s| s.as_str())
-                                    .or_else(|| DEFAULT_ACCENT.get(accent_idx).copied());
+                                // What the FILE says this bar is, before the
+                                // theme's cycle. A deck picks one bar out by
+                                // colour -- the point it is arguing for -- and a
+                                // palette cycle draws the opposite of the intent.
+                                let own = if chartfile_on() {
+                                    series
+                                        .point_colors
+                                        .iter()
+                                        .find(|(i, _)| *i as usize == ci)
+                                        .map(|(_, c)| c.as_str())
+                                        .or(series.color.as_deref())
+                                } else {
+                                    None
+                                };
+                                let col_hex = own.or_else(|| {
+                                    pres.theme_colors
+                                        .get(&format!("accent{}", accent_idx + 1))
+                                        .map(|s| s.as_str())
+                                        .or_else(|| DEFAULT_ACCENT.get(accent_idx).copied())
+                                });
+                                if std::env::var("OXI_CHART_DEBUG").is_ok() {
+                                    eprintln!(
+                                        "CHART ci={ci} chose={col_hex:?} of point_colors={:?}",
+                                        series.point_colors
+                                    );
+                                }
                                 if let Some(rgb) = col_hex.and_then(parse_hex_rgb) {
                                     // "Invert if negative" is ON by default in
                                     // Word: a negative bar is painted WHITE and
@@ -11962,6 +12056,12 @@ const HORIZ_MIN_SPACING: f64 = 57.0;
 /// chart_bar_axis pg13 / chart_bar_resid p4), so HORIZ_MIN_SPACING is left
 /// alone and this applies to the bubble branch only.
 const BUBBLE_LABEL_GAP: f64 = 43.0;
+
+/// S-CHARTFILE: a chart takes the value axis, the point colours and the
+/// deleted title from the FILE, unless this is set.
+fn chartfile_on() -> bool {
+    std::env::var("OXI_CHARTFILE_DISABLE").is_err()
+}
 
 fn nice_axis_max(max_val: f64) -> f64 {
     if max_val <= 0.0 {
