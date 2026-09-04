@@ -1927,6 +1927,76 @@ fn lnalpha_on() -> bool {
     std::env::var("OXI_LNALPHA_DISABLE").is_err()
 }
 
+/// Run `draw` in WHITE over a fresh coverage mask the size of `dc`'s bitmap,
+/// then composite the mask at (colour, alpha) with one AlphaBlend.
+#[cfg(windows)]
+unsafe fn composite_translucent_draw(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    color: (u8, u8, u8),
+    alpha: f32,
+    draw: &dyn Fn(windows::Win32::Graphics::Gdi::HDC, (u8, u8, u8)),
+) {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let alpha = alpha.clamp(0.0, 1.0);
+    if alpha <= 0.004 {
+        return;
+    }
+    let hbm = GetCurrentObject(dc, OBJ_BITMAP);
+    let mut bm = BITMAP::default();
+    if GetObjectW(
+        HGDIOBJ(hbm.0),
+        std::mem::size_of::<BITMAP>() as i32,
+        Some((&mut bm as *mut BITMAP).cast()),
+    ) == 0
+        || bm.bmWidth <= 0
+        || bm.bmHeight <= 0
+    {
+        return;
+    }
+    let (slide_w, slide_h) = (bm.bmWidth, bm.bmHeight);
+    let (w, h) = (slide_w as usize, slide_h as usize);
+    let mask_dc = CreateCompatibleDC(dc);
+    let mut info = BITMAPINFO::default();
+    info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    info.bmiHeader.biWidth = slide_w;
+    info.bmiHeader.biHeight = -slide_h;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB.0;
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let bmp = match CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+        Ok(b) if !bits.is_null() => b,
+        _ => {
+            let _ = DeleteDC(mask_dc);
+            return;
+        }
+    };
+    let old_bmp = SelectObject(mask_dc, bmp);
+    let px = std::slice::from_raw_parts_mut(bits.cast::<u8>(), w * h * 4);
+    px.fill(0);
+    draw(mask_dc, (255, 255, 255));
+    let _ = GdiFlush();
+    for i in 0..w * h {
+        let m = px[i * 4];
+        let a = (f32::from(m) * alpha) as u32;
+        px[i * 4] = ((u32::from(color.2) * a + 127) / 255) as u8;
+        px[i * 4 + 1] = ((u32::from(color.1) * a + 127) / 255) as u8;
+        px[i * 4 + 2] = ((u32::from(color.0) * a + 127) / 255) as u8;
+        px[i * 4 + 3] = a as u8;
+    }
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    let _ = AlphaBlend(dc, 0, 0, slide_w, slide_h, mask_dc, 0, 0, slide_w, slide_h, blend);
+    SelectObject(mask_dc, old_bmp);
+    let _ = DeleteObject(bmp);
+    let _ = DeleteDC(mask_dc);
+}
+
 /// Stroke the shape's outline into a coverage mask and composite it at the
 /// border's colour and alpha. The mask is stroked by the SAME path emitters
 /// the opaque pass uses.
@@ -5137,40 +5207,52 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         };
                         let (ax, ay) = map(x0, y0);
                         let (bx, by) = map(x1, y1);
-                        let pen = outline_pen(
-                            (bw as f64 * scale).round().max(1.0) as i32,
-                            colorref(col.0, col.1, col.2),
-                            sh.border_dash.as_deref(),
-                            bw as f64 * scale,
-                            Some(sh.line_cap.as_deref().unwrap_or("flat")),
-                        );
-                        let old_pen = SelectObject(mem_dc, pen);
-                        if elbow.len() == 4 {
-                            let _ = MoveToEx(mem_dc, elbow[0].0, elbow[0].1, None);
-                            for pt in &elbow[1..] {
-                                let _ = LineTo(mem_dc, pt.0, pt.1);
-                            }
-                        } else {
-                            let _ = MoveToEx(mem_dc, ax, ay, None);
-                            let _ = LineTo(mem_dc, bx, by);
-                        }
-                        SelectObject(mem_dc, old_pen);
-                        let _ = DeleteObject(pen);
-                        if line_ends_on() {
-                            let lw = f64::from(bw);
-                            // A decoration points along the segment it sits on,
-                            // which for an elbow is the first / last one.
-                            let (ha, hb, ta, tb) = if elbow.len() == 4 {
-                                (elbow[0], elbow[1], elbow[3], elbow[2])
+                        // The whole stroke -- elbow, caps, line ends -- as a
+                        // function of the target DC and colour, so the opaque
+                        // and the composited pass cannot disagree about the
+                        // path (S-LNALPHA, the connector half: d20's 72
+                        // straightConnector1 at 50% drew opaque).
+                        let stroke = |dc: windows::Win32::Graphics::Gdi::HDC,
+                                      c: (u8, u8, u8)| {
+                            let pen = outline_pen(
+                                (bw as f64 * scale).round().max(1.0) as i32,
+                                colorref(c.0, c.1, c.2),
+                                sh.border_dash.as_deref(),
+                                bw as f64 * scale,
+                                Some(sh.line_cap.as_deref().unwrap_or("flat")),
+                            );
+                            let old_pen = SelectObject(dc, pen);
+                            if elbow.len() == 4 {
+                                let _ = MoveToEx(dc, elbow[0].0, elbow[0].1, None);
+                                for pt in &elbow[1..] {
+                                    let _ = LineTo(dc, pt.0, pt.1);
+                                }
                             } else {
-                                ((ax, ay), (bx, by), (bx, by), (ax, ay))
-                            };
-                            if let Some(h) = sh.head_end.as_ref() {
-                                draw_line_end(mem_dc, h, ha.0, ha.1, hb.0, hb.1, lw, scale, col);
+                                let _ = MoveToEx(dc, ax, ay, None);
+                                let _ = LineTo(dc, bx, by);
                             }
-                            if let Some(t) = sh.tail_end.as_ref() {
-                                draw_line_end(mem_dc, t, ta.0, ta.1, tb.0, tb.1, lw, scale, col);
+                            SelectObject(dc, old_pen);
+                            let _ = DeleteObject(pen);
+                            if line_ends_on() {
+                                let lw = f64::from(bw);
+                                // A decoration points along the segment it sits
+                                // on, which for an elbow is the first / last one.
+                                let (ha, hb, ta, tb) = if elbow.len() == 4 {
+                                    (elbow[0], elbow[1], elbow[3], elbow[2])
+                                } else {
+                                    ((ax, ay), (bx, by), (bx, by), (ax, ay))
+                                };
+                                if let Some(h) = sh.head_end.as_ref() {
+                                    draw_line_end(dc, h, ha.0, ha.1, hb.0, hb.1, lw, scale, c);
+                                }
+                                if let Some(t) = sh.tail_end.as_ref() {
+                                    draw_line_end(dc, t, ta.0, ta.1, tb.0, tb.1, lw, scale, c);
+                                }
                             }
+                        };
+                        match sh.border_alpha.filter(|a| lnalpha_on() && *a < 0.995) {
+                            Some(a) => composite_translucent_draw(mem_dc, col, a, &stroke),
+                            None => stroke(mem_dc, col),
                         }
                     }
                     continue;
