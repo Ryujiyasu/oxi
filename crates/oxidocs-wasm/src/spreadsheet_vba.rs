@@ -10160,7 +10160,28 @@ impl From<Value> for OutputValue {
 /// and these 30 were not there. `NOTAFUNCTION` was asked alongside them as a
 /// control and was reported absent, which is what says the question was being
 /// answered rather than deflected.
+/// Whether a name reaches `Application` as a worksheet function.
+///
+/// The engine is asked, because it is the one that knows: a name it does not
+/// have answers `#NAME?`, and no name it does have answers that. It is asked
+/// with ONE argument -- with none, the functions that require one answer
+/// `#NAME?` too, and a knownness test that cannot tell a real function from a
+/// missing member is no test at all.
+///
+/// Excel draws that line itself: `Application.Sum` with no arguments is error
+/// 1004 -- a function, given nothing -- while `Application.Bold` is 438, there
+/// being no such member. Taking every unknown name for a function put all of
+/// them on the 1004 side.
 fn worksheet_function_carries(name: &str) -> bool {
+    let probe = [oxicells_calc::functions::Arg::Value(
+        oxicells_calc::Value::Number(1.0),
+    )];
+    if matches!(
+        oxicells_calc::functions::call(&name.to_ascii_uppercase(), &probe),
+        oxicells_calc::Value::Error(oxicells_calc::ExcelError::Name)
+    ) {
+        return false;
+    }
     const ABSENT: &[&str] = &[
         // each of these is a VBA function of its own
         "ABS", "CHAR", "CODE", "DATE", "DAY", "HOUR", "INT", "LEFT", "LEN", "LOWER", "MID",
