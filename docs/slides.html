@@ -101,6 +101,29 @@ body {
 .msg.err { background: #FDECEA; color: #B3261E }
 .msg[hidden] { display: none }
 @media (max-width: 720px) { .rail { display: none !important } }
+
+/* ---- presenting ---- */
+#btnPresent { font-weight: 600 }
+body.presenting { overflow: hidden; background: #000 }
+body.presenting .tb, body.presenting .rail, body.presenting .msg,
+body.presenting .nav { display: none !important }
+body.presenting .stage { height: 100vh }
+body.presenting .canvas { padding: 0; background: #000; display: grid;
+                          place-items: center; overflow: hidden }
+body.presenting .slide { box-shadow: none; border-radius: 0 }
+#presbar { position: fixed; left: 0; right: 0; bottom: 0; display: none;
+           align-items: center; gap: 14px; padding: 10px 18px; color: #f2f3f7;
+           font: 13px/1.4 system-ui, sans-serif; font-variant-numeric: tabular-nums;
+           background: linear-gradient(to top, rgba(0,0,0,.7), transparent);
+           transition: opacity .25s ease; z-index: 5 }
+body.presenting #presbar { display: flex }
+body.presenting.idle #presbar { opacity: 0 }
+#presbar .right { margin-left: auto; color: #b9bfcc }
+#presbar .right b { color: #fff; font-weight: 600 }
+#presrail { position: fixed; left: 0; bottom: 0; height: 3px; background: #B7410E;
+            display: none; transition: width .18s ease; z-index: 6 }
+body.presenting #presrail { display: block }
+@media (prefers-reduced-motion: reduce) { #presbar, #presrail { transition: none } }
 </style>
 </head>
 <body>
@@ -110,6 +133,7 @@ body {
   <span class="dn" id="docName" data-i18n="noFile">No presentation open</span>
   <span class="sp"></span>
   <button id="btnOpen" data-i18n="open">Open</button>
+  <button id="btnPresent" data-i18n="present" disabled>Present</button>
   <a class="btn" href="./docs.html" data-i18n="wordApp">Word app</a>
   <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
   <span class="lang">
@@ -118,6 +142,12 @@ body {
 </div>
 
 <div class="msg" id="msg" hidden></div>
+
+<div id="presbar">
+  <span id="presclock">0:00</span>
+  <span class="right"><b id="prescur">1</b> / <span id="prestot">1</span></span>
+</div>
+<div id="presrail"></div>
 
 <div class="stage">
   <div class="rail" id="rail"></div>
@@ -145,7 +175,7 @@ const I18N = {
     choose: 'Choose a .pptx', sample: 'Try a sample',
     note: 'Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
     loading: 'Loading the engine…', parsing: 'Parsing…',
-    prev: 'Previous', next: 'Next',
+    prev: 'Previous', next: 'Next', present: 'Present',
     parsed: (n, s, ms) => `${n} slides, ${s} shapes — parsed in ${ms} ms`,
     slideOf: (a, b) => `Slide ${a} / ${b}`,
     badType: 'That is not a .pptx file.',
@@ -158,7 +188,7 @@ const I18N = {
     choose: '.pptx を選ぶ', sample: 'サンプルを開く',
     note: 'Oxi はオープンソースです。このページの描画エンジンは PowerPoint 自身の出力とスライド単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
-    prev: '前へ', next: '次へ',
+    prev: '前へ', next: '次へ', present: 'プレゼン開始',
     parsed: (n, s, ms) => `${n} スライド / ${s} 図形 — ${ms} ms で解析`,
     slideOf: (a, b) => `${a} / ${b} 枚目`,
     badType: '.pptx ファイルではありません。',
@@ -246,6 +276,160 @@ function hexRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// A table, from the cells the parser already reads. The demo drew nothing
+// where one sat, so a deck's comparison table -- often its densest slide --
+// came out blank.
+//
+// Column widths and row heights come from the file, and a cell's own fill and
+// its four borders are drawn. An edge the file makes invisible (alpha 0) is
+// left out, which is how PowerPoint's own tables show a few rules instead of
+// a full grid.
+function buildTable(table, shape, scale) {
+  const el = document.createElement('table');
+  el.style.width = '100%';
+  el.style.borderCollapse = 'collapse';
+  el.style.tableLayout = 'fixed';
+  const cg = document.createElement('colgroup');
+  (table.col_widths || []).forEach(w => {
+    const col = document.createElement('col');
+    col.style.width = (w * scale) + 'px';
+    cg.appendChild(col);
+  });
+  el.appendChild(cg);
+  const sides = ['borderLeft', 'borderRight', 'borderTop', 'borderBottom'];
+  (table.rows || []).forEach((row, ri) => {
+    const tr = document.createElement('tr');
+    if (table.row_heights && table.row_heights[ri]) {
+      tr.style.height = (table.row_heights[ri] * scale) + 'px';
+    }
+    row.forEach(cell => {
+      const td = document.createElement('td');
+      td.style.padding = (3 * scale) + 'px ' + (6 * scale) + 'px';
+      td.style.verticalAlign = 'middle';
+      if (cell.fill_color) {
+        const a = (cell.fill_alpha === undefined || cell.fill_alpha === null) ? 1 : cell.fill_alpha;
+        td.style.backgroundColor = hexRgba(cell.fill_color, a);
+      }
+      (cell.borders || []).forEach((b, i) => {
+        if (!b || !b.color) return;
+        const a = (b.alpha === undefined || b.alpha === null) ? 1 : b.alpha;
+        if (a <= 0) return;
+        td.style[sides[i]] = Math.max(1, (b.width || 1) * scale) + 'px solid ' + hexRgba(b.color, a);
+      });
+      (cell.paragraphs || []).forEach(para => {
+        const pEl = document.createElement('p');
+        pEl.style.margin = '0';
+        if (para.alignment === 'Center') pEl.style.textAlign = 'center';
+        else if (para.alignment === 'Right') pEl.style.textAlign = 'right';
+        (para.runs || []).forEach(run => {
+          const span = document.createElement('span');
+          span.textContent = run.text;
+          span.style.fontSize = ((run.font_size || 12) * scale) + 'px';
+          if (run.bold) span.style.fontWeight = 'bold';
+          if (run.italic) span.style.fontStyle = 'italic';
+          if (run.color) span.style.color = '#' + run.color;
+          if (run.font_family) {
+            span.style.fontFamily = run.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+          }
+          pEl.appendChild(span);
+        });
+        td.appendChild(pEl);
+      });
+      tr.appendChild(td);
+    });
+    el.appendChild(tr);
+  });
+  return el;
+}
+
+// Excel's default series colours, which a single-series chart cycles through
+// per POINT.
+const CHART_COLORS = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
+
+// A clustered column chart, drawn on a canvas sized to the shape.
+//
+// Only the plain column case is drawn; anything else leaves the space empty
+// rather than inventing a picture. Not yet read from the file: the value
+// axis's own min and max, per-point colours, and whether data labels were
+// asked for -- the axis runs from zero to a round number just past the
+// tallest bar.
+function buildChart(chart, shape, scale) {
+  if (chart.chart_type !== 'bar' || (chart.bar_dir && chart.bar_dir !== 'col')) return null;
+  const series = (chart.series || []).filter(sr => (sr.values || []).length);
+  const cats = chart.categories || [];
+  if (!series.length || !cats.length) return null;
+  let top = 0;
+  for (const sr of series) for (const v of sr.values) top = Math.max(top, v || 0);
+  if (!(top > 0)) return null;
+
+  const w = shape.width * scale, h = shape.height * scale;
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px';
+  cv.style.height = h + 'px';
+  const g = cv.getContext('2d');
+  g.scale(dpr, dpr);
+
+  const title = chart.explicit_title || (series.length === 1 ? series[0].name : '');
+  const u = scale;
+  const padTop = (title ? 26 : 10) * u, padBot = 26 * u, padL = 34 * u, padR = 10 * u;
+  const plot = { x: padL, y: padTop, w: w - padL - padR, h: h - padTop - padBot };
+  if (plot.w <= 0 || plot.h <= 0) return null;
+
+  const steps = 5;
+  const mag = Math.pow(10, Math.floor(Math.log10(top)));
+  const nice = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= top) || 10 * mag;
+  const decimals = Math.max(0, Math.min(3, Math.ceil(-Math.log10(nice / steps))));
+  const FONT = "'Yu Gothic', 'Meiryo', 'Noto Sans JP', system-ui, sans-serif";
+
+  g.textBaseline = 'alphabetic';
+  if (title) {
+    g.fillStyle = '#111';
+    g.font = 'bold ' + (12 * u) + 'px ' + FONT;
+    g.textAlign = 'center';
+    g.fillText(title, w / 2, 17 * u);
+  }
+  g.font = (9 * u) + 'px ' + FONT;
+  g.textAlign = 'right';
+  for (let i = 0; i <= steps; i++) {
+    const v = nice * i / steps;
+    const gy = plot.y + plot.h - plot.h * (v / nice);
+    g.strokeStyle = i === 0 ? 'rgba(0,0,0,.45)' : 'rgba(0,0,0,.12)';
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(plot.x, gy);
+    g.lineTo(plot.x + plot.w, gy);
+    g.stroke();
+    g.fillStyle = '#555';
+    g.fillText(v.toFixed(decimals), plot.x - 5 * u, gy + 3 * u);
+  }
+  const slot = plot.w / cats.length;
+  const bw = slot * 0.6 / series.length;
+  g.textAlign = 'center';
+  cats.forEach((cat, ci) => {
+    series.forEach((sr, si) => {
+      const v = sr.values[ci];
+      if (v === null || v === undefined) return;
+      const bh = plot.h * (v / nice);
+      const bx = plot.x + slot * ci + slot * 0.2 + bw * si;
+      const by = plot.y + plot.h - bh;
+      g.fillStyle = series.length === 1
+        ? CHART_COLORS[ci % CHART_COLORS.length]
+        : CHART_COLORS[si % CHART_COLORS.length];
+      g.fillRect(bx, by, bw, bh);
+      g.fillStyle = '#111';
+      g.font = (9 * u) + 'px ' + FONT;
+      g.fillText(String(v), bx + bw / 2, by - 3.5 * u);
+    });
+    g.fillStyle = '#333';
+    g.font = (9.5 * u) + 'px ' + FONT;
+    g.fillText(String(cat), plot.x + slot * ci + slot / 2, plot.y + plot.h + 14 * u);
+  });
+  return cv;
+}
+
 function buildSlide(container, slide, scale) {
   slide.shapes.forEach(shape => {
     const div = document.createElement('div');
@@ -313,6 +497,11 @@ function buildSlide(container, slide, scale) {
         });
         div.appendChild(p);
       });
+    } else if (c && c.Table && c.Table.table) {
+      div.appendChild(buildTable(c.Table.table, shape, scale));
+    } else if (c && c.Chart && c.Chart.chart) {
+      const cvChart = buildChart(c.Chart.chart, shape, scale);
+      if (cvChart) div.appendChild(cvChart);
     } else if (c && c.Image && c.Image.data && c.Image.data.length) {
       const img = document.createElement('img');
       img.src = bytesToDataUrl(c.Image.data, c.Image.content_type);
@@ -336,7 +525,9 @@ function render() {
   rail.style.display = 'block';
 
   const avail = Math.max(320, canvas.clientWidth - 40);
-  const scale = Math.min(avail, 980) / pres.slide_width;
+  const scale = presenting
+    ? Math.min(window.innerWidth / pres.slide_width, window.innerHeight / pres.slide_height)
+    : Math.min(avail, 980) / pres.slide_width;
   const thumbScale = 128 / pres.slide_width;
 
   const slide = pres.slides[current];
@@ -381,6 +572,9 @@ function render() {
     rail.appendChild(thumb);
   });
   rail.querySelectorAll('.thumb')[current].scrollIntoView({ block: 'nearest' });
+  document.getElementById('prescur').textContent = current + 1;
+  document.getElementById('presrail').style.width =
+    ((current + 1) / pres.slides.length * 100) + '%';
 }
 
 // ---- engine ----------------------------------------------------------------
@@ -403,6 +597,8 @@ async function open(name, bytes) {
     current = 0;
     document.getElementById('docName').textContent = name;
     say(t('parsed')(pres.slides.length, shapes, ms));
+    document.getElementById('btnPresent').disabled = false;
+    document.getElementById('prestot').textContent = pres.slides.length;
     render();
   } catch (e) {
     say(t('failed') + e.message, true);
@@ -434,8 +630,77 @@ document.addEventListener('drop', e => {
 });
 document.addEventListener('keydown', e => {
   if (!pres) return;
-  if (e.key === 'ArrowRight' || e.key === 'PageDown') { if (current < pres.slides.length - 1) { current++; render(); } }
-  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { if (current > 0) { current--; render(); } }
+  if (presenting) {
+    if (e.key === 'Escape') { stopPresenting(); e.preventDefault(); return; }
+    if (e.key === ' ' || e.key === 'n') { go(1); e.preventDefault(); return; }
+    if (e.key === 'p') { go(-1); e.preventDefault(); return; }
+    if (e.key === 'Home') { current = 0; render(); presWake(); e.preventDefault(); return; }
+    if (e.key === 'End') { current = pres.slides.length - 1; render(); presWake(); e.preventDefault(); return; }
+    if (e.key === 'r' || e.key === 'R') { presStart = Date.now(); presTick(); e.preventDefault(); return; }
+  }
+  if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === 'ArrowDown') { go(1); }
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === 'ArrowUp') { go(-1); }
+});
+
+/* ---- presenting ---------------------------------------------------------
+   The same render path, with the page's furniture put away and the slide
+   scaled to the screen instead of to the column. Nothing about the drawing
+   changes, so what the room sees is what the demo shows. */
+
+let presenting = false, presStart = 0, presIdle = 0;
+
+function go(d) {
+  const n = Math.max(0, Math.min(pres.slides.length - 1, current + d));
+  if (n === current) return;
+  current = n;
+  render();
+  if (presenting) presWake();
+}
+
+function presWake() {
+  document.body.classList.remove('idle');
+  clearTimeout(presIdle);
+  presIdle = setTimeout(() => document.body.classList.add('idle'), 2600);
+}
+
+function presTick() {
+  if (!presenting || !presStart) return;
+  const secs = Math.floor((Date.now() - presStart) / 1000);
+  document.getElementById('presclock').textContent =
+    Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+}
+setInterval(presTick, 500);
+
+function startPresenting() {
+  if (!pres) return;
+  presenting = true;
+  presStart = Date.now();
+  document.body.classList.add('presenting');
+  document.getElementById('prestot').textContent = pres.slides.length;
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  render();
+  presWake();
+  presTick();
+}
+
+function stopPresenting() {
+  presenting = false;
+  document.body.classList.remove('presenting', 'idle');
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  render();
+}
+
+document.getElementById('btnPresent').onclick = startPresenting;
+document.addEventListener('fullscreenchange', () => {
+  if (presenting && !document.fullscreenElement) stopPresenting();
+});
+document.getElementById('canvas').addEventListener('click', e => {
+  if (!presenting) return;
+  go(e.clientX < window.innerWidth * 0.32 ? -1 : 1);
+});
+document.getElementById('canvas').addEventListener('mousemove', () => {
+  if (presenting) presWake();
 });
 let rt;
 window.addEventListener('resize', () => { if (pres) { clearTimeout(rt); rt = setTimeout(render, 120); } });

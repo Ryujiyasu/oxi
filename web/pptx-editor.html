@@ -48,6 +48,28 @@
   .hint { color: var(--dim); font-size: 12px; }
   ul.fams { margin: 4px 0; padding-left: 16px; }
   ul.fams li { margin: 1px 0; }
+
+  /* ---- presentation ---- */
+  button.go { background: #b7410e; border-color: #b7410e; color: #fff; font-weight: 600; }
+  button.go:hover { background: #d1541c; }
+  body.present { background: #000; overflow: hidden; }
+  body.present header, body.present #thumbs, body.present #side,
+  body.present #status, body.present #caret { display: none; }
+  body.present main { height: 100vh; }
+  body.present #stage { padding: 0; align-items: center; background: #000; }
+  body.present #wrap { box-shadow: none; }
+  #presbar { position: fixed; left: 0; right: 0; bottom: 0; display: none;
+             align-items: center; gap: 14px; padding: 10px 18px; color: #e8eaed;
+             background: linear-gradient(to top, rgba(0,0,0,.75), transparent);
+             font-variant-numeric: tabular-nums; transition: opacity .25s ease; }
+  body.present #presbar { display: flex; }
+  body.present.idle #presbar { opacity: 0; }
+  #presbar .count { margin-left: auto; color: #9aa3ad; }
+  #presbar .count b { color: #e8eaed; font-weight: 600; }
+  #presrail { position: fixed; left: 0; bottom: 0; height: 3px; background: #b7410e;
+              display: none; transition: width .18s ease; }
+  body.present #presrail { display: block; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
@@ -55,6 +77,7 @@
   <h1>Oxi slide editor</h1>
   <label class="file">Open .pptx<input type="file" id="file" accept=".pptx"></label>
   <button id="save" disabled>Save</button>
+  <button id="present" class="go" disabled>プレゼン開始</button>
   <span class="spacer"></span>
   <span class="hint">green = laid out by the engine &nbsp; amber = the engine could not measure it</span>
 </header>
@@ -75,6 +98,11 @@
   </div>
 </main>
 <div id="status">No file loaded.</div>
+<div id="presbar">
+  <span id="presclock">7:00</span>
+  <span class="count"><b id="prescur">1</b> / <span id="prestot">1</span></span>
+</div>
+<div id="presrail"></div>
 
 <script type="module">
 import init, {
@@ -87,6 +115,9 @@ const $ = (id) => document.getElementById(id);
 const cv = $('slide'), ctx = cv.getContext('2d');
 const state = {
   bytes: null, pres: null, slide: 0, scale: 1,
+  present: false,      // playing full screen: no chrome, no diagnostic outlines
+  presStart: 0,        // when the talk began, for the countdown
+  presIdle: 0,
   laid: [],            // per shape: {shape, shapeIndex, paragraphs, layout}
   sel: null,           // {entry, line, charIndex, inLine}
   anchor: null,        // where a selection began, as a character offset
@@ -266,6 +297,30 @@ function paintBackground(slide, w, h) {
   ctx.fillRect(0, 0, w, h);
 }
 
+// The path a shape's own geometry describes. An ellipse drawn as a rectangle
+// is the difference between a deck's rounded cards and a wall of blocks, and
+// canvas can trace all three shapes this corpus actually uses.
+function shapePath(shape, x, y, w, h, k) {
+  const t = (shape.shape_type || 'rect').toLowerCase();
+  ctx.beginPath();
+  if (t === 'ellipse' || t === 'circle' || t === 'oval') {
+    ctx.ellipse(x + w / 2, y + h / 2, Math.abs(w / 2), Math.abs(h / 2), 0, 0, Math.PI * 2);
+    return true;
+  }
+  if (t === 'roundrect' || t === 'round1rect' || t === 'round2samerect') {
+    // PowerPoint's default corner is 1/6 of the shorter side, which is what
+    // `adjustments` overrides when the deck sets one.
+    const adj = (shape.adjustments && shape.adjustments.length) ? shape.adjustments[0] : null;
+    const frac = adj == null ? 1 / 6 : adj;
+    const r = Math.min(Math.abs(w), Math.abs(h)) * Math.min(Math.max(frac, 0), 0.5);
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else ctx.rect(x, y, w, h);
+    return true;
+  }
+  ctx.rect(x, y, w, h);
+  return true;
+}
+
 function paintShapeBox(shape, k) {
   const x = shape.x * k, y = shape.y * k, w = shape.width * k, h = shape.height * k;
   if (shape.fill_color) {
@@ -273,12 +328,14 @@ function paintShapeBox(shape, k) {
     const c = shape.fill_color;
     ctx.fillStyle = a >= 1 ? '#' + c
       : `rgba(${parseInt(c.slice(0,2),16)},${parseInt(c.slice(2,4),16)},${parseInt(c.slice(4,6),16)},${a})`;
-    ctx.fillRect(x, y, w, h);
+    shapePath(shape, x, y, w, h, k);
+    ctx.fill();
   }
   if (shape.border_color) {
     ctx.strokeStyle = '#' + shape.border_color;
     ctx.lineWidth = Math.max(1, (shape.border_width || 1) * k);
-    ctx.strokeRect(x, y, w, h);
+    shapePath(shape, x, y, w, h, k);
+    ctx.stroke();
   }
 }
 
@@ -301,12 +358,38 @@ function paintSelection(k) {
   }
 }
 
+// The colour the RUN sets, found by walking the paragraph's runs to the
+// character the segment starts at.
+//
+// The painter drew every line in near-black, which is invisible on the dark
+// shapes a deck actually uses: the pitch deck's opening slide sets white and
+// pale blue on navy, and read as three empty bands. The runs carry their
+// colours (`FFFFFF`, `CADCFC`, ...) -- nothing needed measuring, the painter
+// simply never asked.
+function runColorAt(entry, line, offsetInLine) {
+  const paras = entry.paragraphs || [];
+  const para = paras[line.para_index];
+  if (!para || !para.runs) return null;
+  let at = (line.char_start || 0) + (offsetInLine || 0);
+  for (const r of para.runs) {
+    const n = Array.from(r.text || '').length;
+    if (at < n) return r.color || null;
+    at -= n;
+  }
+  const last = para.runs[para.runs.length - 1];
+  return (last && last.color) || null;
+}
+
+function inkOf(entry, line, offsetInLine) {
+  const c = runColorAt(entry, line, offsetInLine);
+  return c ? '#' + c : '#111';
+}
+
 function paintLines(entry, k) {
   const { shape, layout } = entry;
   for (const line of layout.lines) {
     const px = (shape.x + line.x) * k;
     const py = (shape.y + line.baseline) * k;
-    ctx.fillStyle = '#111';
     ctx.textBaseline = 'alphabetic';
     const off = lineOffsets(line);
     if (off) {
@@ -314,6 +397,7 @@ function paintLines(entry, k) {
       // its own run is set in.
       for (const sg of lineParts(line)) {
         ctx.font = lineFont(sg, k);
+        ctx.fillStyle = inkOf(entry, line, sg.start);
         let u = sg.start;
         for (const ch of sg.text) {
           ctx.fillText(ch, px + off[u] * k, py);
@@ -322,9 +406,11 @@ function paintLines(entry, k) {
       }
     } else {
       ctx.font = lineFont(line, k);
+      ctx.fillStyle = inkOf(entry, line, 0);
       ctx.fillText(line.text, px, py);
     }
   }
+  if (state.present) return;
   // Say which layout this was: the engine's, or a fallback.
   ctx.strokeStyle = layout.complete ? 'rgba(74,222,128,.55)' : 'rgba(251,191,36,.75)';
   ctx.setLineDash(layout.complete ? [] : [5, 4]);
@@ -333,14 +419,106 @@ function paintLines(entry, k) {
   ctx.setLineDash([]);
 }
 
+// Excel's default series colours, which a single-series chart cycles through
+// per POINT. The pitch deck's SSIM chart draws blue / orange / grey / yellow,
+// and these are those four.
+const CHART_COLORS = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
+
+// A bar chart, from the numbers the parser already puts in the IR.
+//
+// The demo drew nothing at all where a chart sat -- half of the pitch deck's
+// accuracy slide was blank -- while `chart_type`, `categories` and each
+// series' `values` were there to be read. Only the plain column case is drawn:
+// anything else keeps the old behaviour of leaving the space empty rather than
+// inventing a picture.
+//
+// Not yet from the file: the value axis's own min/max, per-point colours, and
+// whether data labels were asked for. The axis is taken from the data (zero to
+// just past the tallest bar), which is what a reader expects but is not what
+// PowerPoint would draw for a deck that pins its axis.
+function paintChart(shape, chart, k) {
+  if (chart.chart_type !== 'bar' || (chart.bar_dir && chart.bar_dir !== 'col')) return false;
+  const series = (chart.series || []).filter(s => (s.values || []).length);
+  const cats = chart.categories || [];
+  if (!series.length || !cats.length) return false;
+
+  const x = shape.x * k, y = shape.y * k, w = shape.width * k, h = shape.height * k;
+  const px = 12 * k / 1.0;
+  const title = chart.explicit_title || (series.length === 1 ? series[0].name : '');
+  const padTop = (title ? 30 : 12) * k, padBot = 30 * k, padL = 40 * k, padR = 12 * k;
+  const plot = { x: x + padL, y: y + padTop, w: w - padL - padR, h: h - padTop - padBot };
+  if (plot.w <= 0 || plot.h <= 0) return false;
+
+  let top = 0;
+  for (const sr of series) for (const v of sr.values) top = Math.max(top, v || 0);
+  if (top <= 0) return false;
+  const steps = 5;
+  // Round the top up to 1, 2, 2.5 or 5 times a power of ten -- the steps a
+  // reader expects on an axis, and what PowerPoint puts on this deck's chart
+  // (four SSIM values under 0.85, drawn against 0 to 1).
+  const mag = Math.pow(10, Math.floor(Math.log10(top)));
+  const nice = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= top) || 10 * mag;
+  const decimals = Math.max(0, Math.min(3, Math.ceil(-Math.log10(nice / steps))));
+
+  ctx.save();
+  ctx.textBaseline = 'alphabetic';
+  if (title) {
+    ctx.fillStyle = '#111';
+    ctx.font = `700 ${13 * k}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText(title, x + w / 2, y + 20 * k);
+  }
+  // gridlines and their values
+  ctx.font = `${10 * k}px system-ui, sans-serif`;
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= steps; i++) {
+    const v = nice * i / steps;
+    const gy = plot.y + plot.h - plot.h * (v / nice);
+    ctx.strokeStyle = i === 0 ? 'rgba(0,0,0,.45)' : 'rgba(0,0,0,.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(plot.x, gy); ctx.lineTo(plot.x + plot.w, gy); ctx.stroke();
+    ctx.fillStyle = '#555';
+    ctx.fillText(v.toFixed(decimals), plot.x - 6 * k, gy + 3.5 * k);
+  }
+  // bars, one slot per category
+  const slot = plot.w / cats.length;
+  const bw = slot * 0.62 / series.length;
+  ctx.textAlign = 'center';
+  cats.forEach((cat, ci) => {
+    series.forEach((sr, si) => {
+      const v = sr.values[ci];
+      if (v == null) return;
+      const bh = plot.h * (v / nice);
+      const bx = plot.x + slot * ci + slot * 0.19 + bw * si;
+      const by = plot.y + plot.h - bh;
+      ctx.fillStyle = series.length === 1
+        ? CHART_COLORS[ci % CHART_COLORS.length] : CHART_COLORS[si % CHART_COLORS.length];
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = '#111';
+      ctx.font = `${10 * k}px system-ui, sans-serif`;
+      ctx.fillText(Number(v).toFixed(3).replace(/0+$/, '').replace(/\.$/, ''),
+                   bx + bw / 2, by - 4 * k);
+    });
+    ctx.fillStyle = '#333';
+    ctx.font = `${10.5 * k}px system-ui, sans-serif`;
+    ctx.fillText(String(cat), plot.x + slot * ci + slot / 2, plot.y + plot.h + 16 * k);
+  });
+  ctx.restore();
+  return true;
+}
+
 function paint() {
   const slide = state.pres.slides[state.slide];
   const k = state.scale;
   cv.width = state.pres.slide_width * k;
   cv.height = state.pres.slide_height * k;
   paintBackground(slide, cv.width, cv.height);
-  for (const shape of slide.shapes) paintShapeBox(shape, k);
-  paintSelection(k);
+  for (const shape of slide.shapes) {
+    paintShapeBox(shape, k);
+    const c = shape.content;
+    if (c && c.Chart && c.Chart.chart) paintChart(shape, c.Chart.chart, k);
+  }
+  if (!state.present) paintSelection(k);
   for (const entry of state.laid) paintLines(entry, k);
   paintCaret();
 }
@@ -819,6 +997,8 @@ function showSlide(i) {
   coverage();
   describeSelection();
   $('s-slide').textContent = `${i + 1} / ${state.pres.slides.length}`;
+  $('prescur').textContent = i + 1;
+  $('presrail').style.width = ((i + 1) / state.pres.slides.length * 100) + '%';
   document.querySelectorAll('.thumb').forEach((t, j) => t.classList.toggle('on', j === i));
 }
 
@@ -860,11 +1040,98 @@ $('file').addEventListener('change', async (e) => {
     say('could not parse: ' + err.message);
     return;
   }
-  state.scale = Math.min(1.2, 900 / state.pres.slide_width);
+  state.scale = editScale();
   buildThumbs();
   showSlide(0);
+  $('present').disabled = false;
+  $('prestot').textContent = state.pres.slides.length;
   say(`${f.name} — ${state.pres.slides.length} slides`);
 });
+
+/* ---------- presenting -------------------------------------------------- */
+
+// The engine lays the slide out once per slide, so playing is just the editor
+// with its instruments put away: no diagnostic outline, no selection band, no
+// panels, and the canvas scaled to whatever the room's screen is.
+function editScale() {
+  return Math.min(1.2, 900 / state.pres.slide_width);
+}
+
+function presentScale() {
+  return Math.min(window.innerWidth / state.pres.slide_width,
+                  window.innerHeight / state.pres.slide_height);
+}
+
+function enterPresent() {
+  if (!state.pres) return;
+  state.present = true;
+  state.sel = null;
+  if (!state.presStart) state.presStart = Date.now();
+  document.body.classList.add('present');
+  state.scale = presentScale();
+  showSlide(state.slide);
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  presWake();
+}
+
+function exitPresent() {
+  state.present = false;
+  document.body.classList.remove('present', 'idle');
+  state.scale = editScale();
+  showSlide(state.slide);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+function presGo(d) {
+  const n = Math.max(0, Math.min(state.pres.slides.length - 1, state.slide + d));
+  if (n !== state.slide) showSlide(n);
+  presWake();
+}
+
+function presWake() {
+  document.body.classList.remove('idle');
+  clearTimeout(state.presIdle);
+  state.presIdle = setTimeout(() => document.body.classList.add('idle'), 2600);
+}
+
+function presTick() {
+  if (!state.presStart) return;
+  const left = 7 * 60 - Math.floor((Date.now() - state.presStart) / 1000);
+  const over = left < 0, a = Math.abs(left);
+  const el = $('presclock');
+  el.textContent = (over ? '+' : '') + Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+  el.style.color = over ? '#f87171' : (left <= 60 ? '#fbbf24' : '#e8eaed');
+}
+setInterval(presTick, 250);
+
+$('present').addEventListener('click', enterPresent);
+window.addEventListener('resize', () => {
+  if (!state.present) return;
+  state.scale = presentScale();
+  showSlide(state.slide);
+});
+document.addEventListener('fullscreenchange', () => {
+  if (state.present && !document.fullscreenElement) exitPresent();
+});
+$('stage').addEventListener('mousemove', () => { if (state.present) presWake(); });
+$('stage').addEventListener('click', (e) => {
+  if (!state.present) return;
+  presGo(e.clientX < window.innerWidth * 0.32 ? -1 : 1);
+});
+document.addEventListener('keydown', (e) => {
+  if (!state.present) return;
+  switch (e.key) {
+    case 'ArrowRight': case 'ArrowDown': case ' ': case 'PageDown': case 'n':
+      presGo(1); e.preventDefault(); e.stopPropagation(); break;
+    case 'ArrowLeft': case 'ArrowUp': case 'PageUp': case 'p':
+      presGo(-1); e.preventDefault(); e.stopPropagation(); break;
+    case 'Home': showSlide(0); presWake(); e.preventDefault(); break;
+    case 'End': showSlide(state.pres.slides.length - 1); presWake(); e.preventDefault(); break;
+    case 'r': case 'R': state.presStart = Date.now(); presTick(); e.preventDefault(); break;
+    case 'Escape': exitPresent(); e.preventDefault(); e.stopPropagation(); break;
+  }
+}, true);
 
 await init();
 say('ready — open a .pptx');
