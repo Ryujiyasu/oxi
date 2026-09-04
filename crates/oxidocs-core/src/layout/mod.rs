@@ -17447,7 +17447,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // S707: no-grid empty-para line height is governed by the ASCII font.
                     // S949: Latin custom-pitch no-type grids included (see the
                     // line_height_for_line_inner empty branch).
+                    // S1305: the estimate half of the same empty-paragraph rule.
+                    // Wiring only the render half would leave the page-fit
+                    // estimate disagreeing with what is drawn.
                     let s949_ascii = grid_pitch.is_none()
+                        || (!para.style.snap_to_grid && std::env::var("OXI_S1305").is_ok())
                         || (page.doc_grid_no_type
                             && !self.doc_body_has_real_cjk
                             && std::env::var("OXI_S949_DISABLE").is_err());
@@ -29225,7 +29229,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // The estimate (S940E) already prefers ascii for Latin docs — this closes
             // the render half of that split. JP no-type (ikujidetail 286) untouched
             // via the doc_body_has_real_cjk gate; typed grids keep S583's eastAsia.
+            // S1305 (2026-09-04, opt-out OXI_S1305_DISABLE): a paragraph with
+            // `snapToGrid=0` does not snap, so its EMPTY line is a no-grid line
+            // however the section is declared, and S707's ASCII rule applies.
+            // MEASURED on `policies__0353d0b2a7f98e13`, the gate's worst document
+            // (0.1921). Its blank separators carry snapToGrid=0 with a typed
+            // docGrid; docDefaults name ascii=Century / eastAsia=ＭＳ 明朝 at
+            // 10.5pt with line=276 auto:
+            //     ＭＳ 明朝 x 1.297 x 1.15 = 15.66   <- what Oxi advanced
+            //     Century  x ~1.17  x 1.15 = ~14.1  <- Word advances 14.25/15.00
+            //     (`_para_advance_word.py`; Info6 is quantised to 0.75pt)
+            // Six of them on page 1 = 6.16pt, which pushed four paragraphs off it.
+            // ★SCOPE is the EMPTY branch only. An earlier attempt put the same
+            // test inside `metrics_for_para_mark_g`, where the mark path is also
+            // reached from paragraphs that HAVE text, and cost 0.0266 across
+            // three documents (d1e8ac8 −0.0177, ed025 −0.0065, kojin −0.0031).
+            // The measurement is about blank separators; the rule stays there.
+            let s1305 = !para_style.snap_to_grid && std::env::var("OXI_S1305").is_ok();
             let s949_ascii = grid_pitch.is_none()
+                || s1305
                 || (grid_no_type
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S949_DISABLE").is_err());
@@ -29817,7 +29839,39 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .and_then(|r| r.font_size)
                             .unwrap_or(para_font_size);
                         let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+                        // S1305 (2026-09-04, opt-out OXI_S1305_DISABLE): this branch
+                        // is reached only for a paragraph that does NOT snap to the
+                        // grid, which is a no-grid line however the section is
+                        // declared -- so its ¶ mark takes the ASCII font (S583/S707).
+                        // It called the prefer_ascii=false form, which is where the
+                        // eastAsia reading came from.
+                        // MEASURED on `policies__0353d0b2a7f98e13`, the gate's worst
+                        // document (0.1921). Its blank separators carry snapToGrid=0
+                        // under a typed docGrid, with docDefaults ascii=Century /
+                        // eastAsia=ＭＳ 明朝 at 10.5pt and line=276 auto:
+                        //     ＭＳ 明朝 x 1.297 x 1.15 = 15.66  <- what Oxi advanced
+                        //     Century  x ~1.17  x 1.15 = ~14.1 <- Word advances
+                        //     14.25 / 15.00 (`_para_advance_word.py`; Info6 is
+                        //     quantised to the 0.75pt device step)
+                        // Six of them on page 1 = 6.16pt, four paragraphs pushed off.
+                        // ★An earlier attempt put the test inside
+                        // `metrics_for_para_mark_g`, where the mark path is also
+                        // reached from paragraphs that HAVE text, and cost 0.0266
+                        // over three documents. The measurement is about blank
+                        // separators, so the rule lives in the blank branch.
+                        // ★HELD OPT-IN (`OXI_S1305=1`), default OFF. The rule is
+                        // measured, and on the one document the narrowed scope
+                        // touches it moves the blank's advance the RIGHT way
+                        // (Word 12.75; S1305 gives 12.50, the old reading 13.62)
+                        // -- but that same document's TITLE advance moves +1.12
+                        // with it and the sentinel comes out at −0.0177. The
+                        // coupled quantity is not identified, and a gate that is
+                        // negative does not ship, however good the local reading.
+                        let metrics = self.metrics_for_para_mark_g(
+                            &rpr_ref,
+                            para_style,
+                            std::env::var("OXI_S1305").is_ok(),
+                        );
                         raw_max = metrics.word_line_height_no_grid(font_size);
                     } else {
                         // S1298 FOURTH site. A snapToGrid=0 line in a typed grid
