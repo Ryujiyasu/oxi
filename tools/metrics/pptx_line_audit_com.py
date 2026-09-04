@@ -430,16 +430,15 @@ def audit(doc) -> dict | None:
     wfar: list = []
     split: list = []
     try:
-        # ★Opened TWICE on purpose. PowerPoint's FIRST open of a session
-        # resolves an italic request to the upright part with a synthetic
-        # slant; only once that open has installed the deck's fonts does it use
-        # the real italic face. Opens 2 and 3 agree exactly, so warm is the
-        # stable state and the one the engine models -- measured on d15 slide
-        # 5, where open #1 reports Barlow-Bold and opens #2/#3 Barlow-BoldItalic
-        # (`pptx_truth_pdf_first_open_is_cold`). Asking cold makes the
-        # instrument report a disagreement that is its own.
-        if warmopen_on():
-            app.Presentations.Open(str(src.resolve()), WithWindow=False).Close()
+        # ONE open is enough, and that is a measurement, not an assumption.
+        # PowerPoint's PDF EXPORT resolves an italic request differently on a
+        # session's first open (the upright part with a synthetic slant) than
+        # on later ones, so every stored truth PDF is cold. The APP's layout is
+        # not: opening d15 once to warm the session leaves
+        # `Paragraphs(1).Lines(1).BoundWidth` at 347.88 either way, which is the
+        # warm face (cloud Barlow BoldItalic, 347.79) and not the cold one
+        # (Barlow Bold, 356.40). So this audit is a WARM oracle as it stands,
+        # and a second open would only double its cost.
         pres = app.Presentations.Open(str(src.resolve()), WithWindow=False)
         try:
             for si in range(1, pres.Slides.Count + 1):
@@ -533,7 +532,12 @@ def audit(doc) -> dict | None:
                             # gate cannot mean anything on such a line, and the
                             # break gate was calling it a pass.
                             for ct, et in zip(clines, elines):
-                                a_, b_ = ct.strip(), et.strip()
+                                # U+FEFF: the engine strips it (S-FEFFSTRIP,
+                                # PowerPoint gives it no width and no ink), so
+                                # the words must be compared without it or the
+                                # strip itself reads as a break difference.
+                                a_ = ct.strip().replace(chr(0xFEFF), "")
+                                b_ = et.strip().replace(chr(0xFEFF), "")
                                 if a_ and b_ and a_ != b_:
                                     got["split"] += 1
                                     split.append((si, a_[:34], b_[:34]))
@@ -840,11 +844,6 @@ def audit(doc) -> dict | None:
                   f"asks {cf!r}, measured {ef!r}{' BOLD' if eb else ''}{same}",
                   flush=True)
     return got
-
-
-def warmopen_on() -> bool:
-    """The deck is opened once to warm the session, unless this is set."""
-    return "OXI_AUDIT_COLD" not in os.environ
 
 
 def main() -> None:
