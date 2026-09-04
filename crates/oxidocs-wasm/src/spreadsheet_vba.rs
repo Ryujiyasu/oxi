@@ -1598,6 +1598,25 @@ struct CellMarks {
     indented: bool,
 }
 
+/// The functions `Range.Subtotal` totals with: the xlConsolidationFunction
+/// constant, the SUBTOTAL number it becomes, the word after a group's key,
+/// and the grand total's label -- in Excel's own order, which is the order
+/// the rows of one group take when several functions are laid together.
+/// Measured on a Japanese Office (misc3.vba, 2026-09-05).
+const SUBTOTAL_FUNCTIONS: [(i64, i64, &str, &str); 11] = [
+    (-4157, 9, "集計", "総計"),
+    (-4112, 3, "個数", "総合計"),
+    (-4106, 1, "平均", "全体の平均"),
+    (-4136, 4, "最大", "全体の最大値"),
+    (-4139, 5, "最小", "全体の最小値"),
+    (-4149, 6, "積", "全体の積"),
+    (-4113, 2, "数値の個数", "総合計"),
+    (-4155, 7, "標本標準偏差", "全体の標本標準偏差"),
+    (-4156, 8, "標準偏差", "全体の標準偏差"),
+    (-4164, 10, "標本分散", "全体の標本分散"),
+    (-4165, 11, "分散", "全体の分散"),
+];
+
 /// Which edge of a range `FillDown` and its three siblings copy from.
 #[derive(Debug, Clone, Copy)]
 enum FillEdge {
@@ -6750,6 +6769,321 @@ impl<'a> WorkbookHost<'a> {
         Ok(Value::Boolean(true))
     }
 
+    /// The rows of a range that hold subtotals -- a `SUBTOTAL(n, …)` formula
+    /// in one of the range's columns -- each with the function number and
+    /// the columns (within the range) it totals.
+    fn subtotal_rows_in(&self, range: CellRange) -> Vec<(u32, Vec<(u32, i64)>)> {
+        let mut found: Vec<(u32, Vec<(u32, i64)>)> = Vec::new();
+        let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
+            return found;
+        };
+        for row in &sheet.rows {
+            if !(range.start_row..=range.end_row).contains(&row.index) {
+                continue;
+            }
+            let totals: Vec<(u32, i64)> = row
+                .cells
+                .iter()
+                .filter(|cell| (range.start_column..=range.end_column).contains(&cell.col))
+                .filter_map(|cell| {
+                    let body = cell.formula.as_deref()?.trim_start_matches('=').trim_start();
+                    if body.len() < 9 || !body[..9].eq_ignore_ascii_case("SUBTOTAL(") {
+                        return None;
+                    }
+                    let number: String = body[9..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                    Some((cell.col - range.start_column, number.parse::<i64>().ok()?))
+                })
+                .collect();
+            if !totals.is_empty() {
+                found.push((row.index, totals));
+            }
+        }
+        found
+    }
+
+    /// Take the subtotal rows out of a range, bottom-up, and bring its rows
+    /// back to outline level one. Answers how many rows went.
+    fn take_out_subtotals(&mut self, range: CellRange) -> Result<u32, String> {
+        let rows: Vec<u32> = self.subtotal_rows_in(range).into_iter().map(|(row, _)| row).collect();
+        for row in rows.iter().rev() {
+            let whole = CellRange {
+                sheet: range.sheet,
+                start_row: *row,
+                end_row: *row,
+                start_column: 0,
+                end_column: MAX_WORKSHEET_COLUMN,
+            };
+            self.shift_cells(whole, false, false)?;
+        }
+        if let Some(outline) = self.outlines.get_mut(&range.sheet) {
+            outline.rows.retain(|row, _| !(range.start_row..=range.end_row).contains(row));
+        }
+        Ok(rows.len() as u32)
+    }
+
+    /// `Range.RemoveSubtotal`: the rows holding subtotals go, and the
+    /// range's rows come back to outline level one. Measured: after it the
+    /// data rows stand together again and `Rows(2).OutlineLevel` is 1.
+    fn remove_subtotal(&mut self, range: CellRange) -> Result<Value, String> {
+        let range = if range.is_single() { self.current_region(range)? } else { range };
+        self.guard_structure(range.sheet, false, false)?;
+        self.take_out_subtotals(range)?;
+        Ok(Value::Boolean(true))
+    }
+
+    /// `Range.Subtotal GroupBy, Function, TotalList, Replace, PageBreaks,
+    /// SummaryBelowData`, as Excel does it (measured on a Japanese Office,
+    /// misc2/misc3.vba, 2026-09-05):
+    ///
+    /// The first row is the header. The rows under it are cut into groups
+    /// wherever the GroupBy column's shown text changes -- compared without
+    /// case and without surrounding space, so `a`, `A` and ` a` are one
+    /// group -- and after each group (before it, with SummaryBelowData
+    /// False) a row is put in holding `<key> 集計` in the GroupBy column,
+    /// bold, and `=SUBTOTAL(9,C<first>:C<last>)` over the group's rows in
+    /// every TotalList column. A `総計` row closes the range (opens it,
+    /// summary above), its formulas running from the first data row to the
+    /// last. A group whose key is blank gets no row of its own. Each
+    /// function has its own two labels (Count: 個数 / 総合計, Average:
+    /// 平均 / 全体の平均, …) and its own SUBTOTAL number. The put-in rows
+    /// wear the formats of the row above, as any inserted row does -- a key
+    /// that is a date labels in the date's format, `1/5/2024 集計`. Data
+    /// rows go to outline level 3, group rows to 2, the grand row stays at 1.
+    /// With Replace False the new subtotal joins the old, the rows of one
+    /// group ordered by Excel's function order (Sum, Count, Average, Max,
+    /// Min, Product, CountNums, StDev, StDevP, Var, VarP), the first of them
+    /// innermost. Naming the GroupBy column alone in TotalList totals the
+    /// last column instead; a column past the range, or GroupBy 0, is
+    /// 1004; from one cell the range is the current region.
+    fn subtotal(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | Some(Value::Empty) | None => None,
+            Some(value) => Some(value),
+        };
+        let range = if range.is_single() { self.current_region(range)? } else { range };
+        Self::range_cell_count(range)?;
+        let width = range.end_column - range.start_column + 1;
+        let group_by = match given(0).and_then(any_whole_number) {
+            Some(column) if column >= 1 && column <= i64::from(width) => column as u32 - 1,
+            _ => return Err(host_error(1004, "Subtotal method of Range class failed")),
+        };
+        let function = given(1)
+            .and_then(any_whole_number)
+            .ok_or_else(|| host_error(1004, "Subtotal needs a Function"))?;
+        let Some(order) = SUBTOTAL_FUNCTIONS.iter().position(|(constant, ..)| *constant == function) else {
+            return Err(host_error(1004, "Subtotal method of Range class failed"));
+        };
+        let mut totals: Vec<u32> = Vec::new();
+        let mut take = |value: &Value| -> Result<(), String> {
+            match any_whole_number(value) {
+                Some(column) if column >= 1 && column <= i64::from(width) => {
+                    let column = column as u32 - 1;
+                    if !totals.contains(&column) {
+                        totals.push(column);
+                    }
+                    Ok(())
+                }
+                _ => Err(host_error(1004, "Subtotal method of Range class failed")),
+            }
+        };
+        match given(2) {
+            Some(Value::Array(listed)) => {
+                for value in &listed.values {
+                    take(value)?;
+                }
+            }
+            Some(value) => take(value)?,
+            None => return Err(host_error(1004, "Subtotal needs a TotalList")),
+        }
+        let replace = match given(3) {
+            None => true,
+            Some(value) => style_face_boolean(value, "Subtotal Replace")?.unwrap_or(true),
+        };
+        let below = match given(5) {
+            None => true,
+            Some(value) => style_face_boolean(value, "Subtotal SummaryBelowData")?.unwrap_or(true),
+        };
+        self.guard_structure(range.sheet, false, true)?;
+        self.guard_locked_cells(range, "Range.Subtotal")?;
+        let sheet = range.sheet;
+
+        // Totalling the GroupBy column itself leaves nowhere for the labels,
+        // so Excel puts a column in before it for them: measured, with
+        // GroupBy 1 and TotalList (1) the data stands one column to the
+        // right afterwards, the labels in the new column, and the totals
+        // over the key column read 0.
+        let (range, group_by, totals, label_column) = if totals.contains(&group_by) {
+            let key_column = range.start_column + group_by;
+            let whole = CellRange {
+                sheet,
+                start_row: 1,
+                end_row: MAX_WORKSHEET_ROW,
+                start_column: key_column,
+                end_column: key_column,
+            };
+            self.guard_structure(sheet, true, true)?;
+            self.shift_cells(whole, true, true)?;
+            let range = CellRange { end_column: range.end_column + 1, ..range };
+            let totals: Vec<u32> = totals.iter().map(|column| if *column >= group_by { column + 1 } else { *column }).collect();
+            (range, group_by + 1, totals, key_column)
+        } else {
+            (range, group_by, totals, range.start_column + group_by)
+        };
+
+        // What is there already, function by function -- kept when not
+        // replacing -- and taken out so the whole can be laid again.
+        let mut functions: Vec<(usize, Vec<u32>)> = Vec::new();
+        if !replace {
+            for (_, held) in self.subtotal_rows_in(range) {
+                for (column, number) in held {
+                    let Some(at) = SUBTOTAL_FUNCTIONS.iter().position(|(_, n, ..)| *n == number) else {
+                        continue;
+                    };
+                    match functions.iter_mut().find(|(held, _)| *held == at) {
+                        Some((_, columns)) => {
+                            if !columns.contains(&column) {
+                                columns.push(column);
+                            }
+                        }
+                        None => functions.push((at, vec![column])),
+                    }
+                }
+            }
+        }
+        let gone = self.take_out_subtotals(range)?;
+        let range = CellRange { end_row: range.end_row - gone, ..range };
+        match functions.iter_mut().find(|(held, _)| *held == order) {
+            Some((_, columns)) => {
+                for column in &totals {
+                    if !columns.contains(column) {
+                        columns.push(*column);
+                    }
+                }
+            }
+            None => functions.push((order, totals)),
+        }
+        functions.sort_by_key(|(order, _)| *order);
+        let depth = functions.len() as u8;
+
+        // The groups: runs of data rows sharing a key, with the key as shown.
+        let key_column = range.start_column + group_by;
+        let first_data = range.start_row + 1;
+        let last_data = range.end_row;
+        if last_data < first_data {
+            return Ok(Value::Boolean(true));
+        }
+        let mut groups: Vec<(u32, u32, String, String)> = Vec::new();
+        for row in first_data..=last_data {
+            let shown = self
+                .cell_here(sheet, row, key_column)
+                .map(|cell| shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref()))
+                .unwrap_or_default();
+            let key = shown.trim().to_lowercase();
+            match groups.last_mut() {
+                Some((_, last, held, _)) if *held == key => *last = row,
+                _ => groups.push((row, row, key, shown)),
+            }
+        }
+
+        // Where everything ends up, top to bottom: a data row's final row,
+        // and each put-in row with what it totals.
+        let mut final_of: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        // (final row, function order, group: Some(first, last, shown key) or
+        // None for the grand row)
+        let mut puts: Vec<(u32, usize, Option<(u32, u32, String)>)> = Vec::new();
+        let mut next = first_data;
+        if !below {
+            for (order, _) in &functions {
+                puts.push((next, *order, None));
+                next += 1;
+            }
+        }
+        for (first, last, key, shown) in &groups {
+            let totalled = !key.is_empty();
+            if !below && totalled {
+                for (order, _) in &functions {
+                    puts.push((next, *order, Some((*first, *last, shown.clone()))));
+                    next += 1;
+                }
+            }
+            for row in *first..=*last {
+                final_of.insert(row, next);
+                next += 1;
+            }
+            if below && totalled {
+                for (order, _) in &functions {
+                    puts.push((next, *order, Some((*first, *last, shown.clone()))));
+                    next += 1;
+                }
+            }
+        }
+        if below {
+            for (order, _) in &functions {
+                puts.push((next, *order, None));
+                next += 1;
+            }
+        }
+
+        // Put the rows in top-down: everything above a row being put in is
+        // already where it will stay, and everything below still has the
+        // later rows to move for. The rows are written only once they are
+        // all in, since a formula written earlier would be moved by the
+        // rows put in under it.
+        for (row, _, _) in &puts {
+            let row = *row;
+            let whole = CellRange { sheet, start_row: row, end_row: row, start_column: 0, end_column: MAX_WORKSHEET_COLUMN };
+            self.shift_cells(whole, false, true)?;
+            for column in range.start_column..=range.end_column {
+                let above = CellAddress { sheet, row: row - 1, column };
+                let style = self.cell_here(sheet, row - 1, column).map(|cell| cell.style).unwrap_or_default();
+                let at = CellAddress { sheet, row, column };
+                self.set_range_style(CellRange::single(at), |_, held| *held = style.clone())?;
+                let marks = self.marks_of(above);
+                self.put_marks(at, marks);
+            }
+        }
+        for (row, order, group) in &puts {
+            let row = *row;
+            let (_, number, label, grand_label) = SUBTOTAL_FUNCTIONS[*order];
+            let (text, first, last) = match group {
+                Some((first, last, shown)) => (format!("{shown} {label}"), final_of[first], final_of[last]),
+                None => (grand_label.to_string(), final_of[&first_data], final_of[&last_data]),
+            };
+            let label_at = CellAddress { sheet, row, column: label_column };
+            self.set_cell_value(label_at, CellValue::String(text))?;
+            self.set_range_style(CellRange::single(label_at), |_, style| style.bold = true)?;
+            let columns = functions
+                .iter()
+                .find(|(held, _)| held == order)
+                .map(|(_, columns)| columns.clone())
+                .unwrap_or_default();
+            for column in columns {
+                let column = range.start_column + column;
+                let letter = oxicells_core::editor::col_to_letter(column);
+                let at = CellAddress { sheet, row, column };
+                self.set_cell_formula(at, format!("=SUBTOTAL({number},{letter}{first}:{letter}{last})"))?;
+            }
+        }
+
+        // The outline: data rows deepest, then the group rows by function
+        // order, the first of them innermost; the grand rows stay at one.
+        for final_row in final_of.values() {
+            self.set_outline_level(sheet, ShiftAxis::Rows, *final_row, 2 + depth);
+        }
+        for (row, order, group) in &puts {
+            let level = match group {
+                Some(_) => {
+                    let k = functions.iter().position(|(held, _)| held == order).unwrap_or(0) as u8;
+                    2 + depth - 1 - k
+                }
+                None => 1,
+            };
+            self.set_outline_level(sheet, ShiftAxis::Rows, *row, level);
+        }
+        self.outlines.entry(sheet).or_default().summary_row = if below { 1 } else { 0 };
+        Ok(Value::Boolean(true))
+    }
+
     /// Whether the object's worksheet has been deleted out from under it.
     fn gone(&self, object: &ObjectRef) -> bool {
         matches!(self.objects.get(object.handle as usize), Some(HostObject::Gone))
@@ -9481,6 +9815,11 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn current_region_object(&mut self, range: CellRange) -> Result<Value, String> {
+        let region = self.current_region(range)?;
+        Ok(self.object(HostObject::Range(region)))
+    }
+
+    fn current_region(&self, range: CellRange) -> Result<CellRange, String> {
         let worksheet = self
             .workbook
             .sheets
@@ -9532,7 +9871,7 @@ impl<'a> WorkbookHost<'a> {
             region.start_column -= u32::from(expand_left);
             region.end_column += u32::from(expand_right);
         }
-        Ok(self.object(HostObject::Range(region)))
+        Ok(region)
     }
 
     fn offset_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
@@ -13281,6 +13620,12 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("autofill") {
                     return self.auto_fill(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("subtotal") {
+                    return self.subtotal(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("removesubtotal") {
+                    return self.remove_subtotal(range).map(Some);
+                }
                 if name.eq_ignore_ascii_case("filldown") {
                     return self.fill_edge(range, FillEdge::Top).map(Some);
                 }
@@ -13732,6 +14077,8 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowLevels", "ColumnLevels"][..])
         } else if name.eq_ignore_ascii_case("autofill") {
             Some(&["Destination", "Type"][..])
+        } else if name.eq_ignore_ascii_case("subtotal") {
+            Some(&["GroupBy", "Function", "TotalList", "Replace", "PageBreaks", "SummaryBelowData"][..])
         } else if name.eq_ignore_ascii_case("addcomment") {
             Some(&["Text"][..])
         } else if name.eq_ignore_ascii_case("text")
@@ -24078,6 +24425,97 @@ mod tests {
                 "True\tTrue\t1\t1".to_string(),
                 "=A3*2\tTrue\tz\tq\t=$A$1+#REF!\t1".to_string(),
                 "Boolean".to_string(),
+            ]
+        );
+    }
+
+    /// `Range.Subtotal` and `RemoveSubtotal`, as a Japanese Excel lays them
+    /// (misc2/misc3/sub.vba, 2026-09-05; the case agrees in the harness).
+    #[test]
+    fn vba_lays_subtotals_the_way_excel_does() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim r As Long\n\
+               Range(\"A1\").Value = \"k\": Range(\"B1\").Value = \"v\": Range(\"C1\").Value = \"w\"\n\
+               Range(\"A2\").Value = \"a\": Range(\"B2\").Value = 1: Range(\"C2\").Value = 10\n\
+               Range(\"A3\").Value = \"A\": Range(\"B3\").Value = 2: Range(\"C3\").Value = 20\n\
+               Range(\"A4\").Value = \"b\": Range(\"B4\").Value = 5: Range(\"C4\").Value = 50\n\
+               Range(\"B2\").Font.Bold = True: Range(\"B2\").NumberFormat = \"0.00\"\n\
+               Range(\"A1:C4\").Subtotal GroupBy:=1, Function:=xlSum, TotalList:=Array(2, 3)\n\
+               For r = 1 To 7\n\
+                 Debug.Print Range(\"A\" & r).Value; Range(\"B\" & r).Formula; Range(\"C\" & r).Formula; Rows(r).OutlineLevel; Range(\"A\" & r).Font.Bold; Range(\"B\" & r).Font.Bold\n\
+               Next\n\
+               Debug.Print Range(\"B7\").Value; Range(\"B4\").NumberFormat; ActiveSheet.Outline.SummaryRow\n\
+               Range(\"A1:C7\").Subtotal GroupBy:=1, Function:=xlCount, TotalList:=Array(2), Replace:=False\n\
+               For r = 4 To 10\n\
+                 Debug.Print Range(\"A\" & r).Value; Range(\"B\" & r).Formula; Rows(r).OutlineLevel\n\
+               Next\n\
+               Range(\"A1:C10\").RemoveSubtotal\n\
+               Debug.Print Range(\"A4\").Value; IsEmpty(Range(\"A5\").Value); Rows(2).OutlineLevel\n\
+               Range(\"A1:C4\").Subtotal GroupBy:=1, Function:=xlAverage, TotalList:=Array(3), SummaryBelowData:=False\n\
+               For r = 1 To 7\n\
+                 Debug.Print Range(\"A\" & r).Value; Range(\"C\" & r).Formula; Rows(r).OutlineLevel\n\
+               Next\n\
+               Debug.Print ActiveSheet.Outline.SummaryRow\n\
+               Range(\"A1:C7\").RemoveSubtotal\n\
+               Range(\"A1:C4\").Subtotal GroupBy:=3, Function:=xlSum, TotalList:=2\n\
+               Debug.Print Range(\"C3\").Value; Range(\"B3\").Formula; Range(\"C8\").Value; Range(\"B8\").Formula\n\
+               On Error Resume Next\n\
+               Range(\"A1:C4\").Subtotal GroupBy:=1, Function:=xlSum, TotalList:=Array(4)\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               Range(\"A1:C4\").Subtotal GroupBy:=0, Function:=xlSum, TotalList:=Array(2)\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                // a and A are one group; the label is bold, the totals are
+                // not; data rows level 3, group rows 2, the grand row 1.
+                "k\tv\tw\t1\tFalse\tFalse".to_string(),
+                "a\t1\t10\t3\tFalse\tTrue".to_string(),
+                "A\t2\t20\t3\tFalse\tFalse".to_string(),
+                "a 集計\t=SUBTOTAL(9,B2:B3)\t=SUBTOTAL(9,C2:C3)\t2\tTrue\tFalse".to_string(),
+                "b\t5\t50\t3\tFalse\tFalse".to_string(),
+                "b 集計\t=SUBTOTAL(9,B5:B5)\t=SUBTOTAL(9,C5:C5)\t2\tTrue\tFalse".to_string(),
+                "総計\t=SUBTOTAL(9,B2:B5)\t=SUBTOTAL(9,C2:C5)\t1\tTrue\tFalse".to_string(),
+                // The grand total runs over the data rows; the put-in row
+                // wears the format of the row above it.
+                "8\tGeneral\t1".to_string(),
+                // A second function joins the first in Excel's function
+                // order, the first innermost.
+                "a 集計\t=SUBTOTAL(9,B2:B3)\t3".to_string(),
+                "a 個数\t=SUBTOTAL(3,B2:B3)\t2".to_string(),
+                "b\t5\t4".to_string(),
+                "b 集計\t=SUBTOTAL(9,B6:B6)\t3".to_string(),
+                "b 個数\t=SUBTOTAL(3,B6:B6)\t2".to_string(),
+                "総計\t=SUBTOTAL(9,B2:B6)\t1".to_string(),
+                "総合計\t=SUBTOTAL(3,B2:B6)\t1".to_string(),
+                "b\tTrue\t1".to_string(),
+                // Summary above: the grand row first, then each group's
+                // row before its rows.
+                "k\tw\t1".to_string(),
+                "全体の平均\t=SUBTOTAL(1,C4:C7)\t1".to_string(),
+                "a 平均\t=SUBTOTAL(1,C4:C5)\t2".to_string(),
+                "a\t10\t3".to_string(),
+                "A\t20\t3".to_string(),
+                "b 平均\t=SUBTOTAL(1,C7:C7)\t2".to_string(),
+                "b\t50\t3".to_string(),
+                "0".to_string(),
+                // Grouping by the third column labels in that column, and a
+                // scalar TotalList is taken.
+                "10 集計\t=SUBTOTAL(9,B2:B2)\t総計\t=SUBTOTAL(9,B2:B6)".to_string(),
+                "1004".to_string(),
+                "1004".to_string(),
             ]
         );
     }
