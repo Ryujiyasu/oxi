@@ -3,7 +3,9 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxicells_core::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
+use oxicells_core::ir::{
+    BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, TextRun, Workbook,
+};
 use oxicells_core::{
     formula_from_r1c1, formula_to_r1c1, move_formula_references, translate_formula_references,
     CellMove, ReferenceShift, ShiftAxis,
@@ -298,6 +300,10 @@ enum HostObject {
     Hyperlink(u64),
     /// The hyperlinks on a sheet, or the ones a range reaches.
     Hyperlinks(HyperlinkScope),
+    /// `Range.Characters(Start, Length)`: a stretch of one cell's text.
+    Characters(CellAddress, u32, Option<u32>),
+    /// The font of that stretch.
+    CharactersFont(CellAddress, u32, Option<u32>),
     /// The note on one cell, held by the cell rather than by its place in
     /// the list, since adding and deleting shuffle the list about.
     Comment(CellAddress),
@@ -967,6 +973,128 @@ fn kept_address(address: &str) -> String {
     format!("{}{}/{}", &address[..after_scheme], &rest[..host_end], &rest[host_end..])
 }
 
+
+/// One character's dress, for taking a cell's runs apart and putting them
+/// back together.
+#[derive(Debug, Clone, PartialEq)]
+struct Dress {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    size: Option<f32>,
+    font: Option<String>,
+    color: Option<String>,
+    vert_align: Option<String>,
+}
+
+impl Dress {
+    fn of_style(style: &CellStyle) -> Self {
+        Self {
+            bold: style.bold,
+            italic: style.italic,
+            underline: style.underline,
+            size: style.font_size,
+            font: style.font_name.clone(),
+            color: style.font_color.clone(),
+            vert_align: None,
+        }
+    }
+
+    /// A run's dress. A run with no `<rPr>` of its own wears the cell's; one
+    /// with an `<rPr>` wears what it says, borrowing only a size or a face
+    /// it does not state.
+    fn of_run(run: &TextRun, style: &CellStyle) -> Self {
+        if !run.dressed {
+            return Self::of_style(style);
+        }
+        Self {
+            bold: run.bold,
+            italic: run.italic,
+            underline: run.underline,
+            size: run.size.or(style.font_size),
+            font: run.font.clone().or_else(|| style.font_name.clone()),
+            color: run.color.clone(),
+            vert_align: run.vert_align.clone(),
+        }
+    }
+}
+
+/// The dress of each character of a cell's text.
+fn dresses_of(cell: &Cell) -> Vec<Dress> {
+    let text = cell_text_of(cell);
+    if cell.runs.is_empty() {
+        return vec![Dress::of_style(&cell.style); text.chars().count()];
+    }
+    let mut dresses = Vec::with_capacity(text.chars().count());
+    for run in &cell.runs {
+        let dress = Dress::of_run(run, &cell.style);
+        for _ in run.text.chars() {
+            dresses.push(dress.clone());
+        }
+    }
+    // The runs are meant to cover the text; where a file's do not, the rest
+    // wears the cell's dress.
+    dresses.resize(text.chars().count(), Dress::of_style(&cell.style));
+    dresses
+}
+
+/// The text a cell's characters are counted over: its string, or what a
+/// number shows as.
+fn cell_text_of(cell: &Cell) -> String {
+    match &cell.value {
+        CellValue::String(text) => text.clone(),
+        CellValue::Empty => String::new(),
+        other => shown_text(&from_cell_value(other), cell.style.number_format.as_deref()),
+    }
+}
+
+/// Put a cell's text and per-character dresses back as runs: neighbours
+/// dressed alike become one run, and a text dressed all as the cell is has
+/// no runs at all -- measured, a character made bold and then not leaves
+/// `Font.Bold` a plain False again.
+fn redress(cell: &mut Cell, text: &str, dresses: &[Dress]) {
+    let plain = Dress::of_style(&cell.style);
+    cell.value = CellValue::String(text.to_string());
+    if dresses.iter().all(|dress| *dress == plain) {
+        cell.runs.clear();
+        return;
+    }
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut last: Option<Dress> = None;
+    for (character, dress) in text.chars().zip(dresses) {
+        if last.as_ref() == Some(dress) {
+            runs.last_mut().expect("a run was started").text.push(character);
+            continue;
+        }
+        runs.push(TextRun {
+            text: character.to_string(),
+            size: dress.size,
+            font: dress.font.clone(),
+            bold: dress.bold,
+            italic: dress.italic,
+            underline: dress.underline,
+            color: dress.color.clone(),
+            dressed: true,
+            vert_align: dress.vert_align.clone(),
+        });
+        last = Some(dress.clone());
+    }
+    cell.runs = runs;
+}
+
+/// Which characters `Characters(Start, Length)` names, as a range of
+/// character positions counted from 0, clipped to the text -- measured,
+/// `Characters(3, 100)` of a nine-letter text is its last seven letters and
+/// `Characters(100, 2)` is nothing, neither an error.
+fn character_span(start: u32, length: Option<u32>, text_length: usize) -> (usize, usize) {
+    let from = (start.max(1) as usize - 1).min(text_length);
+    let to = match length {
+        Some(length) => (from + length as usize).min(text_length),
+        None => text_length,
+    };
+    (from, to)
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -1184,6 +1312,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Styles => "Styles",
                 HostObject::Hyperlink(_) => "Hyperlink",
                 HostObject::Hyperlinks(_) => "Hyperlinks",
+                HostObject::Characters(..) => "Characters",
+                HostObject::CharactersFont(..) => "Font",
                 HostObject::Comment(_) => "Comment",
                 HostObject::Comments(_) => "Comments",
                 HostObject::WorksheetFunction => "WorksheetFunction",
@@ -2403,6 +2533,395 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Some(Value::Empty));
         }
         Ok(None)
+    }
+
+    fn characters_of(&self, object: &ObjectRef) -> Option<(CellAddress, u32, Option<u32>)> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Characters(at, start, length)) => Some((*at, *start, *length)),
+            _ => None,
+        }
+    }
+
+    fn characters_font_of(&self, object: &ObjectRef) -> Option<(CellAddress, u32, Option<u32>)> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::CharactersFont(at, start, length)) => Some((*at, *start, *length)),
+            _ => None,
+        }
+    }
+
+    /// `Range.Characters([Start], [Length])`, on one cell.
+    fn characters_object(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        if !range.is_single() {
+            return Err("Range.Characters needs a single cell".to_string());
+        }
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let start = match given(0) {
+            None => 1,
+            Some(value) => sort_number(value, "Characters Start")?.max(0) as u32,
+        };
+        let length = match given(1) {
+            None => None,
+            Some(value) => Some(sort_number(value, "Characters Length")?.max(0) as u32),
+        };
+        let at = CellAddress {
+            sheet: range.sheet,
+            row: range.start_row,
+            column: range.start_column,
+        };
+        Ok(self.object(HostObject::Characters(at, start, length)))
+    }
+
+    /// The cell a stretch of characters belongs to, made if it is not there.
+    fn cell_for_characters(&mut self, at: CellAddress) -> Result<&mut Cell, String> {
+        if self.cell_here(at.sheet, at.row, at.column).is_none() {
+            self.set_cell_value(at, CellValue::Empty)?;
+        }
+        self.workbook.sheets[at.sheet]
+            .rows
+            .iter_mut()
+            .find(|row| row.index == at.row)
+            .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == at.column))
+            .ok_or_else(|| "the cell could not be reached".to_string())
+    }
+
+    /// Put text in place of a stretch of a cell's characters, the new text
+    /// dressed as the first character it replaces was -- or, when it replaces
+    /// nothing, as the character before it. Measured: `Characters(6, 0).Insert
+    /// "-"` between a bold black `o` and a red `T` comes out bold and black.
+    fn replace_characters(
+        &mut self,
+        at: CellAddress,
+        start: u32,
+        length: Option<u32>,
+        with: &str,
+    ) -> Result<(), String> {
+        if self.write_is_protected(at) {
+            return Err(
+                "the cell is locked and the sheet is protected; unprotect it first".to_string(),
+            );
+        }
+        let cell = self.cell_for_characters(at)?;
+        if !matches!(cell.value, CellValue::String(_) | CellValue::Empty) || cell.formula.is_some() {
+            return Err("Characters can only be replaced in a cell holding text".to_string());
+        }
+        let text: Vec<char> = cell_text_of(cell).chars().collect();
+        let mut dresses = dresses_of(cell);
+        let (from, to) = character_span(start, length, text.len());
+        let dress = dresses
+            .get(from)
+            .filter(|_| to > from)
+            .or_else(|| from.checked_sub(1).and_then(|before| dresses.get(before)))
+            .or_else(|| dresses.first())
+            .cloned()
+            .unwrap_or_else(|| Dress::of_style(&cell.style));
+        let mut new_text: String = text[..from].iter().collect();
+        new_text.push_str(with);
+        new_text.extend(text[to..].iter());
+        let inserted: Vec<Dress> = with.chars().map(|_| dress.clone()).collect();
+        dresses.splice(from..to, inserted);
+        redress(cell, &new_text, &dresses);
+        self.wrote = true;
+        Ok(())
+    }
+
+    /// Dress a stretch of a cell's characters. A cell holding a number or a
+    /// formula has no characters of its own to dress, and the whole cell is
+    /// dressed instead -- measured, `Characters(1, 2).Font.Bold = True` on
+    /// 12345 leaves the cell bold and a Double.
+    fn dress_characters(
+        &mut self,
+        at: CellAddress,
+        start: u32,
+        length: Option<u32>,
+        update: impl Fn(&mut Dress),
+    ) -> Result<(), String> {
+        self.guard_formats(at.sheet, "formatting characters")?;
+        let cell = self.cell_for_characters(at)?;
+        if !matches!(cell.value, CellValue::String(_)) || cell.formula.is_some() {
+            let mut dress = Dress::of_style(&cell.style);
+            update(&mut dress);
+            cell.style.bold = dress.bold;
+            cell.style.italic = dress.italic;
+            cell.style.underline = dress.underline;
+            cell.style.font_size = dress.size;
+            cell.style.font_name = dress.font;
+            cell.style.font_color = dress.color;
+            return Ok(());
+        }
+        let text = cell_text_of(cell);
+        let mut dresses = dresses_of(cell);
+        let (from, to) = character_span(start, length, dresses.len());
+        for dress in &mut dresses[from..to] {
+            update(dress);
+        }
+        redress(cell, &text, &dresses);
+        Ok(())
+    }
+
+    /// The dress every character of a stretch shares, or None where they
+    /// differ.
+    fn uniform_character_dress<T: PartialEq + Clone>(
+        &self,
+        at: CellAddress,
+        start: u32,
+        length: Option<u32>,
+        read: impl Fn(&Dress) -> T,
+    ) -> Option<T> {
+        let Some(cell) = self.cell_here(at.sheet, at.row, at.column) else {
+            return Some(read(&Dress::of_style(&CellStyle::default())));
+        };
+        let dresses = dresses_of(&cell);
+        let (from, to) = character_span(start, length, dresses.len());
+        if from >= to {
+            return Some(read(&Dress::of_style(&cell.style)));
+        }
+        let mut first: Option<T> = None;
+        for dress in &dresses[from..to] {
+            let value = read(dress);
+            if first.as_ref().is_some_and(|held| *held != value) {
+                return None;
+            }
+            first = Some(value);
+        }
+        first
+    }
+
+    /// The font attribute every character of every cell of a range shares,
+    /// looking inside the runs of a cell dressed unevenly -- measured, a
+    /// cell whose first word alone is bold answers Null to `Font.Bold`.
+    fn uniform_font<T: PartialEq + Clone>(
+        &self,
+        range: CellRange,
+        read: impl Fn(&Dress) -> T,
+    ) -> Result<Option<T>, String> {
+        Self::range_cell_count(range)?;
+        let mut first: Option<T> = None;
+        for address in range.addresses() {
+            let values: Vec<T> = match self.cell_here(address.sheet, address.row, address.column) {
+                None => vec![read(&Dress::of_style(&CellStyle::default()))],
+                Some(cell) if cell.runs.is_empty() => vec![read(&Dress::of_style(&cell.style))],
+                Some(cell) => cell
+                    .runs
+                    .iter()
+                    .map(|run| read(&Dress::of_run(run, &cell.style)))
+                    .collect(),
+            };
+            for value in values {
+                if first.as_ref().is_some_and(|held| *held != value) {
+                    return Ok(None);
+                }
+                first = Some(value);
+            }
+        }
+        Ok(first)
+    }
+
+    /// Carry a whole-cell font change into the runs of a cell dressed
+    /// unevenly, keeping what else they wear -- measured, `Font.Bold = True`
+    /// on such a cell leaves its red word red.
+    fn redress_runs(&mut self, range: CellRange, update: impl Fn(&mut Dress)) {
+        for address in range.addresses() {
+            let Some(sheet) = self.workbook.sheets.get_mut(address.sheet) else {
+                continue;
+            };
+            let Some(cell) = sheet
+                .rows
+                .iter_mut()
+                .find(|row| row.index == address.row)
+                .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == address.column))
+            else {
+                continue;
+            };
+            if cell.runs.is_empty() {
+                continue;
+            }
+            let text = cell_text_of(cell);
+            let mut dresses = dresses_of(cell);
+            for dress in &mut dresses {
+                update(dress);
+            }
+            redress(cell, &text, &dresses);
+        }
+    }
+
+    /// What a stretch of characters answers to.
+    fn characters_member(
+        &mut self,
+        at: CellAddress,
+        start: u32,
+        length: Option<u32>,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let text_of = || -> String {
+            self.cell_here(at.sheet, at.row, at.column)
+                .map(|cell| {
+                    let text: Vec<char> = cell_text_of(&cell).chars().collect();
+                    let (from, to) = character_span(start, length, text.len());
+                    text[from..to].iter().collect()
+                })
+                .unwrap_or_default()
+        };
+        if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("caption") {
+            return Ok(Some(Value::String(text_of())));
+        }
+        if name.eq_ignore_ascii_case("count") {
+            // Not the length of the stretch. Measured: `Characters(1, 5).Count`
+            // is 1, `Characters(3, 100).Count` is 3, `Characters(100, 2).Count`
+            // is 100 -- the START -- and with no length given it is the
+            // length of the whole text: `Characters(7).Count` of an
+            // eleven-letter text is 11.
+            let count = match length {
+                Some(_) => i64::from(start),
+                None => self
+                    .cell_here(at.sheet, at.row, at.column)
+                    .map(|cell| cell_text_of(&cell).chars().count() as i64)
+                    .unwrap_or(0),
+            };
+            return Ok(Some(Value::Integer(count)));
+        }
+        if name.eq_ignore_ascii_case("parent") {
+            return Ok(Some(self.object(HostObject::Range(CellRange::single(at)))));
+        }
+        if name.eq_ignore_ascii_case("font") {
+            return Ok(Some(self.object(HostObject::CharactersFont(at, start, length))));
+        }
+        if name.eq_ignore_ascii_case("insert") {
+            let [with] = args else {
+                return Err("Characters.Insert takes the text to put in".to_string());
+            };
+            let with = match with {
+                Value::String(text) => text.clone(),
+                value if any_number(value).is_some() => shown_text(value, None),
+                _ => return Err("Characters.Insert takes text".to_string()),
+            };
+            self.replace_characters(at, start, length, &with)?;
+            return Ok(Some(Value::Empty));
+        }
+        if name.eq_ignore_ascii_case("delete") {
+            self.replace_characters(at, start, length, "")?;
+            return Ok(Some(Value::Empty));
+        }
+        Ok(None)
+    }
+
+    /// What the font of a stretch of characters answers to.
+    fn characters_font_member(
+        &mut self,
+        at: CellAddress,
+        start: u32,
+        length: Option<u32>,
+        name: &str,
+    ) -> Result<Option<Value>, String> {
+        let default_name = self
+            .workbook
+            .default_style
+            .font_name
+            .clone()
+            .unwrap_or_else(|| "Calibri".to_string());
+        let default_size = self.workbook.default_style.font_size.unwrap_or(11.0);
+        let answer = if name.eq_ignore_ascii_case("bold") {
+            self.uniform_character_dress(at, start, length, |dress| dress.bold)
+                .map(Value::Boolean)
+        } else if name.eq_ignore_ascii_case("italic") {
+            self.uniform_character_dress(at, start, length, |dress| dress.italic)
+                .map(Value::Boolean)
+        } else if name.eq_ignore_ascii_case("underline") {
+            self.uniform_character_dress(at, start, length, |dress| dress.underline)
+                .map(|held| Value::Integer(if held { UNDERLINE_SINGLE } else { UNDERLINE_NONE }))
+        } else if name.eq_ignore_ascii_case("size") {
+            self.uniform_character_dress(at, start, length, |dress| dress.size)
+                .map(|held| Value::Double(f64::from(held.unwrap_or(default_size))))
+        } else if name.eq_ignore_ascii_case("name") {
+            self.uniform_character_dress(at, start, length, |dress| dress.font.clone())
+                .map(|held| Value::String(held.unwrap_or(default_name)))
+        } else if name.eq_ignore_ascii_case("color") {
+            self.uniform_character_dress(at, start, length, |dress| dress.color.clone())
+                .map(|held| style_color_value(Some(held), BLACK))
+        } else if name.eq_ignore_ascii_case("colorindex") {
+            self.uniform_character_dress(at, start, length, |dress| dress.color.clone())
+                .map(|held| match colour_to_packed(held.as_deref()) {
+                    None => Value::Integer(1),
+                    Some(packed) => Value::Integer(nearest_palette_index(packed)),
+                })
+        } else if name.eq_ignore_ascii_case("superscript") {
+            self.uniform_character_dress(at, start, length, |dress| {
+                dress.vert_align.as_deref() == Some("superscript")
+            })
+            .map(Value::Boolean)
+        } else if name.eq_ignore_ascii_case("subscript") {
+            self.uniform_character_dress(at, start, length, |dress| {
+                dress.vert_align.as_deref() == Some("subscript")
+            })
+            .map(Value::Boolean)
+        } else if name.eq_ignore_ascii_case("parent") {
+            return Ok(Some(self.object(HostObject::Characters(at, start, length))));
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(answer.unwrap_or(Value::Null)))
+    }
+
+    /// Set one attribute of the font of a stretch of characters.
+    fn set_characters_font(
+        &mut self,
+        at: CellAddress,
+        start: u32,
+        length: Option<u32>,
+        name: &str,
+        value: Value,
+    ) -> Result<bool, String> {
+        if name.eq_ignore_ascii_case("bold") {
+            let Some(held) = style_face_boolean(&value, "Font.Bold")? else {
+                return Ok(true);
+            };
+            self.dress_characters(at, start, length, |dress| dress.bold = held)?;
+        } else if name.eq_ignore_ascii_case("italic") {
+            let Some(held) = style_face_boolean(&value, "Font.Italic")? else {
+                return Ok(true);
+            };
+            self.dress_characters(at, start, length, |dress| dress.italic = held)?;
+        } else if name.eq_ignore_ascii_case("underline") {
+            let held = match &value {
+                Value::Boolean(held) => *held,
+                value if any_whole_number(value).is_some() => {
+                    any_whole_number(value).unwrap_or_default() != UNDERLINE_NONE
+                }
+                _ => return Err("Font.Underline takes True, False, or an underline style".to_string()),
+            };
+            self.dress_characters(at, start, length, |dress| dress.underline = held)?;
+        } else if name.eq_ignore_ascii_case("size") {
+            let held = font_size(&value)?;
+            self.dress_characters(at, start, length, |dress| dress.size = held)?;
+        } else if name.eq_ignore_ascii_case("name") {
+            let held = match &value {
+                Value::String(named) if named.is_empty() => None,
+                Value::String(named) => Some(named.clone()),
+                _ => return Err("Font.Name must be a name".to_string()),
+            };
+            self.dress_characters(at, start, length, |dress| dress.font = held.clone())?;
+        } else if name.eq_ignore_ascii_case("color") {
+            let held = style_color(&value, "Font.Color")?;
+            self.dress_characters(at, start, length, |dress| dress.color = held.clone())?;
+        } else if name.eq_ignore_ascii_case("colorindex") {
+            let held = palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
+            self.dress_characters(at, start, length, |dress| dress.color = held.clone())?;
+        } else if name.eq_ignore_ascii_case("superscript") || name.eq_ignore_ascii_case("subscript")
+        {
+            let Some(held) = style_face_boolean(&value, "Font.Superscript")? else {
+                return Ok(true);
+            };
+            let which = if name.eq_ignore_ascii_case("superscript") { "superscript" } else { "subscript" };
+            self.dress_characters(at, start, length, |dress| {
+                dress.vert_align = if held { Some(which.to_string()) } else { None };
+            })?;
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     fn comment_cell(&self, object: &ObjectRef) -> Option<CellAddress> {
@@ -5367,6 +5886,7 @@ impl<'a> WorkbookHost<'a> {
             Some(cell) => {
                 cell.value = value;
                 cell.formula = None;
+                cell.runs.clear();
             }
             None => {
                 row.cells.push(Cell {
@@ -5435,6 +5955,7 @@ impl<'a> WorkbookHost<'a> {
             Some(cell) => {
                 cell.value = CellValue::Empty;
                 cell.formula = formula;
+                cell.runs.clear();
             }
             None => {
                 row.cells.push(Cell {
@@ -7647,15 +8168,20 @@ impl<'a> WorkbookHost<'a> {
                                 })
                             })
                             .transpose()?;
-                        Ok::<_, String>((cell.value.clone(), cell.style.clone(), formula))
+                        Ok::<_, String>((
+                            cell.value.clone(),
+                            cell.style.clone(),
+                            formula,
+                            cell.runs.clone(),
+                        ))
                     })
-                    .unwrap_or_else(|| Ok((CellValue::Empty, CellStyle::default(), None)))
+                    .unwrap_or_else(|| Ok((CellValue::Empty, CellStyle::default(), None, Vec::new())))
             })
             .collect::<Result<Vec<_>, _>>()?;
         // On a protected sheet the value arrives and the dress does not; see
         // `paste_cell`.
         let dressing = self.cell_protection(destination.sheet).is_none();
-        for (address, (value, style, formula)) in destination.addresses().zip(copied) {
+        for (address, (value, style, formula, runs)) in destination.addresses().zip(copied) {
             self.set_cell_value(address, value)?;
             let sheet = &mut self.workbook.sheets[address.sheet];
             let cell = sheet
@@ -7666,6 +8192,7 @@ impl<'a> WorkbookHost<'a> {
                 .expect("set_cell_value creates the destination cell");
             if dressing {
                 cell.style = style;
+                cell.runs = runs;
             }
             if formula.is_some() {
                 cell.value = CellValue::Empty;
@@ -8046,6 +8573,12 @@ impl Host for WorkbookHost<'_> {
             if let Some(at) = self.comment_cell(receiver) {
                 return self.comment_member(at, name, args);
             }
+            if let Some((at, start, length)) = self.characters_of(receiver) {
+                return self.characters_member(at, start, length, name, args);
+            }
+            if let Some((at, start, length)) = self.characters_font_of(receiver) {
+                return self.characters_font_member(at, start, length, name);
+            }
             if let Some(id) = self.link_id(receiver) {
                 return self.hyperlink_member(id, name, args);
             }
@@ -8250,6 +8783,9 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("style") && args.is_empty() {
                     return Ok(Some(self.style_of(range)));
+                }
+                if name.eq_ignore_ascii_case("characters") {
+                    return self.characters_object(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("hyperlinks") {
                     let scope = HyperlinkScope::Range(range);
@@ -8757,6 +9293,12 @@ impl Host for WorkbookHost<'_> {
         if let Some(at) = self.comment_cell(receiver) {
             return self.comment_member(at, name, &[]);
         }
+        if let Some((at, start, length)) = self.characters_of(receiver) {
+            return self.characters_member(at, start, length, name, &[]);
+        }
+        if let Some((at, start, length)) = self.characters_font_of(receiver) {
+            return self.characters_font_member(at, start, length, name);
+        }
         if let Some(id) = self.link_id(receiver) {
             return self.hyperlink_member(id, name, &[]);
         }
@@ -8845,12 +9387,12 @@ impl Host for WorkbookHost<'_> {
         if let Some(range) = self.range_font(receiver) {
             if name.eq_ignore_ascii_case("bold") {
                 return self
-                    .uniform_style(range, |style| style.bold)
+                    .uniform_font(range, |dress| dress.bold)
                     .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
             }
             if name.eq_ignore_ascii_case("italic") {
                 return self
-                    .uniform_style(range, |style| style.italic)
+                    .uniform_font(range, |dress| dress.italic)
                     .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
             }
             if name.eq_ignore_ascii_case("strikethrough") {
@@ -8866,7 +9408,7 @@ impl Host for WorkbookHost<'_> {
                 // `xlUnderlineStyleSingle` — which is also what it answers
                 // after `Font.Underline = True`.
                 return self
-                    .uniform_style(range, |style| style.underline)
+                    .uniform_font(range, |dress| dress.underline)
                     .map(|value| {
                         Some(match value {
                             Some(true) => Value::Integer(UNDERLINE_SINGLE),
@@ -8882,7 +9424,7 @@ impl Host for WorkbookHost<'_> {
                 // Excel's own `Styles("Normal").Font.Name` says.
                 let fallback = self.workbook.default_style.font_name.clone();
                 return self
-                    .uniform_style(range, |style| style.font_name.clone())
+                    .uniform_font(range, |dress| dress.font.clone())
                     .map(|value| {
                         Some(match value {
                             None => Value::Null,
@@ -8900,7 +9442,7 @@ impl Host for WorkbookHost<'_> {
                 // not answer Empty.
                 let fallback = self.workbook.default_style.font_size;
                 return self
-                    .uniform_style(range, |style| style.font_size)
+                    .uniform_font(range, |dress| dress.size)
                     .map(|value| {
                         Some(match value {
                             Some(Some(value)) => Value::Double(f64::from(value)),
@@ -8911,7 +9453,7 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("color") {
                 return self
-                    .uniform_style(range, |style| style.font_color.clone())
+                    .uniform_font(range, |dress| dress.color.clone())
                     .map(|value| Some(style_color_value(value, BLACK)));
             }
             // Measured: a font never coloured answers ThemeColor 2, the dark
@@ -9313,6 +9855,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("style") {
             return Ok(Some(self.style_of(range)));
         }
+        if name.eq_ignore_ascii_case("characters") {
+            return self.characters_object(range, &[]).map(Some);
+        }
         if name.eq_ignore_ascii_case("hyperlinks") {
             return Ok(Some(self.object(HostObject::Hyperlinks(HyperlinkScope::Range(range)))));
         }
@@ -9586,6 +10131,21 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some((at, start, length)) = self.characters_of(receiver) {
+            if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("caption") {
+                let with = match &value {
+                    Value::String(text) => text.clone(),
+                    value if any_number(value).is_some() => shown_text(value, None),
+                    _ => return Err("Characters.Text takes text".to_string()),
+                };
+                self.replace_characters(at, start, length, &with)?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        if let Some((at, start, length)) = self.characters_font_of(receiver) {
+            return self.set_characters_font(at, start, length, name, value);
+        }
         if let Some(id) = self.link_id(receiver) {
             let Some(index) = self.link_index(id) else {
                 return Err("the hyperlink has been deleted".to_string());
@@ -9854,6 +10414,7 @@ impl Host for WorkbookHost<'_> {
                 let colour = palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
                 self.forget_theme_paint(range, Paint::Font);
                 self.set_range_style(range, |_, style| style.font_color = colour.clone())?;
+                self.redress_runs(range, |dress| dress.color = colour.clone());
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("strikethrough") {
@@ -9889,6 +10450,7 @@ impl Host for WorkbookHost<'_> {
                     _ => return Err(format!("unsupported Font.Underline constant: {asked}")),
                 };
                 self.set_range_style(range, |_, style| style.underline = underline)?;
+                self.redress_runs(range, |dress| dress.underline = underline);
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("name") {
@@ -9912,6 +10474,7 @@ impl Host for WorkbookHost<'_> {
                     _ => return Err("Font.Name must be a name".to_string()),
                 };
                 self.set_range_style(range, |_, style| style.font_name = named.clone())?;
+                self.redress_runs(range, |dress| dress.font = named.clone());
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("bold") {
@@ -9919,6 +10482,7 @@ impl Host for WorkbookHost<'_> {
                     return Ok(true);
                 };
                 self.set_range_style(range, |_, style| style.bold = value)?;
+                self.redress_runs(range, |dress| dress.bold = value);
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("italic") {
@@ -9926,17 +10490,20 @@ impl Host for WorkbookHost<'_> {
                     return Ok(true);
                 };
                 self.set_range_style(range, |_, style| style.italic = value)?;
+                self.redress_runs(range, |dress| dress.italic = value);
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("size") {
                 let value = font_size(&value)?;
                 self.set_range_style(range, |_, style| style.font_size = value)?;
+                self.redress_runs(range, |dress| dress.size = value);
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("color") {
                 let value = style_color(&value, "Font.Color")?;
                 self.forget_theme_paint(range, Paint::Font);
                 self.set_range_style(range, |_, style| style.font_color = value.clone())?;
+                self.redress_runs(range, |dress| dress.color = value.clone());
                 return Ok(true);
             }
             return Ok(false);
@@ -14222,6 +14789,66 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// A stretch of a cell's characters is dressed, read, replaced and taken
+    /// out as Excel does it.
+    ///
+    /// Measured against Excel: `Characters(1, 5).Font.Bold = True` on
+    /// `Hello World` leaves the first word bold, the rest not, and the cell's
+    /// own `Font.Bold` Null; `Characters(7, 5).Text = "There"` keeps the
+    /// dress of what it replaces; a deleted character closes the gap; text
+    /// put in at a point wears the dress of the character before it; a
+    /// numeric cell dresses whole; the whole cell made bold keeps a red
+    /// word red; a new value takes the runs off; a copy carries them; a
+    /// character bolded and unbolded leaves `Font.Bold` a plain False; and
+    /// `Count` answers the start when a length was given and the whole
+    /// text's length when not.
+    #[test]
+    fn characters_are_dressed_read_replaced_and_taken_out() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, v As Variant
+               On Error Resume Next
+               Range(\"B1\").Value = \"Hello World\"
+               Range(\"B1\").Characters(1, 5).Font.Bold = True
+               out = Range(\"B1\").Characters(1, 5).Font.Bold & \"/\" & Range(\"B1\").Characters(6, 6).Font.Bold & \"/\" & TypeName(Range(\"B1\").Font.Bold) & \"/\" & Range(\"B1\").Characters(7).Text & \"|\"
+               Range(\"B1\").Characters(7, 5).Text = \"There\"
+               Range(\"B1\").Characters(7, 5).Font.Color = 255
+               Range(\"B1\").Characters(6, 1).Delete
+               Range(\"B1\").Characters(6, 0).Insert \"-\"
+               out = out & Range(\"B1\").Value & \"/\" & Range(\"B1\").Characters(6, 1).Font.Bold & Range(\"B1\").Characters(6, 1).Font.Color & \"/\" & Range(\"B1\").Characters(7, 5).Font.Color & \"|\"
+               out = out & Range(\"B1\").Characters(1, 5).Count & Range(\"B1\").Characters(7).Count & \"|\"
+               Range(\"B1\").Font.Bold = True
+               out = out & Range(\"B1\").Characters(7, 5).Font.Bold & TypeName(Range(\"B1\").Font.Color) & \"|\"
+               Range(\"B1\").Copy Range(\"B2\")
+               Range(\"B1\").Value = \"New\"
+               out = out & Range(\"B2\").Characters(7, 5).Font.Color & \"/\" & Range(\"B1\").Characters(1, 3).Font.Color & Range(\"B1\").Font.Bold & \"|\"
+               Range(\"B3\").Value = 12345
+               Range(\"B3\").Characters(1, 2).Font.Bold = True
+               out = out & TypeName(Range(\"B3\").Value) & Range(\"B3\").Font.Bold & \"|\"
+               Range(\"B4\").Value = \"abc\"
+               Range(\"B4\").Characters(2, 1).Font.Bold = True
+               Range(\"B4\").Characters(2, 1).Font.Bold = False
+               v = Range(\"B4\").Font.Bold
+               out = out & TypeName(v) & v
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "True/False/Null/World|Hello-There/True0/255|111|TrueNull|255/0True|DoubleTrue|BooleanFalse"
+                    .to_string()
+            )
         );
     }
 
