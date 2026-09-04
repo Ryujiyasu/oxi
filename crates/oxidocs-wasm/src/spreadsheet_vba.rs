@@ -1655,6 +1655,16 @@ impl<'a> WorkbookHost<'a> {
                 self.workbook.defined_names[at].1
             )));
         }
+        // The names Excel writes for itself are hidden; the ones a macro adds
+        // are not. Measured: `Sheet1!_FilterDatabase` answers False.
+        if name.eq_ignore_ascii_case("visible") {
+            let held = self.workbook.defined_names[at].0.clone();
+            let leaf = held.rsplit('!').next().unwrap_or(&held).to_string();
+            return Ok(Value::Boolean(
+                !leaf.eq_ignore_ascii_case("_FilterDatabase")
+                    && !leaf.to_ascii_lowercase().starts_with("_xlnm."),
+            ));
+        }
         if name.eq_ignore_ascii_case("referstorange") {
             let range = self.named_range(
                 0,
@@ -4899,6 +4909,31 @@ impl<'a> WorkbookHost<'a> {
     /// With no arguments it turns filtering off and shows everything again.
     /// The header row is never hidden, and rows outside the range are left
     /// alone.
+/// The hidden name Excel writes down when a filter goes on.
+    ///
+    /// Applying an AutoFilter creates a sheet-scoped `_FilterDatabase` over
+    /// the filtered block. Measured: after `Range("A1:B4").AutoFilter Field:=1,
+    /// Criteria1:=">2"`, `ActiveWorkbook.Names.Count` is 1, the one name is
+    /// `Sheet1!_FilterDatabase`, it refers to `=Sheet1!$A$1:$B$4`, and its
+    /// Visible is False.
+    ///
+    /// It is written ONCE. Filtering the same block again leaves one, and so
+    /// does filtering a different block -- and when the second block is
+    /// filtered the name still refers to the FIRST. Turning the filter off
+    /// does not take it away either: the name outlives the filter that made
+    /// it.
+    fn note_filter_database(&mut self, range: CellRange) {
+        let held = format!(
+            "{}!_FilterDatabase",
+            quoted_sheet(&self.workbook.sheets[range.sheet].name)
+        );
+        if self.name_at(&held).is_some() {
+            return;
+        }
+        let refers_to = self.address_of(range);
+        self.workbook.defined_names.push((held, refers_to));
+    }
+
     fn auto_filter(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let given = |index: usize| match args.get(index) {
             Some(Value::Missing) | None => None,
@@ -4915,10 +4950,12 @@ impl<'a> WorkbookHost<'a> {
                     range,
                     fields: Vec::new(),
                 });
+                self.note_filter_database(range);
             }
             return Ok(Value::Boolean(true));
         }
 
+        self.note_filter_database(range);
         let Some(field) = given(0) else {
             return Err("Range.AutoFilter needs a field to filter on".to_string());
         };
@@ -10546,6 +10583,58 @@ mod tests {
         }
         // A real date field beside one is still a date.
         assert_eq!(shown_as(Some("m/d/yyyy h:mm AM/PM")), ShownAs::Moment);
+    }
+
+    /// A filter leaves a hidden name behind it.
+    ///
+    /// Applying an AutoFilter writes a sheet-scoped `_FilterDatabase` over the
+    /// block. Measured against Excel: after `Range("A1:B4").AutoFilter
+    /// Field:=1, Criteria1:=">2"`, `Names.Count` is 1, the name is
+    /// `Sheet1!_FilterDatabase`, it refers to `=Sheet1!$A$1:$B$4`, and its
+    /// Visible is False.
+    ///
+    /// It is written once and it outlives the filter. Filtering again leaves
+    /// one, filtering a DIFFERENT block leaves the name pointing at the first,
+    /// and turning the filter off does not remove it.
+    ///
+    /// A macro that counts or walks `Names` sees it, which is the whole reason
+    /// it matters -- it was found by a flow that added a name of its own and
+    /// asked how many there were.
+    #[test]
+    fn a_filter_leaves_a_hidden_name_behind_it() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               Range(\"A1\").Value = 1
+               Range(\"A2\").Value = 3
+               Range(\"B1\").Value = \"apple\"
+               Range(\"B2\").Value = \"pear\"
+               out = \"before=\" & ActiveWorkbook.Names.Count & \";\"
+               Range(\"A1:B2\").AutoFilter Field:=1, Criteria1:=\">2\"
+               out = out & \"after=\" & ActiveWorkbook.Names.Count & \";\"
+               out = out & \"name=\" & ActiveWorkbook.Names(1).Name & \";\"
+               out = out & \"refers=\" & ActiveWorkbook.Names(1).RefersTo & \";\"
+               out = out & \"visible=\" & ActiveWorkbook.Names(1).Visible & \";\"
+               Range(\"A1:B2\").AutoFilter
+               out = out & \"off=\" & ActiveWorkbook.Names.Count
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "before=0;after=1;name=Sheet1!_FilterDatabase;                 refers==Sheet1!$A$1:$B$2;visible=False;off=1"
+                    .replace(' ', "")
+                    .to_string()
+            )
+        );
     }
 
     /// A cell cuts its text at the first NUL.
