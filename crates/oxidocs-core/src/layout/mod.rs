@@ -25536,7 +25536,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // (b837: charSpace absent, default 12pt), which would otherwise
                         // fall through to expected_w=fs and widen natural<fs chars,
                         // over-wrapping (7->9). Skip expansion for the no-charSpace case.
-                        let s466_no_grid = s466_grid_expand && char_space_pt < 0.01;
+                        // S1315 (2026-09-05, default ON, opt-out OXI_S1315_DISABLE): a
+                        // NEGATIVE charSpace shrinks the pitch below the font size.
+                        // DERIVED (`_pb_charspaceneg_gen.py`, 21 linesAndChars arms
+                        // x 10.5/11/12pt, first-line character counts): the pitch
+                        // is fs + charSpace/4096 for every sign and size (11pt:
+                        // -1440 -> 42 chars/453pt, -2880 -> 44, -4320 -> 45; +1440
+                        // -> 39, +2880 -> 38); a `lines` grid ignores charSpace.
+                        // S466 lumped "negative" with "no charSpace" and kept the
+                        // natural advance (41), the 7% that put reference__0cf9c879
+                        // on two pages.
+                        let s466_no_grid = s466_grid_expand
+                            && if std::env::var("OXI_S1315_DISABLE").is_err() {
+                                char_space_pt.abs() < 0.01
+                            } else {
+                                char_space_pt < 0.01
+                            };
                         // S344 (2026-05-27): when S344 fed grid values through despite
                         // snap_to_grid=false, gate compression to fs < default_fs only.
                         // (Effective only when paired with S342/S344 pass-through at
@@ -25549,6 +25564,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if h6_trigger || h7_trigger || h8_trigger || s344_skip || s466_no_grid {
                             0.0
                         } else {
+                            // S1315 keeps the ADDITIVE form for a negative charSpace: the
+                            // b35123 truth PDF advances 12/11/10/9pt text at fs - 0.663
+                            // (11.34 / 10.35 / 9.35 / 8.34), neither proportional
+                            // (11.20) nor twips-floored (11.30).
                             let expected_w = if char_space_pt >= 0.0 && !s1210 {
                                 font_size * pitch / default_fs
                             } else {
