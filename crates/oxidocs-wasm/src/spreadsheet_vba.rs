@@ -333,6 +333,10 @@ enum HostObject {
     Comment(CellAddress),
     /// The notes on one sheet.
     Comments(usize),
+    /// An object whose worksheet has been deleted. Excel answers every
+    /// member of one with error 424 -- measured, a `Worksheet` and a `Range`
+    /// kept across the sheet's deletion both raise it, read or written.
+    Gone,
 }
 
 
@@ -1597,6 +1601,14 @@ struct WorkbookHost<'a> {
     next_table: u64,
     /// Each sheet's page setup, once a macro has touched it.
     page_setups: std::collections::HashMap<usize, PageSetup>,
+    /// The selection and active cell of every sheet that is not in front.
+    selections: std::collections::HashMap<usize, (CellRange, CellAddress)>,
+    /// How many sheets have been made since the workbook was opened, which
+    /// is where the next new sheet's number comes from. Measured: the count
+    /// starts over when a file is opened -- a saved workbook whose one sheet
+    /// is Sheet3, or Base, gets Sheet1 next -- so a workbook the browser
+    /// has just read starts from nothing.
+    sheet_counter: usize,
     /// The number the next new table is named with. Measured: a workbook
     /// counter, not the lowest free number -- with テーブル1 renamed to T,
     /// the next table is still テーブル2.
@@ -1686,6 +1698,8 @@ impl<'a> WorkbookHost<'a> {
             table_extra: std::collections::HashMap::new(),
             next_table: 1,
             page_setups: std::collections::HashMap::new(),
+            selections: std::collections::HashMap::new(),
+            sheet_counter: 0,
             table_counter,
             next_link: 1,
             linked_once: false,
@@ -1772,6 +1786,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Comments(_) => "Comments",
                 HostObject::WorksheetFunction => "WorksheetFunction",
                 HostObject::DebugConsole => "Debug",
+                HostObject::Gone => "Nothing",
             }
             .to_string(),
         })
@@ -6110,6 +6125,211 @@ impl<'a> WorkbookHost<'a> {
         )
     }
 
+    /// Whether the object's worksheet has been deleted out from under it.
+    fn gone(&self, object: &ObjectRef) -> bool {
+        matches!(self.objects.get(object.handle as usize), Some(HostObject::Gone))
+    }
+
+    /// Every place a sheet is named by its position, brought up to date
+    /// after the sheets were renumbered: `moved(old)` is the sheet's new
+    /// position, or None for a sheet that is gone, whose entries go with it.
+    ///
+    /// Objects already handed out follow their sheet -- measured, a
+    /// `Worksheet` held across `Worksheets.Add` still names Sheet1 and a
+    /// `Range` held across it still writes there -- and the ones on a deleted
+    /// sheet answer 424 from then on.
+    fn sheets_renumbered(&mut self, moved: &dyn Fn(usize) -> Option<usize>) {
+        let address = |at: CellAddress| moved(at.sheet).map(|sheet| CellAddress { sheet, ..at });
+        let range = |held: CellRange| moved(held.sheet).map(|sheet| CellRange { sheet, ..held });
+
+        let mut protected = Vec::new();
+        protected.resize_with(self.workbook.sheets.len(), || None);
+        for (was, protection) in std::mem::take(&mut self.protected).into_iter().enumerate() {
+            if let Some(now) = moved(was) {
+                if now < protected.len() {
+                    protected[now] = protection;
+                }
+            }
+        }
+        self.protected = protected;
+        self.unlocked = std::mem::take(&mut self.unlocked)
+            .into_iter()
+            .filter_map(address)
+            .collect();
+        self.notes = std::mem::take(&mut self.notes)
+            .into_iter()
+            .filter_map(|mut note| {
+                note.at = address(note.at)?;
+                Some(note)
+            })
+            .collect();
+        self.links = std::mem::take(&mut self.links)
+            .into_iter()
+            .filter_map(|mut link| {
+                link.anchor = range(link.anchor)?;
+                Some(link)
+            })
+            .collect();
+        self.validations = std::mem::take(&mut self.validations)
+            .into_iter()
+            .filter_map(|(at, validation)| Some((address(at)?, validation)))
+            .collect();
+        self.conditions = std::mem::take(&mut self.conditions)
+            .into_iter()
+            .filter_map(|mut condition| {
+                condition.sheet = moved(condition.sheet)?;
+                condition.applies = condition.applies.iter().filter_map(|held| range(*held)).collect();
+                Some(condition)
+            })
+            .collect();
+        let handles = std::mem::take(&mut self.table_handles);
+        for (id, sheet, name) in handles {
+            match moved(sheet) {
+                Some(sheet) => self.table_handles.push((id, sheet, name)),
+                None => {
+                    self.table_extra.remove(&id);
+                }
+            }
+        }
+        self.page_setups = std::mem::take(&mut self.page_setups)
+            .into_iter()
+            .filter_map(|(sheet, setup)| Some((moved(sheet)?, setup)))
+            .collect();
+        self.styled = std::mem::take(&mut self.styled)
+            .into_iter()
+            .filter_map(|(at, style)| Some((address(at)?, style)))
+            .collect();
+        self.theme_paint = std::mem::take(&mut self.theme_paint)
+            .into_iter()
+            .filter_map(|((at, paint), colour)| Some(((address(at)?, paint), colour)))
+            .collect();
+        self.selections = std::mem::take(&mut self.selections)
+            .into_iter()
+            .filter_map(|(sheet, (selection, active))| {
+                Some((moved(sheet)?, (range(selection)?, address(active)?)))
+            })
+            .collect();
+        if let Some(filter) = self.auto_filter.as_mut() {
+            match range(filter.range) {
+                Some(held) => filter.range = held,
+                None => self.auto_filter = None,
+            }
+        }
+        if let Some(cut) = self.pending_cut {
+            self.pending_cut = range(cut);
+        }
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            match address(clipboard.origin) {
+                Some(origin) => clipboard.origin = origin,
+                None => self.clipboard = None,
+            }
+        }
+        if let Some(find) = self.last_find.as_mut() {
+            match range(find.range) {
+                Some(held) => {
+                    find.range = held;
+                    find.last_found = find.last_found.and_then(address);
+                }
+                None => self.last_find = None,
+            }
+        }
+        for blocks in &mut self.blocks {
+            *blocks = blocks.iter().filter_map(|held| range(*held)).collect();
+        }
+        if let Some(active) = moved(self.active_sheet) {
+            self.active_sheet = active;
+        }
+        match (range(self.selection), address(self.active_cell)) {
+            (Some(selection), Some(active)) => {
+                self.selection = selection;
+                self.active_cell = active;
+            }
+            _ => {
+                let sheet = self.active_sheet.min(self.workbook.sheets.len().saturating_sub(1));
+                self.selection = CellRange::single(CellAddress { sheet, row: 1, column: 0 });
+                self.active_cell = self.selection.first();
+            }
+        }
+        for object in &mut self.objects {
+            let followed = match *object {
+                HostObject::Range(held) => range(held).map(HostObject::Range),
+                HostObject::RangeFont(held) => range(held).map(HostObject::RangeFont),
+                HostObject::RangeInterior(held) => range(held).map(HostObject::RangeInterior),
+                HostObject::RangeBorders(held, selection) => {
+                    range(held).map(|held| HostObject::RangeBorders(held, selection))
+                }
+                HostObject::RangeCollection(held, axis) => {
+                    range(held).map(|held| HostObject::RangeCollection(held, axis))
+                }
+                HostObject::Worksheet(sheet) => moved(sheet).map(HostObject::Worksheet),
+                HostObject::Hyperlinks(HyperlinkScope::Sheet(sheet)) => {
+                    moved(sheet).map(|sheet| HostObject::Hyperlinks(HyperlinkScope::Sheet(sheet)))
+                }
+                HostObject::Hyperlinks(HyperlinkScope::Range(held)) => {
+                    range(held).map(|held| HostObject::Hyperlinks(HyperlinkScope::Range(held)))
+                }
+                HostObject::PageSetup(sheet) => moved(sheet).map(HostObject::PageSetup),
+                HostObject::ListObjects(sheet) => moved(sheet).map(HostObject::ListObjects),
+                HostObject::Validation(held) => range(held).map(HostObject::Validation),
+                HostObject::FormatConditions(held) => range(held).map(HostObject::FormatConditions),
+                HostObject::DisplayFormat(held) => range(held).map(HostObject::DisplayFormat),
+                HostObject::DisplayFont(held) => range(held).map(HostObject::DisplayFont),
+                HostObject::DisplayInterior(held) => range(held).map(HostObject::DisplayInterior),
+                HostObject::Characters(at, start, length) => {
+                    address(at).map(|at| HostObject::Characters(at, start, length))
+                }
+                HostObject::CharactersFont(at, start, length) => {
+                    address(at).map(|at| HostObject::CharactersFont(at, start, length))
+                }
+                HostObject::Comment(at) => address(at).map(HostObject::Comment),
+                HostObject::Comments(sheet) => moved(sheet).map(HostObject::Comments),
+                HostObject::Blocks(_)
+                | HostObject::Areas(_)
+                | HostObject::BlocksStyle(..)
+                | HostObject::Worksheets
+                | HostObject::Names
+                | HostObject::DefinedName(_)
+                | HostObject::Workbook
+                | HostObject::Application
+                | HostObject::WorksheetFunction
+                | HostObject::DebugConsole
+                | HostObject::Window
+                | HostObject::Style(_)
+                | HostObject::Styles
+                | HostObject::Hyperlink(_)
+                | HostObject::ListObject(_)
+                | HostObject::ListRows(_)
+                | HostObject::ListRow(..)
+                | HostObject::ListColumns(_)
+                | HostObject::ListColumn(..)
+                | HostObject::FormatCondition(_)
+                | HostObject::ConditionFont(_)
+                | HostObject::ConditionInterior(_)
+                | HostObject::Gone => continue,
+            };
+            *object = followed.unwrap_or(HostObject::Gone);
+        }
+    }
+
+    /// Make `sheet` the active one, keeping the selection the sheet being
+    /// left had for its return. Measured: each sheet keeps its own -- with
+    /// A8:B9 selected on Sheet1, adding a sheet and coming back finds A8:B9
+    /// selected still.
+    fn activate_sheet(&mut self, sheet: usize) {
+        if sheet == self.active_sheet && self.selection.sheet == sheet {
+            return;
+        }
+        if self.selection.sheet == self.active_sheet {
+            self.selections
+                .insert(self.active_sheet, (self.selection, self.active_cell));
+        }
+        self.active_sheet = sheet;
+        let home = CellRange::single(CellAddress { sheet, row: 1, column: 0 });
+        let (selection, active) = self.selections.remove(&sheet).unwrap_or((home, home.first()));
+        self.selection = selection;
+        self.active_cell = active;
+    }
+
     fn is_worksheet_function(&self, object: &ObjectRef) -> bool {
         matches!(
             self.objects.get(object.handle as usize),
@@ -6196,8 +6416,23 @@ impl<'a> WorkbookHost<'a> {
         if args.len() > 3 {
             return Err("Worksheets.Add takes Before, After and Count".to_string());
         }
-        if given(2).is_some() {
-            return Err("Worksheets.Add cannot add several sheets at once".to_string());
+        // Count adds that many, each in front of the one before: measured,
+        // `Worksheets.Add Count:=2` puts Sheet11 before Sheet10 and leaves
+        // Sheet11 active.
+        let count = match given(2) {
+            None => 1,
+            Some(value) => match any_whole_number(value) {
+                Some(count) if count >= 1 => count,
+                _ => return Err(host_error(1004, "Worksheets.Add Count must be at least one")),
+            },
+        };
+        if count > 1 {
+            let placing: Vec<Value> = args.iter().take(2).cloned().collect();
+            let mut added = Value::Empty;
+            for _ in 0..count {
+                added = self.add_worksheet(&placing)?;
+            }
+            return Ok(added);
         }
         // Before and After name a sheet with the object itself, not its name.
         let placed = |host: &Self, value: &Value| match value {
@@ -6217,9 +6452,10 @@ impl<'a> WorkbookHost<'a> {
             _ => self.active_sheet,
         };
 
+        let name = self.next_sheet_name();
         let template = &self.workbook.sheets[self.active_sheet];
         let sheet = Sheet {
-            name: self.unused_sheet_name(),
+            name,
             visibility: oxicells_core::ir::Visibility::Visible,
             rows: Vec::new(),
             col_count: 0,
@@ -6242,25 +6478,31 @@ impl<'a> WorkbookHost<'a> {
             unsupported_elements: Vec::new(),
         };
         self.workbook.sheets.insert(at, sheet);
-        self.active_sheet = at;
+        self.sheets_renumbered(&|was| Some(if was >= at { was + 1 } else { was }));
+        self.activate_sheet(at);
         Ok(self.object(HostObject::Worksheet(at)))
     }
 
-    /// Excel numbers a new sheet from a counter that never goes back, so a
-    /// workbook that has had sheets removed skips those numbers. This build
-    /// takes the lowest number nothing is using, which agrees whenever no sheet
-    /// has been removed.
-    fn unused_sheet_name(&self) -> String {
-        (1..)
-            .map(|number| format!("Sheet{number}"))
-            .find(|candidate| {
-                !self
-                    .workbook
-                    .sheets
-                    .iter()
-                    .any(|sheet| sheet.name.eq_ignore_ascii_case(candidate))
-            })
-            .expect("a workbook cannot hold every possible sheet name")
+    /// Excel numbers a new sheet from a counter that never goes back: the
+    /// count of sheets made since the workbook was opened, plus one,
+    /// skipping a number a sheet already wears. Measured: Sheet1 alone, add
+    /// twice (Sheet2, Sheet3), delete both, add -> Sheet4; rename it Sheet9
+    /// and add -> Sheet5; with a Sheet7 about, the counter steps past it to
+    /// Sheet8; and a COPY takes a number too without wearing it -- after
+    /// `X (2)` the next added sheet is Sheet13, not Sheet12.
+    fn next_sheet_name(&mut self) -> String {
+        loop {
+            self.sheet_counter += 1;
+            let candidate = format!("Sheet{}", self.sheet_counter);
+            if !self
+                .workbook
+                .sheets
+                .iter()
+                .any(|sheet| sheet.name.eq_ignore_ascii_case(&candidate))
+            {
+                return candidate;
+            }
+        }
     }
 
     /// Where a sheet being copied or moved should land. Excel takes Before or
@@ -6296,11 +6538,12 @@ impl<'a> WorkbookHost<'a> {
         let at = self.worksheet_destination(args, "Copy")?;
         let mut copy = self.workbook.sheets[sheet].clone();
         copy.name = self.unused_copy_name(&self.workbook.sheets[sheet].name);
+        self.sheet_counter += 1;
         self.workbook.sheets.insert(at, copy);
-        // Objects already handed out name sheets by position, so the ones past
-        // the new sheet would now point at their neighbour.
-        self.invalidate_worksheets_from(at);
-        self.active_sheet = at;
+        self.sheets_renumbered(&|was| Some(if was >= at { was + 1 } else { was }));
+        let from = if sheet >= at { sheet + 1 } else { sheet };
+        self.duplicate_side_tables(from, at);
+        self.activate_sheet(at);
         Ok(())
     }
 
@@ -6313,8 +6556,11 @@ impl<'a> WorkbookHost<'a> {
         // Taking it out shifts everything after it down one.
         let at = if at > sheet { at - 1 } else { at };
         self.workbook.sheets.insert(at, moved);
-        self.invalidate_worksheets_from(0);
-        self.active_sheet = at;
+        let mut order: Vec<usize> = (0..self.workbook.sheets.len()).collect();
+        let lifted = order.remove(sheet);
+        order.insert(at, lifted);
+        self.sheets_renumbered(&|was| order.iter().position(|held| *held == was));
+        self.activate_sheet(at);
         Ok(())
     }
 
@@ -6332,11 +6578,82 @@ impl<'a> WorkbookHost<'a> {
             .expect("a workbook cannot hold every possible sheet name")
     }
 
-    fn invalidate_worksheets_from(&mut self, first: usize) {
-        self.objects.retain(|object| match object {
-            HostObject::Worksheet(index) => *index < first,
-            _ => true,
-        });
+    /// What a copied sheet takes with it that the workbook does not hold:
+    /// its notes, unlocked cells, validation, conditions, hyperlinks, styles
+    /// and page setup. Everything is copied fresh, with numbers of its own.
+    fn duplicate_side_tables(&mut self, from: usize, to: usize) {
+        let address = |at: CellAddress| CellAddress { sheet: to, ..at };
+        let range = |held: CellRange| CellRange { sheet: to, ..held };
+        if let Some(protection) = self.protected.get(from).cloned().flatten() {
+            if to < self.protected.len() {
+                self.protected[to] = Some(protection);
+            }
+        }
+        let unlocked: Vec<CellAddress> = self
+            .unlocked
+            .iter()
+            .filter(|at| at.sheet == from)
+            .map(|at| address(*at))
+            .collect();
+        self.unlocked.extend(unlocked);
+        let notes: Vec<Note> = self
+            .notes
+            .iter()
+            .filter(|note| note.at.sheet == from)
+            .map(|note| Note { at: address(note.at), ..note.clone() })
+            .collect();
+        self.notes.extend(notes);
+        let links: Vec<Link> = self
+            .links
+            .iter()
+            .filter(|link| link.anchor.sheet == from)
+            .map(|link| Link { id: 0, anchor: range(link.anchor), ..link.clone() })
+            .collect();
+        for mut link in links {
+            link.id = self.next_link;
+            self.next_link += 1;
+            self.links.push(link);
+        }
+        let validations: Vec<(CellAddress, Validation)> = self
+            .validations
+            .iter()
+            .filter(|(at, _)| at.sheet == from)
+            .map(|(at, validation)| (address(*at), validation.clone()))
+            .collect();
+        self.validations.extend(validations);
+        let conditions: Vec<Condition> = self
+            .conditions
+            .iter()
+            .filter(|condition| condition.sheet == from)
+            .map(|condition| Condition {
+                id: 0,
+                sheet: to,
+                applies: condition.applies.iter().map(|held| range(*held)).collect(),
+                ..condition.clone()
+            })
+            .collect();
+        for mut condition in conditions {
+            condition.id = self.next_condition;
+            self.next_condition += 1;
+            self.conditions.push(condition);
+        }
+        if let Some(setup) = self.page_setups.get(&from).cloned() {
+            self.page_setups.insert(to, setup);
+        }
+        let styled: Vec<(CellAddress, usize)> = self
+            .styled
+            .iter()
+            .filter(|(at, _)| at.sheet == from)
+            .map(|(at, style)| (address(*at), *style))
+            .collect();
+        self.styled.extend(styled);
+        let painted: Vec<((CellAddress, Paint), (usize, f64))> = self
+            .theme_paint
+            .iter()
+            .filter(|((at, _), _)| at.sheet == from)
+            .map(|((at, paint), colour)| ((address(*at), *paint), *colour))
+            .collect();
+        self.theme_paint.extend(painted);
     }
 
     fn delete_worksheet(&mut self, sheet: usize) -> Result<(), String> {
@@ -6344,11 +6661,23 @@ impl<'a> WorkbookHost<'a> {
             return Err("a workbook must keep at least one worksheet".to_string());
         }
         self.workbook.sheets.remove(sheet);
-        // Objects already handed out name sheets by position, so the ones past
-        // the hole would now point at their neighbour.
-        self.invalidate_worksheets_from(sheet);
-        if self.active_sheet >= self.workbook.sheets.len() {
-            self.active_sheet = self.workbook.sheets.len() - 1;
+        self.selections.remove(&sheet);
+        // Excel moves to the sheet after the deleted one, or to the last
+        // when it was the last -- and where a sheet other than the active
+        // one goes, the active one keeps its place.
+        let next = match self.active_sheet.cmp(&sheet) {
+            std::cmp::Ordering::Less => self.active_sheet,
+            std::cmp::Ordering::Equal => sheet.min(self.workbook.sheets.len() - 1),
+            std::cmp::Ordering::Greater => self.active_sheet - 1,
+        };
+        self.sheets_renumbered(&|was| match was.cmp(&sheet) {
+            std::cmp::Ordering::Less => Some(was),
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Greater => Some(was - 1),
+        });
+        self.active_sheet = next;
+        if self.selection.sheet != next {
+            self.activate_sheet(next);
         }
         Ok(())
     }
@@ -11427,6 +11756,9 @@ impl Host for WorkbookHost<'_> {
         args: &[Value],
     ) -> Result<Option<Value>, String> {
         if let Some(receiver) = receiver {
+            if self.gone(receiver) {
+                return Err(host_error(424, "the object's worksheet has been deleted"));
+            }
             // EVERY Excel object can be asked for the Application, and it
             // always answers the same one. Measured: `Range("A1").Application`,
             // `ActiveSheet.Application` and `ActiveWorkbook.Application` are
@@ -11576,13 +11908,7 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Worksheet.Select does not accept arguments".to_string());
                     }
-                    self.active_sheet = sheet;
-                    self.selection = CellRange::single(CellAddress {
-                        sheet,
-                        row: 1,
-                        column: 0,
-                    });
-                    self.active_cell = self.selection.first();
+                    self.activate_sheet(sheet);
                     return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("showalldata") {
@@ -11628,12 +11954,7 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Worksheet.Activate does not accept arguments".to_string());
                     }
-                    self.active_sheet = sheet;
-                    self.selection = CellRange::single(CellAddress {
-                        sheet,
-                        row: 1,
-                        column: 0,
-                    });
+                    self.activate_sheet(sheet);
                     self.active_cell = self.selection.first();
                     return Ok(Some(Value::Boolean(true)));
                 }
@@ -11834,7 +12155,7 @@ impl Host for WorkbookHost<'_> {
                 let Some(range) = self.range(object) else {
                     return Err("Application.Goto takes a Range object".to_string());
                 };
-                self.active_sheet = range.sheet;
+                self.activate_sheet(range.sheet);
                 self.selection = range;
                 self.active_cell = range.first();
                 return Ok(Some(Value::Empty));
@@ -12442,6 +12763,9 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if self.gone(receiver) {
+            return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
         // The Application's default member is its NAME, not a Value: asked of
         // Excel, `CStr(Range("A1").Application)` is `Microsoft Excel`. Without
         // this the object came through and then would not become a value, so
@@ -13365,6 +13689,9 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if self.gone(receiver) {
+            return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
         if let Some(range) = self.validation_range(receiver) {
             return self.set_validation(range, name, value);
         }
@@ -13992,6 +14319,9 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
+        if self.gone(receiver) {
+            return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
         if self.is_worksheets(receiver) {
             let mut worksheets = Vec::with_capacity(self.workbook.sheets.len());
             for sheet in 0..self.workbook.sheets.len() {
@@ -22058,6 +22388,81 @@ mod tests {
                 .map(|sheet| sheet.name.clone())
                 .collect::<Vec<_>>(),
             vec!["Sheet1".to_string(), "Base".to_string()]
+        );
+    }
+
+    /// Everything held beside the workbook is held by the sheet's position,
+    /// and a new sheet in front moves every position along. Measured: a
+    /// `Worksheet` and a `Range` kept across `Worksheets.Add` still name
+    /// Sheet1; its note, unlocked cell, page setup and validation stay
+    /// with it; the new sheet has none; each sheet keeps its own selection;
+    /// and the objects of a deleted sheet answer 424.
+    #[test]
+    fn vba_side_tables_follow_a_renumbered_sheet() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Dim ws As Object, r As Object
+               Application.DisplayAlerts = False
+               Set ws = Worksheets(1)
+               Set r = Range(\"B2\")
+               Range(\"A1\").AddComment \"n1\"
+               Range(\"A2\").Locked = False
+               ActiveSheet.PageSetup.Orientation = 2
+               Range(\"A6\").Validation.Add 1, 1, 1, \"1\", \"9\"
+               Range(\"A8:B9\").Select
+               Worksheets.Add
+               r.Value = 5
+               Debug.Print ws.Name; ws.Index; r.Worksheet.Name; ActiveSheet.Name
+               Debug.Print Worksheets(\"Sheet1\").Range(\"B2\").Value; IsEmpty(Range(\"B2\").Value)
+               Debug.Print Worksheets(\"Sheet1\").Comments.Count; ActiveSheet.Comments.Count
+               Debug.Print Worksheets(\"Sheet1\").Range(\"A2\").Locked; Range(\"A2\").Locked
+               Debug.Print Worksheets(\"Sheet1\").PageSetup.Orientation; ActiveSheet.PageSetup.Orientation
+               Debug.Print Worksheets(\"Sheet1\").Range(\"A6\").Validation.Formula1
+               Debug.Print Selection.Address(0, 0)
+               Worksheets(\"Sheet1\").Activate
+               Debug.Print Selection.Address(0, 0)
+               Worksheets(1).Delete
+               Debug.Print Worksheets.Count; ws.Index; Range(\"A1\").Comment.Text
+               Worksheets.Add Count:=2
+               Debug.Print Worksheets(1).Name; Worksheets(2).Name; ActiveSheet.Name
+               Set ws = Worksheets(1)
+               Worksheets(1).Delete
+               On Error Resume Next
+               Debug.Print ws.Name
+               Debug.Print Err.Number
+               Err.Clear
+               r.Value = 1
+               Debug.Print Err.Number
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                "Sheet1	2	Sheet1	Sheet2".to_string(),
+                "5	True".to_string(),
+                "1	0".to_string(),
+                "False	True".to_string(),
+                "2	1".to_string(),
+                "1".to_string(),
+                "A1".to_string(),
+                "A8:B9".to_string(),
+                "1	1	n1".to_string(),
+                // Two at once go in front of each other, numbered on from
+                // the sheets made so far -- Sheet2 is gone, but its number
+                // is spent.
+                "Sheet4	Sheet3	Sheet4".to_string(),
+                "424".to_string(),
+                // The range on Sheet1 is still there to write to.
+                "0".to_string(),
+            ]
         );
     }
 
