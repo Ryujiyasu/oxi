@@ -4,6 +4,7 @@
 
 pub mod chart;
 pub mod editor;
+pub mod fill;
 pub mod formula;
 pub mod ir;
 pub mod parser;

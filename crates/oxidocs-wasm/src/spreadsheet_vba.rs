@@ -1598,6 +1598,15 @@ struct CellMarks {
     indented: bool,
 }
 
+/// Which edge of a range `FillDown` and its three siblings copy from.
+#[derive(Debug, Clone, Copy)]
+enum FillEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
 /// What `Range.Copy` set aside, as it stood when it was copied. Excel keeps a
 /// live link to the cells instead, so changing them before pasting changes what
 /// arrives; this build pastes what was there at the time.
@@ -6534,6 +6543,211 @@ impl<'a> WorkbookHost<'a> {
             self.hatchings.insert(at, Hatching { kind, colour });
         }
         Ok(())
+    }
+
+    /// What the fill sees of a cell.
+    fn seed_of(&self, at: CellAddress) -> oxicells_core::fill::Seed {
+        let Some(cell) = self.cell_here(at.sheet, at.row, at.column) else {
+            return oxicells_core::fill::Seed::default();
+        };
+        oxicells_core::fill::Seed {
+            number: match cell.value {
+                CellValue::Number(number) => Some(number),
+                _ => None,
+            },
+            text: match &cell.value {
+                CellValue::Number(_) | CellValue::Empty => String::new(),
+                other => other.display(),
+            },
+            formula: cell.formula.clone(),
+            number_format: cell.style.number_format.clone(),
+        }
+    }
+
+    /// Put one step of a fill down: its value or formula, and the dress of
+    /// the cell it is patterned on, as the kind of fill allows.
+    fn put_filled(
+        &mut self,
+        at: CellAddress,
+        step: &oxicells_core::fill::Step,
+        seat: CellAddress,
+        values: bool,
+        formats: bool,
+    ) -> Result<(), String> {
+        use oxicells_core::fill::Filled;
+        if values {
+            match &step.filled {
+                Filled::Empty => self.set_cell_value(at, CellValue::Empty)?,
+                Filled::Number(number) => self.set_cell_value(at, CellValue::Number(*number))?,
+                Filled::Text(text) => self.set_cell_value(at, CellValue::String(text.clone()))?,
+                Filled::Formula(formula) => self.set_cell_formula(at, formula.clone())?,
+            }
+        }
+        if formats {
+            let dress = self
+                .cell_here(seat.sheet, seat.row, seat.column)
+                .map(|cell| cell.style)
+                .unwrap_or_default();
+            self.set_range_style(CellRange::single(at), |_, style| *style = dress.clone())?;
+            let marks = self.marks_of(seat);
+            self.put_marks(at, marks);
+        }
+        Ok(())
+    }
+
+    /// `Range.AutoFill Destination, Type`.
+    ///
+    /// Measured (fill.vba, 2026-09-05): the destination must hold the source
+    /// and be more than it, or it is 1004; a type past the ten is 1004; the
+    /// answer is True. Pulled the other way (source A4:A5, destination
+    /// A1:A5) the line runs backwards. A destination reaching both down and
+    /// across fills only the cells outside the source's rows AND columns,
+    /// with copies of the source's first cell: Y1 into Y1:Z3 fills Z2:Z3
+    /// with Y1, and AD1:AE1 into AD1:AF3 fills AF2:AF3 with AD1.
+    fn auto_fill(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
+        use oxicells_core::fill::{continue_line, Along, How};
+        let destination = match args.first() {
+            Some(Value::Object(object)) => self
+                .range(object)
+                .ok_or_else(|| host_error(1004, "AutoFill takes a Range as its destination"))?,
+            _ => return Err(host_error(1004, "AutoFill needs a destination Range")),
+        };
+        let how = match args.get(1) {
+            None | Some(Value::Missing) | Some(Value::Empty) => How::Default,
+            Some(value) => match any_whole_number(value) {
+                Some(0) => How::Default,
+                Some(1) => How::Copy,
+                Some(2) => How::Series,
+                Some(3) | Some(4) => How::Default,
+                Some(5) => How::Days,
+                Some(6) => How::Weekdays,
+                Some(7) => How::Months,
+                Some(8) => How::Years,
+                Some(9) => How::LinearTrend,
+                Some(10) => How::GrowthTrend,
+                _ => return Err(host_error(1004, "AutoFill method of Range class failed")),
+            },
+        };
+        let (values, formats) = match args.get(1).and_then(any_whole_number) {
+            Some(3) => (false, true),
+            Some(4) => (true, false),
+            _ => (true, true),
+        };
+        if destination.sheet != source.sheet
+            || !range_within(source, destination)
+            || range_within(destination, source)
+        {
+            return Err(host_error(1004, "AutoFill method of Range class failed"));
+        }
+        Self::range_cell_count(destination)?;
+        self.guard_locked_cells(destination, "Range.AutoFill")?;
+        self.arrays_allow(destination, false)?;
+        let above = source.start_row - destination.start_row;
+        let below = destination.end_row - source.end_row;
+        let left = source.start_column - destination.start_column;
+        let right = destination.end_column - source.end_column;
+        if (above > 0 || below > 0) && (left > 0 || right > 0) {
+            let first = source.first();
+            let corner = self.seed_of(first);
+            let copied = continue_line(&[corner], 1, true, How::Copy, Along::Rows);
+            let Some(step) = copied.first() else {
+                return Ok(Value::Boolean(true));
+            };
+            for at in destination.addresses() {
+                let in_rows = (source.start_row..=source.end_row).contains(&at.row);
+                let in_columns = (source.start_column..=source.end_column).contains(&at.column);
+                if in_rows || in_columns {
+                    continue;
+                }
+                self.put_filled(at, step, first, values, formats)?;
+            }
+            return Ok(Value::Boolean(true));
+        }
+        if (above > 0 && below > 0) || (left > 0 && right > 0) {
+            return Err(host_error(1004, "AutoFill method of Range class failed"));
+        }
+        let down = above > 0 || below > 0;
+        let forwards = below > 0 || right > 0;
+        let steps = if down { above.max(below) } else { left.max(right) } as usize;
+        let sheet = source.sheet;
+        let lanes: Vec<u32> = if down {
+            (source.start_column..=source.end_column).collect()
+        } else {
+            (source.start_row..=source.end_row).collect()
+        };
+        for lane in lanes {
+            let seats: Vec<CellAddress> = if down {
+                (source.start_row..=source.end_row)
+                    .map(|row| CellAddress { sheet, row, column: lane })
+                    .collect()
+            } else {
+                (source.start_column..=source.end_column)
+                    .map(|column| CellAddress { sheet, row: lane, column })
+                    .collect()
+            };
+            let line: Vec<_> = seats.iter().map(|at| self.seed_of(*at)).collect();
+            let along = if down { Along::Rows } else { Along::Columns };
+            let filled = continue_line(&line, steps, forwards, how, along);
+            for (k, step) in filled.iter().enumerate() {
+                let k = k as u32 + 1;
+                let at = match (down, forwards) {
+                    (true, true) => CellAddress { sheet, row: source.end_row + k, column: lane },
+                    (true, false) => CellAddress { sheet, row: source.start_row - k, column: lane },
+                    (false, true) => CellAddress { sheet, row: lane, column: source.end_column + k },
+                    (false, false) => CellAddress { sheet, row: lane, column: source.start_column - k },
+                };
+                self.put_filled(at, step, seats[step.seat], values, formats)?;
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    /// `FillDown` / `FillUp` / `FillRight` / `FillLeft`: the edge row or
+    /// column copied into the rest of the range -- the edge alone, not the
+    /// pattern: measured, J1:J2 holding 1 and 2 reads 1 and 1 after
+    /// FillDown, and a range one row deep is 1004.
+    fn fill_edge(&mut self, range: CellRange, edge: FillEdge) -> Result<Value, String> {
+        use oxicells_core::fill::{continue_line, Along, How};
+        Self::range_cell_count(range)?;
+        let down = matches!(edge, FillEdge::Top | FillEdge::Bottom);
+        let forwards = matches!(edge, FillEdge::Top | FillEdge::Left);
+        let steps = if down {
+            range.end_row - range.start_row
+        } else {
+            range.end_column - range.start_column
+        } as usize;
+        if steps == 0 {
+            return Err(host_error(1004, "the range has only its edge to fill from"));
+        }
+        self.guard_locked_cells(range, "Range.FillDown")?;
+        self.arrays_allow(range, false)?;
+        let sheet = range.sheet;
+        let lanes: Vec<u32> = if down {
+            (range.start_column..=range.end_column).collect()
+        } else {
+            (range.start_row..=range.end_row).collect()
+        };
+        for lane in lanes {
+            let seat = match edge {
+                FillEdge::Top => CellAddress { sheet, row: range.start_row, column: lane },
+                FillEdge::Bottom => CellAddress { sheet, row: range.end_row, column: lane },
+                FillEdge::Left => CellAddress { sheet, row: lane, column: range.start_column },
+                FillEdge::Right => CellAddress { sheet, row: lane, column: range.end_column },
+            };
+            let along = if down { Along::Rows } else { Along::Columns };
+            let filled = continue_line(&[self.seed_of(seat)], steps, forwards, How::Copy, along);
+            for (k, step) in filled.iter().enumerate() {
+                let k = k as u32 + 1;
+                let at = match edge {
+                    FillEdge::Top => CellAddress { sheet, row: range.start_row + k, column: lane },
+                    FillEdge::Bottom => CellAddress { sheet, row: range.end_row - k, column: lane },
+                    FillEdge::Left => CellAddress { sheet, row: lane, column: range.start_column + k },
+                    FillEdge::Right => CellAddress { sheet, row: lane, column: range.end_column - k },
+                };
+                self.put_filled(at, step, seat, true, true)?;
+            }
+        }
+        Ok(Value::Boolean(true))
     }
 
     /// Whether the object's worksheet has been deleted out from under it.
@@ -13064,6 +13278,21 @@ impl Host for WorkbookHost<'_> {
                     self.clear_outline(range);
                     return Ok(Some(Value::Boolean(true)));
                 }
+                if name.eq_ignore_ascii_case("autofill") {
+                    return self.auto_fill(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("filldown") {
+                    return self.fill_edge(range, FillEdge::Top).map(Some);
+                }
+                if name.eq_ignore_ascii_case("fillup") {
+                    return self.fill_edge(range, FillEdge::Bottom).map(Some);
+                }
+                if name.eq_ignore_ascii_case("fillright") {
+                    return self.fill_edge(range, FillEdge::Left).map(Some);
+                }
+                if name.eq_ignore_ascii_case("fillleft") {
+                    return self.fill_edge(range, FillEdge::Right).map(Some);
+                }
                 if name.eq_ignore_ascii_case("removeduplicates") {
                     return self.remove_duplicates(range, args).map(Some);
                 }
@@ -13501,6 +13730,8 @@ impl Host for WorkbookHost<'_> {
             Some(&["Type", "Operator", "Formula1", "Formula2", "String", "TextOperator"][..])
         } else if name.eq_ignore_ascii_case("showlevels") {
             Some(&["RowLevels", "ColumnLevels"][..])
+        } else if name.eq_ignore_ascii_case("autofill") {
+            Some(&["Destination", "Type"][..])
         } else if name.eq_ignore_ascii_case("addcomment") {
             Some(&["Text"][..])
         } else if name.eq_ignore_ascii_case("text")
@@ -23772,6 +24003,81 @@ mod tests {
                 // that C2 now reads.
                 "#N/A\t7\t1".to_string(),
                 "10\t4".to_string(),
+            ]
+        );
+    }
+
+    /// `Range.AutoFill` and the four `Fill*` members, as measured (fill.vba,
+    /// 2026-09-05; the case agrees in the differential harness). The law of
+    /// the series itself is pinned in `oxicells_core::fill`; this pins the
+    /// wiring: where the cells land, what a destination may be, what the
+    /// formats do.
+    #[test]
+    fn vba_fills_a_range_from_its_pattern() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 5: Range(\"A1\").AutoFill Range(\"A1:A3\")\n\
+               Range(\"B1\").Value = 5: Range(\"B1\").AutoFill Range(\"B1:B3\"), 2\n\
+               Range(\"F1\").Value = 1: Range(\"F1\").Font.Bold = True: Range(\"F2\").Value = 2: Range(\"F1:F2\").AutoFill Range(\"F1:F5\")\n\
+               Debug.Print Range(\"A3\").Value; Range(\"B3\").Value; Range(\"F5\").Value; Range(\"F3\").Font.Bold; Range(\"F4\").Font.Bold; Range(\"F5\").Font.Bold\n\
+               Range(\"H1\").Value = 1: Range(\"H1\").Font.Bold = True: Range(\"H2\").Value = 2: Range(\"H1:H2\").AutoFill Range(\"H1:H4\"), 3\n\
+               Range(\"G1\").Value = 1: Range(\"G1\").Font.Bold = True: Range(\"G2\").Value = 2: Range(\"G1:G2\").AutoFill Range(\"G1:G4\"), 4\n\
+               Debug.Print IsEmpty(Range(\"H3\").Value); Range(\"H3\").Font.Bold; Range(\"G3\").Value; Range(\"G3\").Font.Bold\n\
+               Range(\"O4\").Value = 10: Range(\"O5\").Value = 8: Range(\"O4:O5\").AutoFill Range(\"O1:O5\")\n\
+               Range(\"T1\").Value = 1: Range(\"U1\").Value = 3: Range(\"T1:U1\").AutoFill Range(\"T1:W1\")\n\
+               Range(\"N1\").Formula = \"=A1*2\": Range(\"N1\").AutoFill Range(\"N1:N3\")\n\
+               Debug.Print Range(\"O1\").Value; Range(\"O3\").Value; Range(\"W1\").Value; Range(\"N3\").Formula\n\
+               On Error Resume Next\n\
+               Range(\"P1\").Value = 1: Range(\"P1\").AutoFill Range(\"P2:P4\")\n\
+               Debug.Print Err.Number; IsEmpty(Range(\"P2\").Value)\n\
+               Err.Clear\n\
+               Range(\"S1\").AutoFill Range(\"S1\")\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               Range(\"AN1\").AutoFill Range(\"AN1:AN3\"), 99\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               Range(\"H9\").Value = 1: Range(\"H9\").FillDown\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               On Error GoTo 0\n\
+               Range(\"Q1\").Value = 1: Range(\"Q1\").AutoFill Range(\"Q1:R3\")\n\
+               Debug.Print IsEmpty(Range(\"Q2\").Value); IsEmpty(Range(\"R1\").Value); Range(\"R2\").Value; Range(\"R3\").Value\n\
+               Range(\"AC1\").Formula = \"=A1*2\": Range(\"AC1\").Font.Bold = True: Range(\"AC1:AC3\").FillDown\n\
+               Range(\"AD3\").Value = \"z\": Range(\"AD1:AD3\").FillUp\n\
+               Range(\"AE1\").Value = \"q\": Range(\"AE1:AG1\").FillRight\n\
+               Range(\"AJ1\").Formula = \"=$A$1+B1\": Range(\"AH1:AJ1\").FillLeft\n\
+               Range(\"J1\").Value = 1: Range(\"J2\").Value = 2: Range(\"J1:J2\").FillDown\n\
+               Debug.Print Range(\"AC3\").Formula; Range(\"AC3\").Font.Bold; Range(\"AD1\").Value; Range(\"AG1\").Value; Range(\"AH1\").Formula; Range(\"J2\").Value\n\
+               Debug.Print TypeName(Range(\"J1:J2\").AutoFill(Range(\"J1:J3\")))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                // A lone number is copied, a series counts, and the formats
+                // follow the pattern cell by cell.
+                "5\t7\t5\tTrue\tFalse\tTrue".to_string(),
+                // xlFillFormats carries no values; xlFillValues no formats.
+                "True\tTrue\t3\tFalse".to_string(),
+                "16\t12\t7\t=A3*2".to_string(),
+                // The destination must hold the source, and be more than it.
+                "1004\tTrue".to_string(),
+                "1004".to_string(),
+                "1004".to_string(),
+                "1004".to_string(),
+                // A destination reaching both ways fills only the corner,
+                // with the first cell.
+                "True\tTrue\t1\t1".to_string(),
+                "=A3*2\tTrue\tz\tq\t=$A$1+#REF!\t1".to_string(),
+                "Boolean".to_string(),
             ]
         );
     }

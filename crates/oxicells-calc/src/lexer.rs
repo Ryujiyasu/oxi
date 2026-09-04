@@ -250,13 +250,27 @@ pub fn translate_formula_references(
         let Some(mut reference) = parse_a1(name) else {
             continue;
         };
-        if !reference.row_absolute {
-            reference.row = shifted_coordinate(reference.row, row_offset, MAX_ROW)?;
-        }
-        if !reference.col_absolute {
-            reference.col = shifted_coordinate(reference.col, column_offset, MAX_COL)?;
-        }
-        *name = reference.to_a1();
+        // A reference carried off the sheet's edge is `#REF!`, the way Excel
+        // writes it: measured, `=$A$1+B1` filled one column to the left reads
+        // `=$A$1+#REF!`.
+        let row = if reference.row_absolute {
+            Ok(reference.row)
+        } else {
+            shifted_coordinate(reference.row, row_offset, MAX_ROW)
+        };
+        let col = if reference.col_absolute {
+            Ok(reference.col)
+        } else {
+            shifted_coordinate(reference.col, column_offset, MAX_COL)
+        };
+        *name = match (row, col) {
+            (Ok(row), Ok(col)) => {
+                reference.row = row;
+                reference.col = col;
+                reference.to_a1()
+            }
+            _ => "#REF!".to_string(),
+        };
     }
 
     let mut output = String::new();
@@ -1171,11 +1185,13 @@ mod tests {
         );
     }
 
+    /// A reference carried off the sheet becomes `#REF!`, as Excel writes
+    /// it (measured: `=$A$1+B1` filled two columns to the left is
+    /// `=$A$1+#REF!`); a formula that cannot be read is refused.
     #[test]
-    fn formula_translation_rejects_out_of_bounds_and_unsupported_formulas() {
-        assert!(translate_formula_references("=A1", -1, 0)
-            .unwrap_err()
-            .contains("outside the worksheet"));
+    fn formula_translation_marks_out_of_bounds_and_rejects_unsupported_formulas() {
+        assert_eq!(translate_formula_references("=A1", -1, 0).unwrap(), "=#REF!");
+        assert_eq!(translate_formula_references("=$A$1+B1", 0, -2).unwrap(), "=$A$1+#REF!");
         assert!(translate_formula_references("=A1;B1", 1, 1).is_err());
     }
 
