@@ -1164,11 +1164,28 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// Where the workbook keeps that name, whatever case it was asked in.
+    /// Where a name is kept, whether it was asked for with its sheet or
+    /// without.
+    ///
+    /// A sheet-scoped name is stored as Excel reports it, `Sheet1!loc`, and a
+    /// macro that writes `Range("loc")` still has to find it. Asked with the
+    /// sheet, only the exact one answers.
     fn name_at(&self, name: &str) -> Option<usize> {
-        self.workbook
+        if let Some(at) = self
+            .workbook
             .defined_names
             .iter()
             .position(|(held, _)| held.eq_ignore_ascii_case(name))
+        {
+            return Some(at);
+        }
+        if name.contains('!') {
+            return None;
+        }
+        self.workbook.defined_names.iter().position(|(held, _)| {
+            held.rsplit_once('!')
+                .is_some_and(|(_, leaf)| leaf.eq_ignore_ascii_case(name))
+        })
     }
 
     fn is_application(&self, object: &ObjectRef) -> bool {
@@ -1595,7 +1612,26 @@ impl<'a> WorkbookHost<'a> {
             [Value::String(name), refers_to] => (name.clone(), refers_to),
             _ => return Err("Names.Add needs a Name and what it RefersTo".to_string()),
         };
-        check_name(&name)?;
+        // A name may carry the sheet it belongs to: asked of Excel,
+            // `Names.Add Name:="Sheet1!loc", RefersTo:="=Sheet1!$A$2"` is
+            // accepted, `Names(1).Name` answers `Sheet1!loc`, and
+            // `Range("loc")` finds it from that sheet. Only the part after the
+            // `!` is the name; the part before it has to be a sheet there is.
+            match name.rsplit_once('!') {
+                Some((sheet, leaf)) => {
+                    let bare = sheet.trim_matches('\'');
+                    if !self
+                        .workbook
+                        .sheets
+                        .iter()
+                        .any(|held| held.name.eq_ignore_ascii_case(bare))
+                    {
+                        return Err(format!("{bare:?} is not a worksheet in this workbook"));
+                    }
+                    check_name(leaf)?;
+                }
+                None => check_name(&name)?,
+            }
         let refers_to = match refers_to {
             Value::String(written) => {
                 let written = written.trim();
@@ -1699,11 +1735,13 @@ impl<'a> WorkbookHost<'a> {
         reach: NameReach,
         unreadable: String,
     ) -> Result<CellRange, String> {
+        // Through `name_at`, which also finds a SHEET-SCOPED name asked for
+        // without its sheet: `Range("loc")` has to reach `Sheet1!loc`. Reading
+        // the list directly here found only the exact spelling, so a scoped
+        // name could be added and then not be found by the name a macro writes.
         let Some((held, refers_to)) = self
-            .workbook
-            .defined_names
-            .iter()
-            .find(|(held, _)| held.eq_ignore_ascii_case(name.trim()))
+            .name_at(name.trim())
+            .and_then(|at| self.workbook.defined_names.get(at))
         else {
             return Err(format!(
                 "{unreadable}, and the workbook has no name {name:?} either"
@@ -4355,6 +4393,178 @@ impl<'a> WorkbookHost<'a> {
     /// Told to tell case apart, it still compares the letters without regard
     /// to case and puts the LOWER case first where they are the same:
     /// `b A a B` sorts to `a A b B`. See `compare_text_by_case`.
+    /// `Range.RemoveDuplicates Columns:=..., Header:=...`
+    ///
+    /// The FIRST row carrying a given key stays and the later ones go, the
+    /// survivors move up to close the gap, and what is left at the bottom is
+    /// emptied. Measured against Excel on A1:B5 with a key column of
+    /// 1, 2, 1, 3, 2: the rows keeping 1, 2 and 3 end up in rows 1 to 3 and
+    /// rows 4 and 5 hold nothing.
+    ///
+    /// `Columns` is one number or an array of them, counted from the range's
+    /// own left edge, and every named column has to match for two rows to be
+    /// the same. `Header:=xlYes` leaves the first row where it is and starts
+    /// comparing below it.
+    /// `AutoFit` on the columns a range covers.
+    ///
+    /// It widens each column to the longest thing shown in it. The exact width
+    /// Excel lands on is FONT-dependent and so not reproducible here: measured
+    /// on a machine whose standard font is 游ゴシック 11, `abcde` gives 6.13,
+    /// ten letters 11.63, five digits 5.88, and an empty column 5.88. The same
+    /// column under Calibri 11 would answer differently, and the DEFAULT width
+    /// already differs for the same reason -- 8.38 there against the 8.43 this
+    /// host uses.
+    ///
+    /// So this matches the shape and not the number: characters plus one, with
+    /// the empty column's width as the floor. What it must not do is what it
+    /// did before, which was raise 438 and leave the macro broken -- a macro
+    /// asking to autofit wants the column widened, and a width slightly
+    /// different from Excel's is a far smaller wrong than no width at all.
+    fn auto_fit(&mut self, range: CellRange) -> Result<Value, String> {
+        const FLOOR: f64 = 5.88;
+        for column in range.start_column..=range.end_column {
+            let mut widest = 0usize;
+            let rows: Vec<u32> = self.workbook.sheets[range.sheet]
+                .rows
+                .iter()
+                .map(|row| row.index)
+                .collect();
+            for row in rows {
+                let Some(cell) = self.cell_here(range.sheet, row, column) else {
+                    continue;
+                };
+                let shown = shown_text(
+                    &from_cell_value(&cell.value),
+                    cell.style.number_format.as_deref(),
+                );
+                widest = widest.max(shown.chars().count());
+            }
+            let width = if widest == 0 {
+                FLOOR
+            } else {
+                widest as f64 + 1.0
+            };
+            let lane = CellRange {
+                sheet: range.sheet,
+                start_row: range.start_row,
+                end_row: range.end_row,
+                start_column: column,
+                end_column: column,
+            };
+            self.set_range_column_width(lane, Value::Double(width))?;
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    fn remove_duplicates(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let width = range.end_column - range.start_column + 1;
+        let mut lanes: Vec<u32> = Vec::new();
+        match given(0) {
+            None => lanes.extend(range.start_column..=range.end_column),
+            Some(Value::Array(listed)) => {
+                for value in &listed.values {
+                    lanes.push(Self::duplicate_lane(value, range, width)?);
+                }
+            }
+            Some(value) => lanes.push(Self::duplicate_lane(value, range, width)?),
+        }
+        if lanes.is_empty() {
+            return Err("Range.RemoveDuplicates needs at least one column".to_string());
+        }
+        let header = match given(1) {
+            None => false,
+            Some(value) => match sort_number(value, "Header")? {
+                // xlNo is 2, xlYes 1, xlGuess 0 -- and a guess reads the first
+                // row as a header when it is text over numbers, which this
+                // does not attempt: it takes the plain answer.
+                1 => true,
+                _ => false,
+            },
+        };
+        let first = if header {
+            range.start_row + 1
+        } else {
+            range.start_row
+        };
+        if first > range.end_row {
+            return Ok(Value::Boolean(true));
+        }
+
+        // Read every row out first: the survivors are about to move.
+        let taken: Vec<Vec<Option<Cell>>> = (first..=range.end_row)
+            .map(|row| {
+                (range.start_column..=range.end_column)
+                    .map(|column| self.cell_here(range.sheet, row, column))
+                    .collect()
+            })
+            .collect();
+        let key_of = |held: &Vec<Option<Cell>>| -> Vec<String> {
+            lanes
+                .iter()
+                .map(|lane| {
+                    let at = (lane - range.start_column) as usize;
+                    held.get(at)
+                        .and_then(|cell| cell.as_ref())
+                        .map(|cell| find_value_text(&from_cell_value(&cell.value)))
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        let mut kept: Vec<Vec<Option<Cell>>> = Vec::new();
+        for held in taken {
+            let key = key_of(&held);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            kept.push(held);
+        }
+
+        for (offset, row) in (first..=range.end_row).enumerate() {
+            for (at, column) in (range.start_column..=range.end_column).enumerate() {
+                let address = CellAddress {
+                    sheet: range.sheet,
+                    row,
+                    column,
+                };
+                let held = kept.get(offset).and_then(|line| line.get(at).cloned()).flatten();
+                match held {
+                    Some(cell) => self.set_cell_value(address, cell.value)?,
+                    None => self.set_cell_value(address, CellValue::Empty)?,
+                }
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    /// Which column of the sheet a `Columns:=` number stands for.
+    fn duplicate_lane(value: &Value, range: CellRange, width: u32) -> Result<u32, String> {
+        let asked = sort_number(value, "RemoveDuplicates Columns")?;
+        if asked < 1 || asked as u32 > width {
+            return Err(format!(
+                "Range.RemoveDuplicates column {asked} is outside the {width}-column range"
+            ));
+        }
+        Ok(range.start_column + asked as u32 - 1)
+    }
+
+    /// The cell at a place, if there is one.
+    fn cell_here(&self, sheet: usize, row: u32, column: u32) -> Option<Cell> {
+        self.workbook
+            .sheets
+            .get(sheet)?
+            .rows
+            .iter()
+            .find(|held| held.index == row)
+            .and_then(|held| held.cells.iter().find(|cell| cell.col == column))
+            .cloned()
+    }
+
     fn sort_range(&mut self, range: CellRange, args: &[Value]) -> Result<(), String> {
         let given = |index: usize| match args.get(index) {
             Some(Value::Missing) | None => None,
@@ -5807,6 +6017,15 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("cut") {
                     return self.cut_range(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("autofit") {
+                    if !args.is_empty() {
+                        return Err("Range.AutoFit does not accept arguments".to_string());
+                    }
+                    return self.auto_fit(range).map(Some);
+                }
+                if name.eq_ignore_ascii_case("removeduplicates") {
+                    return self.remove_duplicates(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("specialcells") {
                     return self.special_cells(range, args).map(Some);
@@ -10583,6 +10802,102 @@ mod tests {
         }
         // A real date field beside one is still a date.
         assert_eq!(shown_as(Some("m/d/yyyy h:mm AM/PM")), ShownAs::Moment);
+    }
+
+    /// `RemoveDuplicates` keeps the first of each and closes the gap.
+    ///
+    /// Measured against Excel on A1:B5 with a key column of 1, 2, 1, 3, 2: the
+    /// rows keeping 1, 2 and 3 end up in rows 1 to 3 and rows 4 and 5 hold
+    /// nothing. `Columns` counts from the range's own left edge and takes an
+    /// array; every named column has to match for two rows to be the same.
+    /// `Header:=xlYes` leaves the first row alone.
+    #[test]
+    fn remove_duplicates_keeps_the_first_of_each() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim r As Long
+               Dim out As String
+               Range(\"A1\").Value = 1: Range(\"B1\").Value = \"a\"
+               Range(\"A2\").Value = 2: Range(\"B2\").Value = \"b\"
+               Range(\"A3\").Value = 1: Range(\"B3\").Value = \"c\"
+               Range(\"A4\").Value = 3: Range(\"B4\").Value = \"d\"
+               Range(\"A5\").Value = 2: Range(\"B5\").Value = \"e\"
+               Range(\"A1:B5\").RemoveDuplicates Columns:=1, Header:=xlNo
+               For r = 1 To 5
+                 out = out & \"[\" & CStr(Cells(r, 1).Value) & \"/\" &                        CStr(Cells(r, 2).Value) & \"]\"
+               Next r
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(answer, Value::String("[1/a][2/b][3/d][/][/]".to_string()));
+    }
+
+    /// A name may say which sheet it belongs to, and still answer to its own
+    /// short name.
+    ///
+    /// Asked of Excel, `Names.Add Name:="Sheet1!loc", RefersTo:="=Sheet1!$A$2"`
+    /// is accepted, `Names(1).Name` answers `Sheet1!loc`, and BOTH
+    /// `Range("loc")` and `Range("Sheet1!loc")` find it.
+    ///
+    /// The short form was the one that did not work, because `Range` read the
+    /// list of names directly instead of going through the lookup that knows
+    /// about scope -- two readers of one list, one of them out of date.
+    #[test]
+    fn a_name_may_belong_to_a_sheet_and_still_answer_to_its_short_name() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Range(\"A2\").Value = 42
+               ActiveWorkbook.Names.Add Name:=\"Sheet1!loc\", RefersTo:=\"=Sheet1!$A$2\"
+               Ask = ActiveWorkbook.Names(1).Name & \"|\" &                      CStr(Range(\"loc\").Value) & \"|\" &                      CStr(Range(\"Sheet1!loc\").Value) & \"|\" &                      ActiveWorkbook.Names(\"Sheet1!loc\").RefersTo
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("Sheet1!loc|42|42|=Sheet1!$A$2".to_string())
+        );
+    }
+
+    /// `AutoFit` widens the column instead of refusing.
+    ///
+    /// The width Excel lands on is font-dependent and not reproduced here --
+    /// measured under 游ゴシック 11, `abcde` gives 6.13 where this answers 6 --
+    /// so what is asserted is that it succeeds and that the column grew with
+    /// the text. Raising 438 was the thing worth fixing: a macro asking to
+    /// autofit wants the column widened.
+    #[test]
+    fn autofit_widens_a_column_to_what_is_in_it() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Range(\"A1\").Value = \"abcde\"
+               Columns(1).AutoFit
+               Ask = CStr(Columns(1).ColumnWidth > 5) & \"|\"
+               Range(\"A1\").Value = \"abcdeabcdeabcde\"
+               Columns(1).AutoFit
+               Ask = Ask & CStr(Columns(1).ColumnWidth > 10)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(answer, Value::String("True|True".to_string()));
     }
 
     /// A filter leaves a hidden name behind it.
