@@ -3589,6 +3589,13 @@ unsafe fn draw_table_legacy(
     let _ = DeleteObject(pen);
 }
 
+/// S-GRADTOE: a gradient stop channel at or below the sRGB knee decodes to
+/// linear zero, unless this is set, which restores the plain decode.
+fn gradtoe_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_GRADTOE_DISABLE").is_err())
+}
+
 fn srgb_to_linear(c: f64) -> f64 {
     let c = c / 255.0;
     if c <= 0.04045 {
@@ -3689,9 +3696,30 @@ fn gradient_color_at(g: &SlideGradient, t: f64) -> (u8, u8, u8) {
             let b = parse(&stops[i + 1].color);
             if two_stop {
                 let e = f * f * (3.0 - 2.0 * f);
+                // ★S-GRADTOE: a stop channel in the sRGB TOE decodes to
+                // linear ZERO in PowerPoint's ramp. Its export writes every
+                // two-stop ramp as a 256-sample table, and across all 451
+                // tables in both corpora the endpoint channels take the value
+                // 0 (140 times) and then nothing until 11 -- the boundary is
+                // exactly the piecewise knee (0.04045 * 255 = 10.31). d24's
+                // background stops carry G=6 and G=4; its table starts and
+                // ends at G=0, while the SAME colours drawn as solid fills
+                // keep 6 and 4 (rg operators, 663 uses). Solids are
+                // untouched; only the ramp decode crushes.
+                // ...and only when BOTH stops sit in the toe. A channel that
+                // CROSSES out of the toe keeps its ordinary curve: blind 08's
+                // R runs 2 -> 55 and its baked table's interior reads
+                // 11/15/23 where a crushed curve would read ~0/0/7 (only the
+                // t=0 endpoint is written as 0 there). Crushing one-sided
+                // channels cost d15 two mean|err| units across 36 slides.
+                let in_toe = |v: u8| f64::from(v) / 255.0 <= 0.04045;
                 let mix = |x: u8, y: u8| {
+                    if gradtoe_on() && in_toe(x) && in_toe(y) {
+                        return 0;
+                    }
                     linear_to_srgb(
-                        srgb_to_linear(x as f64) * (1.0 - e) + srgb_to_linear(y as f64) * e,
+                        srgb_to_linear(f64::from(x)) * (1.0 - e)
+                            + srgb_to_linear(f64::from(y)) * e,
                     ) as u8
                 };
                 return (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2));
