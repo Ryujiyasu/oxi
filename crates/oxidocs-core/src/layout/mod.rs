@@ -30028,15 +30028,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // ★Both sites needed it. The first attempt wired this one and was
                 // judged "no effect" against a probe arm that takes the OTHER path
                 // -- the specimen has to be one the site actually decides.
-                // ★SCOPE: lines that hold text. The sweep's eight arms are all text
-                // lines; a BLANK paragraph under a multiplier in a linesAndChars grid
-                // was not swept, and `creative__13152ea1` says it does not follow the
-                // law as written -- Word advances its four 12pt x1.15 blanks
-                // 21.00 / 21.75 / 21.75 / **18.75** (the last one a bare cell) where
-                // the law gives 21.56 x 4, and that 3pt spills its one page. Blank
-                // lines keep the old path until they are measured (S1305's territory).
+                // S1308 (2026-09-04, default ON, opt-out OXI_S1308_DISABLE): BLANK
+                // lines take the same law. S1306b first shipped scoped to lines
+                // that hold text because `creative__13152ea1`'s four 12pt x1.15
+                // blanks read 21.00 / 21.75 / 21.75 / 18.75 in Word -- "the last
+                // one a bare cell". That was the instrument: Word centres a
+                // snapped line's natural box inside its pitch and Info6 reports
+                // the natural box's top, so the FIRST advance carries +3.0 and
+                // the last -2.8; the span over a zero-blank control is 86.25 =
+                // 4 x 21.5625 exactly, for every following rule (exact / auto /
+                // atLeast), for text lines too, and under `lines` as well as
+                // `linesAndChars` (`_pb_blankmult_gen.py`, 16 arms). The page
+                // that spilled under the unscoped version was S1307's doing (the
+                // floating table's row grown by a wrapNone anchor), not this law.
                 let s1306 = std::env::var("OXI_S1306_DISABLE").is_err()
-                    && line.fragments.iter().any(|f| !f.text.trim().is_empty());
+                    && (line.fragments.iter().any(|f| !f.text.trim().is_empty())
+                        || std::env::var("OXI_S1308_DISABLE").is_err());
                 if snap_to_grid && (is_single_line || (s1306 && !grid_no_type)) {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
