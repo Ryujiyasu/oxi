@@ -253,6 +253,19 @@ pub struct RunStyles<'a> {
     /// inherits THIS -- not the paragraph's resolved weight, which would make a
     /// silent run bold merely because a sibling is.
     pub lvl_bold: bool,
+    /// The level's SIZE, for the same reason. `paragraph_font_size` resolves a
+    /// paragraph to the LARGEST size any of its runs declares, so falling back
+    /// to that drags every silent run to a sibling's `sz` -- d19's title is
+    /// `1` / `.` (sz=2400) / ` Transition headline`, and PowerPoint's own COM
+    /// reports 46.0 / 24.0 / 46.0.
+    pub lvl_fs: Option<f32>,
+}
+
+/// S-LVLRUNSIZE: a run that declares no size is measured at the LEVEL's,
+/// unless this is set, which restores the paragraph's resolved size.
+fn lvlrunsize_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_LVLRUNSIZE_DISABLE").is_err())
 }
 
 /// S-LVLRUNBOLD: a run that declares no weight is measured at the LEVEL's,
@@ -279,7 +292,7 @@ fn style_at(
         let n = run.text.chars().count();
         if at < seen + n {
             return (
-                run.font_size.unwrap_or(fs),
+                run.font_size.or(styles.lvl_fs).unwrap_or(fs),
                 // The run's own declaration, and the LEVEL's weight when it
                 // makes none -- not `is_bold(bold)`, whose `bold` is the
                 // PARAGRAPH's resolved weight and would make a silent run bold
@@ -450,7 +463,7 @@ mod wrap_tests {
     #[test]
     fn each_character_is_measured_in_its_own_run() {
         let runs = [run("ab", None, false), run("cd", None, true)];
-        let st = RunStyles { runs: &runs, line_start: 0, lvl_bold: false };
+        let st = RunStyles { runs: &runs, line_start: 0, lvl_bold: false, lvl_fs: None };
         // 2 chars at 0.5em and 2 at 0.6em, 12pt: 2*48 + 2*57.6->58 = 212.
         let got = master_units_runs(&ByWeight, "abcd", 12.0, "X", false, false, &st, true);
         assert_eq!(got, Some(2 * 48 + 2 * 58));
@@ -460,7 +473,7 @@ mod wrap_tests {
     fn line_start_shifts_which_run_owns_a_character() {
         let runs = [run("ab", None, false), run("cd", None, true)];
         // The line is the paragraph's tail, so both its characters are bold.
-        let st = RunStyles { runs: &runs, line_start: 2, lvl_bold: false };
+        let st = RunStyles { runs: &runs, line_start: 2, lvl_bold: false, lvl_fs: None };
         assert_eq!(
             master_units_runs(&ByWeight, "cd", 12.0, "X", false, false, &st, true),
             Some(2 * 58)
@@ -810,7 +823,12 @@ fn break_segment(
             // it does not know the level; a run that declares no weight keeps
             // the old reading here. The caller that DOES know it -- the
             // renderer's own fit test -- passes it in its `RunStyles`.
-            let styles = RunStyles { runs, line_start: base + emitted, lvl_bold: false };
+            let styles = RunStyles {
+                runs,
+                line_start: base + emitted,
+                lvl_bold: false,
+                lvl_fs: None,
+            };
             let mu = if runs.len() > 1 {
                 master_units_runs(metrics, candidate, fs, family, bold, italic, &styles, true)
             } else {
@@ -2090,6 +2108,7 @@ pub fn layout_text_shape(
                 // so `OXI_LVLRUNBOLD_DISABLE` means the same thing in both
                 // crates: a flag that covers only one of them cannot A/B it.
                 lvl_bold: lvl_bold && lvlrunbold_on(),
+                lvl_fs: if lvlrunsize_on() { level.font_size } else { None },
             };
             let line_w = line_width_pt(
                 metrics,

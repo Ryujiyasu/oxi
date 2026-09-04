@@ -5173,7 +5173,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         this_off,
                                         &p.runs,
                                         &family,
-                                        fs,
+                                        // The level's size, not the
+                                        // paragraph's -- see `lvlrunsize_on`.
+                                        if lvlrunsize_on() {
+                                            m_fs.unwrap_or(fs)
+                                        } else {
+                                            fs
+                                        },
                                         run_default_color.as_deref(),
                                         para_highlight.as_deref(),
                                         lvl_italic,
@@ -5346,6 +5352,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                             scale, fs, &family, bold, false,
                                                             Some((&p.runs[..], 0)),
                                                             bold,
+                                                            None,
                                                         )
                                                         .len()
                                                         .max(1);
@@ -5584,6 +5591,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                     false,
                                                     Some((&p.runs[..], 0)),
                                                     bold,
+                                                    None,
                                                 )
                                                 .len()
                                                 .max(1);
@@ -5690,6 +5698,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             false,
                                             Some((&p.runs[..], 0)),
                                             bold,
+                                            None,
                                         );
                                         for line in &lines {
                                             // ★A trailing space is not ink and
@@ -14822,6 +14831,17 @@ struct RunStyles<'a> {
     /// declares none inherits. Not the paragraph's resolved weight: that would
     /// make a silent run bold because a sibling is.
     lvl_bold: bool,
+    /// The level's SIZE, for the same reason and with the same trap: the
+    /// paragraph's resolved size is the largest any run declares, so falling
+    /// back to it drags every silent run to a sibling's `sz`.
+    lvl_fs: Option<f32>,
+}
+
+/// S-LVLRUNSIZE: a run that declares no size takes the LEVEL's, unless this is
+/// set, which restores taking the paragraph's -- the largest size any run in it
+/// declares.
+fn lvlrunsize_on() -> bool {
+    std::env::var("OXI_LVLRUNSIZE_DISABLE").is_err()
 }
 
 /// S-LVLRUNBOLD: a run that declares no weight is measured at the LEVEL's,
@@ -14858,6 +14878,7 @@ fn master_units_runs(
             runs: styles.runs,
             line_start: styles.line_start,
             lvl_bold: lvlrunbold_on() && styles.lvl_bold,
+            lvl_fs: styles.lvl_fs,
         },
         letterspc_on(),
     )
@@ -14946,7 +14967,7 @@ fn line_width_pt_runs(
             if at < seen + n {
                 // f32 has no Eq, and the segment walk needs one; the size is a
                 // half-point value, so hundredths of a point are lossless.
-                let size = run.font_size.unwrap_or(fs);
+                let size = run.font_size.or(styles.lvl_fs).unwrap_or(fs);
                 return (
                     (size * 100.0).round() as u32,
                     // The run's own declaration, and the LEVEL's weight when
@@ -15932,6 +15953,8 @@ fn gdi_wrap_lines(
     // What the placeholder LEVEL says the weight is; a run that declares none
     // is measured at it (see `RunStyles::lvl_bold`).
     lvl_bold: bool,
+    // The level's size, likewise (see `RunStyles::lvl_fs`).
+    lvl_fs: Option<f32>,
 ) -> Vec<String> {
     let opts = oxislides_core::layout::WrapOpts {
         trim_trailing_space: std::env::var("OXI_WRAPTRIM_DISABLE").is_err(),
@@ -15949,6 +15972,7 @@ fn gdi_wrap_lines(
                 runs,
                 line_start: base + emitted,
                 lvl_bold,
+                lvl_fs,
             });
             fits_line(
                 dc, candidate, fs, family, bold, italic, width_pt, width_px, scale, styles,
@@ -16832,6 +16856,8 @@ fn layout_paragraph_baselines(
     // What the LEVEL alone says, kept beside the paragraph's resolved weight:
     // a run that declares none is measured at this, not at the paragraph's.
     let lvl_bold = lvlbold_on() && m.bold.unwrap_or(false);
+    // The level's size, which a run that declares none is set in.
+    let lvl_fs = lvlrunsize_on().then_some(m.font_size).flatten();
     let bold = para_is_bold(&para.runs, lvl_bold);
     // S-ITALADV (2026-08-24): and at the SLANT it is drawn at, level italic
     // included -- the same argument as the bold line above, which this one was
@@ -17009,6 +17035,7 @@ fn layout_paragraph_baselines(
                 dc, seg, w, rest_w, scale, fs, &family, bold, italic,
                 Some((&para.runs[..], seg_base)),
                 lvl_bold,
+                lvl_fs,
             );
             seg_base += seg.chars().count() + 1;
             if part.is_empty() {
@@ -17022,6 +17049,7 @@ fn layout_paragraph_baselines(
             dc, &text, first_w, rest_w, scale, fs, &family, bold, italic,
             Some((&para.runs[..], 0)),
             lvl_bold,
+            lvl_fs,
         )
     };
     let n_lines = lines.len();
@@ -17160,6 +17188,7 @@ fn layout_paragraph_baselines(
                     runs: &para.runs,
                     line_start: align_at,
                     lvl_bold: lvlbold_on() && m.bold.unwrap_or(false),
+                    lvl_fs: lvlrunsize_on().then_some(m.font_size).flatten(),
                 },
             )
         } else {
