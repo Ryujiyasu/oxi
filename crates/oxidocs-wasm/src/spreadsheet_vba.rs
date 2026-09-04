@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{
-    BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, TextRun, Workbook,
+    BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Table, TextRun, Workbook,
 };
 use oxicells_core::{
     formula_from_r1c1, formula_to_r1c1, move_formula_references, translate_formula_references,
@@ -300,6 +300,14 @@ enum HostObject {
     Hyperlink(u64),
     /// The hyperlinks on a sheet, or the ones a range reaches.
     Hyperlinks(HyperlinkScope),
+    /// The tables of a sheet, one table by its number, and a table's rows
+    /// and columns.
+    ListObjects(usize),
+    ListObject(u64),
+    ListRows(u64),
+    ListRow(u64, u32),
+    ListColumns(u64),
+    ListColumn(u64, u32),
     /// `Range.Validation`, for the cells of a range.
     Validation(CellRange),
     /// `Range.FormatConditions`: the conditional formats reaching a range.
@@ -443,6 +451,16 @@ fn tinted(colour: i64, tint: f64) -> i64 {
     let channel = |hue: i64| ((hue_to_rgb(hue) * RGBMAX + HLSMAX / 2) / HLSMAX).clamp(0, RGBMAX);
     let (red, green, blue) = (channel(hue + HLSMAX / 3), channel(hue), channel(hue - HLSMAX / 3));
     red | (green << 8) | (blue << 16)
+}
+
+/// Which part of a table an object speaks for.
+#[derive(Debug, Clone, Copy)]
+enum TablePart {
+    Whole,
+    Rows,
+    Row(u32),
+    Columns,
+    Column(u32),
 }
 
 /// Which painted part of a cell a theme colour was given to.
@@ -1233,6 +1251,96 @@ fn compare_as_excel(left: &Value, right: &Value) -> Ordering {
         .then_with(|| left.2.cmp(&right.2))
 }
 
+
+/// What a `ListObject` keeps beside the IR's table: whether its totals row
+/// is shown, and what each column totals.
+#[derive(Debug, Clone, Default)]
+struct TableExtra {
+    totals: bool,
+    /// xlTotalsCalculationNone 0, Sum 1, Average 2, Count 3, CountNums 4,
+    /// Min 5, Max 6, StdDev 7, Var 8, per column.
+    calculations: Vec<i64>,
+    /// Which columns were headed by the table itself (列1, 列2, ...) rather
+    /// than by anyone typing: measured, a `Resize` that drops such a column
+    /// clears its header cell, and keeps one that was named.
+    auto_named: Vec<bool>,
+}
+
+/// The SUBTOTAL function number a totals calculation stands for.
+fn subtotal_function(calculation: i64) -> Option<i64> {
+    Some(match calculation {
+        1 => 109,
+        2 => 101,
+        3 => 103,
+        4 => 102,
+        5 => 105,
+        6 => 104,
+        7 => 107,
+        8 => 110,
+        _ => return None,
+    })
+}
+
+/// The highest number among the tables named テーブルN, which is where the
+/// workbook's counter starts.
+fn last_table_number(workbook: &Workbook) -> u32 {
+    workbook
+        .sheets
+        .iter()
+        .flat_map(|sheet| sheet.tables.iter())
+        .filter_map(|table| table.name.strip_prefix("テーブル")?.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0)
+}
+
+/// The name a new column takes: 列 and the first number not taken.
+fn next_column_name(columns: &[String]) -> String {
+    (1..)
+        .map(|number| format!("列{number}"))
+        .find(|name| !columns.iter().any(|held| held == name))
+        .expect("the numbers do not run out")
+}
+
+/// A table's colours from its style, the way the parser settles them: the
+/// Medium, Light and Dark styles from 2 on walk the six accents.
+fn table_colours(style: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let number: Option<u32> = style
+        .strip_prefix("TableStyleMedium")
+        .or_else(|| style.strip_prefix("TableStyleLight"))
+        .or_else(|| style.strip_prefix("TableStyleDark"))
+        .and_then(|rest| rest.parse().ok());
+    let Some(number) = number.filter(|number| *number >= 2) else {
+        return (None, None, None);
+    };
+    let accent = THEME_COLOURS[4 + ((number - 2) % 6) as usize];
+    let band = tinted(accent, 0.8);
+    let rule = if style.starts_with("TableStyleMedium") {
+        Some(colour_from_packed(tinted(accent, 0.4)))
+    } else {
+        None
+    };
+    (
+        Some(colour_from_packed(accent)),
+        Some(colour_from_packed(band)),
+        rule,
+    )
+}
+
+/// Whether a table style name is one Excel has: measured, `NoSuchStyle` is
+/// 450 where `TableStyleLight1` is taken.
+fn known_table_style(name: &str) -> bool {
+    let number: Option<u32> = name
+        .strip_prefix("TableStyleMedium")
+        .or_else(|| name.strip_prefix("TableStyleLight"))
+        .or_else(|| name.strip_prefix("TableStyleDark"))
+        .and_then(|rest| rest.parse().ok());
+    match number {
+        Some(number) if name.starts_with("TableStyleDark") => (1..=11).contains(&number),
+        Some(number) => (1..=28).contains(&number),
+        None => false,
+    }
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -1327,6 +1435,15 @@ struct WorkbookHost<'a> {
     /// The conditional formats, in order of priority within each sheet.
     conditions: Vec<Condition>,
     next_condition: u64,
+    /// The tables a macro can reach, by number: which sheet each is on and
+    /// what it is called there, since renaming moves nothing else.
+    table_handles: Vec<(u64, usize, String)>,
+    table_extra: std::collections::HashMap<u64, TableExtra>,
+    next_table: u64,
+    /// The number the next new table is named with. Measured: a workbook
+    /// counter, not the lowest free number -- with テーブル1 renamed to T,
+    /// the next table is still テーブル2.
+    table_counter: u32,
     /// The number the next hyperlink gets.
     next_link: u64,
     /// Whether a hyperlink has ever been added: the `Hyperlink` style joins
@@ -1383,6 +1500,7 @@ impl<'a> WorkbookHost<'a> {
             ));
         }
         let notes = notes_pinned_open(workbook);
+        let table_counter = last_table_number(workbook);
         Ok(Self {
             workbook,
             active_sheet,
@@ -1407,6 +1525,10 @@ impl<'a> WorkbookHost<'a> {
             validations: std::collections::HashMap::new(),
             conditions: Vec::new(),
             next_condition: 1,
+            table_handles: Vec::new(),
+            table_extra: std::collections::HashMap::new(),
+            next_table: 1,
+            table_counter,
             next_link: 1,
             linked_once: false,
             split: SplitSettings::default(),
@@ -1458,6 +1580,12 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Styles => "Styles",
                 HostObject::Hyperlink(_) => "Hyperlink",
                 HostObject::Hyperlinks(_) => "Hyperlinks",
+                HostObject::ListObjects(_) => "ListObjects",
+                HostObject::ListObject(_) => "ListObject",
+                HostObject::ListRows(_) => "ListRows",
+                HostObject::ListRow(..) => "ListRow",
+                HostObject::ListColumns(_) => "ListColumns",
+                HostObject::ListColumn(..) => "ListColumn",
                 HostObject::Validation(_) => "Validation",
                 HostObject::FormatConditions(_) => "FormatConditions",
                 HostObject::FormatCondition(id) => match self
@@ -2702,6 +2830,985 @@ impl<'a> WorkbookHost<'a> {
         Ok(None)
     }
 
+    fn list_objects_sheet(&self, object: &ObjectRef) -> Option<usize> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::ListObjects(sheet)) => Some(*sheet),
+            _ => None,
+        }
+    }
+
+    /// The table handle an object speaks for, and which part of the table.
+    fn table_part(&self, object: &ObjectRef) -> Option<(u64, TablePart)> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::ListObject(id)) => Some((*id, TablePart::Whole)),
+            Some(HostObject::ListRows(id)) => Some((*id, TablePart::Rows)),
+            Some(HostObject::ListRow(id, index)) => Some((*id, TablePart::Row(*index))),
+            Some(HostObject::ListColumns(id)) => Some((*id, TablePart::Columns)),
+            Some(HostObject::ListColumn(id, index)) => Some((*id, TablePart::Column(*index))),
+            _ => None,
+        }
+    }
+
+    /// The handle of a sheet's table by its name, made if it has none yet:
+    /// a table the file brought in gets a handle the first time it is asked
+    /// for.
+    fn table_handle(&mut self, sheet: usize, name: &str) -> u64 {
+        if let Some((id, _, _)) = self
+            .table_handles
+            .iter()
+            .find(|(_, held_sheet, held)| *held_sheet == sheet && held == name)
+        {
+            return *id;
+        }
+        let id = self.next_table;
+        self.next_table += 1;
+        self.table_handles.push((id, sheet, name.to_string()));
+        id
+    }
+
+    /// Where a handle's table is: its sheet and its place in the sheet's
+    /// tables, or 424 once it is gone -- measured, a deleted table's `Name`
+    /// is error 424.
+    fn table_at(&self, id: u64) -> Result<(usize, usize), String> {
+        let (_, sheet, name) = self
+            .table_handles
+            .iter()
+            .find(|(held, _, _)| *held == id)
+            .ok_or_else(|| host_error(424, "the table has been deleted"))?;
+        let index = self.workbook.sheets[*sheet]
+            .tables
+            .iter()
+            .position(|table| table.name == *name)
+            .ok_or_else(|| host_error(424, "the table has been deleted"))?;
+        Ok((*sheet, index))
+    }
+
+    fn table_range(&self, sheet: usize, table: &Table) -> CellRange {
+        CellRange {
+            sheet,
+            start_row: table.start_row,
+            start_column: table.start_col,
+            end_row: table.end_row,
+            end_column: table.end_col,
+        }
+    }
+
+    /// The table a cell lies in, if any.
+    fn table_holding(&self, at: CellAddress) -> Option<(usize, usize)> {
+        let sheet = self.workbook.sheets.get(at.sheet)?;
+        sheet
+            .tables
+            .iter()
+            .position(|table| {
+                (table.start_row..=table.end_row).contains(&at.row)
+                    && (table.start_col..=table.end_col).contains(&at.column)
+            })
+            .map(|index| (at.sheet, index))
+    }
+
+    /// How many rows at the bottom are the totals row.
+    fn totals_rows(&self, id: u64) -> u32 {
+        u32::from(self.table_extra.get(&id).is_some_and(|extra| extra.totals))
+    }
+
+    /// `ListObjects.Add(SourceType, Source, LinkSource, HasHeaders,
+    /// Destination)`.
+    ///
+    /// Measured: the table takes the source's first row as its header when
+    /// told so, or when left to guess and the first row is text over
+    /// something else; otherwise a header row is put in above the data,
+    /// which moves down, headed 列1, 列2, ...; the table is named テーブル1
+    /// and on, dressed TableStyleMedium2 with banded rows and a filter; one
+    /// overlapping a table is 1004.
+    fn add_list_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        if let Some(kind) = given(0) {
+            if sort_number(kind, "ListObjects SourceType")? != 1 {
+                return Err("only a range can be made a table here".to_string());
+            }
+        }
+        let source = match given(1) {
+            Some(Value::Object(object)) => self
+                .range(object)
+                .ok_or_else(|| "ListObjects.Add needs a Range as its source".to_string())?,
+            _ => return Err("ListObjects.Add needs a Range as its source".to_string()),
+        };
+        Self::range_cell_count(source)?;
+        if source.sheet != sheet {
+            return Err("the source must be on this worksheet".to_string());
+        }
+        if self.workbook.sheets[sheet]
+            .tables
+            .iter()
+            .any(|table| ranges_overlap(self.table_range(sheet, table), source))
+        {
+            return Err("a table cannot overlap another table".to_string());
+        }
+        let has_headers = match given(3) {
+            None => 0,
+            Some(value) => sort_number(value, "ListObjects HasHeaders")?,
+        };
+        let first_row_is_header = match has_headers {
+            1 => true,
+            2 => false,
+            _ => {
+                // The guess: every cell of the first row is text, and the row
+                // under it is not all text.
+                let texts = |row: u32| -> Vec<Option<CellValue>> {
+                    (source.start_column..=source.end_column)
+                        .map(|column| self.cell_here(sheet, row, column).map(|cell| cell.value))
+                        .collect()
+                };
+                let first = texts(source.start_row);
+                let all_text = first
+                    .iter()
+                    .all(|value| matches!(value, Some(CellValue::String(text)) if !text.is_empty()));
+                let second = if source.end_row > source.start_row {
+                    texts(source.start_row + 1)
+                } else {
+                    Vec::new()
+                };
+                let second_all_text = !second.is_empty()
+                    && second
+                        .iter()
+                        .all(|value| matches!(value, Some(CellValue::String(text)) if !text.is_empty()));
+                all_text && !second_all_text
+            }
+        };
+        let mut range = source;
+        if !first_row_is_header {
+            // Put a header row in above the data: the data moves down within
+            // the table's columns.
+            let header_line = CellRange {
+                end_row: source.start_row,
+                ..source
+            };
+            self.shift_cells(header_line, false, true)?;
+            range.end_row += 1;
+        }
+        // The column names: the header cells' text, a numbered name where a
+        // header is empty.
+        let mut columns: Vec<String> = Vec::new();
+        let mut auto_named: Vec<bool> = Vec::new();
+        for column in range.start_column..=range.end_column {
+            let at = CellAddress {
+                sheet,
+                row: range.start_row,
+                column,
+            };
+            let shown = self
+                .cell_here(sheet, at.row, at.column)
+                .map(|cell| shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref()))
+                .unwrap_or_default();
+            let blank = shown.is_empty();
+            let name = if blank { next_column_name(&columns) } else { shown };
+            if blank {
+                self.set_cell_value(at, CellValue::String(name.clone()))?;
+            }
+            columns.push(name);
+            auto_named.push(blank);
+        }
+        self.table_counter += 1;
+        let name = format!("テーブル{}", self.table_counter);
+        let style = "TableStyleMedium2";
+        let (accent, band, rule) = table_colours(style);
+        self.workbook.sheets[sheet].tables.push(Table {
+            name: name.clone(),
+            columns,
+            start_row: range.start_row,
+            start_col: range.start_column,
+            end_row: range.end_row,
+            end_col: range.end_column,
+            style: Some(style.to_string()),
+            header_rows: 1,
+            banded_rows: true,
+            accent,
+            band,
+            rule,
+            outline: None,
+        });
+        let id = self.table_handle(sheet, &name);
+        let width = (range.end_column - range.start_column + 1) as usize;
+        self.table_extra.insert(
+            id,
+            TableExtra {
+                totals: false,
+                calculations: vec![0; width],
+                auto_named,
+            },
+        );
+        self.wrote = true;
+        Ok(self.object(HostObject::ListObject(id)))
+    }
+
+    /// Grow a table when something is typed just under it or just right of
+    /// it. Measured: a value in the row under the last data row, or in the
+    /// column right of the last column within the table's rows, brings that
+    /// row or column into the table -- a new column headed 列1 -- while one
+    /// under the totals row, one row further down, or on the corner does not.
+    fn grow_table_toward(&mut self, at: CellAddress) -> Result<(), String> {
+        let Some(sheet) = self.workbook.sheets.get(at.sheet) else {
+            return Ok(());
+        };
+        let Some(index) = sheet.tables.iter().position(|table| {
+            let under = at.row == table.end_row + 1
+                && (table.start_col..=table.end_col).contains(&at.column);
+            let beside = at.column == table.end_col + 1
+                && (table.start_row..=table.end_row).contains(&at.row);
+            under || beside
+        }) else {
+            return Ok(());
+        };
+        let name = sheet.tables[index].name.clone();
+        let id = self.table_handle(at.sheet, &name);
+        let (start_row, end_row, end_col) = {
+            let table = &self.workbook.sheets[at.sheet].tables[index];
+            (table.start_row, table.end_row, table.end_col)
+        };
+        if at.row == end_row + 1 {
+            if self.totals_rows(id) > 0 {
+                return Ok(());
+            }
+            self.workbook.sheets[at.sheet].tables[index].end_row += 1;
+            return Ok(());
+        }
+        if at.column == end_col + 1 {
+            let header = CellAddress {
+                sheet: at.sheet,
+                row: start_row,
+                column: at.column,
+            };
+            let shown = self
+                .cell_here(header.sheet, header.row, header.column)
+                .map(|cell| shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref()))
+                .unwrap_or_default();
+            let columns = self.workbook.sheets[at.sheet].tables[index].columns.clone();
+            let name = if shown.is_empty() { next_column_name(&columns) } else { shown.clone() };
+            if shown.is_empty() {
+                self.set_cell_value(header, CellValue::String(name.clone()))?;
+            }
+            let table = &mut self.workbook.sheets[at.sheet].tables[index];
+            table.end_col += 1;
+            table.columns.push(name);
+            if let Some(extra) = self.table_extra.get_mut(&id) {
+                extra.calculations.push(0);
+                extra.auto_named.push(shown.is_empty());
+            }
+        }
+        Ok(())
+    }
+
+    /// Put the totals row on or take it off. Measured: the row appears under
+    /// the data with 集計 in the first column and `=SUBTOTAL(103,[Last])` --
+    /// a count -- under the last column, or `SUBTOTAL(109, ...)`, a sum, when
+    /// that column is numbers; taking the row off clears it.
+    fn show_table_totals(&mut self, id: u64, shown: bool) -> Result<(), String> {
+        let (sheet, index) = self.table_at(id)?;
+        let already = self.totals_rows(id) > 0;
+        if shown == already {
+            return Ok(());
+        }
+        let (name, start_col, end_col, end_row, columns) = {
+            let table = &self.workbook.sheets[sheet].tables[index];
+            (
+                table.name.clone(),
+                table.start_col,
+                table.end_col,
+                table.end_row,
+                table.columns.clone(),
+            )
+        };
+        if shown {
+            let row = end_row + 1;
+            // Measured: the row goes in under the data and whatever was
+            // there moves down within the table's columns; taking the row
+            // out brings it back up.
+            self.shift_cells(
+                CellRange {
+                    sheet,
+                    start_row: row,
+                    end_row: row,
+                    start_column: start_col,
+                    end_column: end_col,
+                },
+                false,
+                true,
+            )?;
+            self.workbook.sheets[sheet].tables[index].end_row = row;
+            let width = columns.len();
+            let last = width - 1;
+            let last_is_numbers = (self.workbook.sheets[sheet].tables[index].start_row + 1..row)
+                .filter_map(|held| self.cell_here(sheet, held, end_col))
+                .all(|cell| matches!(cell.value, CellValue::Number(_)));
+            {
+                let extra = self.table_extra.entry(id).or_default();
+                extra.totals = true;
+                extra.calculations.resize(width, 0);
+                extra.calculations[last] = if last_is_numbers { 1 } else { 3 };
+            }
+            self.set_cell_value(
+                CellAddress {
+                    sheet,
+                    row,
+                    column: start_col,
+                },
+                CellValue::String("集計".to_string()),
+            )?;
+            let function = if last_is_numbers { 109 } else { 103 };
+            self.set_cell_formula(
+                CellAddress {
+                    sheet,
+                    row,
+                    column: end_col,
+                },
+                format!("SUBTOTAL({function},{name}[{}])", columns[last]),
+            )?;
+        } else {
+            let row = end_row;
+            self.workbook.sheets[sheet].tables[index].end_row = row - 1;
+            if let Some(extra) = self.table_extra.get_mut(&id) {
+                extra.totals = false;
+            }
+            self.shift_cells(
+                CellRange {
+                    sheet,
+                    start_row: row,
+                    end_row: row,
+                    start_column: start_col,
+                    end_column: end_col,
+                },
+                false,
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The table's data rows: from under the header to above the totals.
+    fn table_data_rows(&self, id: u64, sheet: usize, index: usize) -> (u32, u32) {
+        let table = &self.workbook.sheets[sheet].tables[index];
+        (
+            table.start_row + table.header_rows,
+            table.end_row - self.totals_rows(id),
+        )
+    }
+
+    /// What a table, its rows and its columns answer to.
+    fn table_member(
+        &mut self,
+        id: u64,
+        part: TablePart,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let (sheet, index) = self.table_at(id)?;
+        let (first_data, last_data) = self.table_data_rows(id, sheet, index);
+        let table = self.workbook.sheets[sheet].tables[index].clone();
+        let whole = self.table_range(sheet, &table);
+        let data_range = |column_from: u32, column_to: u32| -> Option<CellRange> {
+            (first_data <= last_data).then_some(CellRange {
+                sheet,
+                start_row: first_data,
+                end_row: last_data,
+                start_column: column_from,
+                end_column: column_to,
+            })
+        };
+        match part {
+            TablePart::Whole => {
+                let answer = if name.eq_ignore_ascii_case("name") {
+                    Value::String(table.name.clone())
+                } else if name.eq_ignore_ascii_case("range") {
+                    self.object(HostObject::Range(whole))
+                } else if name.eq_ignore_ascii_case("headerrowrange") {
+                    self.object(HostObject::Range(CellRange {
+                        end_row: whole.start_row,
+                        ..whole
+                    }))
+                } else if name.eq_ignore_ascii_case("databodyrange") {
+                    match data_range(whole.start_column, whole.end_column) {
+                        Some(range) => self.object(HostObject::Range(range)),
+                        None => Value::Nothing,
+                    }
+                } else if name.eq_ignore_ascii_case("totalsrowrange") {
+                    if self.totals_rows(id) == 0 {
+                        return Err("the table shows no totals row".to_string());
+                    }
+                    self.object(HostObject::Range(CellRange {
+                        start_row: whole.end_row,
+                        ..whole
+                    }))
+                } else if name.eq_ignore_ascii_case("listrows") {
+                    match args {
+                        [] => self.object(HostObject::ListRows(id)),
+                        [wanted] => {
+                            let index = positive_index(wanted, "ListRows index")?;
+                            if index > last_data.saturating_sub(first_data) + 1 || first_data > last_data {
+                                return Err(format!("the table has no row {index}"));
+                            }
+                            self.object(HostObject::ListRow(id, index))
+                        }
+                        _ => return Err("ListRows expects zero or one argument".to_string()),
+                    }
+                } else if name.eq_ignore_ascii_case("listcolumns") {
+                    match args {
+                        [] => self.object(HostObject::ListColumns(id)),
+                        [wanted] => self.list_column_item(id, &table, wanted)?,
+                        _ => return Err("ListColumns expects zero or one argument".to_string()),
+                    }
+                } else if name.eq_ignore_ascii_case("tablestyle") {
+                    Value::String(table.style.clone().unwrap_or_default())
+                } else if name.eq_ignore_ascii_case("showheaders") {
+                    Value::Boolean(table.header_rows > 0)
+                } else if name.eq_ignore_ascii_case("showtotals") {
+                    Value::Boolean(self.totals_rows(id) > 0)
+                } else if name.eq_ignore_ascii_case("showautofilter") {
+                    Value::Boolean(true)
+                } else if name.eq_ignore_ascii_case("showtablestylerowstripes") {
+                    Value::Boolean(table.banded_rows)
+                } else if name.eq_ignore_ascii_case("showtablestylecolumnstripes")
+                    || name.eq_ignore_ascii_case("showtablestylefirstcolumn")
+                    || name.eq_ignore_ascii_case("showtablestylelastcolumn")
+                {
+                    Value::Boolean(false)
+                } else if name.eq_ignore_ascii_case("parent") {
+                    self.object(HostObject::Worksheet(sheet))
+                } else if name.eq_ignore_ascii_case("resize") {
+                    let [Value::Object(object)] = args else {
+                        return Err("ListObject.Resize takes the new Range".to_string());
+                    };
+                    let asked = self
+                        .range(object)
+                        .ok_or_else(|| "ListObject.Resize takes the new Range".to_string())?;
+                    if asked.sheet != sheet || asked.start_row != whole.start_row {
+                        return Err("a table keeps its header row when resized".to_string());
+                    }
+                    // A column the table headed itself loses that header when
+                    // it is dropped; one that was named keeps it.
+                    let dropped: Vec<u32> = (whole.start_column..=whole.end_column)
+                        .filter(|column| !(asked.start_column..=asked.end_column).contains(column))
+                        .collect();
+                    for column in dropped {
+                        let slot = (column - whole.start_column) as usize;
+                        let auto = self
+                            .table_extra
+                            .get(&id)
+                            .and_then(|extra| extra.auto_named.get(slot).copied())
+                            .unwrap_or(false);
+                        if auto {
+                            self.set_cell_value(
+                                CellAddress {
+                                    sheet,
+                                    row: whole.start_row,
+                                    column,
+                                },
+                                CellValue::Empty,
+                            )?;
+                        }
+                    }
+                    let held = &mut self.workbook.sheets[sheet].tables[index];
+                    held.start_col = asked.start_column;
+                    held.end_col = asked.end_column;
+                    held.end_row = asked.end_row;
+                    let width = (asked.end_column - asked.start_column + 1) as usize;
+                    let mut columns = Vec::with_capacity(width);
+                    for column in asked.start_column..=asked.end_column {
+                        let shown = self
+                            .cell_here(sheet, asked.start_row, column)
+                            .map(|cell| shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref()))
+                            .unwrap_or_default();
+                        columns.push(if shown.is_empty() { next_column_name(&columns) } else { shown });
+                    }
+                    let auto_named: Vec<bool> = (asked.start_column..=asked.end_column)
+                        .map(|column| {
+                            let slot = column.checked_sub(whole.start_column).map(|slot| slot as usize);
+                            slot.and_then(|slot| {
+                                self.table_extra
+                                    .get(&id)
+                                    .and_then(|extra| extra.auto_named.get(slot).copied())
+                            })
+                            .unwrap_or(false)
+                        })
+                        .collect();
+                    self.workbook.sheets[sheet].tables[index].columns = columns;
+                    if let Some(extra) = self.table_extra.get_mut(&id) {
+                        extra.calculations.resize(width, 0);
+                        extra.auto_named = auto_named;
+                    }
+                    Value::Empty
+                } else if name.eq_ignore_ascii_case("unlist") {
+                    // The look stays as the cells' own: measured, the header
+                    // is still bold after `Unlist`.
+                    self.bake_table_dress(sheet, index);
+                    self.workbook.sheets[sheet].tables.remove(index);
+                    self.table_handles.retain(|(held, _, _)| *held != id);
+                    Value::Empty
+                } else if name.eq_ignore_ascii_case("delete") {
+                    self.workbook.sheets[sheet].tables.remove(index);
+                    self.table_handles.retain(|(held, _, _)| *held != id);
+                    self.clear_range(whole, true, true)?;
+                    Value::Empty
+                } else {
+                    return Ok(None);
+                };
+                Ok(Some(answer))
+            }
+            TablePart::Rows => {
+                let count = if first_data > last_data { 0 } else { last_data - first_data + 1 };
+                let answer = if name.eq_ignore_ascii_case("count") {
+                    Value::Integer(i64::from(count))
+                } else if name.eq_ignore_ascii_case("item") {
+                    let [wanted] = args else {
+                        return Err("ListRows.Item takes one number".to_string());
+                    };
+                    let index = positive_index(wanted, "ListRows index")?;
+                    if index > count {
+                        return Err(format!("the table has no row {index}"));
+                    }
+                    self.object(HostObject::ListRow(id, index))
+                } else if name.eq_ignore_ascii_case("add") {
+                    // `Add [Position]`: a row under the data, or put in at the
+                    // position with the rows from there moving down within the
+                    // table's columns.
+                    let position = match args.first() {
+                        None | Some(Value::Missing) => None,
+                        Some(value) => Some(positive_index(value, "ListRows.Add Position")?),
+                    };
+                    let at_row = match position {
+                        Some(position) if position <= count => first_data + position - 1,
+                        _ => last_data + 1,
+                    };
+                    let line = CellRange {
+                        sheet,
+                        start_row: at_row,
+                        end_row: at_row,
+                        start_column: whole.start_column,
+                        end_column: whole.end_column,
+                    };
+                    // The row is put in, whatever sat there moving down within
+                    // the table's columns; inside the table the shift takes
+                    // the table's end along, under it the table grows to it.
+                    self.shift_cells(line, false, true)?;
+                    if at_row > whole.end_row {
+                        self.workbook.sheets[sheet].tables[index].end_row += 1;
+                    }
+                    let made = if position.is_some_and(|position| position <= count) {
+                        position.unwrap_or(1)
+                    } else {
+                        count + 1
+                    };
+                    self.object(HostObject::ListRow(id, made))
+                } else if name.eq_ignore_ascii_case("parent") {
+                    self.object(HostObject::ListObject(id))
+                } else {
+                    return Ok(None);
+                };
+                Ok(Some(answer))
+            }
+            TablePart::Row(row_index) => {
+                let row = first_data + row_index - 1;
+                if row > last_data {
+                    return Err(host_error(424, "the row has been deleted"));
+                }
+                let line = CellRange {
+                    sheet,
+                    start_row: row,
+                    end_row: row,
+                    start_column: whole.start_column,
+                    end_column: whole.end_column,
+                };
+                let answer = if name.eq_ignore_ascii_case("range") {
+                    self.object(HostObject::Range(line))
+                } else if name.eq_ignore_ascii_case("index") {
+                    Value::Integer(i64::from(row_index))
+                } else if name.eq_ignore_ascii_case("delete") {
+                    // The shift takes the table's end up with the cells.
+                    self.shift_cells(line, false, false)?;
+                    Value::Empty
+                } else if name.eq_ignore_ascii_case("parent") {
+                    self.object(HostObject::ListObject(id))
+                } else {
+                    return Ok(None);
+                };
+                Ok(Some(answer))
+            }
+            TablePart::Columns => {
+                let answer = if name.eq_ignore_ascii_case("count") {
+                    Value::Integer(table.columns.len() as i64)
+                } else if name.eq_ignore_ascii_case("item") {
+                    let [wanted] = args else {
+                        return Err("ListColumns.Item takes one name or number".to_string());
+                    };
+                    self.list_column_item(id, &table, wanted)?
+                } else if name.eq_ignore_ascii_case("add") {
+                    // `Add [Position]`: a column on the right, headed with the
+                    // first free 列N, or put in at the position with the
+                    // columns from there moving right within the table's rows.
+                    let count = table.columns.len() as u32;
+                    let position = match args.first() {
+                        None | Some(Value::Missing) => None,
+                        Some(value) => Some(positive_index(value, "ListColumns.Add Position")?),
+                    };
+                    let at_column = match position {
+                        Some(position) if position <= count => whole.start_column + position - 1,
+                        _ => whole.end_column + 1,
+                    };
+                    // The column is put in, whatever sat there moving right
+                    // within the table's rows -- measured, a cell beside the
+                    // table moves over when a column is added on that side.
+                    let band = CellRange {
+                        sheet,
+                        start_row: whole.start_row,
+                        end_row: whole.end_row,
+                        start_column: at_column,
+                        end_column: at_column,
+                    };
+                    self.shift_cells(band, true, true)?;
+                    if at_column > whole.end_column {
+                        self.workbook.sheets[sheet].tables[index].end_col += 1;
+                    }
+                    let new_name = next_column_name(&table.columns);
+                    self.set_cell_value(
+                        CellAddress {
+                            sheet,
+                            row: whole.start_row,
+                            column: at_column,
+                        },
+                        CellValue::String(new_name.clone()),
+                    )?;
+                    let slot = (at_column - whole.start_column) as usize;
+                    let held = &mut self.workbook.sheets[sheet].tables[index];
+                    held.columns.insert(slot, new_name);
+                    if let Some(extra) = self.table_extra.get_mut(&id) {
+                        extra.calculations.insert(slot, 0);
+                        extra.auto_named.resize(slot, false);
+                        extra.auto_named.insert(slot, true);
+                    }
+                    self.object(HostObject::ListColumn(id, slot as u32 + 1))
+                } else if name.eq_ignore_ascii_case("parent") {
+                    self.object(HostObject::ListObject(id))
+                } else {
+                    return Ok(None);
+                };
+                Ok(Some(answer))
+            }
+            TablePart::Column(column_index) => {
+                let slot = column_index as usize - 1;
+                let Some(column_name) = table.columns.get(slot).cloned() else {
+                    return Err(host_error(424, "the column has been deleted"));
+                };
+                let column = whole.start_column + column_index - 1;
+                let answer = if name.eq_ignore_ascii_case("name") {
+                    Value::String(column_name)
+                } else if name.eq_ignore_ascii_case("index") {
+                    Value::Integer(i64::from(column_index))
+                } else if name.eq_ignore_ascii_case("range") {
+                    self.object(HostObject::Range(CellRange {
+                        sheet,
+                        start_row: whole.start_row,
+                        end_row: whole.end_row,
+                        start_column: column,
+                        end_column: column,
+                    }))
+                } else if name.eq_ignore_ascii_case("databodyrange") {
+                    match data_range(column, column) {
+                        Some(range) => self.object(HostObject::Range(range)),
+                        None => Value::Nothing,
+                    }
+                } else if name.eq_ignore_ascii_case("totalscalculation") {
+                    Value::Integer(
+                        self.table_extra
+                            .get(&id)
+                            .and_then(|extra| extra.calculations.get(slot).copied())
+                            .unwrap_or(0),
+                    )
+                } else if name.eq_ignore_ascii_case("delete") {
+                    let band = CellRange {
+                        sheet,
+                        start_row: whole.start_row,
+                        end_row: whole.end_row,
+                        start_column: column,
+                        end_column: column,
+                    };
+                    // The shift takes the table's right edge in.
+                    self.shift_cells(band, true, false)?;
+                    let held = &mut self.workbook.sheets[sheet].tables[index];
+                    held.columns.remove(slot);
+                    if let Some(extra) = self.table_extra.get_mut(&id) {
+                        if slot < extra.calculations.len() {
+                            extra.calculations.remove(slot);
+                        }
+                        if slot < extra.auto_named.len() {
+                            extra.auto_named.remove(slot);
+                        }
+                    }
+                    Value::Empty
+                } else if name.eq_ignore_ascii_case("parent") {
+                    self.object(HostObject::ListObject(id))
+                } else {
+                    return Ok(None);
+                };
+                Ok(Some(answer))
+            }
+        }
+    }
+
+    /// What `Worksheet.ListObjects` answers to.
+    fn list_objects_member(
+        &mut self,
+        sheet: usize,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        if name.eq_ignore_ascii_case("count") {
+            return Ok(Some(Value::Integer(self.workbook.sheets[sheet].tables.len() as i64)));
+        }
+        if name.eq_ignore_ascii_case("item") {
+            let [wanted] = args else {
+                return Err("ListObjects.Item takes one name or number".to_string());
+            };
+            let table_name = match wanted {
+                Value::String(named) => self.workbook.sheets[sheet]
+                    .tables
+                    .iter()
+                    .find(|table| table.name.eq_ignore_ascii_case(named))
+                    .map(|table| table.name.clone())
+                    .ok_or_else(|| format!("the sheet has no table {named:?}"))?,
+                value => {
+                    let index = positive_index(value, "ListObjects index")? as usize;
+                    self.workbook.sheets[sheet]
+                        .tables
+                        .get(index - 1)
+                        .map(|table| table.name.clone())
+                        .ok_or_else(|| format!("the sheet has no table number {index}"))?
+                }
+            };
+            let id = self.table_handle(sheet, &table_name);
+            return Ok(Some(self.object(HostObject::ListObject(id))));
+        }
+        if name.eq_ignore_ascii_case("add") {
+            return self.add_list_object(sheet, args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("parent") {
+            return Ok(Some(self.object(HostObject::Worksheet(sheet))));
+        }
+        Ok(None)
+    }
+
+    /// `Range.ListObject`: the table the range's first cell lies in, or
+    /// Nothing.
+    fn list_object_of(&mut self, range: CellRange) -> Value {
+        let at = CellAddress {
+            sheet: range.sheet,
+            row: range.start_row,
+            column: range.start_column,
+        };
+        match self.table_holding(at) {
+            Some((sheet, index)) => {
+                let name = self.workbook.sheets[sheet].tables[index].name.clone();
+                let id = self.table_handle(sheet, &name);
+                self.object(HostObject::ListObject(id))
+            }
+            None => Value::Nothing,
+        }
+    }
+
+    /// `ListColumns(n)` / `ListColumns("Name")`.
+    fn list_column_item(&mut self, id: u64, table: &Table, wanted: &Value) -> Result<Value, String> {
+        let index = match wanted {
+            Value::String(name) => table
+                .columns
+                .iter()
+                .position(|held| held.eq_ignore_ascii_case(name))
+                .map(|slot| slot as u32 + 1)
+                .ok_or_else(|| format!("the table has no column {name:?}"))?,
+            value => positive_index(value, "ListColumns index")?,
+        };
+        if index as usize > table.columns.len() {
+            return Err(format!("the table has no column {index}"));
+        }
+        Ok(self.object(HostObject::ListColumn(id, index)))
+    }
+
+    /// Set a part of a table: its name, a column's name, its style, whether
+    /// its totals or stripes show, or what a column totals.
+    fn set_table(&mut self, id: u64, part: TablePart, name: &str, value: Value) -> Result<bool, String> {
+        let (sheet, index) = self.table_at(id)?;
+        match part {
+            TablePart::Whole => {
+                if name.eq_ignore_ascii_case("name") {
+                    let Value::String(new_name) = &value else {
+                        return Err("a table's name is text".to_string());
+                    };
+                    check_name(new_name)?;
+                    let old = self.workbook.sheets[sheet].tables[index].name.clone();
+                    if self.workbook.sheets.iter().flat_map(|held| held.tables.iter()).any(|table| {
+                        table.name.eq_ignore_ascii_case(new_name) && table.name != old
+                    }) {
+                        return Err(format!("there is already a table named {new_name:?}"));
+                    }
+                    self.workbook.sheets[sheet].tables[index].name = new_name.clone();
+                    if let Some(handle) = self.table_handles.iter_mut().find(|(held, _, _)| *held == id) {
+                        handle.2 = new_name.clone();
+                    }
+                    // Formulas naming the table follow it.
+                    for held in &mut self.workbook.sheets {
+                        for row in &mut held.rows {
+                            for cell in &mut row.cells {
+                                if let Some(formula) = cell.formula.as_mut() {
+                                    if formula.contains(&format!("{old}[")) {
+                                        *formula = formula.replace(&format!("{old}["), &format!("{new_name}["));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return Ok(true);
+                }
+                if name.eq_ignore_ascii_case("tablestyle") {
+                    let Value::String(style) = &value else {
+                        return Err(host_error(450, "a table style is named"));
+                    };
+                    if !known_table_style(style) {
+                        return Err(host_error(450, format!("there is no table style {style:?}")));
+                    }
+                    let (accent, band, rule) = table_colours(style);
+                    let table = &mut self.workbook.sheets[sheet].tables[index];
+                    table.style = Some(style.clone());
+                    table.accent = accent;
+                    table.band = band;
+                    table.rule = rule;
+                    return Ok(true);
+                }
+                if name.eq_ignore_ascii_case("showtotals") {
+                    if let Some(shown) = style_face_boolean(&value, "ListObject.ShowTotals")? {
+                        self.show_table_totals(id, shown)?;
+                    }
+                    return Ok(true);
+                }
+                if name.eq_ignore_ascii_case("showtablestylerowstripes") {
+                    if let Some(banded) = style_face_boolean(&value, "ListObject.ShowTableStyleRowStripes")? {
+                        self.workbook.sheets[sheet].tables[index].banded_rows = banded;
+                    }
+                    return Ok(true);
+                }
+                if name.eq_ignore_ascii_case("showautofilter")
+                    || name.eq_ignore_ascii_case("showheaders")
+                    || name.eq_ignore_ascii_case("showtablestylecolumnstripes")
+                    || name.eq_ignore_ascii_case("showtablestylefirstcolumn")
+                    || name.eq_ignore_ascii_case("showtablestylelastcolumn")
+                {
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+            TablePart::Column(column_index) => {
+                let slot = column_index as usize - 1;
+                let table = &self.workbook.sheets[sheet].tables[index];
+                let (start_row, column) = (table.start_row, table.start_col + column_index - 1);
+                if slot >= table.columns.len() {
+                    return Err(host_error(424, "the column has been deleted"));
+                }
+                if name.eq_ignore_ascii_case("name") {
+                    let Value::String(new_name) = &value else {
+                        return Err("a column's name is text".to_string());
+                    };
+                    self.workbook.sheets[sheet].tables[index].columns[slot] = new_name.clone();
+                    if let Some(extra) = self.table_extra.get_mut(&id) {
+                        if slot < extra.auto_named.len() {
+                            extra.auto_named[slot] = false;
+                        }
+                    }
+                    self.set_cell_value(
+                        CellAddress {
+                            sheet,
+                            row: start_row,
+                            column,
+                        },
+                        CellValue::String(new_name.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if name.eq_ignore_ascii_case("totalscalculation") {
+                    let calculation = sort_number(&value, "ListColumn.TotalsCalculation")?;
+                    if !(0..=8).contains(&calculation) {
+                        return Err("that is not a totals calculation".to_string());
+                    }
+                    if self.totals_rows(id) == 0 {
+                        return Err("the table shows no totals row".to_string());
+                    }
+                    let (table_name, column_name, totals_row) = {
+                        let table = &self.workbook.sheets[sheet].tables[index];
+                        (table.name.clone(), table.columns[slot].clone(), table.end_row)
+                    };
+                    if let Some(extra) = self.table_extra.get_mut(&id) {
+                        extra.calculations.resize(slot + 1, 0);
+                        extra.calculations[slot] = calculation;
+                    }
+                    let at = CellAddress {
+                        sheet,
+                        row: totals_row,
+                        column,
+                    };
+                    match subtotal_function(calculation) {
+                        Some(function) => self.set_cell_formula(
+                            at,
+                            format!("SUBTOTAL({function},{table_name}[{column_name}])"),
+                        )?,
+                        None => self.set_cell_value(at, CellValue::Empty)?,
+                    }
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Write a table's look into its cells' own dress, for a table being
+    /// unlisted: the header bold and white on the accent, the odd data rows
+    /// on the band.
+    fn bake_table_dress(&mut self, sheet: usize, index: usize) {
+        let table = self.workbook.sheets[sheet].tables[index].clone();
+        let dark_header = table
+            .style
+            .as_deref()
+            .is_some_and(|style| !style.starts_with("TableStyleLight"));
+        let accent = table.accent.clone().filter(|_| dark_header);
+        let header = CellRange {
+            sheet,
+            start_row: table.start_row,
+            end_row: table.start_row,
+            start_column: table.start_col,
+            end_column: table.end_col,
+        };
+        let _ = self.set_range_style(header, |_, style| {
+            style.bold = true;
+            if let Some(accent) = &accent {
+                style.font_color = Some("FFFFFF".to_string());
+                style.bg_color = Some(accent.clone());
+            }
+        });
+        if let Some(band) = table.band.clone().filter(|_| table.banded_rows) {
+            for (step, row) in (table.start_row + table.header_rows..=table.end_row).enumerate() {
+                if step % 2 != 0 {
+                    continue;
+                }
+                let line = CellRange {
+                    sheet,
+                    start_row: row,
+                    end_row: row,
+                    start_column: table.start_col,
+                    end_column: table.end_col,
+                };
+                let _ = self.set_range_style(line, |_, style| style.bg_color = Some(band.clone()));
+            }
+        }
+    }
+
     fn conditions_range(&self, object: &ObjectRef) -> Option<CellRange> {
         match self.objects.get(object.handle as usize) {
             Some(HostObject::FormatConditions(range)) => Some(*range),
@@ -3006,6 +4113,27 @@ impl<'a> WorkbookHost<'a> {
         let (mut dress, mut fill, mut strikethrough) = base;
         let (mut set_bold, mut set_italic, mut set_underline, mut set_strike, mut set_colour, mut set_fill) =
             (false, false, false, false, false, false);
+        // A table dresses its cells under everything else: measured, a
+        // TableStyleMedium2 header shows bold, white on the accent, and the
+        // first data row shows the band.
+        if let Some((_, index)) = self.table_holding(at) {
+            let table = &self.workbook.sheets[at.sheet].tables[index];
+            let dark_header = table
+                .style
+                .as_deref()
+                .is_some_and(|style| !style.starts_with("TableStyleLight"));
+            if at.row < table.start_row + table.header_rows {
+                dress.bold = true;
+                if let (Some(accent), true) = (table.accent.clone(), dark_header) {
+                    dress.color = Some("FFFFFF".to_string());
+                    fill = Some(accent);
+                }
+            } else if table.banded_rows && (at.row - table.start_row - table.header_rows) % 2 == 0 {
+                if let Some(band) = table.band.clone() {
+                    fill = Some(band);
+                }
+            }
+        }
         for condition in self.conditions.iter().filter(|condition| {
             condition.sheet == at.sheet
                 && condition
@@ -6459,6 +7587,15 @@ impl<'a> WorkbookHost<'a> {
             return Value::String(String::new());
         };
         if let Some(formula) = cell.formula.as_deref() {
+            // Inside a table, a formula naming that table reads without the
+            // name: measured, the totals row reads `=SUBTOTAL(103,[Note])`.
+            let formula = match self.table_holding(address) {
+                Some((sheet, index)) => {
+                    let name = &self.workbook.sheets[sheet].tables[index].name;
+                    formula.replace(&format!("{name}["), "[")
+                }
+                None => formula.to_string(),
+            };
             return Value::String(format!("={formula}"));
         }
         Value::String(match from_cell_value(&cell.value) {
@@ -7249,6 +8386,7 @@ impl<'a> WorkbookHost<'a> {
         // writes A5 and then raises 1004. So each unlocked cell is written and
         // the refusal comes at the end.
         let mut refused = false;
+        let mut header_writes: Vec<CellAddress> = Vec::new();
         for row_step in 0..=(range.end_row - range.start_row) {
             for column_step in 0..=(range.end_column - range.start_column) {
                 let address = CellAddress {
@@ -7260,6 +8398,8 @@ impl<'a> WorkbookHost<'a> {
                     refused = true;
                     continue;
                 }
+                self.grow_table_toward(address)?;
+                header_writes.push(address);
                 let from_row = if block.rows == 1 { 0 } else { row_step as usize };
                 let from_column = if block.columns == 1 {
                     0
@@ -7301,10 +8441,70 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
         }
+        for address in header_writes {
+            self.rename_table_column_from_cell(address)?;
+        }
         if refused {
             return Err(
                 "the cell is locked and the sheet is protected; unprotect it first".to_string(),
             );
+        }
+        Ok(())
+    }
+
+    /// A table's column takes the name typed into its header cell. Measured:
+    /// typing `Qty` over the header of a table whose second column is
+    /// already `Qty` keeps the typed cell as it is and renames the OTHER
+    /// column `Qty2`.
+    fn rename_table_column_from_cell(&mut self, at: CellAddress) -> Result<(), String> {
+        let Some((sheet, index)) = self.table_holding(at) else {
+            return Ok(());
+        };
+        let table = &self.workbook.sheets[sheet].tables[index];
+        if at.row != table.start_row || table.header_rows == 0 {
+            return Ok(());
+        }
+        let slot = (at.column - table.start_col) as usize;
+        let typed = self
+            .cell_here(at.sheet, at.row, at.column)
+            .map(|cell| shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref()))
+            .unwrap_or_default();
+        let columns = table.columns.clone();
+        let start_col = table.start_col;
+        if typed.is_empty() || columns.get(slot).is_some_and(|held| *held == typed) {
+            return Ok(());
+        }
+        let mut renamed: Vec<(usize, String)> = Vec::new();
+        for (other, held) in columns.iter().enumerate() {
+            if other != slot && *held == typed {
+                let fresh = (2..)
+                    .map(|number| format!("{typed}{number}"))
+                    .find(|name| !columns.iter().any(|held| held == name))
+                    .expect("the numbers do not run out");
+                renamed.push((other, fresh));
+            }
+        }
+        let table_name = table.name.clone();
+        let table = &mut self.workbook.sheets[sheet].tables[index];
+        table.columns[slot] = typed;
+        for (other, fresh) in &renamed {
+            table.columns[*other] = fresh.clone();
+        }
+        let id = self.table_handle(sheet, &table_name);
+        if let Some(extra) = self.table_extra.get_mut(&id) {
+            if slot < extra.auto_named.len() {
+                extra.auto_named[slot] = false;
+            }
+        }
+        for (other, fresh) in renamed {
+            self.set_cell_value(
+                CellAddress {
+                    sheet,
+                    row: at.row,
+                    column: start_col + other as u32,
+                },
+                CellValue::String(fresh),
+            )?;
         }
         Ok(())
     }
@@ -7942,6 +9142,35 @@ impl<'a> WorkbookHost<'a> {
             })
             .collect();
         self.validations = moved_validations.into_iter().collect();
+        // A table in the way of the shift moves with its cells: a band of
+        // rows or columns put in above or left of it, or through it, and one
+        // taken out.
+        self.workbook.sheets[sheet].tables.retain_mut(|table| {
+            let (crossing_first, crossing_last) = if sideways {
+                (table.start_row, table.end_row)
+            } else {
+                (table.start_col + 1, table.end_col + 1)
+            };
+            if !(crossing_first..=crossing_last).any(taking_part) {
+                return true;
+            }
+            let (near, far) = if sideways {
+                (table.start_col + 1, table.end_col + 1)
+            } else {
+                (table.start_row, table.end_row)
+            };
+            let (Some(near), Some(far)) = (moved(near), moved(far)) else {
+                return false;
+            };
+            if sideways {
+                table.start_col = near - 1;
+                table.end_col = far - 1;
+            } else {
+                table.start_row = near;
+                table.end_row = far;
+            }
+            true
+        });
         for condition in &mut self.conditions {
             if condition.sheet != sheet {
                 continue;
@@ -9777,6 +11006,13 @@ impl Host for WorkbookHost<'_> {
                         _ => Err("Hyperlinks expects zero or one argument".to_string()),
                     };
                 }
+                if name.eq_ignore_ascii_case("listobjects") {
+                    return match args {
+                        [] => Ok(Some(self.object(HostObject::ListObjects(sheet)))),
+                        [wanted] => self.list_objects_member(sheet, "item", std::slice::from_ref(wanted)),
+                        _ => Err("ListObjects expects zero or one argument".to_string()),
+                    };
+                }
                 // `Protect [password, ...]` and `Unprotect [password]`.
                 // Measured: a wrong password on Unprotect is error 1004 and
                 // leaves the sheet protected; no password either way is fine;
@@ -9914,6 +11150,12 @@ impl Host for WorkbookHost<'_> {
             }
             if let Some(range) = self.conditions_range(receiver) {
                 return self.conditions_member(range, name, args);
+            }
+            if let Some(sheet) = self.list_objects_sheet(receiver) {
+                return self.list_objects_member(sheet, name, args);
+            }
+            if let Some((id, part)) = self.table_part(receiver) {
+                return self.table_member(id, part, name, args);
             }
             if let Some((id, face)) = self.condition_id(receiver) {
                 return self.condition_member(id, face, name, args);
@@ -10144,6 +11386,9 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("displayformat") && args.is_empty() {
                     return Ok(Some(self.object(HostObject::DisplayFormat(range))));
+                }
+                if name.eq_ignore_ascii_case("listobject") && args.is_empty() {
+                    return Ok(Some(self.list_object_of(range)));
                 }
                 if name.eq_ignore_ascii_case("hyperlinks") {
                     let scope = HyperlinkScope::Range(range);
@@ -10514,6 +11759,12 @@ impl Host for WorkbookHost<'_> {
                 Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
             } else if receiver.is_some_and(|receiver| self.validation_range(receiver).is_some()) {
                 Some(&["Type", "AlertStyle", "Operator", "Formula1", "Formula2"][..])
+            } else if receiver.is_some_and(|receiver| self.list_objects_sheet(receiver).is_some()) {
+                Some(&["SourceType", "Source", "LinkSource", "XlListObjectHasHeaders", "Destination"][..])
+            } else if receiver
+                .is_some_and(|receiver| matches!(self.table_part(receiver), Some((_, TablePart::Rows | TablePart::Columns))))
+            {
+                Some(&["Position", "AlwaysInsert"][..])
             } else if receiver.is_some_and(|receiver| self.conditions_range(receiver).is_some()) {
                 Some(
                     &[
@@ -10685,6 +11936,12 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(range) = self.conditions_range(receiver) {
             return self.conditions_member(range, name, &[]);
+        }
+        if let Some(sheet) = self.list_objects_sheet(receiver) {
+            return self.list_objects_member(sheet, name, &[]);
+        }
+        if let Some((id, part)) = self.table_part(receiver) {
+            return self.table_member(id, part, name, &[]);
         }
         if let Some((id, face)) = self.condition_id(receiver) {
             return self.condition_member(id, face, name, &[]);
@@ -10983,6 +12240,9 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("hyperlinks") {
                 return Ok(Some(self.object(HostObject::Hyperlinks(HyperlinkScope::Sheet(sheet)))));
             }
+            if name.eq_ignore_ascii_case("listobjects") {
+                return Ok(Some(self.object(HostObject::ListObjects(sheet))));
+            }
             // What the sheet was protected with. `ProtectContents` is False
             // for a sheet protected with `Contents:=False`, and
             // `ProtectionMode` is the `UserInterfaceOnly` flag.
@@ -11263,6 +12523,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("displayformat") {
             return Ok(Some(self.object(HostObject::DisplayFormat(range))));
         }
+        if name.eq_ignore_ascii_case("listobject") {
+            return Ok(Some(self.list_object_of(range)));
+        }
         if name.eq_ignore_ascii_case("hyperlinks") {
             return Ok(Some(self.object(HostObject::Hyperlinks(HyperlinkScope::Range(range)))));
         }
@@ -11541,6 +12804,9 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some((id, face)) = self.condition_id(receiver) {
             return self.set_condition(id, face, name, value);
+        }
+        if let Some((id, part)) = self.table_part(receiver) {
+            return self.set_table(id, part, name, value);
         }
         if let Some((at, start, length)) = self.characters_of(receiver) {
             if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("caption") {
@@ -12205,6 +13471,37 @@ impl Host for WorkbookHost<'_> {
             let mut items = Vec::new();
             for id in self.conditions_reaching(range) {
                 items.push(self.object(HostObject::FormatCondition(id)));
+            }
+            return Ok(Some(items));
+        }
+        if let Some(sheet) = self.list_objects_sheet(receiver) {
+            let names: Vec<String> = self.workbook.sheets[sheet]
+                .tables
+                .iter()
+                .map(|table| table.name.clone())
+                .collect();
+            let mut items = Vec::new();
+            for name in names {
+                let id = self.table_handle(sheet, &name);
+                items.push(self.object(HostObject::ListObject(id)));
+            }
+            return Ok(Some(items));
+        }
+        if let Some((id, TablePart::Rows)) = self.table_part(receiver) {
+            let (sheet, index) = self.table_at(id)?;
+            let (first, last) = self.table_data_rows(id, sheet, index);
+            let mut items = Vec::new();
+            for row_index in 1..=last.saturating_sub(first) + u32::from(first <= last) {
+                items.push(self.object(HostObject::ListRow(id, row_index)));
+            }
+            return Ok(Some(items));
+        }
+        if let Some((id, TablePart::Columns)) = self.table_part(receiver) {
+            let (sheet, index) = self.table_at(id)?;
+            let count = self.workbook.sheets[sheet].tables[index].columns.len() as u32;
+            let mut items = Vec::new();
+            for column_index in 1..=count {
+                items.push(self.object(HostObject::ListColumn(id, column_index)));
             }
             return Ok(Some(items));
         }
@@ -14243,6 +15540,21 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastecolumnwidths" => 8,
         "xlpastevaluesandnumberformats" => 12,
         "xlpastecomments" => -4144,
+        // Tables.
+        "xlsrcrange" => 1,
+        "xlsrcexternal" => 0,
+        "xlsrcxml" => 2,
+        "xlsrcquery" => 3,
+        "xlsrcmodel" => 4,
+        "xltotalscalculationnone" => 0,
+        "xltotalscalculationsum" => 1,
+        "xltotalscalculationaverage" => 2,
+        "xltotalscalculationcount" => 3,
+        "xltotalscalculationcountnums" => 4,
+        "xltotalscalculationmin" => 5,
+        "xltotalscalculationmax" => 6,
+        "xltotalscalculationstddev" => 7,
+        "xltotalscalculationvar" => 8,
         // Conditional formats.
         "xlcellvalue" => 1,
         "xlexpression" => 2,
@@ -16246,6 +17558,75 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// A table is made, grown, totalled, reshaped and unlisted as Excel does
+    /// it.
+    ///
+    /// Measured against Excel: `ListObjects.Add` on a range with headers
+    /// names the table テーブル1, dresses it TableStyleMedium2 and reads its
+    /// columns off the header row; the header shows bold and white on the
+    /// accent and the first data row shows the band; a row added goes under
+    /// the data and a column added is headed 列1; typing just under or just
+    /// right of the table grows it; `ShowTotals` puts 集計 and a SUBTOTAL
+    /// under the last column; a table without headers gets a header row put
+    /// in above its data; overlapping tables are 1004; a bad style is 450;
+    /// `Unlist` leaves the header bold; and a deleted table's name is 424.
+    #[test]
+    fn a_table_is_made_grown_totalled_reshaped_and_unlisted() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, lo As Object, lo2 As Object, v As Variant
+               On Error Resume Next
+               Range(\"A1\").Value = \"Name\"
+               Range(\"B1\").Value = \"Qty\"
+               Range(\"A2\").Value = \"x\"
+               Range(\"B2\").Value = 1
+               Range(\"A3\").Value = \"y\"
+               Range(\"B3\").Value = 2
+               Set lo = ActiveSheet.ListObjects.Add(xlSrcRange, Range(\"A1:B3\"), , xlYes)
+               out = lo.Name & \"/\" & lo.Range.Address & \"/\" & lo.HeaderRowRange.Address & \"/\" & lo.DataBodyRange.Address & \"/\" & lo.ListRows.Count & lo.ListColumns.Count & \"/\" & lo.ListColumns(2).Name & \"/\" & lo.TableStyle & \"|\"
+               out = out & Range(\"A1\").DisplayFormat.Font.Bold & Range(\"A1\").DisplayFormat.Interior.Color & \"/\" & Range(\"A2\").DisplayFormat.Interior.Color & Range(\"A3\").DisplayFormat.Interior.Color & \"/\" & Range(\"B3\").ListObject.Name & (Range(\"D1\").ListObject Is Nothing) & \"|\"
+               lo.ListRows.Add
+               lo.ListColumns.Add
+               out = out & lo.Range.Address & \"/\" & Range(\"C1\").Value & \"/\" & lo.ListRows(3).Range.Address & \"|\"
+               Range(\"A5\").Value = \"under\"
+               Range(\"D2\").Value = \"beside\"
+               out = out & lo.Range.Address & \"/\" & Range(\"D1\").Value & \"|\"
+               lo.ShowTotals = True
+               out = out & lo.TotalsRowRange.Address & \"/\" & Range(\"A6\").Value & \"/\" & Range(\"D6\").Formula & \"|\"
+               lo.ShowTotals = False
+               lo.Name = \"T\"
+               Set lo2 = ActiveSheet.ListObjects.Add(xlSrcRange, Range(\"F1:F2\"), , xlNo)
+               out = out & lo2.Name & \"/\" & lo2.Range.Address & \"/\" & Range(\"F1\").Value & \"|\"
+               ActiveSheet.ListObjects.Add xlSrcRange, Range(\"A2:B3\")
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               lo.TableStyle = \"NoSuchStyle\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               lo.Unlist
+               out = out & ActiveSheet.ListObjects.Count & \"/\" & Range(\"A1\").Font.Bold & \"|\"
+               lo2.Delete
+               v = lo2.Name
+               out = out & Err.Number & \"/\" & Range(\"F2\").Value
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "テーブル1/$A$1:$B$3/$A$1:$B$1/$A$2:$B$3/22/Qty/TableStyleMedium2|True8544277/1611539216777215/テーブル1True|$A$1:$C$4/列1/$A$4:$C$4|$A$1:$D$5/列2|$A$6:$D$6/集計/=SUBTOTAL(103,[列2])|テーブル2/$F$1:$F$3/列1|1004|450|1/True|424/"
+                    .to_string()
+            )
         );
     }
 
