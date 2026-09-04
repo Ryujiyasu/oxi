@@ -12,6 +12,7 @@ use oxidocs_core::ir::{Block, Paragraph, Table, Alignment, TextBox, FloatingPosi
 use oxidocs_core::font::FontMetricsRegistry;
 use oxipdf_core::ir::*;
 
+mod fontidx;
 mod vba;
 
 fn main() {
@@ -22,6 +23,46 @@ fn main() {
             let input = args.get(2).expect("Usage: oxi docx-to-pdf <input.docx> <output.pdf>");
             let output = args.get(3).expect("Usage: oxi docx-to-pdf <input.docx> <output.pdf>");
             docx_to_pdf(input, output);
+        }
+        Some("fonts-index") => {
+            // Instrument for the font resolver: report what the machine
+            // actually offers, so a substitution decision can be read
+            // rather than guessed.
+            let index = fontidx::FontIndex::build(&bundled_font_dirs());
+            println!("faces indexed: {}", index.len());
+            let query = args.get(2).map(|s| s.as_str());
+            let families: Vec<&str> = match query {
+                Some(q) => vec![q],
+                None => vec![
+                    "Calibri", "Cambria", "Arial", "Times New Roman", "Courier New",
+                    "Verdana", "Tahoma", "Segoe UI", "Georgia", "Wingdings", "Symbol",
+                    "Carlito", "Liberation Sans", "Liberation Serif", "Liberation Mono",
+                ],
+            };
+            for family in families {
+                for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let style = match (bold, italic) {
+                        (false, false) => "regular",
+                        (true, false) => "bold",
+                        (false, true) => "italic",
+                        (true, true) => "bold-italic",
+                    };
+                    match index.find(family, bold, italic) {
+                        Some(face) if face.bold == bold && face.italic == italic => println!(
+                            "  {family:<18} {style:<12} {}#{}",
+                            face.path.display(),
+                            face.index
+                        ),
+                        Some(face) => println!(
+                            "  {family:<18} {style:<12} DEGRADED -> {} ({}{})",
+                            face.path.display(),
+                            if face.bold { "bold" } else { "regular" },
+                            if face.italic { "+italic" } else { "" }
+                        ),
+                        None => println!("  {family:<18} {style:<12} ABSENT"),
+                    }
+                }
+            }
         }
         Some("vba-analyze") => {
             let input = args.get(2).expect("Usage: oxi vba-analyze <input.xlsm>");
@@ -758,19 +799,186 @@ fn char_width(ch: char, font_size: f64) -> f64 {
     }
 }
 
+/// Faces the document actually asks for, resolved to files on this machine.
+/// Built once per conversion by `build_embedded_fonts`, then read by
+/// `resolve_font` so the emitter and the embedder agree on one name per face.
+#[derive(Debug, Default)]
+struct FontPlan {
+    /// (lowercased family, bold, italic) -> PDF font key that was embedded
+    keys: HashMap<(String, bool, bool), String>,
+}
+
+static FONT_PLAN: std::sync::OnceLock<FontPlan> = std::sync::OnceLock::new();
+
+/// Metric-compatible free substitutes, used only when the real family is
+/// absent. Measured 2026-09-02 against the Microsoft originals: Carlito and
+/// the three Liberation faces match their counterpart's advance width on all
+/// 95 printable ASCII characters, so substituting one moves no glyph.
+/// Caladea does NOT -- it differs on every ASCII character (up to 0.19 em),
+/// so a Cambria document substituted this way reflows within the line. It is
+/// still a closer answer than letting the viewer pick, but it is not exact.
+const SUBSTITUTES: &[(&str, &str)] = &[
+    ("calibri", "Carlito"),
+    ("cambria", "Caladea"),
+    ("arial", "Liberation Sans"),
+    ("helvetica", "Liberation Sans"),
+    // Helvetica Neue deliberately has no entry. Substituting Liberation Sans
+    // for it was measured on the blind corpus and came out *worse* than
+    // letting it fall to base-14 Helvetica — a reminder that a substitute is
+    // only worth making when its metrics are known to match, not when the
+    // families merely look alike.
+    ("times new roman", "Liberation Serif"),
+    ("times", "Liberation Serif"),
+    ("courier new", "Liberation Mono"),
+    ("courier", "Liberation Mono"),
+    // Liberation Sans Narrow matches Arial Narrow exactly — measured
+    // 2026-09-02, all 95 printable ASCII widths identical, hhea identical.
+    // It is NOT in `fonts/` and must not be added there: Narrow is still
+    // Liberation 1.x, which is GPLv2-with-font-exception, and this project
+    // ships only MPL-2.0-compatible third-party files. Mapping to it costs
+    // nothing and redistributes nothing — it is used when the machine already
+    // has it, which most Linux distributions do.
+    ("arial narrow", "Liberation Sans Narrow"),
+];
+
+/// The machine's font index, built once. Every path that needs a font file
+/// goes through here, so what a conversion can see is decided in one place and
+/// the environment (a container with no Microsoft fonts, say) is honoured
+/// consistently rather than by whichever caller happened to hardcode a path.
+fn font_index() -> &'static fontidx::FontIndex {
+    static INDEX: std::sync::OnceLock<fontidx::FontIndex> = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| fontidx::FontIndex::build(&bundled_font_dirs()))
+}
+
+/// Path to the file holding `family` at this weight: the family itself, else
+/// its bundled metric-compatible stand-in. TTC members past the first are
+/// skipped because the subsetter addresses files, not collection entries.
+fn resolve_face_path(family: &str, bold: bool, italic: bool) -> Option<String> {
+    let index = font_index();
+    // The `index == 0` test belongs to each candidate, not to the pair: a
+    // family that only exists deeper in a collection should still let the
+    // bundled stand-in be tried, rather than taking the whole lookup down.
+    index
+        .find(family, bold, italic)
+        .filter(|face| face.index == 0)
+        .or_else(|| {
+            substitute_for(family)
+                .and_then(|s| index.find(s, bold, italic))
+                .filter(|face| face.index == 0)
+        })
+        .map(|face| face.path.to_string_lossy().to_string())
+}
+
+/// Split a trailing weight or slope word off a family name, as in
+/// `Trebuchet MS Bold` or `Calibri Light`. Some producers write the full face
+/// name where the family belongs, and the shortened name is often one we can
+/// resolve or substitute when the long one is not.
+///
+/// Only weight and slope are stripped. Width is not: `Arial Narrow` is its own
+/// family with its own advances, and turning it into `Arial` would silently
+/// change every line length — the same mistake as substituting a face that
+/// merely looks similar.
+fn split_style_suffix(family: &str) -> Option<(String, bool, bool)> {
+    const WEIGHTS: &[&str] = &[
+        "Thin", "ExtraLight", "UltraLight", "Light", "Regular", "Book",
+        "Medium", "Semibold", "SemiBold", "Demibold", "DemiBold", "Bold",
+        "ExtraBold", "UltraBold", "Black", "Heavy",
+    ];
+    const SLOPES: &[&str] = &["Italic", "Oblique"];
+
+    let mut words: Vec<&str> = family.split_whitespace().collect();
+    let mut bold = false;
+    let mut italic = false;
+    let mut stripped = false;
+    while words.len() > 1 {
+        let last = words[words.len() - 1];
+        if SLOPES.iter().any(|s| s.eq_ignore_ascii_case(last)) {
+            italic = true;
+        } else if WEIGHTS.iter().any(|w| w.eq_ignore_ascii_case(last)) {
+            // "Bold" and the heavier names are a weight we can ask for; the
+            // lighter ones just are not this family's regular face, and asking
+            // for regular is the closest we can honestly get.
+            if last.eq_ignore_ascii_case("Bold")
+                || last.eq_ignore_ascii_case("Black")
+                || last.eq_ignore_ascii_case("Heavy")
+            {
+                bold = true;
+            }
+        } else {
+            break;
+        }
+        words.pop();
+        stripped = true;
+    }
+    if !stripped {
+        return None;
+    }
+    Some((words.join(" "), bold, italic))
+}
+
+fn substitute_for(family: &str) -> Option<&'static str> {
+    let key = family.trim().to_lowercase();
+    SUBSTITUTES
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, sub)| *sub)
+}
+
+/// PDF font key for one face. Derived from the family name alone so the
+/// emitter can name a face before the plan is built, and so two runs asking
+/// for the same face always land on the same key.
+fn font_key(family: &str, bold: bool, italic: bool) -> String {
+    let mut key = String::from("F");
+    for ch in family.chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch);
+        }
+    }
+    if bold {
+        key.push_str("_B");
+    }
+    if italic {
+        key.push_str("_I");
+    }
+    key
+}
+
+/// Directories holding the fonts shipped with Oxi: `fonts/` beside the
+/// executable for an installed build, and the crate's own `fonts/` so a
+/// `target/release` binary run from the source tree finds them too.
+fn bundled_font_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    let exe = std::env::current_exe().ok();
+    if let Some(dir) = exe.as_ref().and_then(|e| e.parent()) {
+        dirs.push(dir.join("fonts"));
+    }
+
+    // `CARGO_MANIFEST_DIR` is an absolute path baked in at compile time, so a
+    // binary handed to someone else keeps reading the build machine's working
+    // directory — a path that by then may hold nothing, or somebody else's
+    // fonts. Use it only when the running binary is still inside that source
+    // tree, which is the case it exists for: `cargo run` and `target/release`
+    // during development.
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let in_source_tree = manifest
+        .parent()
+        .and_then(|p| p.parent())
+        .zip(exe.as_ref())
+        .is_some_and(|(root, exe)| exe.starts_with(root));
+    if in_source_tree {
+        dirs.push(manifest.join("fonts"));
+    }
+    dirs
+}
+
 fn resolve_font(family: Option<&str>, bold: bool) -> String {
+    resolve_font_styled(family, bold, false)
+}
+
+fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String {
     let base = family.unwrap_or("Calibri");
     // CJK fonts: use bold variant when bold is requested
-    let is_cjk = matches!(base,
-        "ＭＳ ゴシック" | "MS ゴシック" | "MS Gothic" |
-        "ＭＳ Ｐゴシック" | "MS PGothic" |
-        "ＭＳ 明朝" | "MS 明朝" | "MS Mincho" |
-        "ＭＳ Ｐ明朝" | "MS PMincho"
-    ) || base.contains("Gothic") || base.contains("Mincho") || base.contains("游")
-        || base.contains("ＭＳ") || base.contains("ゴシック") || base.contains("明朝")
-        || base.contains("メイリオ") || base.contains("ヒラギノ");
-
-    if is_cjk {
+    if is_cjk_family(base) {
         if bold {
             return "OxiCJK-Bold".to_string();
         }
@@ -782,7 +990,17 @@ fn resolve_font(family: Option<&str>, bold: bool) -> String {
             _ => base.to_string(),
         };
     }
-    // Use embedded Latin fonts for Calibri/Arial (matching LayoutEngine metrics)
+    // A face the plan actually embedded wins over the base-14 mapping: the
+    // document's own family drawn with its own outlines and widths, rather
+    // than every sans family collapsed onto one file.
+    if let Some(plan) = FONT_PLAN.get() {
+        if let Some(key) = plan.keys.get(&(base.trim().to_lowercase(), bold, italic)) {
+            return key.clone();
+        }
+    }
+
+    // Nothing embedded for this face: fall back to the base-14 mapping, which
+    // at least names a font every viewer has.
     if bold {
         match base {
             "Calibri" | "Arial" | "Helvetica" => "OxiLatin-Bold".to_string(),
@@ -926,7 +1144,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
     let registry = FontMetricsRegistry::load();
 
     // Build embedded fonts for CJK text
-    let embedded_fonts = build_embedded_fonts(doc);
+    let embedded_fonts = build_embedded_fonts(doc, &layout_result);
 
     // Convert LayoutResult pages → PDF pages
     let pages: Vec<Page> = layout_result.pages.iter().map(|lp| {
@@ -969,7 +1187,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                     }
 
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
-                    let font_name = resolve_font(font_family.as_deref(), *bold);
+                    let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
 
                     // Split text into ASCII (Type1) and CJK (embedded) segments
                     // When font_name IS a CJK font, use it for all characters (no splitting).
@@ -981,15 +1199,51 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                     let mut seg_x = x;
                     let mut segments: Vec<(String, String, f64, f64)> = Vec::new();
 
+                    // Route a character to the CJK font only when the resolved
+                    // face has no glyph for it. The old test was "codepoint >
+                    // 0x7F", which sent curly quotes, dashes and accented Latin
+                    // — all present in the Latin face — into a Japanese Gothic
+                    // font. Without an embedded face there is no cmap to ask,
+                    // so the codepoint test remains the fallback.
+                    let latin_face = embedded_fonts.get(&font_name);
+                    // Only divert to a font that was actually loaded. The
+                    // decision to load one is made from the document's text;
+                    // this decision was made per character, and the two
+                    // disagreed — a bullet or a non-breaking hyphen missing
+                    // from the Latin subset sent a run to OxiCJK in a document
+                    // with no East Asian text in it, naming a font the PDF
+                    // never carried, and taking the ordinary English after it
+                    // along for the ride.
+                    let cjk_loaded = embedded_fonts.contains_key("OxiCJK-Regular");
+                    let needs_cjk = |c: char| {
+                        if !cjk_loaded {
+                            return false;
+                        }
+                        // A tab carries no glyph and is in no font's cmap, so
+                        // "the face does not cover it" is true of every face —
+                        // which used to hand a plain English document to the
+                        // East Asian font on the strength of one indent.
+                        if (c as u32) < 0x20 {
+                            return false;
+                        }
+                        match latin_face {
+                            Some(face) => !face.unicode_to_gid.contains_key(&(c as u32)),
+                            // With no face to ask, only real East Asian text is
+                            // worth diverting; a curly quote or an accented
+                            // letter is representable where it already is.
+                            None => is_cjk_char(c),
+                        }
+                    };
+
                     let mut raw_segments: Vec<(String, String, f64)> = Vec::new();
                     let mut total_est = 0.0_f64;
                     let mut i = 0;
                     while i < chars.len() {
-                        let is_cjk = chars[i] as u32 > 0x7F;
+                        let is_cjk = needs_cjk(chars[i]);
                         let mut j = i + 1;
                         // If using a CJK font, don't split — keep everything in one segment
                         if !is_cjk_font_name {
-                            while j < chars.len() && (chars[j] as u32 > 0x7F) == is_cjk {
+                            while j < chars.len() && needs_cjk(chars[j]) == is_cjk {
                                 j += 1;
                             }
                         } else {
@@ -2265,19 +2519,193 @@ const CJK_FONT_PATHS_BOLD: &[&str] = &[
     "/System/Library/Fonts/HiraginoSans-W6.ttc",
 ];
 
-/// System font paths for Latin fonts (Calibri)
-const LATIN_FONT_PATHS: &[(&str, &str)] = &[
-    ("C:\\Windows\\Fonts\\calibri.ttf", "C:\\Windows\\Fonts\\calibrib.ttf"),
-    ("/usr/share/fonts/truetype/msttcorefonts/calibri.ttf", "/usr/share/fonts/truetype/msttcorefonts/calibrib.ttf"),
-];
-
 /// Path to Python3 for font subsetting (requires fonttools)
 const PYTHON3: &str = "python3";
 
+/// True for characters that actually need an East Asian face.
+///
+/// The test used to be `c > 0x7F`, which is true of a curly quote, an en dash
+/// and every accented Latin letter. One smart quote in an English document was
+/// enough to decide it "needs CJK" and pull a whole East Asian font into the
+/// PDF — 15MB of Noto on Linux, for a document with no East Asian text in it.
+fn is_cjk_char(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x2FFF   // radicals and Kangxi
+        | 0x3000..=0x303F // CJK symbols and punctuation
+        | 0x3040..=0x30FF // hiragana, katakana
+        | 0x3100..=0x312F // bopomofo
+        | 0x3130..=0x318F // hangul compatibility jamo
+        | 0x3190..=0x319F // kanbun
+        | 0x31F0..=0x31FF // katakana phonetic extensions
+        | 0x3400..=0x4DBF // unified ideographs extension A
+        | 0x4E00..=0x9FFF // unified ideographs
+        | 0xA960..=0xA97F // hangul jamo extended-A
+        | 0xAC00..=0xD7AF // hangul syllables
+        | 0xF900..=0xFAFF // compatibility ideographs
+        | 0xFE30..=0xFE4F // CJK compatibility forms
+        | 0xFF00..=0xFFEF // halfwidth and fullwidth forms
+        | 0x1100..=0x11FF // hangul jamo
+        | 0x20000..=0x3FFFF // ideograph extensions B and later
+    )
+}
+
+/// True for the East Asian families the CJK embedding path owns. The generic
+/// face pass leaves these alone so the existing per-family CJK handling (and
+/// the emitter's ASCII/CJK segment split, which keys off the returned name)
+/// keeps working unchanged.
+fn is_cjk_family(base: &str) -> bool {
+    // A family name written in Japanese is East Asian whatever else it says.
+    if base.chars().any(is_cjk_char) {
+        return true;
+    }
+    // Romanized names have to be matched on words, not substrings. "Gothic"
+    // alone was the test, and it is a Latin word: Century Gothic, Franklin
+    // Gothic and News Gothic are all Latin families that were being handed to
+    // the East Asian path and drawn with MS Gothic.
+    let lower = base.to_lowercase();
+    const EAST_ASIAN: &[&str] = &[
+        "ms gothic", "ms pgothic", "ms mincho", "ms pmincho",
+        "yu gothic", "yu mincho", "meiryo", "hiragino", "noto sans cjk",
+        "noto serif cjk", "source han", "pingfang", "heiti", "songti",
+        "kaiti", "fangsong", "simsun", "simhei", "nsimsun", "batang",
+        "gulim", "dotum", "malgun", "nanum",
+    ];
+    EAST_ASIAN.iter().any(|name| lower.starts_with(name))
+}
+
+/// Resolve every (family, weight, slope) the laid-out document asks for to a
+/// real font file, subset it to the characters that face is used with, and
+/// embed it under a stable key.
+///
+/// Order: the family itself, then the bundled metric-compatible substitute,
+/// then nothing -- in which case `resolve_font` falls back to the base-14
+/// mapping and the viewer substitutes. That last case is reported on stderr,
+/// because a PDF built from a substituted face looks fine and is wrong, and
+/// silence is what made it invisible before.
+fn embed_document_faces(
+    layout: &oxidocs_core::layout::LayoutResult,
+    fonts: &mut HashMap<String, EmbeddedFont>,
+) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut wanted: BTreeMap<(String, bool, bool), BTreeSet<char>> = BTreeMap::new();
+    for page in &layout.pages {
+        for elem in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text {
+                text, font_family, bold, italic, ..
+            } = &elem.content
+            {
+                let family = font_family
+                    .clone()
+                    .unwrap_or_else(|| "Calibri".to_string());
+                if is_cjk_family(&family) {
+                    continue;
+                }
+                let set = wanted.entry((family, *bold, *italic)).or_default();
+                for ch in text.chars() {
+                    set.insert(ch);
+                }
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return;
+    }
+
+    let index = font_index();
+    let mut plan = FontPlan::default();
+    let mut missing: Vec<String> = Vec::new();
+
+    for ((family, bold, italic), chars) in wanted {
+        // A face asked for by an empty run draws nothing. Subsetting it to
+        // zero glyphs drops the cmap and the subsetter dies on the way out,
+        // so there is nothing to embed and nothing to warn about.
+        if chars.is_empty() {
+            continue;
+        }
+        let key = font_key(&family, bold, italic);
+        if fonts.contains_key(&key) {
+            plan.keys
+                .insert((family.trim().to_lowercase(), bold, italic), key);
+            continue;
+        }
+        // The family itself, then its stand-in, then the same pair again with
+        // a weight or slope word taken off the end — `Calibri Light` is a
+        // Calibri a document wrote the long way, and it is the only handle we
+        // have on the face it means.
+        let lookup = |name: &str, bold: bool, italic: bool| {
+            index
+                .find(name, bold, italic)
+                .map(|face| (face, None))
+                .or_else(|| {
+                    substitute_for(name)
+                        .and_then(|s| index.find(s, bold, italic))
+                        .map(|face| (face, substitute_for(name)))
+                })
+        };
+        let (face, substituted) = match lookup(&family, bold, italic) {
+            Some((face, sub)) => (Some(face), sub),
+            None => match split_style_suffix(&family)
+                .and_then(|(base, b, i)| lookup(&base, bold || b, italic || i))
+            {
+                Some((face, sub)) => (Some(face), sub),
+                None => (None, None),
+            },
+        };
+        let Some(face) = face else {
+            missing.push(family.clone());
+            continue;
+        };
+        let path = face.path.to_string_lossy().to_string();
+        // The external subsetter addresses files, not collection members, so a
+        // face past the first in its .ttc goes out whole instead. macOS ships
+        // most of its families that way — Times.ttc holds roman, bold, italic
+        // and bold-italic as members 0..3 — so refusing them would leave every
+        // emphasised run on that platform drawn by a viewer substitute.
+        let embedded = if face.index == 0 {
+            subset_font_file(&path, &chars, &key)
+        } else {
+            embed_collection_member(&path, face.index, &key)
+        };
+        match embedded {
+            Some(embedded) => {
+                if let Some(sub) = substituted {
+                    eprintln!(
+                        "Substituting {sub} for {family} (not installed; advance widths match on ASCII)"
+                    );
+                }
+                fonts.insert(key.clone(), embedded);
+                plan.keys
+                    .insert((family.trim().to_lowercase(), bold, italic), key);
+            }
+            None => missing.push(family.clone()),
+        }
+    }
+
+    if !missing.is_empty() {
+        missing.sort();
+        missing.dedup();
+        eprintln!(
+            "Warning: no font file for {} - these are drawn with a viewer substitute and will not match Word",
+            missing.join(", ")
+        );
+    }
+
+    let _ = FONT_PLAN.set(plan);
+}
+
 /// Build embedded fonts map from system fonts.
 /// Detects CJK font usage in the document and embeds the font data.
-fn build_embedded_fonts(doc: &oxidocs_core::Document) -> HashMap<String, EmbeddedFont> {
+fn build_embedded_fonts(
+    doc: &oxidocs_core::Document,
+    layout: &oxidocs_core::layout::LayoutResult,
+) -> HashMap<String, EmbeddedFont> {
     let mut fonts = HashMap::new();
+
+    // Every face the laid-out document actually asks for, with the characters
+    // it asks for. Read from the layout rather than the IR because bold and
+    // italic are resolved there -- the IR carries the level, not the answer.
+    embed_document_faces(layout, &mut fonts);
 
     // Collect all font names used in the document that likely need CJK
     let mut needs_cjk_font = false;
@@ -2412,14 +2840,15 @@ fn build_embedded_fonts(doc: &oxidocs_core::Document) -> HashMap<String, Embedde
 
 /// Embed Cambria Regular and Bold for documents using Cambria/Century.
 fn embed_cambria_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mut HashMap<String, EmbeddedFont>) {
-    let cambria_paths: &[(&str, &str)] = &[
-        ("C:\\Windows\\Fonts\\cambria.ttc", "C:\\Windows\\Fonts\\cambriab.ttf"),
-    ];
-    let pair = cambria_paths.iter().find(|(r, _)| std::path::Path::new(r).exists());
-    let (regular_path, bold_path) = match pair {
-        Some(p) => p,
+    let regular = match resolve_face_path("Cambria", false, false) {
+        Some(path) => path,
         None => return,
     };
+    let bold = match resolve_face_path("Cambria", true, false) {
+        Some(path) => path,
+        None => regular.clone(),
+    };
+    let (regular_path, bold_path) = (regular.as_str(), bold.as_str());
     let latin_chars: std::collections::BTreeSet<char> = used_chars.iter()
         .filter(|c| (**c as u32) < 0x2000)
         .copied()
@@ -2436,12 +2865,19 @@ fn embed_cambria_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mu
 
 /// Embed Calibri Regular and Bold for Latin text rendering.
 fn embed_latin_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mut HashMap<String, EmbeddedFont>) {
-    // Find available Latin font pair
-    let latin_pair = LATIN_FONT_PATHS.iter().find(|(r, _)| std::path::Path::new(r).exists());
-    let (regular_path, bold_path) = match latin_pair {
-        Some(pair) => pair,
-        None => { eprintln!("Warning: No Latin system font found"); return; }
+    // Fallback faces for the `OxiLatin-*` names `resolve_font` still returns
+    // when a document's own family could not be embedded. Resolved through the
+    // index like everything else, so a machine without Calibri gets Carlito
+    // here too instead of falling off the end.
+    let regular = match resolve_face_path("Calibri", false, false) {
+        Some(path) => path,
+        None => { eprintln!("Warning: No Latin font found"); return; }
     };
+    let bold = match resolve_face_path("Calibri", true, false) {
+        Some(path) => path,
+        None => regular.clone(),
+    };
+    let (regular_path, bold_path) = (regular.as_str(), bold.as_str());
 
     // Filter to ASCII/Latin chars only (for smaller subset)
     let latin_chars: std::collections::BTreeSet<char> = used_chars.iter()
@@ -2459,15 +2895,76 @@ fn embed_latin_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mut 
     }
 }
 
-/// Subset a single font file and return EmbeddedFont.
+/// Embed a font file whole, with no external help. This is the road out when
+/// the subsetter cannot run: a machine with no `python3`, or no fontTools, or
+/// a font it refuses. The PDF gets larger -- a CJK face is megabytes where its
+/// subset is kilobytes -- but it is a correct PDF with real outlines and a
+/// real width table, which a base-14 name is not. Being unable to find Python
+/// must not decide how a document looks.
+/// Remove what the subsetter wrote. Called on every way out of
+/// `subset_font_file`, not just the successful one: `font.save()` happens
+/// before the step that can fail, so a failing face still left three files
+/// behind — 88 of them after thirty documents.
+fn clear_scratch(widths_path: &str, cidmap_path: &str, subset_path: &str) {
+    let _ = fs::remove_file(subset_path);
+    let _ = fs::remove_file(cidmap_path);
+    let _ = fs::remove_file(format!("{widths_path}.psname"));
+    let _ = fs::remove_file(widths_path);
+}
+
+/// Embed one member of a font collection whole. Used where the family lives
+/// past the first face of a `.ttc`, which the path-addressed subsetter cannot
+/// name.
+fn embed_collection_member(font_path: &str, face: u32, label: &str) -> Option<EmbeddedFont> {
+    let data = fs::read(font_path).ok()?;
+    let font = oxipdf_core::font_util::embedded_font_from_face(&data, face);
+    if font.unicode_to_gid.is_empty() {
+        return None;
+    }
+    eprintln!(
+        "Embedding {} whole from collection member {} ({} bytes)",
+        label,
+        face,
+        font.data.len()
+    );
+    Some(font)
+}
+
+fn embed_whole_font(font_path: &str, label: &str) -> Option<EmbeddedFont> {
+    let data = fs::read(font_path).ok()?;
+    let font = oxipdf_core::font_util::embedded_font_from_ttf(&data);
+    if font.unicode_to_gid.is_empty() {
+        return None;
+    }
+    eprintln!(
+        "Embedding {} whole ({} bytes) — no subsetter available",
+        label,
+        font.data.len()
+    );
+    Some(font)
+}
+
+/// Subset a single font file and return EmbeddedFont. Falls back to embedding
+/// the whole file when the external subsetter is unavailable or fails.
 fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, label: &str) -> Option<EmbeddedFont> {
+    // Nothing to draw, so nothing to embed. Subsetting to zero glyphs strips
+    // the cmap and the subsetter dies reading it back; a document whose only
+    // block is an empty table used to take every Latin face down that way.
+    if chars.is_empty() {
+        return None;
+    }
     let char_string: String = chars.iter()
         .filter(|c| { let cp = **c as u32; !(0xD800..=0xDFFF).contains(&cp) })
         .collect();
 
-    let subset_path = format!("/tmp/oxi-font-subset-{}.otf", label);
-    let cidmap_path = format!("/tmp/oxi-font-cidmap-{}.json", label);
-    let widths_path = format!("/tmp/oxi-font-widths-{}.json", label);
+    // Process id in the name: two conversions running side by side used to
+    // write the same three files and read back each other's subset, producing
+    // a PDF built from another document's glyph set with no error anywhere.
+    let scratch = std::env::temp_dir();
+    let stem = format!("oxi-font-{}-{}", label, std::process::id());
+    let subset_path = scratch.join(format!("{stem}.otf")).to_string_lossy().replace('\\', "/");
+    let cidmap_path = scratch.join(format!("{stem}-cidmap.json")).to_string_lossy().replace('\\', "/");
+    let widths_path = scratch.join(format!("{stem}-widths.json")).to_string_lossy().replace('\\', "/");
     let font_path_escaped = font_path.replace('\\', "\\\\");
     let python_script = format!(
         r#"
@@ -2487,6 +2984,22 @@ else:
 
 chars = sys.stdin.read()
 chars = ''.join(c for c in chars if ord(c) < 0xD800 or ord(c) > 0xDFFF)
+
+# Read the PostScript name BEFORE subsetting. Apple ships collections whose
+# nameID 6 lives only on platform 1, and the subsetter's defaults
+# (name_legacy=False, name_languages=[1033]) prune exactly that record -- so
+# reading it afterwards returned nothing and the PDF went out carrying our
+# internal handle as its BaseFont. Reading first needs no option tuning and
+# survives whatever a future fontTools decides to drop.
+ps_name = None
+for record in font['name'].names:
+    if record.nameID == 6:
+        try:
+            ps_name = record.toUnicode()
+            break
+        except Exception:
+            pass
+
 opts = Options()
 subsetter = Subsetter(options=opts)
 subsetter.populate(text=chars)
@@ -2494,7 +3007,16 @@ subsetter.subset(font)
 
 font.save("{subset_path}")
 
-cmap = font.getBestCmap()
+# A subset that kept no glyph has no cmap left, and getBestCmap() returns
+# None rather than an empty map. That happens whenever none of the requested
+# characters exist in this face -- a symbol font asked for Latin, say -- and
+# it used to raise on the next line and take the whole face down.
+try:
+    cmap = font.getBestCmap()
+except Exception:
+    cmap = None
+if cmap is None:
+    cmap = {{}}
 unicode_to_cid = {{}}
 cid_widths = {{}}
 
@@ -2527,14 +3049,6 @@ with open("{cidmap_path}", 'w') as f:
 with open("{widths_path}", 'w') as f:
     json.dump(cid_widths, f)
 
-ps_name = None
-for record in font['name'].names:
-    if record.nameID == 6:
-        try:
-            ps_name = record.toUnicode()
-            break
-        except:
-            pass
 if ps_name:
     with open("{widths_path}.psname", 'w') as f:
         f.write(ps_name)
@@ -2560,22 +3074,52 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
             let output = child.wait_with_output().ok()?;
             if !output.status.success() {
                 eprintln!("Font subsetting ({}) failed: {}", label, String::from_utf8_lossy(&output.stderr));
-                return None;
+                clear_scratch(&widths_path, &cidmap_path, &subset_path);
+                return embed_whole_font(font_path, label);
             }
             eprintln!("Font subset ({}): {}", label, String::from_utf8_lossy(&output.stdout).trim());
         }
         Err(e) => {
             eprintln!("Python not available for {} subsetting: {}", label, e);
-            return None;
+            clear_scratch(&widths_path, &cidmap_path, &subset_path);
+            return embed_whole_font(font_path, label);
         }
     }
 
-    let otf_data = fs::read(&subset_path).ok()?;
-    let unicode_to_gid = if let Ok(json_str) = fs::read_to_string(&cidmap_path) {
-        parse_cidmap_json(&json_str)
-    } else {
-        parse_cmap_table(&otf_data)
+    let otf_data = match fs::read(&subset_path) {
+        Ok(data) => data,
+        Err(_) => {
+            clear_scratch(&widths_path, &cidmap_path, &subset_path);
+            return embed_whole_font(font_path, label);
+        }
     };
+    let unicode_to_gid = {
+        let from_subsetter = fs::read_to_string(&cidmap_path)
+            .map(|json| parse_cidmap_json(&json))
+            .unwrap_or_default();
+        if from_subsetter.is_empty() {
+            // The subsetter reports through `getBestCmap()`, which knows only
+            // Unicode cmaps and answers None for a symbol font — Wingdings and
+            // Symbol carry a (3,0) table and nothing else. Read the subset
+            // ourselves instead of trusting the report.
+            parse_cmap_table(&otf_data)
+        } else {
+            from_subsetter
+        }
+    };
+
+    if unicode_to_gid.is_empty() {
+        // Still nothing: the subset kept no glyph we can address, so embedding
+        // it would put a font in the file that draws nothing — a PDF that
+        // passes every structural check and shows blank where the bullets
+        // were. The whole font has the mapping the subset lost.
+        eprintln!(
+            "Font subset ({}) mapped no glyph; embedding the whole font instead",
+            label
+        );
+        clear_scratch(&widths_path, &cidmap_path, &subset_path);
+        return embed_whole_font(font_path, label);
+    }
     let cid_widths = if let Ok(json_str) = fs::read_to_string(&widths_path) {
         parse_cidwidths_json(&json_str)
     } else {
@@ -2589,6 +3133,8 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
     if let Some(ref psn) = ps_name {
         eprintln!("PostScript name: {}", psn);
     }
+
+    clear_scratch(&widths_path, &cidmap_path, &subset_path);
 
     let is_cff = otf_data.starts_with(b"OTTO") || has_cff_table(&otf_data);
     if is_cff {
@@ -2641,7 +3187,7 @@ fn collect_cjk_fonts_from_block(block: &Block, needs_cjk: &mut bool, font_names:
     match block {
         Block::Paragraph(para) => {
             for run in &para.runs {
-                if run.text.chars().any(|c| c as u32 > 0x7F) {
+                if run.text.chars().any(is_cjk_char) {
                     *needs_cjk = true;
                 }
                 if let Some(ref family) = run.style.font_family {
@@ -2685,146 +3231,11 @@ fn find_and_subset_cjk_font(used_chars: &std::collections::BTreeSet<char>) -> Op
 fn find_and_subset_cjk_font_bold(used_chars: &std::collections::BTreeSet<char>) -> Option<EmbeddedFont> {
     let font_path = CJK_FONT_PATHS_BOLD.iter().find(|p| std::path::Path::new(p).exists())?;
     eprintln!("Found CJK Bold font: {}", font_path);
-
-    let char_string: String = used_chars.iter()
-        .filter(|c| { let cp = **c as u32; !(0xD800..=0xDFFF).contains(&cp) })
-        .collect();
-
-    let subset_path = "/tmp/oxi-font-subset-bold.otf";
-    let cidmap_path = "/tmp/oxi-font-cidmap-bold.json";
-    let widths_path = "/tmp/oxi-font-widths-bold.json";
-    let font_path_escaped = font_path.replace('\\', "\\\\");
-    let python_script = format!(
-        r#"
-import sys, json
-sys.stdin.reconfigure(encoding='utf-8', errors='replace')
-from fontTools.ttLib import TTCollection, TTFont
-from fontTools.subset import Subsetter, Options
-
-font_path = "{font_path_escaped}"
-data = open(font_path, 'rb').read()
-
-if data[:4] == b'ttcf':
-    ttc = TTCollection(font_path)
-    font = ttc[0]
-else:
-    font = TTFont(font_path)
-
-chars = sys.stdin.read()
-chars = ''.join(c for c in chars if ord(c) < 0xD800 or ord(c) > 0xDFFF)
-opts = Options()
-subsetter = Subsetter(options=opts)
-subsetter.populate(text=chars)
-subsetter.subset(font)
-
-font.save("{subset_path}")
-
-cmap = font.getBestCmap()
-unicode_to_cid = {{}}
-cid_widths = {{}}
-
-upem = font['head'].unitsPerEm
-hmtx = font['hmtx']
-
-for unicode_val, glyph_name in cmap.items():
-    cid = None
-    if glyph_name.startswith('cid'):
-        cid = int(glyph_name[3:])
-    elif glyph_name == '.notdef':
-        continue
-    else:
-        glyph_order = font.getGlyphOrder()
-        try:
-            cid = glyph_order.index(glyph_name)
-        except ValueError:
-            continue
-
-    if cid is not None:
-        unicode_to_cid[unicode_val] = cid
-        if glyph_name in hmtx.metrics:
-            advance, _ = hmtx.metrics[glyph_name]
-            w = int(advance * 1000 / upem)
-            cid_widths[cid] = w
-
-with open("{cidmap_path}", 'w') as f:
-    json.dump(unicode_to_cid, f)
-
-with open("{widths_path}", 'w') as f:
-    json.dump(cid_widths, f)
-
-ps_name = None
-for record in font['name'].names:
-    if record.nameID == 6:
-        try:
-            ps_name = record.toUnicode()
-            break
-        except:
-            pass
-if ps_name:
-    with open("{widths_path}.psname", 'w') as f:
-        f.write(ps_name)
-
-print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
-"#
-    );
-
-    let result = std::process::Command::new(PYTHON3)
-        .arg("-c")
-        .arg(&python_script)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-
-    match result {
-        Ok(mut child) => {
-            if let Some(ref mut stdin) = child.stdin {
-                use std::io::Write;
-                let _ = stdin.write_all(char_string.as_bytes());
-            }
-            let output = child.wait_with_output().ok()?;
-            if !output.status.success() {
-                eprintln!("Bold font subsetting failed: {}", String::from_utf8_lossy(&output.stderr));
-                return None;
-            }
-            eprintln!("Font subset (Bold): {}", String::from_utf8_lossy(&output.stdout).trim());
-        }
-        Err(e) => {
-            eprintln!("Python not available for bold font subsetting: {}", e);
-            return None;
-        }
-    }
-
-    let otf_data = fs::read(subset_path).ok()?;
-    let unicode_to_gid = if let Ok(json_str) = fs::read_to_string(cidmap_path) {
-        parse_cidmap_json(&json_str)
-    } else {
-        parse_cmap_table(&otf_data)
-    };
-    let cid_widths = if let Ok(json_str) = fs::read_to_string(widths_path) {
-        parse_cidwidths_json(&json_str)
-    } else {
-        HashMap::new()
-    };
-
-    let is_cff = otf_data.starts_with(b"OTTO") || has_cff_table(&otf_data);
-    if is_cff {
-        if let Some(cff) = extract_cff_from_otf(&otf_data) {
-            return Some(EmbeddedFont { ps_name: None,
-                data: cff,
-                format: FontFormat::OpenTypeCff,
-                unicode_to_gid,
-                cid_widths,
-            });
-        }
-    }
-
-    Some(EmbeddedFont { ps_name: None,
-        data: otf_data,
-        format: FontFormat::TrueType,
-        unicode_to_gid,
-        cid_widths,
-    })
+    // Was a 144-line copy of the subsetter with its own hardcoded scratch
+    // paths and no way out when the subsetter was missing, so bold CJK text
+    // simply vanished on a machine without fontTools -- and on Windows the
+    // "/tmp/..." it wrote to means C:	mp\, which need not exist at all.
+    subset_font_file(font_path, used_chars, "cjk-bold")
 }
 
 /// Fallback: load the full font without subsetting.

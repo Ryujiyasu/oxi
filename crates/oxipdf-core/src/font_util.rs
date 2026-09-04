@@ -101,11 +101,18 @@ pub fn parse_cmap_table(font_data: &[u8]) -> HashMap<u32, u16> {
         ]) as usize;
 
         let priority = match (platform, encoding) {
-            (3, 10) => 4, // Windows UCS-4 (best, supports all Unicode)
-            (0, 4) => 3,  // Unicode full
-            (3, 1) => 2,  // Windows BMP
-            (0, 3) => 2,  // Unicode BMP
-            (0, _) => 1,  // Any Unicode platform
+            (3, 10) => 5, // Windows UCS-4 (best, supports all Unicode)
+            (0, 4) => 4,  // Unicode full
+            (3, 1) => 3,  // Windows BMP
+            (0, 3) => 3,  // Unicode BMP
+            (0, _) => 2,  // Any Unicode platform
+            // Windows symbol encoding. Wingdings, Symbol and their relatives
+            // carry only this one, mapping the F000..F0FF private-use block —
+            // which is exactly what a .docx asks for when it uses them. Ranked
+            // last so a font that has both is still read as Unicode, but
+            // reachable, because otherwise these families have no cmap at all
+            // and their glyphs never get embedded.
+            (3, 0) => 1,
             _ => 0,
         };
 
@@ -333,7 +340,10 @@ pub fn parse_ttf_widths(font_data: &[u8]) -> HashMap<u16, u16> {
             break;
         }
         let advance = u16::from_be_bytes([hmtx[off], hmtx[off + 1]]) as u32;
-        let width_1000 = (advance * 1000 / units_per_em) as u16;
+        // Round rather than truncate: at 2048 units/em the floor costs up to
+        // one 1/1000-em unit on every glyph, all in the same direction, so the
+        // error accumulates along a line instead of cancelling.
+        let width_1000 = ((advance * 1000 + units_per_em / 2) / units_per_em) as u16;
         result.insert(gid as u16, width_1000);
     }
 
@@ -342,7 +352,8 @@ pub fn parse_ttf_widths(font_data: &[u8]) -> HashMap<u16, u16> {
         let last_off = (num_long_hor_metrics - 1) * 4;
         if last_off + 2 <= hmtx.len() {
             let last_advance = u16::from_be_bytes([hmtx[last_off], hmtx[last_off + 1]]) as u32;
-            let last_width_1000 = (last_advance * 1000 / units_per_em) as u16;
+            let last_width_1000 =
+                ((last_advance * 1000 + units_per_em / 2) / units_per_em) as u16;
 
             // leftSideBearing entries follow: 2 bytes each
             let remaining_start = num_long_hor_metrics * 4;
@@ -410,25 +421,93 @@ pub fn parse_ps_name(font_data: &[u8]) -> Option<String> {
 
 /// Extract the single-font data from a TTC (TrueType Collection) file.
 /// If the data is not a TTC, returns it as-is.
-fn resolve_ttc(font_data: &[u8]) -> &[u8] {
-    if font_data.len() >= 16 && &font_data[0..4] == b"ttcf" {
-        // TTC header: tag(4) + version(4) + numFonts(4) + offsets(4*numFonts)
-        let _num_fonts =
-            u32::from_be_bytes([font_data[8], font_data[9], font_data[10], font_data[11]])
-                as usize;
-        let first_offset =
-            u32::from_be_bytes([font_data[12], font_data[13], font_data[14], font_data[15]])
-                as usize;
-        if first_offset < font_data.len() {
-            return &font_data[first_offset..];
+/// Lift one member of a TrueType Collection out into a standalone font.
+///
+/// A TTC stores each member's table directory at its own offset, but the
+/// offsets *inside* those records are absolute from the start of the file.
+/// Slicing the collection at the directory and treating the result as a font
+/// therefore reads every table from the wrong place — which is why anything
+/// that went through this path (Cambria, MS Gothic, MS Mincho — all shipped as
+/// .ttc on Windows) could only be handled by an external subsetter that knew
+/// about collections. Rebuilding the member as its own sfnt keeps every later
+/// reader honest, because the offsets it sees are its own.
+pub fn extract_ttc_face(data: &[u8], face: u32) -> Option<Vec<u8>> {
+    if data.len() < 16 || &data[0..4] != b"ttcf" {
+        return None;
+    }
+    let read_u32 = |at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes([
+            *data.get(at)?,
+            *data.get(at + 1)?,
+            *data.get(at + 2)?,
+            *data.get(at + 3)?,
+        ]))
+    };
+    let num_fonts = read_u32(8)?;
+    if face >= num_fonts {
+        return None;
+    }
+    let dir = read_u32(12 + 4 * face as usize)? as usize;
+    let sfnt_version = data.get(dir..dir + 4)?.to_vec();
+    let num_tables = u16::from_be_bytes([*data.get(dir + 4)?, *data.get(dir + 5)?]) as usize;
+
+    // Collect (tag, bytes) for every table this member names.
+    let mut tables: Vec<([u8; 4], &[u8])> = Vec::with_capacity(num_tables);
+    for i in 0..num_tables {
+        let rec = dir + 12 + i * 16;
+        let mut tag = [0u8; 4];
+        tag.copy_from_slice(data.get(rec..rec + 4)?);
+        let offset = read_u32(rec + 8)? as usize;
+        let length = read_u32(rec + 12)? as usize;
+        let end = offset.checked_add(length)?;
+        tables.push((tag, data.get(offset..end.min(data.len()))?));
+    }
+    tables.sort_by_key(|(tag, _)| *tag);
+
+    // sfnt layout: header, then one 16-byte record per table, then the table
+    // data itself, each padded to a 4-byte boundary.
+    let header_len = 12 + tables.len() * 16;
+    let mut records = Vec::with_capacity(tables.len() * 16);
+    let mut body: Vec<u8> = Vec::new();
+    for (tag, bytes) in &tables {
+        let offset = header_len + body.len();
+        records.extend_from_slice(tag);
+        records.extend_from_slice(&0u32.to_be_bytes()); // checksum: readers we
+                                                        // feed do not verify it
+        records.extend_from_slice(&(offset as u32).to_be_bytes());
+        records.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+        body.extend_from_slice(bytes);
+        while body.len() % 4 != 0 {
+            body.push(0);
         }
     }
-    font_data
+
+    let count = tables.len() as u16;
+    let entry_selector = (15u16.saturating_sub(count.leading_zeros() as u16)).min(15);
+    let search_range = (1u16 << entry_selector).saturating_mul(16);
+    let mut out = Vec::with_capacity(header_len + body.len());
+    out.extend_from_slice(&sfnt_version);
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend_from_slice(&search_range.to_be_bytes());
+    out.extend_from_slice(&entry_selector.to_be_bytes());
+    out.extend_from_slice(&(count.saturating_mul(16).saturating_sub(search_range)).to_be_bytes());
+    out.extend_from_slice(&records);
+    out.extend_from_slice(&body);
+    Some(out)
 }
 
 /// Build an `EmbeddedFont` from raw TTF/TTC/OTF bytes (no subsetting).
 pub fn embedded_font_from_ttf(font_data: &[u8]) -> EmbeddedFont {
-    let otf_data = resolve_ttc(font_data);
+    embedded_font_from_face(font_data, 0)
+}
+
+/// Build an `EmbeddedFont` from one face of a font file. `face` selects the
+/// member of a TrueType Collection and is ignored for a plain TTF/OTF.
+pub fn embedded_font_from_face(font_data: &[u8], face: u32) -> EmbeddedFont {
+    // A collection member is lifted out as its own sfnt first: the tables must
+    // be read, and embedded, with offsets that belong to the font we name.
+    let lifted = extract_ttc_face(font_data, face);
+    let otf_data: &[u8] = lifted.as_deref().unwrap_or(font_data);
 
     let unicode_to_gid = parse_cmap_table(otf_data);
     let cid_widths = parse_ttf_widths(otf_data);
@@ -443,9 +522,7 @@ pub fn embedded_font_from_ttf(font_data: &[u8]) -> EmbeddedFont {
             (otf_data.to_vec(), FontFormat::OpenTypeCff)
         }
     } else {
-        // For TTC, we need the whole file (offset-based tables reference the original data).
-        // For plain TTF, otf_data == font_data so this is fine either way.
-        (font_data.to_vec(), FontFormat::TrueType)
+        (otf_data.to_vec(), FontFormat::TrueType)
     };
 
     EmbeddedFont {
@@ -454,5 +531,103 @@ pub fn embedded_font_from_ttf(font_data: &[u8]) -> EmbeddedFont {
         unicode_to_gid,
         cid_widths,
         ps_name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a two-member collection whose tables carry recognisable bytes, so
+    /// a lifted face can be checked against what it was supposed to contain.
+    fn synthetic_ttc() -> Vec<u8> {
+        fn dir(tables: &[([u8; 4], u32, u32)]) -> Vec<u8> {
+            let mut out = Vec::new();
+            out.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // sfntVersion
+            out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+            out.extend_from_slice(&0u16.to_be_bytes()); // searchRange
+            out.extend_from_slice(&0u16.to_be_bytes()); // entrySelector
+            out.extend_from_slice(&0u16.to_be_bytes()); // rangeShift
+            for (tag, offset, length) in tables {
+                out.extend_from_slice(tag);
+                out.extend_from_slice(&0u32.to_be_bytes());
+                out.extend_from_slice(&offset.to_be_bytes());
+                out.extend_from_slice(&length.to_be_bytes());
+            }
+            out
+        }
+
+        // Header: tag(4) version(4) numFonts(4) offsets(4*2) = 20 bytes.
+        let header_len = 20u32;
+        let dir_len = 12 + 16 * 2; // two tables each
+        let dir0_at = header_len;
+        let dir1_at = dir0_at + dir_len as u32;
+        let data_at = dir1_at + dir_len as u32;
+
+        let face0_a = b"FACE-ZERO-TABLE-A".to_vec();
+        let face0_b = b"FACE-ZERO-TABLE-B".to_vec();
+        let face1_a = b"FACE-ONE-TABLE-A".to_vec();
+
+        let a0 = data_at;
+        let b0 = a0 + face0_a.len() as u32;
+        let a1 = b0 + face0_b.len() as u32;
+
+        let mut out = Vec::new();
+        out.extend_from_slice(b"ttcf");
+        out.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&dir0_at.to_be_bytes());
+        out.extend_from_slice(&dir1_at.to_be_bytes());
+        out.extend_from_slice(&dir(&[
+            (*b"AAAA", a0, face0_a.len() as u32),
+            (*b"BBBB", b0, face0_b.len() as u32),
+        ]));
+        out.extend_from_slice(&dir(&[
+            (*b"AAAA", a1, face1_a.len() as u32),
+            (*b"BBBB", b0, face0_b.len() as u32),
+        ]));
+        out.extend_from_slice(&face0_a);
+        out.extend_from_slice(&face0_b);
+        out.extend_from_slice(&face1_a);
+        out
+    }
+
+    #[test]
+    fn extract_ttc_face_lifts_the_named_member() {
+        let ttc = synthetic_ttc();
+
+        let face0 = extract_ttc_face(&ttc, 0).expect("face 0");
+        let (off, len) = find_table(&face0, b"AAAA").expect("AAAA in face 0");
+        assert_eq!(&face0[off..off + len], b"FACE-ZERO-TABLE-A");
+
+        let face1 = extract_ttc_face(&ttc, 1).expect("face 1");
+        let (off, len) = find_table(&face1, b"AAAA").expect("AAAA in face 1");
+        assert_eq!(
+            &face1[off..off + len],
+            b"FACE-ONE-TABLE-A",
+            "face 1 must not come back holding face 0's tables"
+        );
+
+        // Shared tables are copied into each lifted face, not referenced.
+        let (off, len) = find_table(&face1, b"BBBB").expect("BBBB in face 1");
+        assert_eq!(&face1[off..off + len], b"FACE-ZERO-TABLE-B");
+
+        assert!(extract_ttc_face(&ttc, 2).is_none(), "no third member exists");
+        assert!(
+            extract_ttc_face(b"not a collection at all", 0).is_none(),
+            "a plain font is not a collection"
+        );
+    }
+
+    /// The offsets a lifted face carries must be its own. Reading the
+    /// collection sliced at the directory — what the code used to do — makes
+    /// every table land in the wrong place.
+    #[test]
+    fn lifted_face_offsets_are_self_relative() {
+        let ttc = synthetic_ttc();
+        let face0 = extract_ttc_face(&ttc, 0).expect("face 0");
+        let (off, _) = find_table(&face0, b"AAAA").expect("AAAA");
+        assert!(off >= 12 + 2 * 16, "table data must follow the directory");
+        assert!(off < face0.len(), "offset must address the lifted font");
     }
 }
