@@ -43506,12 +43506,33 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// 311.02pt (+60.3), which pushed the table tail down ~38pt, spilled the two
     /// trailing empty body paragraphs Word keeps on p2, and produced a phantom
     /// page (Oxi 5 / Word 4).
+    /// S1307 (2026-09-04, default ON, opt-out OXI_S1307_DISABLE): a **wrapNone**
+    /// in-cell anchor reserves no row height either, whatever it is anchored to.
+    /// DERIVED (`tools/metrics/_pb_cellfloat_gen.py`, 13 arms: a 100pt object in a
+    /// 16pt-exact cell paragraph, row floor 40 / none / 130.2, `layoutInCell` 0
+    /// and 1, three wrap kinds; row read as the span over a no-object control):
+    ///     wrapNone          +0.00 in all six arms (floor 40, none, 130.2 x lic 0/1)
+    ///     wrapSquare        +62.25  (row grows to CONTAIN the object: max, not sum)
+    ///     wrapTopAndBottom  +93.75  (the object stacks with the text)
+    /// Oxi added +104.5 / +112.5 / +14.3 for every kind. `layoutInCell` changes
+    /// nothing. Witness: creative__13152ea1's floating table (wrapNone 120.75pt
+    /// group in a 16pt exact line, floor 130.2) is 130.8 in Word's PDF and was
+    /// 147.75 here = 16 + 120.75 + 11 -- and that 17pt is what turned the S1308
+    /// blank-line law's +10.25 into a page spill. Census: 309 of the corpus's 339
+    /// in-cell anchors are wrapNone (tokumei / order / kyotei / roudoujoken forms),
+    /// so S1053's "their calibration is untouched" was the approximation holding
+    /// wherever `trHeight` already exceeded the object. The Square (max) and
+    /// TopAndBottom (sum) arms keep the S331b fold: only Square is now wrong by
+    /// the sum-vs-max difference, on 7 corpus anchors.
     fn s1053_cell_float_no_reserve(img: &crate::ir::Image) -> bool {
-        std::env::var("OXI_S1053_DISABLE").is_err()
+        let page_rel = std::env::var("OXI_S1053_DISABLE").is_err()
             && img
                 .position
                 .as_ref()
-                .map_or(false, |p| p.v_relative.as_deref() == Some("page"))
+                .map_or(false, |p| p.v_relative.as_deref() == Some("page"));
+        let wrap_none = std::env::var("OXI_S1307_DISABLE").is_err()
+            && matches!(img.wrap_type, Some(crate::ir::WrapType::None));
+        page_rel || wrap_none
     }
 
     fn s971_image_line_h(
