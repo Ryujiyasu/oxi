@@ -28799,6 +28799,33 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     gdi_height_pt
                 }
+            } else if in_table_cell
+                && metrics.is_cjk_83_64_font()
+                && std::env::var("OXI_S1310_DISABLE").is_err()
+                && std::env::var("OXI_S1311_DISABLE").is_err()
+            {
+                // S1310 (2026-09-05, default ON, opt-out OXI_S1310_DISABLE; also off
+                // under OXI_S1311_DISABLE -- shipped as S1311's pair): a CJK 83/64
+                // face with NO GDI-height table entry (HG丸ｺﾞｼｯｸ / UD デジタル教科書体
+                // / 游ゴシック / Meiryo UI / HGPｺﾞｼｯｸM) fell through to the
+                // pixel-quantised fallbacks below: `word_line_height_standard`
+                // (the adjustLineHeightInTable arm) has no 83/64 at all -- HG丸
+                // 9pt gave 9.00 -- and `word_line_height_table_cell` applies it
+                // to the 11px-rounded win sum (10.625). Word's cell line is the
+                // metrics-exact natural, the value the GDI-table branch returns
+                // under ROWBOX2 raw. DERIVED (`_pb_hintdigits_gen.py`, 36 arms:
+                // body / cell / floating cell x HG丸 / ＭＳ ゴシック / ＭＳ 明朝 /
+                // Century x hint x digits / CJK / Latin x ALIT x snapToGrid):
+                // every HG丸 / ＭＳ cell row reads 12.25 = 11.67 + the 0.5 insideH
+                // border, the same as the body line, whatever the hint or the
+                // ALIT flag; ALIT only matters with snapToGrid ON (17.75 = pitch
+                // 17.2 + 0.5, which the snap below already produces). Witness:
+                // correspondence__04a3e3e1's HG丸 9pt date rows, Word 12.0 vs Oxi
+                // 10.31. A font-level version of this (inside the two fallbacks
+                // themselves) reached every ＭＳ-face cell through the other call
+                // sites and lost 154 bases (net -6.30); scoped HERE it touches only
+                // the GDI-less faces (JA blind 10 docs, golden 2).
+                metrics.word_line_height_no_grid(font_size)
             } else if in_table_cell && self.adjust_line_height_in_table {
                 metrics.word_line_height_standard(font_size)
             } else if in_table_cell {
