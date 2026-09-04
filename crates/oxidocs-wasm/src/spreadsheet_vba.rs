@@ -4119,7 +4119,8 @@ impl<'a> WorkbookHost<'a> {
     fn insert_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let sideways = Self::shift_direction(range, args, true)?;
         self.shift_cells(range, sideways, true)?;
-        Ok(Value::Empty)
+        // True, the way Excel answers every member that acts.
+        Ok(Value::Boolean(true))
     }
 
     fn delete_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
@@ -5723,7 +5724,9 @@ impl Host for WorkbookHost<'_> {
                     }
                     self.selection = range;
                     self.active_cell = range.first();
-                    return Ok(Some(Value::Empty));
+                    // True, like the other members that DO something: asked of
+                    // Excel, `r = Range("A2").Select` is a Boolean.
+                    return Ok(Some(Value::Boolean(true)));
                 }
                 // Excel moves the cell in front WITHOUT disturbing the
                 // selection when the range is already inside it, and selects
@@ -8942,6 +8945,13 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlgeneral" => 1,
         "xlleft" => -4131,
         "xlcenter" => -4108,
+        // The two VERTICAL ones. `VerticalAlignment` could be written all
+        // along, but `xlTop` and `xlBottom` were not in this table -- so
+        // `Range("A1").VerticalAlignment = xlTop` handed it an Empty, was
+        // refused for not being a number, and left the cell as it was. A
+        // constant missing from a list reads as a feature that does not work.
+        "xltop" => -4160,
+        "xlbottom" => -4107,
         "xlright" => -4152,
         "xlfill" => 5,
         "xljustify" => -4130,

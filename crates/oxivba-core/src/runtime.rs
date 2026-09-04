@@ -3219,9 +3219,15 @@ impl<'a> Runtime<'a> {
 
     fn let_value(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
         match value {
+            // An object with no default member cannot become a value, and
+            // Excel answers 438 to the attempt -- not the type mismatch this
+            // used to give. Asked of it, `r = Range("A1").Interior` and the
+            // same of `.Parent`, `.Font`, `.Worksheet`, `ActiveSheet` and
+            // `Worksheets(1)` are all 438, while `r = Range("A1")` comes
+            // through as the cell's value because a Range HAS a default
+            // member.
             Value::Object(receiver) => self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
-                error(
-                    RuntimeErrorKind::TypeMismatch,
+                no_such_member(
                     format!("{} has no default scalar Value property", receiver.kind),
                     Some(line),
                 )
