@@ -289,6 +289,10 @@ enum HostObject {
     /// `ActiveWindow`: the one view a browser host has, whose only state
     /// worth keeping is where its panes are frozen.
     Window,
+    /// One of the workbook's cell styles, by its place in the table.
+    Style(usize),
+    /// All of them.
+    Styles,
     /// The note on one cell, held by the cell rather than by its place in
     /// the list, since adding and deleting shuffle the list about.
     Comment(CellAddress),
@@ -402,6 +406,370 @@ struct FieldRule {
     kind: i64,
 }
 
+
+/// One of the cell styles a new workbook carries.
+///
+/// What a style includes is what applying it sets; what it leaves out it
+/// leaves alone. Measured on a Japanese Office: `Percent` includes only the
+/// number, so a bold cell given it stays bold; `Normal` includes everything
+/// and puts a cell back to bare; the themed styles include font and fill.
+struct BuiltInStyle {
+    /// The name `Range.Style = "..."` answers to. Six styles keep English
+    /// names on a Japanese Office and the rest answer only to Japanese ones:
+    /// `Range("A1").Style = "Good"` there is error 450.
+    name: &'static str,
+    local: &'static str,
+    number: Option<&'static str>,
+    font: Option<StyleFont>,
+    /// Some(None) includes the fill and clears it; Some(Some(colour)) fills.
+    fill: Option<Option<i64>>,
+    /// Left, top, bottom, right, each a kind and a colour.
+    borders: Option<[Option<(&'static str, i64)>; 4]>,
+    alignment: bool,
+    protection: bool,
+}
+
+struct StyleFont {
+    bold: bool,
+    italic: bool,
+    size: f32,
+    name: Option<&'static str>,
+    /// A packed BGR colour; None is the automatic black.
+    color: Option<i64>,
+}
+
+const NO_FONT_CHANGE: Option<StyleFont> = None;
+
+const fn themed_font(color: Option<i64>) -> Option<StyleFont> {
+    Some(StyleFont {
+        bold: false,
+        italic: false,
+        size: 11.0,
+        name: None,
+        color,
+    })
+}
+
+const fn bold_font(color: Option<i64>, size: f32) -> Option<StyleFont> {
+    Some(StyleFont {
+        bold: true,
+        italic: false,
+        size,
+        name: None,
+        color,
+    })
+}
+
+const fn tint(name: &'static str, local: &'static str, fill: i64) -> BuiltInStyle {
+    BuiltInStyle {
+        name,
+        local,
+        number: None,
+        font: themed_font(None),
+        fill: Some(Some(fill)),
+        borders: None,
+        alignment: false,
+        protection: false,
+    }
+}
+
+const fn accent(name: &'static str, local: &'static str, fill: i64) -> BuiltInStyle {
+    BuiltInStyle {
+        name,
+        local,
+        number: None,
+        font: themed_font(Some(16_777_215)),
+        fill: Some(Some(fill)),
+        borders: None,
+        alignment: false,
+        protection: false,
+    }
+}
+
+const fn numbered(name: &'static str, local: &'static str, format: &'static str) -> BuiltInStyle {
+    BuiltInStyle {
+        name,
+        local,
+        number: Some(format),
+        font: NO_FONT_CHANGE,
+        fill: None,
+        borders: None,
+        alignment: false,
+        protection: false,
+    }
+}
+
+const WHITE_LONG: i64 = 16_777_215;
+const DARK2: i64 = 4_270_094;
+const ACCENT1: i64 = 8_544_277;
+
+/// The forty-seven, in the order `Styles(1)` counts them -- which is by the
+/// Japanese name, kana by reading and kanji by code point. Every colour, size
+/// and edge is what `Range` answered after the style was applied.
+const BUILT_IN_STYLES: [BuiltInStyle; 47] = [
+    tint("20% - アクセント 1", "20% - アクセント 1", 16_115_392),
+    tint("20% - アクセント 2", "20% - アクセント 2", 14_017_275),
+    tint("20% - アクセント 3", "20% - アクセント 3", 13_168_833),
+    tint("20% - アクセント 4", "20% - アクセント 4", 16_510_410),
+    tint("20% - アクセント 5", "20% - アクセント 5", 15_716_082),
+    tint("20% - アクセント 6", "20% - アクセント 6", 13_693_658),
+    tint("40% - アクセント 1", "40% - アクセント 1", 15_453_315),
+    tint("40% - アクセント 2", "40% - アクセント 2", 11_323_383),
+    tint("40% - アクセント 3", "40% - アクセント 3", 9_364_099),
+    tint("40% - アクセント 4", "40% - アクセント 4", 16_309_396),
+    tint("40% - アクセント 5", "40% - アクセント 5", 14_524_132),
+    tint("40% - アクセント 6", "40% - アクセント 6", 10_675_893),
+    tint("60% - アクセント 1", "60% - アクセント 1", 14_791_492),
+    tint("60% - アクセント 2", "60% - アクセント 2", 8_628_721),
+    tint("60% - アクセント 3", "60% - アクセント 3", 5_886_791),
+    tint("60% - アクセント 4", "60% - アクセント 4", 15_977_313),
+    tint("60% - アクセント 5", "60% - アクセント 5", 13_463_000),
+    tint("60% - アクセント 6", "60% - アクセント 6", 7_592_334),
+    accent("アクセント 1", "アクセント 1", ACCENT1),
+    accent("アクセント 2", "アクセント 2", 3_305_961),
+    accent("アクセント 3", "アクセント 3", 2_386_713),
+    accent("アクセント 4", "アクセント 4", 13_999_631),
+    accent("アクセント 5", "アクセント 5", 9_644_960),
+    accent("アクセント 6", "アクセント 6", 3_057_486),
+    BuiltInStyle {
+        name: "タイトル",
+        local: "タイトル",
+        number: None,
+        font: Some(StyleFont {
+            bold: false,
+            italic: false,
+            size: 18.0,
+            name: Some("游ゴシック Light"),
+            color: Some(DARK2),
+        }),
+        fill: None,
+        borders: None,
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "チェック セル",
+        local: "チェック セル",
+        number: None,
+        font: bold_font(Some(WHITE_LONG), 11.0),
+        fill: Some(Some(10_855_845)),
+        borders: Some([
+            Some(("double", 4_144_959)),
+            Some(("double", 4_144_959)),
+            Some(("double", 4_144_959)),
+            Some(("double", 4_144_959)),
+        ]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "どちらでもない",
+        local: "どちらでもない",
+        number: None,
+        font: themed_font(Some(22_428)),
+        fill: Some(Some(10_284_031)),
+        borders: None,
+        alignment: false,
+        protection: false,
+    },
+    numbered("Percent", "パーセント", "0%"),
+    BuiltInStyle {
+        name: "メモ",
+        local: "メモ",
+        number: None,
+        font: NO_FONT_CHANGE,
+        fill: Some(Some(13_434_879)),
+        borders: Some([
+            Some(("thin", 11_711_154)),
+            Some(("thin", 11_711_154)),
+            Some(("thin", 11_711_154)),
+            Some(("thin", 11_711_154)),
+        ]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "リンク セル",
+        local: "リンク セル",
+        number: None,
+        font: themed_font(Some(32_250)),
+        fill: None,
+        borders: Some([None, None, Some(("double", 98_559)), None]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "入力",
+        local: "入力",
+        number: None,
+        font: themed_font(Some(7_749_439)),
+        fill: Some(Some(10_079_487)),
+        borders: Some([
+            Some(("thin", 8_355_711)),
+            Some(("thin", 8_355_711)),
+            Some(("thin", 8_355_711)),
+            Some(("thin", 8_355_711)),
+        ]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "出力",
+        local: "出力",
+        number: None,
+        font: bold_font(Some(4_144_959), 11.0),
+        fill: Some(Some(15_921_906)),
+        borders: Some([
+            Some(("thin", 4_144_959)),
+            Some(("thin", 4_144_959)),
+            Some(("thin", 4_144_959)),
+            Some(("thin", 4_144_959)),
+        ]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "悪い",
+        local: "悪い",
+        number: None,
+        font: themed_font(Some(393_372)),
+        fill: Some(Some(13_551_615)),
+        borders: None,
+        alignment: false,
+        protection: false,
+    },
+    numbered("Comma [0]", "桁区切り", "#,##0_);[Red](#,##0)"),
+    numbered("Comma", "桁区切り [0.00]", "#,##0.00_);[Red](#,##0.00)"),
+    BuiltInStyle {
+        name: "Normal",
+        local: "標準",
+        number: Some("General"),
+        font: themed_font(None),
+        fill: Some(None),
+        borders: Some([None, None, None, None]),
+        alignment: true,
+        protection: true,
+    },
+    BuiltInStyle {
+        name: "良い",
+        local: "良い",
+        number: None,
+        font: themed_font(Some(24_832)),
+        fill: Some(Some(13_561_798)),
+        borders: None,
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "見出し 1",
+        local: "見出し 1",
+        number: None,
+        font: bold_font(Some(DARK2), 15.0),
+        fill: None,
+        borders: Some([None, None, Some(("thick", ACCENT1)), None]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "見出し 2",
+        local: "見出し 2",
+        number: None,
+        font: bold_font(Some(DARK2), 13.0),
+        fill: None,
+        borders: Some([None, None, Some(("thick", 15_122_020)), None]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "見出し 3",
+        local: "見出し 3",
+        number: None,
+        font: bold_font(Some(DARK2), 11.0),
+        fill: None,
+        borders: Some([None, None, Some(("medium", 14_791_492)), None]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "見出し 4",
+        local: "見出し 4",
+        number: None,
+        font: bold_font(Some(DARK2), 11.0),
+        fill: None,
+        borders: None,
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "計算",
+        local: "計算",
+        number: None,
+        font: bold_font(Some(32_250), 11.0),
+        fill: Some(Some(15_921_906)),
+        borders: Some([
+            Some(("thin", 8_355_711)),
+            Some(("thin", 8_355_711)),
+            Some(("thin", 8_355_711)),
+            Some(("thin", 8_355_711)),
+        ]),
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "説明文",
+        local: "説明文",
+        number: None,
+        font: Some(StyleFont {
+            bold: false,
+            italic: true,
+            size: 11.0,
+            name: None,
+            color: Some(8_355_711),
+        }),
+        fill: None,
+        borders: None,
+        alignment: false,
+        protection: false,
+    },
+    BuiltInStyle {
+        name: "警告文",
+        local: "警告文",
+        number: None,
+        font: themed_font(Some(255)),
+        fill: None,
+        borders: None,
+        alignment: false,
+        protection: false,
+    },
+    numbered("Currency [0]", "通貨", "$#,##0_);[Red]($#,##0)"),
+    numbered("Currency", "通貨 [0.00]", "$#,##0.00_);[Red]($#,##0.00)"),
+    BuiltInStyle {
+        name: "集計",
+        local: "集計",
+        number: None,
+        font: bold_font(None, 11.0),
+        fill: None,
+        borders: Some([None, Some(("thin", ACCENT1)), Some(("double", ACCENT1)), None]),
+        alignment: false,
+        protection: false,
+    },
+];
+
+/// Where `Normal` sits in the table.
+const NORMAL_STYLE: usize = 35;
+
+/// The style a name stands for. Measured: `percent`, `PERCENT`, `Percent `
+/// and the Japanese `パーセント` all reach the style, so the case and the
+/// edges do not count and either name will do; `Good` and `Heading 1` -- the
+/// English names of styles this Office names in Japanese -- and a number are
+/// error 450.
+fn built_in_style(name: &str) -> Option<usize> {
+    let wanted = name.trim().to_lowercase();
+    BUILT_IN_STYLES.iter().position(|style| {
+        style.name.to_lowercase() == wanted || style.local.to_lowercase() == wanted
+    })
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -491,6 +859,9 @@ struct WorkbookHost<'a> {
     notes: Vec<Note>,
     /// How `TextToColumns` last split, which is how it splits next.
     split: SplitSettings,
+    /// The style each cell was last given, by its place in the table; a cell
+    /// not listed wears `Normal`.
+    styled: std::collections::HashMap<CellAddress, usize>,
     /// What a macro has written across the bottom of the window, while it is
     /// the macro's to write. Nothing here means the bar is Excel's own again,
     /// which is what it answers `False` to say.
@@ -553,6 +924,7 @@ impl<'a> WorkbookHost<'a> {
             unlocked: std::collections::HashSet::new(),
             notes,
             split: SplitSettings::default(),
+            styled: std::collections::HashMap::new(),
             enable_events: true,
             display_alerts: true,
             calculation: -4105,
@@ -595,6 +967,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Workbook => "Workbook",
                 HostObject::Application => "Application",
                 HostObject::Window => "Window",
+                HostObject::Style(_) => "Style",
+                HostObject::Styles => "Styles",
                 HostObject::Comment(_) => "Comment",
                 HostObject::Comments(_) => "Comments",
                 HostObject::WorksheetFunction => "WorksheetFunction",
@@ -1352,6 +1726,149 @@ impl<'a> WorkbookHost<'a> {
             held.rsplit_once('!')
                 .is_some_and(|(_, leaf)| leaf.eq_ignore_ascii_case(name))
         })
+    }
+
+    fn style_index(&self, object: &ObjectRef) -> Option<usize> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Style(index)) => Some(*index),
+            _ => None,
+        }
+    }
+
+    fn is_styles(&self, object: &ObjectRef) -> bool {
+        matches!(self.objects.get(object.handle as usize), Some(HostObject::Styles))
+    }
+
+    /// The style a range wears: the one its cells all wear, or Nothing when
+    /// they differ -- measured, `Range("C3:C6").Style.Name` over a Percent
+    /// cell and a Comma cell is error 91.
+    fn style_of(&mut self, range: CellRange) -> Value {
+        let mut seen: Option<usize> = None;
+        for address in range.addresses() {
+            let held = self.styled.get(&address).copied().unwrap_or(NORMAL_STYLE);
+            match seen {
+                None => seen = Some(held),
+                Some(first) if first == held => {}
+                Some(_) => return Value::Nothing,
+            }
+        }
+        self.object(HostObject::Style(seen.unwrap_or(NORMAL_STYLE)))
+    }
+
+    /// `Styles(n)` / `Styles("Percent")`.
+    fn style_item(&mut self, wanted: &Value) -> Result<Value, String> {
+        let index = match wanted {
+            Value::String(name) => built_in_style(name)
+                .ok_or_else(|| host_error(450, format!("there is no style {name:?}")))?,
+            value => {
+                let index = positive_index(value, "Styles index")? as usize;
+                if index > BUILT_IN_STYLES.len() {
+                    return Err(format!("the workbook has no style number {index}"));
+                }
+                index - 1
+            }
+        };
+        Ok(self.object(HostObject::Style(index)))
+    }
+
+    /// What a Style answers to.
+    fn style_member(&mut self, index: usize, name: &str) -> Result<Option<Value>, String> {
+        let style = &BUILT_IN_STYLES[index];
+        let answer = if name.eq_ignore_ascii_case("name") || name.eq_ignore_ascii_case("value") {
+            Value::String(style.name.to_string())
+        } else if name.eq_ignore_ascii_case("namelocal") {
+            Value::String(style.local.to_string())
+        } else if name.eq_ignore_ascii_case("builtin") {
+            Value::Boolean(true)
+        } else if name.eq_ignore_ascii_case("includenumber") {
+            Value::Boolean(style.number.is_some())
+        } else if name.eq_ignore_ascii_case("includefont") {
+            Value::Boolean(style.font.is_some())
+        } else if name.eq_ignore_ascii_case("includealignment") {
+            Value::Boolean(style.alignment)
+        } else if name.eq_ignore_ascii_case("includeborder") {
+            Value::Boolean(style.borders.is_some())
+        } else if name.eq_ignore_ascii_case("includepatterns") {
+            Value::Boolean(style.fill.is_some())
+        } else if name.eq_ignore_ascii_case("includeprotection") {
+            Value::Boolean(style.protection)
+        } else if name.eq_ignore_ascii_case("numberformat") {
+            Value::String(style.number.unwrap_or("General").to_string())
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(answer))
+    }
+
+    /// `Range.Style = "Percent"`: put the style's parts onto every cell and
+    /// remember which style it was.
+    fn apply_style(&mut self, range: CellRange, index: usize) -> Result<(), String> {
+        Self::range_cell_count(range)?;
+        let style = &BUILT_IN_STYLES[index];
+        let font = style.font.as_ref().map(|font| {
+            (
+                font.bold,
+                font.italic,
+                font.size,
+                font.name.map(str::to_string),
+                font.color.map(colour_from_packed),
+            )
+        });
+        let fill = style.fill.map(|fill| fill.map(colour_from_packed));
+        let borders = style.borders.map(|edges| {
+            edges.map(|edge| {
+                edge.map(|(kind, colour)| BorderLine {
+                    style: kind.to_string(),
+                    color: Some(colour_from_packed(colour)),
+                })
+            })
+        });
+        let number = style.number.map(|format| {
+            if format == "General" { None } else { Some(format.to_string()) }
+        });
+        let alignment = style.alignment;
+        self.set_range_style(range, |_, held| {
+            if let Some(number) = &number {
+                held.number_format = number.clone();
+            }
+            if let Some((bold, italic, size, name, color)) = &font {
+                held.bold = *bold;
+                held.italic = *italic;
+                held.underline = false;
+                held.strikethrough = false;
+                held.font_size = if *size == 11.0 { None } else { Some(*size) };
+                held.font_name = name.clone();
+                held.font_color = color.clone();
+            }
+            if let Some(fill) = &fill {
+                held.bg_color = fill.clone();
+            }
+            if let Some([left, top, bottom, right]) = &borders {
+                held.border_left = left.clone();
+                held.border_top = top.clone();
+                held.border_bottom = bottom.clone();
+                held.border_right = right.clone();
+            }
+            if alignment {
+                held.horizontal_align = None;
+                held.vertical_align = None;
+                held.wrap_text = false;
+                held.indent = 0;
+            }
+        })?;
+        if style.protection {
+            for address in range.addresses() {
+                self.unlocked.remove(&address);
+            }
+        }
+        for address in range.addresses() {
+            if index == NORMAL_STYLE {
+                self.styled.remove(&address);
+            } else {
+                self.styled.insert(address, index);
+            }
+        }
+        Ok(())
     }
 
     fn comment_cell(&self, object: &ObjectRef) -> Option<CellAddress> {
@@ -4603,24 +5120,47 @@ impl<'a> WorkbookHost<'a> {
         Ok(first)
     }
 
+    /// A cell's dress with the edges it shares filled in: an edge a cell
+    /// draws nothing along is the neighbour's, if the neighbour draws one.
+    /// Measured, the cell under a `見出し 1` cell answers its top border as
+    /// that cell's thick bottom one.
+    fn style_with_shared_edges(&self, address: CellAddress) -> CellStyle {
+        let dress_at = |row: u32, column: u32| -> Option<CellStyle> {
+            let sheet = self.workbook.sheets.get(address.sheet)?;
+            let row = sheet.rows.iter().find(|held| held.index == row)?;
+            let cell = row.cells.iter().find(|held| held.col == column)?;
+            Some(cell.style.clone())
+        };
+        let mut style = dress_at(address.row, address.column).unwrap_or_default();
+        if style.border_top.is_none() && address.row > 1 {
+            style.border_top =
+                dress_at(address.row - 1, address.column).and_then(|above| above.border_bottom);
+        }
+        if style.border_left.is_none() && address.column > 0 {
+            style.border_left =
+                dress_at(address.row, address.column - 1).and_then(|left| left.border_right);
+        }
+        if style.border_bottom.is_none() {
+            style.border_bottom =
+                dress_at(address.row + 1, address.column).and_then(|below| below.border_top);
+        }
+        if style.border_right.is_none() {
+            style.border_right =
+                dress_at(address.row, address.column + 1).and_then(|right| right.border_left);
+        }
+        style
+    }
+
     fn uniform_border(
         &self,
         range: CellRange,
         selection: BorderSelection,
     ) -> Result<Option<(i64, i64)>, String> {
         Self::range_cell_count(range)?;
-        let default_style = CellStyle::default();
         let mut first = None;
         for address in range.addresses() {
-            let style = self
-                .workbook
-                .sheets
-                .get(address.sheet)
-                .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
-                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
-                .map(|cell| &cell.style)
-                .unwrap_or(&default_style);
-            for value in selected_borders(style, address, range, selection) {
+            let style = self.style_with_shared_edges(address);
+            for value in selected_borders(&style, address, range, selection) {
                 if first.is_some_and(|first| first != value) {
                     return Ok(None);
                 }
@@ -4628,6 +5168,33 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         Ok(Some(first.unwrap_or((LINE_NONE, WEIGHT_THIN))))
+    }
+
+    /// The colour the selected edges share, or None when they disagree.
+    fn uniform_border_colour(
+        &self,
+        range: CellRange,
+        selection: BorderSelection,
+    ) -> Result<Option<EdgeColour>, String> {
+        Self::range_cell_count(range)?;
+        let mut first: Option<EdgeColour> = None;
+        for address in range.addresses() {
+            let style = self.style_with_shared_edges(address);
+            for edge in selected_border_lines(&style, address, range, selection) {
+                let colour = match edge {
+                    None => EdgeColour::NoLine,
+                    Some(line) => match line.color {
+                        Some(colour) => EdgeColour::Named(colour),
+                        None => EdgeColour::Automatic,
+                    },
+                };
+                if first.as_ref().is_some_and(|held| *held != colour) {
+                    return Ok(None);
+                }
+                first = Some(colour);
+            }
+        }
+        Ok(Some(first.unwrap_or(EdgeColour::NoLine)))
     }
 
     fn range_column_width(&self, range: CellRange) -> Result<Value, String> {
@@ -4767,6 +5334,11 @@ impl<'a> WorkbookHost<'a> {
             && (!clear_contents || self.cell_protection(range.sheet).is_none());
         if clear_formats {
             self.unlocked.retain(|held| {
+                held.sheet != range.sheet
+                    || !(range.start_row..=range.end_row).contains(&held.row)
+                    || !(range.start_column..=range.end_column).contains(&held.column)
+            });
+            self.styled.retain(|held, _| {
                 held.sheet != range.sheet
                     || !(range.start_row..=range.end_row).contains(&held.row)
                     || !(range.start_column..=range.end_column).contains(&held.column)
@@ -6568,6 +7140,14 @@ impl<'a> WorkbookHost<'a> {
             } else {
                 self.unlocked.remove(&to);
             }
+            match self.styled.get(&from).copied() {
+                Some(style) => {
+                    self.styled.insert(to, style);
+                }
+                None => {
+                    self.styled.remove(&to);
+                }
+            }
             if let Some(index) = self.note_at(to) {
                 self.notes.remove(index);
             }
@@ -6865,6 +7445,30 @@ impl Host for WorkbookHost<'_> {
             if let Some(at) = self.comment_cell(receiver) {
                 return self.comment_member(at, name, args);
             }
+            if let Some(index) = self.style_index(receiver) {
+                return self.style_member(index, name);
+            }
+            if self.is_styles(receiver) {
+                if name.eq_ignore_ascii_case("count") {
+                    return Ok(Some(Value::Integer(BUILT_IN_STYLES.len() as i64)));
+                }
+                if name.eq_ignore_ascii_case("item") {
+                    let [wanted] = args else {
+                        return Err("Styles.Item takes one name or one number".to_string());
+                    };
+                    return self.style_item(wanted).map(Some);
+                }
+                return Ok(None);
+            }
+            if (self.is_workbook(receiver) || self.is_application(receiver))
+                && name.eq_ignore_ascii_case("styles")
+            {
+                return match args {
+                    [] => Ok(Some(self.object(HostObject::Styles))),
+                    [wanted] => self.style_item(wanted).map(Some),
+                    _ => Err("Styles expects zero or one argument".to_string()),
+                };
+            }
             if let Some(sheet) = self.comments_sheet(receiver) {
                 if name.eq_ignore_ascii_case("count") {
                     return Ok(Some(Value::Integer(self.notes_on(sheet).len() as i64)));
@@ -7036,6 +7640,9 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("comment") && args.is_empty() {
                     return Ok(Some(self.comment_of(range)));
+                }
+                if name.eq_ignore_ascii_case("style") && args.is_empty() {
+                    return Ok(Some(self.style_of(range)));
                 }
                 // Answers True, as `Clear` does.
                 if name.eq_ignore_ascii_case("clearcomments") {
@@ -7527,6 +8134,20 @@ impl Host for WorkbookHost<'_> {
         if let Some(at) = self.comment_cell(receiver) {
             return self.comment_member(at, name, &[]);
         }
+        if let Some(index) = self.style_index(receiver) {
+            return self.style_member(index, name);
+        }
+        if self.is_styles(receiver) {
+            if name.eq_ignore_ascii_case("count") {
+                return Ok(Some(Value::Integer(BUILT_IN_STYLES.len() as i64)));
+            }
+            return Ok(None);
+        }
+        if (self.is_workbook(receiver) || self.is_application(receiver))
+            && name.eq_ignore_ascii_case("styles")
+        {
+            return Ok(Some(self.object(HostObject::Styles)));
+        }
         if let Some(sheet) = self.comments_sheet(receiver) {
             if name.eq_ignore_ascii_case("count") {
                 return Ok(Some(Value::Integer(self.notes_on(sheet).len() as i64)));
@@ -7544,6 +8165,34 @@ impl Host for WorkbookHost<'_> {
                         Some((kind, weight)) => {
                             Value::Integer(if line { kind } else { weight })
                         }
+                        None => Value::Null,
+                    })
+                });
+            }
+            // Measured: an edge with no line answers Color 0 and ColorIndex
+            // xlColorIndexNone; edges that disagree answer 0 too, not Null --
+            // and that 0 is a Double, where the others are Longs.
+            if name.eq_ignore_ascii_case("color") {
+                return self.uniform_border_colour(range, selection).map(|colour| {
+                    Some(match colour {
+                        Some(EdgeColour::Named(colour)) => {
+                            Value::Integer(colour_to_packed(Some(&colour)).unwrap_or(0))
+                        }
+                        Some(_) => Value::Integer(0),
+                        None => Value::Double(0.0),
+                    })
+                });
+            }
+            if name.eq_ignore_ascii_case("colorindex") {
+                return self.uniform_border_colour(range, selection).map(|colour| {
+                    Some(match colour {
+                        Some(EdgeColour::Named(colour)) => Value::Integer(
+                            colour_to_packed(Some(&colour))
+                                .map(nearest_palette_index)
+                                .unwrap_or(COLOUR_AUTOMATIC),
+                        ),
+                        Some(EdgeColour::Automatic) => Value::Integer(COLOUR_AUTOMATIC),
+                        Some(EdgeColour::NoLine) => Value::Integer(LINE_NONE),
                         None => Value::Null,
                     })
                 });
@@ -7971,6 +8620,9 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("comment") {
             return Ok(Some(self.comment_of(range)));
+        }
+        if name.eq_ignore_ascii_case("style") {
+            return Ok(Some(self.style_of(range)));
         }
         if name.eq_ignore_ascii_case("notetext") {
             return self.note_text_member(range, &[]).map(Some);
@@ -8427,6 +9079,28 @@ impl Host for WorkbookHost<'_> {
                 })?;
                 return Ok(true);
             }
+            // A colour given to an edge with no line draws a thin one in that
+            // colour: measured, `Borders(xlEdgeBottom).Color = 255` on a bare
+            // cell reads back LineStyle 1, Weight 2, Color 255. A colour
+            // outside the range -- -1, 16777216 -- reads back 0.
+            if name.eq_ignore_ascii_case("color") || name.eq_ignore_ascii_case("colorindex") {
+                let colour = if name.eq_ignore_ascii_case("color") {
+                    let Some(asked) = any_number(&value) else {
+                        return Err("Borders.Color must be an RGB color number".to_string());
+                    };
+                    if asked.is_finite() && (0.0..=16_777_215.0).contains(&asked) {
+                        Some(colour_from_packed(asked as i64))
+                    } else {
+                        None
+                    }
+                } else {
+                    palette_choice(&value, COLOUR_AUTOMATIC, "Borders.ColorIndex")?
+                };
+                self.set_range_style(range, |address, style| {
+                    recolour_selected_borders(style, address, range, selection, colour.as_deref());
+                })?;
+                return Ok(true);
+            }
             return Ok(false);
         }
         if let Some(range) = self.range_font(receiver) {
@@ -8610,6 +9284,18 @@ impl Host for WorkbookHost<'_> {
             })?;
             return Ok(true);
         }
+        if name.eq_ignore_ascii_case("style") {
+            let index = match &value {
+                Value::String(named) => built_in_style(named)
+                    .ok_or_else(|| host_error(450, format!("there is no style {named:?}")))?,
+                Value::Object(object) => self
+                    .style_index(object)
+                    .ok_or_else(|| "Range.Style is given a style or its name".to_string())?,
+                _ => return Err(host_error(450, "Range.Style is given a style or its name")),
+            };
+            self.apply_style(range, index)?;
+            return Ok(true);
+        }
         if name.eq_ignore_ascii_case("locked") {
             let Some(locked) = style_face_boolean(&value, "Range.Locked")? else {
                 return Ok(true);
@@ -8762,6 +9448,13 @@ impl Host for WorkbookHost<'_> {
                 }
             }
             return Ok(Some(cells));
+        }
+        if self.is_styles(receiver) {
+            let mut items = Vec::with_capacity(BUILT_IN_STYLES.len());
+            for index in 0..BUILT_IN_STYLES.len() {
+                items.push(self.object(HostObject::Style(index)));
+            }
+            return Ok(Some(items));
         }
         if let Some(sheet) = self.comments_sheet(receiver) {
             let mut items = Vec::new();
@@ -10487,6 +11180,123 @@ fn selected_borders(
             values
         }
         _ => Vec::new(),
+    }
+}
+
+/// What an edge answers for its colour: nothing drawn, drawn in the
+/// automatic colour, or drawn in a named one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EdgeColour {
+    NoLine,
+    Automatic,
+    Named(String),
+}
+
+/// The edges of a cell a selection names, as drawn.
+fn selected_border_lines(
+    style: &CellStyle,
+    address: CellAddress,
+    range: CellRange,
+    selection: BorderSelection,
+) -> Vec<Option<BorderLine>> {
+    match selection {
+        BorderSelection::All => vec![
+            style.border_top.clone(),
+            style.border_bottom.clone(),
+            style.border_left.clone(),
+            style.border_right.clone(),
+        ],
+        BorderSelection::EdgeLeft if address.column == range.start_column => {
+            vec![style.border_left.clone()]
+        }
+        BorderSelection::EdgeTop if address.row == range.start_row => {
+            vec![style.border_top.clone()]
+        }
+        BorderSelection::EdgeBottom if address.row == range.end_row => {
+            vec![style.border_bottom.clone()]
+        }
+        BorderSelection::EdgeRight if address.column == range.end_column => {
+            vec![style.border_right.clone()]
+        }
+        BorderSelection::InsideVertical => {
+            let mut edges = Vec::with_capacity(2);
+            if address.column > range.start_column {
+                edges.push(style.border_left.clone());
+            }
+            if address.column < range.end_column {
+                edges.push(style.border_right.clone());
+            }
+            edges
+        }
+        BorderSelection::InsideHorizontal => {
+            let mut edges = Vec::with_capacity(2);
+            if address.row > range.start_row {
+                edges.push(style.border_top.clone());
+            }
+            if address.row < range.end_row {
+                edges.push(style.border_bottom.clone());
+            }
+            edges
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Give the selected edges a colour, drawing a thin line where there was
+/// none.
+fn recolour_selected_borders(
+    style: &mut CellStyle,
+    address: CellAddress,
+    range: CellRange,
+    selection: BorderSelection,
+    colour: Option<&str>,
+) {
+    let recoloured = |edge: &mut Option<BorderLine>| {
+        let kind = edge
+            .as_ref()
+            .map(|line| line.style.clone())
+            .unwrap_or_else(|| "thin".to_string());
+        *edge = Some(BorderLine {
+            style: kind,
+            color: colour.map(str::to_string),
+        });
+    };
+    match selection {
+        BorderSelection::All => {
+            recoloured(&mut style.border_top);
+            recoloured(&mut style.border_bottom);
+            recoloured(&mut style.border_left);
+            recoloured(&mut style.border_right);
+        }
+        BorderSelection::EdgeLeft if address.column == range.start_column => {
+            recoloured(&mut style.border_left);
+        }
+        BorderSelection::EdgeTop if address.row == range.start_row => {
+            recoloured(&mut style.border_top);
+        }
+        BorderSelection::EdgeBottom if address.row == range.end_row => {
+            recoloured(&mut style.border_bottom);
+        }
+        BorderSelection::EdgeRight if address.column == range.end_column => {
+            recoloured(&mut style.border_right);
+        }
+        BorderSelection::InsideVertical => {
+            if address.column > range.start_column {
+                recoloured(&mut style.border_left);
+            }
+            if address.column < range.end_column {
+                recoloured(&mut style.border_right);
+            }
+        }
+        BorderSelection::InsideHorizontal => {
+            if address.row > range.start_row {
+                recoloured(&mut style.border_top);
+            }
+            if address.row < range.end_row {
+                recoloured(&mut style.border_bottom);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -12645,6 +13455,117 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// A cell style is applied by name, and reports what it includes.
+    ///
+    /// Measured on a Japanese Office: `Percent` sets `0%` and leaves a bold
+    /// cell bold; `Normal` takes everything back; `見出し 1` is bold 15pt in
+    /// the theme's dark colour with a thick accent rule under it; `良い` is a
+    /// green face on a green fill; the name is matched without regard to case
+    /// or edges and the Japanese name will do, while `Good`, `Heading 1` and
+    /// a number are error 450; a range whose cells wear different styles
+    /// answers Nothing; `ClearFormats` puts a cell back to `Normal`; a copy
+    /// carries the style; and `Styles` counts forty-seven, the first of them
+    /// `20% - アクセント 1`.
+    #[test]
+    fn a_cell_style_is_applied_by_name() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               On Error Resume Next
+               Range(\"A1\").Value = 7
+               Range(\"A1\").Font.Bold = True
+               Range(\"A1\").Style = \"Percent\"
+               out = Range(\"A1\").NumberFormat & \"/\" & Range(\"A1\").Font.Bold & \"/\" & Range(\"A1\").Style.Name & \"|\"
+               Range(\"A1\").Style = \"Normal\"
+               out = out & Range(\"A1\").NumberFormat & \"/\" & Range(\"A1\").Font.Bold & \"|\"
+               Range(\"A2\").Style = \"見出し 1\"
+               out = out & Range(\"A2\").Font.Bold & Range(\"A2\").Font.Size & \"/\" & Range(\"A2\").Font.Color & \"/\" & Range(\"A2\").Borders(9).LineStyle & Range(\"A2\").Borders(9).Weight & \"/\" & Range(\"A2\").Borders(9).Color & \"/\" & Range(\"A3\").Borders(8).Weight & \"|\"
+               Range(\"A4\").Style = \" 良い \"
+               out = out & Range(\"A4\").Font.Color & \"/\" & Range(\"A4\").Interior.Color & \"|\"
+               Range(\"A5\").Style = \"percent\"
+               Range(\"A6\").Style = \"パーセント\"
+               out = out & Range(\"A5\").NumberFormat & Range(\"A6\").NumberFormat & \"|\"
+               Range(\"A7\").Style = \"Good\"
+               out = out & Err.Number
+               Err.Clear
+               Range(\"A7\").Style = \"Heading 1\"
+               out = out & Err.Number
+               Err.Clear
+               Range(\"A7\").Style = 28
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               out = out & (Range(\"A5:A7\").Style Is Nothing) & (Range(\"A5:A6\").Style Is Nothing) & \"|\"
+               Range(\"A2\").ClearFormats
+               out = out & Range(\"A2\").Style.Name & \"|\"
+               Range(\"A4\").Copy Range(\"B4\")
+               out = out & Range(\"B4\").Style.Name & \"|\"
+               out = out & ActiveWorkbook.Styles.Count & \"/\" & ActiveWorkbook.Styles(1).Name & \"/\" & ActiveWorkbook.Styles(\"Comma\").NumberFormat & \"/\" & TypeName(Range(\"A1\").Style) & \"/\" & Range(\"A1\").Style
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "0%/True/Percent|General/False|True15/4270094/14/8544277/4|24832/13561798|0%0%|450450450|TrueFalse|Normal|良い|47/20% - アクセント 1/#,##0.00_);[Red](#,##0.00)/Style/Normal"
+                    .to_string()
+            )
+        );
+    }
+
+    /// An edge takes a colour, and a bare edge given one grows a thin line.
+    ///
+    /// Measured against Excel: a bare edge answers Color 0 and ColorIndex
+    /// xlColorIndexNone; `Borders(xlEdgeBottom).Color = 255` on it reads back
+    /// LineStyle 1, Weight 2, Color 255, ColorIndex 3; edges that disagree
+    /// answer 0; `Range.Borders.Color` lines every edge of every cell, the
+    /// inside ones too; a colour out of range reads back 0; and a cell reads
+    /// the edge it shares with its neighbour.
+    #[test]
+    fn an_edge_takes_a_colour() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               On Error Resume Next
+               Set r = Range(\"B2\")
+               out = r.Borders(9).Color & \"/\" & r.Borders(9).ColorIndex & \"|\"
+               r.Borders(9).Color = 255
+               out = out & r.Borders(9).LineStyle & \"/\" & r.Borders(9).Weight & \"/\" & r.Borders(9).Color & \"/\" & r.Borders(9).ColorIndex & \"|\"
+               r.Borders(8).LineStyle = 1
+               r.Borders(8).Weight = 4
+               r.Borders(8).Color = 65280
+               out = out & r.Borders(8).Weight & \"/\" & r.Borders(8).Color & \"/\" & r.Borders.Color & \"|\"
+               Range(\"D4:E5\").Borders.Color = 16711680
+               out = out & Range(\"D4\").Borders(7).LineStyle & \"/\" & Range(\"D4\").Borders(7).Color & \"/\" & Range(\"D4:E5\").Borders(11).LineStyle & \"/\" & Range(\"D4:E5\").Borders.Color & \"|\"
+               Range(\"G1\").Borders(9).ColorIndex = 3
+               out = out & Range(\"G1\").Borders(9).Color & Range(\"G1\").Borders(9).LineStyle & \"|\"
+               Range(\"G5\").Borders(9).Color = -1
+               out = out & Err.Number & \"/\" & Range(\"G5\").Borders(9).Color & \"|\"
+               out = out & Range(\"B3\").Borders(8).Color & \"/\" & Range(\"B1\").Borders(9).Weight
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "0/-4142|1/2/255/3|4/65280/0|1/16711680/1/16711680|2551|0/0|255/4".to_string()
+            )
         );
     }
 
