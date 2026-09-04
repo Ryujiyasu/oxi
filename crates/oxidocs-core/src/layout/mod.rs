@@ -3905,6 +3905,7 @@ impl LayoutEngine {
             match block {
                 Block::Paragraph(para) => {
                     self.resolve_fit_text_runs(&mut para.runs, &para.style);
+                    self.resolve_ruby_spread_runs(&mut para.runs, &para.style);
                 }
                 Block::Table(table) => {
                     for row in table.rows.iter_mut() {
@@ -3914,6 +3915,57 @@ impl LayoutEngine {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// S1314 (2026-09-05, default ON, opt-out OXI_S1314_DISABLE): a ruby whose
+    /// annotation is WIDER than its base spreads the base characters to the
+    /// ruby's width (Word's distributeSpace), so that width is consumed on the
+    /// line the run sits on. Round 7.7 instead reserved the SUM of every ruby's
+    /// overhang off EVERY line of the paragraph -- reference__0cf9c879 (hps 13.5
+    /// over an 11pt base, five rubies = 300pt) wrapped its 453pt lines at 17
+    /// characters where Word holds ~28, and paginated to 2 pages for Word's 1.
+    /// The spread is carried as character spacing, exempt from the 96dpi snap
+    /// exactly like fit_text, and the render's base width includes it so the
+    /// ruby lands over the spread base with no offset.
+    fn resolve_ruby_spread_runs(&self, runs: &mut Vec<Run>, para_style: &ParagraphStyle) {
+        if std::env::var("OXI_S1314_DISABLE").is_ok() {
+            return;
+        }
+        for run in runs.iter_mut() {
+            let Some(ruby_ir) = run.ruby.as_ref() else { continue };
+            let n = run.text.chars().count();
+            if n == 0 {
+                continue;
+            }
+            run.style.ruby_field = true;
+            let base_pt = self.resolve_font_size(&run.style, para_style);
+            let hps_pt = ruby_ir.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(base_pt / 2.0);
+            let ruby_metrics = self.metrics_for_text(&ruby_ir.text, &run.style, para_style);
+            let base_metrics = self.metrics_for_text(&run.text, &run.style, para_style);
+            let ruby_w: f32 = ruby_ir
+                .text
+                .chars()
+                .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_metrics))
+                .sum();
+            let base_w: f32 = run
+                .text
+                .chars()
+                .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, base_metrics))
+                .sum();
+            if std::env::var("OXI_DBG_RUBYSPREAD").is_ok() {
+                eprintln!("[RUBYSPREAD] base={:?} ruby={:?} n={} base_pt={:.2} hps={:.2} base_w={:.2} ruby_w={:.2} already={} cs={:?}",
+                    run.text, ruby_ir.text, n, base_pt, hps_pt, base_w, ruby_w, run.style.ruby_spread, run.style.character_spacing);
+            }
+            // Idempotent: the pre-pass may visit a paragraph more than once.
+            if run.style.ruby_spread {
+                continue;
+            }
+            if ruby_w > base_w + 0.05 {
+                let extra = (ruby_w - base_w) / n as f32;
+                run.style.character_spacing = Some(run.style.character_spacing.unwrap_or(0.0) + extra);
+                run.style.ruby_spread = true;
             }
         }
     }
@@ -16422,6 +16474,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         } else {
             page.grid_char_cw_ratio
         };
+        // S1314 (2026-09-05, default ON, opt-out OXI_S1314_DISABLE): the ruby field's
+        // extra width is carried by the base run's character spacing (see
+        // resolve_ruby_spread_runs), so nothing is reserved off every line.
+        let ruby_total_overhang_pt = if std::env::var("OXI_S1314_DISABLE").is_err() { 0.0 } else { ruby_total_overhang_pt };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         // S758: the paragraph starts inside a wrapSquare band — break at the
         // narrowed width; s758_wrap_full is the rebreak target at band exit.
@@ -21418,7 +21474,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // The column's per-char DOWN advance is exactly fs (the
                             // renderer adds character_spacing to it) → keep it 0.
                             0.0
-                        } else if frag.style.fit_text.is_some() {
+                        } else if frag.style.fit_text.is_some() || frag.style.ruby_spread {
                             frag.style.character_spacing.unwrap_or(0.0) + justify_char_spacing
                         } else {
                             snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0))
@@ -21511,6 +21567,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     )
                                 })
                                 .sum();
+                            // S1314: a spread base is as wide as its ruby field.
+                            let base_w = if frag.style.ruby_spread {
+                                base_w
+                                    + frag.style.character_spacing.unwrap_or(0.0)
+                                        * run.text.chars().count() as f32
+                            } else {
+                                base_w
+                            };
                             // Round 7.5: rubyAlign positioning per ECMA-376 §17.3.3.26.
                             // ruby_position returns (x_offset_from_base, per_char_spacing).
                             let (ruby_x_offset, ruby_char_spacing) =
@@ -24112,6 +24176,53 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // estimate breakers produce a tuple that has no `combine` flag, so a
             // compact width there would cram full-size text). Cells stay full-size
             // (byte-identical) — the cell warichu is a deferred follow-up.
+            // S1314b (2026-09-05, default ON, opt-out OXI_S1314_DISABLE): a ruby
+            // field never breaks inside its base -- Word moves the whole field
+            // (spread base + annotation) to the next line. reference__0cf9c879
+            // split 吉|田松陰 across lines and wrapped 18 lines where Word wraps
+            // 16. The field's width is the spread base (character spacing
+            // included), exempt from the char grid like a kumimoji unit.
+            if style.ruby_field
+                && !text.is_empty()
+                && std::env::var("OXI_S1314_DISABLE").is_err()
+            {
+                flush_word!(style);
+                let cs_field = style.character_spacing.unwrap_or(0.0);
+                let m_field = self.metrics_for_text(text, style, para_style);
+                let cw: f32 = text
+                    .chars()
+                    .map(|c| self.registry.char_width_pt_with_fallback(c, font_size, m_field) + cs_field)
+                    .sum();
+                let cw_tw = pt_to_tw(cw);
+                if current_width_tw + cw_tw > available_tw
+                    && !current_line.fragments.is_empty()
+                    && !para_all_whitespace
+                {
+                    lines.push(std::mem::take(&mut current_line));
+                    current_width = 0.0;
+                    current_width_tw = 0;
+                    current_capw_tw = 0;
+                    latin_space_credit_tw = 0;
+                    right_tab_slack_tw = 0;
+                    center_tab_stop_tw = None;
+                    compress_used = false;
+                }
+                current_line.fragments.push(LineFragment {
+                    text: text.to_string(),
+                    width: cw,
+                    natural_width: cw,
+                    style: style.clone(),
+                    tab_alignment: None,
+                    tab_position: None,
+                    field_type: frag_field_type,
+                    run_index: frag_run_index,
+                    char_offset: frag_char_start,
+                });
+                current_width += cw;
+                current_width_tw += cw_tw;
+                current_capw_tw += cw_tw;
+                continue;
+            }
             if style.combine
                 && !text.is_empty()
                 && s476_body
@@ -24282,7 +24393,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .sum();
 
             // fitText runs: skip GDI snap to preserve exact target width
-            let cs = if style.fit_text.is_some() {
+            let cs = if style.fit_text.is_some() || style.ruby_spread {
                 style.character_spacing.unwrap_or(0.0)
             } else {
                 snap_character_spacing(style.character_spacing.unwrap_or(0.0))
@@ -25152,7 +25263,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 if self.balance_single_byte_double_byte_width
                     && crate::font::is_fullwidth(ch)
                     && !yakumono_compressed[char_index]
-                    && style.fit_text.is_none()
+                    && style.fit_text.is_none() && !style.ruby_spread
                 {
                     char_width += cs;
                 }
@@ -28852,14 +28963,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 metrics.word_line_height(font_size, 96.0)
             };
 
-        if std::env::var("OXI_DBG_LHI").is_ok() {
-            eprintln!(
-                "[LHI] family={:?} fs={:.2} ppem={} cell={} single={} cjk83={} gdi={:?} realcjk={} base={:.3}",
-                metrics.family, font_size, ppem, in_table_cell, is_single,
-                metrics.is_cjk_83_64_font(), self.registry.gdi_height(&metrics.family, ppem),
-                self.doc_body_has_real_cjk, base
-            );
-        }
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
             (Some("atLeast"), Some(val)) => {
@@ -35544,7 +35647,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         }
 
                                         // Split text character by character for wrapping
-                                        let cs = if run.style.fit_text.is_some() {
+                                        let cs = if run.style.fit_text.is_some() || run.style.ruby_spread {
                                             run.style.character_spacing.unwrap_or(0.0)
                                         } else {
                                             snap_character_spacing(
@@ -36000,7 +36103,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             let balance_extra_cs = if self
                                                 .balance_single_byte_double_byte_width
                                                 && crate::font::is_fullwidth(ch)
-                                                && run.style.fit_text.is_none()
+                                                && run.style.fit_text.is_none() && !run.style.ruby_spread
                                             {
                                                 cs
                                             } else {
@@ -36041,7 +36144,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             font_size,
                                                             cs,
                                                             self.balance_single_byte_double_byte_width
-                                                                && run.style.fit_text.is_none(),
+                                                                && run.style.fit_text.is_none() && !run.style.ruby_spread,
                                                         )
                                                     } else {
                                                         s546_autospace_extra(font_size)
@@ -36398,7 +36501,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             font_size,
                                                             cs,
                                                             self.balance_single_byte_double_byte_width
-                                                                && run.style.fit_text.is_none(),
+                                                                && run.style.fit_text.is_none() && !run.style.ruby_spread,
                                                         )
                                                 } else {
                                                     0.0
@@ -42742,7 +42845,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 s1082_gpos += n;
                 continue;
             }
-            let cs = if run.style.fit_text.is_some() {
+            let cs = if run.style.fit_text.is_some() || run.style.ruby_spread {
                 run.style.character_spacing.unwrap_or(0.0)
             } else {
                 snap_character_spacing(run.style.character_spacing.unwrap_or(0.0))
@@ -42934,7 +43037,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // balance doubling via resolve_fit_text_runs). Mirrors cell renderer fix.
                 let balance_extra_cs = if self.balance_single_byte_double_byte_width
                     && crate::font::is_fullwidth(ch)
-                    && run.style.fit_text.is_none()
+                    && run.style.fit_text.is_none() && !run.style.ruby_spread
                 {
                     cs
                 } else {
@@ -42961,7 +43064,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 font_size,
                                 cs,
                                 self.balance_single_byte_double_byte_width
-                                    && run.style.fit_text.is_none(),
+                                    && run.style.fit_text.is_none() && !run.style.ruby_spread,
                             )
                         } else {
                             s546_autospace_extra(font_size)
@@ -43045,7 +43148,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 font_size,
                                 cs,
                                 self.balance_single_byte_double_byte_width
-                                    && run.style.fit_text.is_none(),
+                                    && run.style.fit_text.is_none() && !run.style.ruby_spread,
                             )
                     } else {
                         0.0

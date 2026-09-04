@@ -443,6 +443,14 @@ pub struct RunStyle {
     /// mark's line with the ASCII font when the East Asian slot is only a theme
     /// reference, so the ¶-mark path needs to tell the two apart.
     pub east_asia_from_theme: bool,
+    /// S1314: this run's base text was spread (character_spacing) to the width of
+    /// its wider ruby, so the spacing is raw (not pixel-snapped) and the base
+    /// width already equals the ruby field width.
+    #[serde(default)]
+    pub ruby_spread: bool,
+    /// S1314b: this run carries a ruby, so its base text wraps as one atomic unit.
+    #[serde(default)]
+    pub ruby_field: bool,
     /// East-Asian language tag (`<w:lang w:eastAsia="ja-JP">`). Drives Word's
     /// ambiguous-quote font choice: a CJK eastAsia lang (ja/zh/ko) renders
     /// curly quotes in the eastAsia font; a Latin one (en-US) renders them in
@@ -621,6 +629,8 @@ impl Default for RunStyle {
             font_family_east_asia: None,
             has_explicit_east_asia: false,
             east_asia_from_theme: false,
+            ruby_spread: false,
+            ruby_field: false,
             east_asia_lang: None,
             latin_lang: None,
             font_size: None,
