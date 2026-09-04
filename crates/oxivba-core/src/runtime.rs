@@ -4435,6 +4435,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "timevalue"
             | "trim"
             | "typename"
+            | "environ"
             | "ubound"
             | "ucase"
             | "val"
@@ -4925,6 +4926,20 @@ fn call_builtin(
                 ));
             }
             return Ok(Value::Error(number));
+        }
+        // `Environ` answers a String: the variable's value, or "" for one the
+        // machine has not. A browser has none to read, so every answer is
+        // the empty String -- measured, `Environ("NOSUCHVAR")` is `""` of
+        // type String, and `Environ(1)` on Excel is the first variable.
+        if name == "environ" {
+            if args.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("Environ expects 1 argument, received {}", args.len()),
+                    line,
+                ));
+            }
+            return Ok(Value::String(String::new()));
         }
         if matches!(
             name.as_str(),

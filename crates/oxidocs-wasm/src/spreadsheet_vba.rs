@@ -1423,6 +1423,79 @@ impl Default for PageSetup {
     }
 }
 
+/// `Application.International(n)`, for the indexes macros ask about, as
+/// the machine this host is measured against answers them: a Japanese Office
+/// under a Windows whose formats are month-day-year, dot, comma and dollar.
+fn international(index: i64) -> Result<Value, String> {
+    Ok(match index {
+        // xlCountryCode, xlCountrySetting
+        1 => Value::Integer(81),
+        2 => Value::Integer(1),
+        // xlDecimalSeparator, xlThousandsSeparator, xlListSeparator
+        3 => Value::String(".".to_string()),
+        4 => Value::String(",".to_string()),
+        5 => Value::String(",".to_string()),
+        // xlUpperCaseRowLetter, xlUpperCaseColumnLetter, xlLowerCaseRowLetter,
+        // xlLowerCaseColumnLetter
+        6 => Value::String("R".to_string()),
+        7 => Value::String("C".to_string()),
+        8 => Value::String("r".to_string()),
+        9 => Value::String("c".to_string()),
+        // xlLeftBracket, xlRightBracket, xlLeftBrace, xlRightBrace
+        10 => Value::String("[".to_string()),
+        11 => Value::String("]".to_string()),
+        12 => Value::String("{".to_string()),
+        13 => Value::String("}".to_string()),
+        // xlColumnSeparator, xlRowSeparator, xlAlternateArraySeparator
+        14 => Value::String(",".to_string()),
+        15 => Value::String(";".to_string()),
+        16 => Value::String(String::new()),
+        // xlDateSeparator, xlTimeSeparator
+        17 => Value::String("/".to_string()),
+        18 => Value::String(":".to_string()),
+        // xlYearCode, xlMonthCode, xlDayCode, xlHourCode, xlMinuteCode,
+        // xlSecondCode
+        19 => Value::String("y".to_string()),
+        20 => Value::String("m".to_string()),
+        21 => Value::String("d".to_string()),
+        22 => Value::String("h".to_string()),
+        23 => Value::String("m".to_string()),
+        24 => Value::String("s".to_string()),
+        // xlCurrencyCode, xlGeneralFormatName
+        25 => Value::String("$".to_string()),
+        26 => Value::String("General".to_string()),
+        // xlCurrencyDigits, xlCurrencyNegative, xlNoncurrencyDigits
+        27 => Value::Integer(2),
+        28 => Value::Integer(0),
+        29 => Value::Integer(2),
+        // xlMonthNameChars, xlWeekdayNameChars
+        30 => Value::Integer(3),
+        31 => Value::Integer(3),
+        // xlDateOrder: 0 month-day-year
+        32 => Value::Integer(0),
+        // xl24HourClock
+        33 => Value::Boolean(false),
+        // xlNonEnglishFunctions, xlMetric, xlCurrencySpaceBefore,
+        // xlCurrencyBefore, xlCurrencyMinusSign, xlCurrencyTrailingZeros,
+        // xlCurrencyLeadingZeros
+        34 => Value::Boolean(false),
+        35 => Value::Boolean(false),
+        36 => Value::Boolean(false),
+        37 => Value::Boolean(true),
+        38 => Value::Boolean(false),
+        39 => Value::Boolean(true),
+        40 => Value::Boolean(true),
+        // xlMonthLeadingZero, xlDayLeadingZero, xl4DigitYears, xlMDY,
+        // xlTimeLeadingZero
+        41 => Value::Boolean(false),
+        42 => Value::Boolean(false),
+        43 => Value::Boolean(true),
+        44 => Value::Boolean(true),
+        45 => Value::Boolean(false),
+        other => return Err(format!("Application.International has no index {other}")),
+    })
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -2114,7 +2187,7 @@ impl<'a> WorkbookHost<'a> {
         name: &str,
         args: &[Value],
     ) -> Result<Value, String> {
-        if !worksheet_function_carries(name) {
+        if vba_has_its_own(name) {
             return Err(format!(
                 "WorksheetFunction has no {name}; VBA has one of its own"
             ));
@@ -7722,15 +7795,23 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
             // Always based at one, whatever the array that went in was based
-            // at, and always two-dimensional: a one-dimensional array counts
-            // as a ROW, so `Transpose(Array(1, 2, 3))` comes back three rows
-            // by one column — which is what lets a macro write a list down a
-            // column in a single assignment.
-            return Ok(Some(Value::Array(ArrayValue {
-                dimensions: vec![
+            // at. A one-dimensional array counts as a ROW, so
+            // `Transpose(Array(1, 2, 3))` comes back three rows by one column
+            // -- which is what lets a macro write a list down a column in a
+            // single assignment -- and a result that is one row comes back
+            // ONE-dimensional: measured, `Transpose(Range("A1:A3"))` has
+            // `LBound` 1, `UBound` 3 and answers `v(3)`, and transposing that
+            // again gives (3, 1).
+            let dimensions = if table.columns == 1 {
+                vec![ArrayDimension { lower_bound: 1, length: table.rows }]
+            } else {
+                vec![
                     ArrayDimension { lower_bound: 1, length: table.columns },
                     ArrayDimension { lower_bound: 1, length: table.rows },
-                ],
+                ]
+            };
+            return Ok(Some(Value::Array(ArrayValue {
+                dimensions,
                 values,
                 element_default: Box::new(Value::Empty),
                 resizable: true,
@@ -7790,7 +7871,23 @@ impl<'a> WorkbookHost<'a> {
 
     /// The same function, answering the way the sheet would: a failure comes
     /// back as the error value a cell would show.
+    /// A worksheet function's answer. Every number is a Double: measured,
+    /// `TypeName` of `WorksheetFunction.Sum(1, 2)`, `CountA`, `Count`,
+    /// `Match`, `Max`, `Round`, `CountIf`, `Power` and `Large` are all
+    /// Double, where `Text` is a String, `IsNumber` a Boolean and `Index` of
+    /// a range a Range.
     fn worksheet_function_value(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, String> {
+        Ok(match self.worksheet_function_raw(name, args)? {
+            Value::Integer(number) => Value::Double(number as f64),
+            other => other,
+        })
+    }
+
+    fn worksheet_function_raw(
         &mut self,
         name: &str,
         args: &[Value],
@@ -11354,6 +11451,18 @@ impl Host for WorkbookHost<'_> {
                 // `Microsoft Excel`.
                 return Ok(Some(Value::String("Microsoft Excel".to_string())));
             }
+            // What the Excel this host is measured against says about
+            // itself. A macro that asks is usually deciding whether a member
+            // exists, and 16.0 has them all.
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("version") {
+                return Ok(Some(Value::String("16.0".to_string())));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("operatingsystem") {
+                return Ok(Some(Value::String("Windows (64-bit) NT 10.00".to_string())));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
+                return Ok(Some(Value::Integer(20326)));
+            }
             // The two rulers page setup is measured with: measured,
             // `InchesToPoints(1)` is 72 and `CentimetersToPoints(2)` is
             // 56.6929133858268.
@@ -11374,6 +11483,11 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Double(points)));
             }
             if self.is_worksheet_function(receiver) {
+                // Measured: `WorksheetFunction.Sqrt` is error 438 -- VBA has
+                // `Sqr`, and Excel leaves such names off the object.
+                if vba_has_its_own(name) {
+                    return Ok(None);
+                }
                 return self.worksheet_function(name, args).map(Some);
             }
             if self.is_debug_console(receiver) && name.eq_ignore_ascii_case("print") {
@@ -11690,6 +11804,19 @@ impl Host for WorkbookHost<'_> {
                 self.recalculate();
                 return Ok(Some(Value::Empty));
             }
+            // Measured: `Application.Wait` comes back True once the moment
+            // has passed; nothing here can hold the page, so it comes back
+            // at once.
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("wait") {
+                return Ok(Some(Value::Boolean(true)));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("international") {
+                let [asked] = args else {
+                    return Err("Application.International takes one index".to_string());
+                };
+                return international(sort_number(asked, "International")?).map(Some);
+            }
+
             // `Application.Goto` brings a range to the front: its sheet is
             // activated, the range selected, and the active cell is its first.
             // Measured: `Goto Range("B2:C3")` leaves Selection B2:C3 and
@@ -11736,7 +11863,7 @@ impl Host for WorkbookHost<'_> {
             // something is there at all. The names Excel leaves off — the ones
             // VBA has of its own, `Len` and `Abs` among them — are left off
             // here too, so they fall through to "no such member".
-            if self.is_application(receiver) && worksheet_function_carries(name) {
+            if self.is_application(receiver) && !vba_has_its_own(name) {
                 let answered = self.worksheet_function_value(name, args);
                 if !matches!(&answered, Err(why) if why.ends_with("is not supported in the browser"))
                 {
@@ -11776,6 +11903,10 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("addcomment") {
                     return self.add_comment(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("calculate") {
+                    self.recalculate();
+                    return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("texttocolumns") {
                     return self.text_to_columns(range, args).map(Some);
@@ -12042,9 +12173,12 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("rgb") {
             return rgb_value(args).map(Some);
         }
+        // A bare `Range` is `Application.Range`, and reaches every name in
+        // the workbook: measured, `Range("nm")` from a second sheet, with
+        // `nm` standing for Sheet1!$A$1, answers that cell on Sheet1.
         if name.eq_ignore_ascii_case("range") {
             return self
-                .range_object(self.active_sheet, args, NameReach::ThisSheet)
+                .range_object(self.active_sheet, args, NameReach::Workbook)
                 .map(Some);
         }
         if name.eq_ignore_ascii_case("evaluate") {
@@ -12917,10 +13051,20 @@ impl Host for WorkbookHost<'_> {
             self.settle(range);
             return self.range_value(range).map(|value| Some(undressed(value)));
         }
-        if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
+        // The `Local` forms read and write the same text on this Office,
+        // whose function names and separators are English: measured,
+        // `FormulaLocal` of `=A1*2` is `=A1*2` and `NumberFormatLocal` of
+        // General is `General`.
+        if name.eq_ignore_ascii_case("formula")
+            || name.eq_ignore_ascii_case("formula2")
+            || name.eq_ignore_ascii_case("formulalocal")
+        {
             return self.range_formula(range, FormulaStyle::A1).map(Some);
         }
-        if name.eq_ignore_ascii_case("formular1c1") || name.eq_ignore_ascii_case("formula2r1c1") {
+        if name.eq_ignore_ascii_case("formular1c1")
+            || name.eq_ignore_ascii_case("formula2r1c1")
+            || name.eq_ignore_ascii_case("formular1c1local")
+        {
             return self.range_formula(range, FormulaStyle::R1C1).map(Some);
         }
         if name.eq_ignore_ascii_case("hasformula") {
@@ -13087,7 +13231,8 @@ impl Host for WorkbookHost<'_> {
                     Some(value.map(|indent| Value::Integer(i64::from(indent))).unwrap_or(Value::Null))
                 });
         }
-        if name.eq_ignore_ascii_case("numberformat") {
+        if name.eq_ignore_ascii_case("numberformat") || name.eq_ignore_ascii_case("numberformatlocal")
+        {
             return self
                 .uniform_style(range, |style| style.number_format.clone())
                 .map(|value| {
@@ -13677,11 +13822,17 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(true);
         }
-        if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
+        if name.eq_ignore_ascii_case("formula")
+            || name.eq_ignore_ascii_case("formula2")
+            || name.eq_ignore_ascii_case("formulalocal")
+        {
             self.set_range_input(range, value, "range formula assignment", FormulaStyle::A1)?;
             return Ok(true);
         }
-        if name.eq_ignore_ascii_case("formular1c1") || name.eq_ignore_ascii_case("formula2r1c1") {
+        if name.eq_ignore_ascii_case("formular1c1")
+            || name.eq_ignore_ascii_case("formula2r1c1")
+            || name.eq_ignore_ascii_case("formular1c1local")
+        {
             self.set_range_input(
                 range,
                 value,
@@ -13795,7 +13946,8 @@ impl Host for WorkbookHost<'_> {
             })?;
             return Ok(true);
         }
-        if name.eq_ignore_ascii_case("numberformat") {
+        if name.eq_ignore_ascii_case("numberformat") || name.eq_ignore_ascii_case("numberformatlocal")
+        {
             let value = match value {
                 Value::Empty => None,
                 Value::String(value) if value.eq_ignore_ascii_case("general") => None,
@@ -17565,28 +17717,9 @@ impl From<Value> for OutputValue {
 /// and these 30 were not there. `NOTAFUNCTION` was asked alongside them as a
 /// control and was reported absent, which is what says the question was being
 /// answered rather than deflected.
-/// Whether a name reaches `Application` as a worksheet function.
-///
-/// The engine is asked, because it is the one that knows: a name it does not
-/// have answers `#NAME?`, and no name it does have answers that. It is asked
-/// with ONE argument -- with none, the functions that require one answer
-/// `#NAME?` too, and a knownness test that cannot tell a real function from a
-/// missing member is no test at all.
-///
-/// Excel draws that line itself: `Application.Sum` with no arguments is error
-/// 1004 -- a function, given nothing -- while `Application.Bold` is 438, there
-/// being no such member. Taking every unknown name for a function put all of
-/// them on the 1004 side.
-fn worksheet_function_carries(name: &str) -> bool {
-    let probe = [oxicells_calc::functions::Arg::Value(
-        oxicells_calc::Value::Number(1.0),
-    )];
-    if matches!(
-        oxicells_calc::functions::call(&name.to_ascii_uppercase(), &probe),
-        oxicells_calc::Value::Error(oxicells_calc::ExcelError::Name)
-    ) {
-        return false;
-    }
+/// The worksheet functions Excel leaves off `WorksheetFunction`, because VBA
+/// has one of its own or says it another way.
+fn vba_has_its_own(name: &str) -> bool {
     const ABSENT: &[&str] = &[
         // each of these is a VBA function of its own
         "ABS", "CHAR", "CODE", "DATE", "DAY", "HOUR", "INT", "LEFT", "LEN", "LOWER", "MID",
@@ -17596,7 +17729,7 @@ fn worksheet_function_carries(name: &str) -> bool {
         // `=` for EXACT, `IsEmpty` for ISBLANK, `Range.Rows.Count` for ROWS
         "COLUMNS", "CONCATENATE", "DATEDIF", "EXACT", "HYPERLINK", "ISBLANK", "ISREF", "ROWS",
     ];
-    !ABSENT
+    ABSENT
         .iter()
         .any(|absent| absent.eq_ignore_ascii_case(name))
 }
@@ -19476,11 +19609,21 @@ mod tests {
             )
         );
 
-        for (call, expected) in [
-            ("f.Search(\"z\", \"abc\")", "#VALUE!"),
-            ("f.Len(\"abcd\")", "VBA has one of its own"),
-            ("f.Abs(-3)", "VBA has one of its own"),
-        ] {
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Dim f\n\
+               Set f = Application.WorksheetFunction\n\
+               Ask = f.Search(\"z\", \"abc\")\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let refused = execute_with_host(&module, "Ask", vec![], &mut host).unwrap_err();
+        assert!(refused.message.contains("#VALUE!"), "{refused:?}");
+        // The names VBA has of its own are not members at all: measured,
+        // `WorksheetFunction.Sqrt(-1)` and `WorksheetFunction.Len("ab")` are
+        // error 438.
+        for call in ["f.Len(\"abcd\")", "f.Abs(-3)", "f.Sqrt(4)"] {
             let module = parse_module(&format!(
                 "Public Function Ask() As String\n\
                    Dim f\n\
@@ -19491,7 +19634,7 @@ mod tests {
             .unwrap();
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
             let refused = execute_with_host(&module, "Ask", vec![], &mut host).unwrap_err();
-            assert!(refused.message.contains(expected), "{call}: {refused:?}");
+            assert_eq!(refused.vba_number, Some(438), "{call}: {refused:?}");
         }
     }
 
@@ -23571,15 +23714,17 @@ End Sub
                Range(\"I1\").Value = \"keep\": Range(\"I3\").Value = 7
                Dim v
                v = WorksheetFunction.Transpose(Range(\"A1:A3\"))
-               Debug.Print LBound(v, 1) & \":\" & UBound(v, 1) & \" \" & LBound(v, 2) & \":\" & UBound(v, 2)
-               Debug.Print v(1, 1) & \" \" & v(1, 2) & \" \" & v(1, 3)
+               Debug.Print LBound(v) & \":\" & UBound(v)
+               Debug.Print v(1) & \" \" & v(2) & \" \" & v(3)
+               v = WorksheetFunction.Transpose(v)
+               Debug.Print UBound(v, 1) & \"x\" & UBound(v, 2) & \" \" & v(2, 1)
                v = WorksheetFunction.Transpose(Range(\"C1:D1\"))
                Debug.Print UBound(v, 1) & \"x\" & UBound(v, 2) & \" \" & v(1, 1) & v(2, 1)
                v = WorksheetFunction.Transpose(Range(\"F1:G2\"))
                Debug.Print v(1, 1) & \" \" & v(1, 2) & \" \" & v(2, 1) & \" \" & v(2, 2)
                Debug.Print WorksheetFunction.Transpose(Range(\"A1\"))
                v = WorksheetFunction.Transpose(Range(\"I1:I3\"))
-               Debug.Print v(1, 1) & \" [\" & v(1, 2) & \"] \" & v(1, 3) & \" \" & IsEmpty(v(1, 2))
+               Debug.Print v(1) & \" [\" & v(2) & \"] \" & v(3) & \" \" & IsEmpty(v(2))
                v = WorksheetFunction.Transpose(Array(1, 2, 3))
                Debug.Print UBound(v, 1) & \"x\" & UBound(v, 2) & \" \" & v(1, 1) & v(2, 1) & v(3, 1)
              End Sub
@@ -23595,9 +23740,12 @@ End Sub
         assert_eq!(
             debug_output,
             vec![
-                // A column of three becomes one row of three, based at one.
-                "1:1 1:3".to_string(),
+                // A column of three becomes one row of three, based at one --
+                // and one row is a ONE-dimensional array: measured, `UBound(v)`
+                // is 3 and `v(3)` answers. Transposed again it is (3, 1).
+                "1:3".to_string(),
                 "1 2 3".to_string(),
+                "3x1 2".to_string(),
                 // And a row of two becomes a column of two.
                 "2x1 xy".to_string(),
                 // A block keeps its corners and swaps the other two.
@@ -26187,11 +26335,14 @@ End Sub
         assert_eq!(result, Value::String("_Fine".to_string()));
     }
 
-    /// What a name cannot be asked for, and what it says instead.
+    /// What a name cannot be asked for, and what it says instead. A bare
+    /// `Range` reaches every name in the workbook -- measured, it finds a
+    /// name on another sheet -- so it is the worksheet's own `Range` that
+    /// keeps to the sheet's names.
     #[test]
     fn vba_says_why_a_name_is_not_a_range() {
         for (call, expected) in [
-            ("Range(\"Away\")", "answers only for its own names"),
+            ("ActiveSheet.Range(\"Away\")", "answers only for its own names"),
             ("Range(\"Scattered\")", "more than one block of cells"),
             ("Range(\"Number\")", "which worksheet it means"),
             ("Range(\"WholeColumn\")", "not a block of cells"),
