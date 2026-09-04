@@ -108,6 +108,8 @@ body.editing .slide-shape span[contenteditable] { outline: 1px dashed rgba(31,42
 body.editing .slide-shape span[contenteditable]:hover { outline-color: rgba(183,65,14,.55) }
 body.editing .slide-shape span[contenteditable]:focus { outline: 2px solid #B7410E;
                                                         outline-offset: 1px }
+body.editing .slide-shape span[contenteditable]:empty { display: inline-block;
+                                                        min-width: 2ch; min-height: 1em }
 #btnSave[hidden], #btnEdit[hidden] { display: none }
 #btnSave { font-weight: 600 }
 .dirty::after { content: '•'; color: #B7410E; margin-left: 6px }
@@ -493,12 +495,25 @@ function editKey(si, shape, pi, ri) {
   return si + '/' + sh + '/' + pi + '/' + ri;
 }
 
+// Every run on the slide, against what the file said. `input` is not enough:
+// Chrome does not fire it when a character lands in an empty run, which is
+// exactly the run a paragraph break opens.
+function harvest() {
+  for (const span of document.querySelectorAll('#canvas span[data-key]')) {
+    const key = span.dataset.key;
+    const now = span.textContent;
+    if (now === (span.dataset.orig || '')) edits.delete(key);
+    else edits.set(key, now);
+  }
+  markDirty();
+}
+
 function markDirty() {
   const n = document.getElementById('docName');
   n.classList.toggle('dirty', edits.size > 0);
 }
 
-function buildSlide(container, slide, scale) {
+function buildSlide(container, slide, scale, interactive) {
   slide.shapes.forEach((shape, __i) => {
     shape.__i = __i;
     const div = document.createElement('div');
@@ -547,15 +562,25 @@ function buildSlide(container, slide, scale) {
         else if (align === 'Right') p.style.textAlign = 'right';
         else if (align === 'Justify') p.style.textAlign = 'justify';
         if (lvl && lvl.line_spacing) p.style.lineHeight = lvl.line_spacing * 1.2;
-        para.runs.forEach((run, ri) => {
+        // A paragraph the engine reports with no runs still has one in the
+        // file -- a break opens `<a:r><a:t></a:t></a:r>`, and an empty run is
+        // dropped on the way to the IR. While editing, give it somewhere to
+        // type: without this, Enter opens a paragraph the caret cannot reach.
+        const runs = (para.runs && para.runs.length)
+          ? para.runs
+          : ((editing && interactive) ? [{ text: '' }] : []);
+        runs.forEach((run, ri) => {
           const span = document.createElement('span');
           // What the file says, unless this run has been edited in the page.
           const key = editKey(slideIndexOf(slide), shape, pi, ri);
-          span.textContent = edits.has(key) ? edits.get(key) : run.text;
-          if (editing) {
+          const original = run.text || '';
+          span.textContent = edits.has(key) ? edits.get(key) : original;
+          if (editing && interactive) {
             span.contentEditable = 'true';
             span.spellcheck = false;
             span.dataset.key = key;
+            span.dataset.run = ri;
+            span.dataset.orig = original;
           }
           span.style.fontSize = ((run.font_size || (lvl && lvl.font_size) || 18) * scale) + 'px';
           if (run.bold) span.style.fontWeight = 'bold';
@@ -612,7 +637,7 @@ function render() {
   el.style.width = (pres.slide_width * scale) + 'px';
   el.style.height = (pres.slide_height * scale) + 'px';
   paintBackground(el, slide);
-  buildSlide(el, slide, scale);
+  buildSlide(el, slide, scale, true);
   canvas.appendChild(el);
 
   const nav = document.createElement('div');
@@ -642,7 +667,7 @@ function render() {
     prev2.className = 'thumb-p';
     prev2.style.height = (pres.slide_height * thumbScale) + 'px';
     paintBackground(prev2, s);
-    buildSlide(prev2, s, thumbScale);
+    buildSlide(prev2, s, thumbScale, false);
     thumb.append(n, prev2);
     thumb.onclick = () => { current = i; render(); };
     rail.appendChild(thumb);
@@ -785,6 +810,7 @@ document.addEventListener('keydown', e => {
 let presenting = false, presStart = 0, presIdle = 0;
 
 function go(d) {
+  if (editing) harvest();
   const n = Math.max(0, Math.min(pres.slides.length - 1, current + d));
   if (n === current) return;
   current = n;
@@ -855,17 +881,77 @@ document.getElementById('btnEdit').onclick = () => {
 };
 
 // One listener on the canvas, so a re-render never leaves a run unwired.
-document.getElementById('canvas').addEventListener('input', e => {
-  const span = e.target.closest ? e.target.closest('span[data-key]') : null;
-  if (!span) return;
-  edits.set(span.dataset.key, span.textContent);
-  markDirty();
-});
+document.getElementById('canvas').addEventListener('input', () => harvest());
+document.getElementById('canvas').addEventListener('keyup', () => { if (editing) harvest(); });
 document.getElementById('canvas').addEventListener('keydown', e => {
   if (!editing) return;
-  if (e.key === 'Enter') e.preventDefault();
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    splitHere();
+    return;
+  }
   e.stopPropagation();                       // arrows move the caret, not the deck
 });
+
+/* Enter opens a paragraph, which is a change to the FILE's structure and not
+   to a run's text, so it goes through the engine rather than the DOM: the
+   caret's offset within the paragraph is handed to `edit_pptx_with_splits` as
+   a split, the file comes back rewritten, and the page re-reads it. Doing it
+   in the DOM instead would leave the page showing something the file does not
+   contain. */
+function caretOffsetInParagraph() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const node = sel.anchorNode;
+  const span = (node.nodeType === 3 ? node.parentElement : node).closest('span[data-key]');
+  if (!span) return null;
+  const p = span.parentElement;
+  let at = 0;
+  for (const sib of p.querySelectorAll('span[data-key]')) {
+    if (sib === span) break;
+    at += Array.from(sib.textContent).length;
+  }
+  // `anchorOffset` counts UTF-16 units; a paragraph offset counts characters.
+  at += Array.from(node.textContent.slice(0, sel.anchorOffset)).length;
+  const [si, sh, pi] = span.dataset.key.split('/').map(Number);
+  return { slide_index: si, shape_index: sh, paragraph_index: pi, at_char: at };
+}
+
+function splitHere() {
+  const where = caretOffsetInParagraph();
+  if (!where) return;
+  harvest();
+  const list = [];
+  for (const [key, text] of edits) {
+    const [si, sh, pi, ri] = key.split('/').map(Number);
+    list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
+                run_index: ri, new_text: text });
+  }
+  try {
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [where], [], []);
+    bytes = out;
+    edits.clear();
+    markDirty();
+    pres = parse_presentation(new Uint8Array(bytes));
+    render();
+    keepDeck(document.getElementById('docName').textContent, bytes);
+    // Put the caret at the start of the paragraph the break opened.
+    const next = document.querySelector(
+      '#canvas span[data-key="' + where.slide_index + '/' + where.shape_index + '/'
+      + (where.paragraph_index + 1) + '/0"]');
+    if (next) {
+      const r = document.createRange();
+      r.setStart(next.firstChild || next, 0);
+      r.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      next.focus();
+    }
+  } catch (err) {
+    say(t('saveFailed') + err.message, true);
+  }
+}
 document.getElementById('canvas').addEventListener('paste', e => {
   if (!editing) return;
   e.preventDefault();
@@ -874,6 +960,7 @@ document.getElementById('canvas').addEventListener('paste', e => {
 });
 
 document.getElementById('btnSave').onclick = async () => {
+  harvest();
   if (!edits.size) { say(t('noEdits')); return; }
   const list = [];
   for (const [key, text] of edits) {

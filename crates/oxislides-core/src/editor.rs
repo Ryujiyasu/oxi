@@ -649,6 +649,11 @@ fn patch_slide_xml(
     let mut run_idx: usize = 0;
     let mut in_run = false;
     let mut in_text = false;
+    // Whether the `<a:t>` currently open carried any text. An empty one emits
+    // no `Text` event, so the edit that replaces its text has to be written
+    // when the element CLOSES -- which is the only chance to type into the
+    // paragraph a break just opened.
+    let mut text_seen = false;
     // While a paragraph is being split its events are collected here instead of
     // written, because the second half needs the first half's properties and
     // they arrive before the cut is reached.
@@ -770,7 +775,22 @@ fn patch_slide_xml(
                         run_idx += 1;
                     }
                     "t" if in_text => {
+                        // An empty run: no `Text` event came, so the edit is
+                        // written here, just before the element closes.
+                        if !text_seen {
+                            if let Some(new_text) = edits.get(&(shape_idx, para_idx, run_idx)) {
+                                let filled = Event::Text(BytesText::new(new_text).into_owned());
+                                if let Some((_, buf)) = buffer.as_mut() {
+                                    buf.push(filled);
+                                } else {
+                                    writer
+                                        .write_event(filled)
+                                        .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                                }
+                            }
+                        }
                         in_text = false;
+                        text_seen = false;
                     }
                     _ => {}
                 }
@@ -802,6 +822,9 @@ fn patch_slide_xml(
             Event::Text(ref e) => {
                 // A text edit is applied BEFORE any split, so the split counts
                 // characters of the text the file will actually carry.
+                if in_text {
+                    text_seen = true;
+                }
                 let out = if in_text {
                     match edits.get(&(shape_idx, para_idx, run_idx)) {
                         Some(new_text) => Event::Text(BytesText::new(new_text).into_owned()),
