@@ -177,8 +177,6 @@ const I18N = {
     note: 'Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
     loading: 'Loading the engine…', parsing: 'Parsing…',
     prev: 'Previous', next: 'Next', present: 'Present', close: 'Close',
-    kept: name => `${name} — reopened from this browser`,
-    parsed: (n, s) => `${n} slides, ${s} shapes`,
     slideOf: (a, b) => `Slide ${a} / ${b}`,
     badType: 'That is not a .pptx file.',
     failed: 'Could not open the presentation: ',
@@ -191,8 +189,6 @@ const I18N = {
     note: 'Oxi はオープンソースです。このページの描画エンジンは PowerPoint 自身の出力とスライド単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
     prev: '前へ', next: '次へ', present: 'プレゼン開始', close: '閉じる',
-    kept: name => `${name} — このブラウザに保存されていたものを開きました`,
-    parsed: (n, s) => `${n} スライド / ${s} 図形`,
     slideOf: (a, b) => `${a} / ${b} 枚目`,
     badType: '.pptx ファイルではありません。',
     failed: 'プレゼンテーションを開けませんでした: ',
@@ -666,12 +662,13 @@ async function open(name, bytes, opts) {
   try {
     say(t('parsing'));
     pres = parse_presentation(bytes);
-    let shapes = 0;
-    for (const s of pres.slides) shapes += s.shapes.length;
     current = (opts && opts.at) || 0;
     if (current >= pres.slides.length) current = 0;
     document.getElementById('docName').textContent = name;
-    say((opts && opts.restored) ? t('kept')(name) : t('parsed')(pres.slides.length, shapes));
+    // Nothing to announce: the file's name is in the toolbar and the slide is
+    // on the screen. The banner is kept for the one thing the page cannot show
+    // by itself -- a file it could not open.
+    msgEl.hidden = true;
     document.getElementById('btnPresent').disabled = false;
     document.getElementById('btnClose').hidden = false;
     document.getElementById('prestot').textContent = pres.slides.length;
