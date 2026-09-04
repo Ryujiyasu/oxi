@@ -40,17 +40,31 @@ from _pb_pxgrid_gen import CT, NS, RELS  # noqa: E402
 MINCHO = "ＭＳ 明朝"
 BODY = "本文の行送りを測るための文字列です。" * 24
 
-# (label, half-points, w:line value, docDefaults ascii face)
+# (label, half-points, w:line value, docDefaults ascii face, docGrid or None)
+# ★The grid arms answer the second question: `d1e8ac8`'s heading sits under
+# `<w:docGrid w:type="linesAndChars" w:linePitch="292"/>` (14.6pt) and Word
+# advances 24.00 over it where the no-grid law says 27.244. A snapping line is a
+# different regime, so sweep the pitch and the multiplier inside it.
+LC = '<w:docGrid w:type="linesAndChars" w:linePitch="%d"/>'
 ARMS = [
-    ("sz21_x1.0_century", 21, 240, "Century"),
-    ("sz21_x1.5_century", 21, 360, "Century"),
-    ("sz28_x1.0_century", 28, 240, "Century"),
-    ("sz28_x1.5_century", 28, 360, "Century"),      # d1e8ac8's heading shape
-    ("sz28_x2.0_century", 28, 480, "Century"),
+    ("sz21_x1.0_century", 21, 240, "Century", None),
+    ("sz21_x1.5_century", 21, 360, "Century", None),
+    ("sz28_x1.0_century", 28, 240, "Century", None),
+    ("sz28_x1.5_century", 28, 360, "Century", None),   # d1e8ac8's heading shape
+    ("sz28_x2.0_century", 28, 480, "Century", None),
     # ★The discriminator: same CJK line, different ASCII face.
-    ("sz28_x1.5_mincho", 28, 360, MINCHO),
-    ("sz28_x1.5_arial", 28, 360, "Arial"),
-    ("sz28_x1.5_meiryo", 28, 360, "メイリオ"),
+    ("sz28_x1.5_mincho", 28, 360, MINCHO, None),
+    ("sz28_x1.5_arial", 28, 360, "Arial", None),
+    ("sz28_x1.5_meiryo", 28, 360, "メイリオ", None),
+    # linesAndChars grid, d1e8ac8's own pitch (292tw = 14.6pt) and a round one.
+    ("g292_sz28_x1.0", 28, 240, "Century", LC % 292),
+    ("g292_sz28_x1.5", 28, 360, "Century", LC % 292),   # the witness's shape
+    ("g292_sz28_x2.0", 28, 480, "Century", LC % 292),
+    ("g292_sz21_x1.0", 21, 240, "Century", LC % 292),
+    ("g292_sz21_x1.5", 21, 360, "Century", LC % 292),
+    ("g360_sz28_x1.0", 28, 240, "Century", LC % 360),
+    ("g360_sz28_x1.5", 28, 360, "Century", LC % 360),
+    ("g360_sz21_x1.5", 21, 360, "Century", LC % 360),
 ]
 
 
@@ -76,7 +90,7 @@ def gen():
                 '<w:compat><w:compatSetting w:name="compatibilityMode"'
                 ' w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>'
                 '<w:themeFontLang w:val="en-US" w:eastAsia="ja-JP"/></w:settings>')
-    for label, sz, line, ascii_face in ARMS:
+    for label, sz, line, ascii_face, grid in ARMS:
         styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + NS + ">"
                   "<w:docDefaults><w:rPrDefault><w:rPr>"
                   '<w:rFonts w:ascii="%s" w:eastAsia="%s" w:hAnsi="%s"/>'
@@ -96,7 +110,8 @@ def gen():
                  "<w:t>%s</w:t></w:r></w:p>" % (line, sz, BODY)
                + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
                  '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/>'
-                 "</w:sectPr></w:body></w:document>")
+               + (grid or "")
+               + "</w:sectPr></w:body></w:document>")
         with zipfile.ZipFile(docx(label), "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("[Content_Types].xml", ct)
             z.writestr("_rels/.rels", RELS)
@@ -109,13 +124,14 @@ def gen():
 
 def report(pitches, who):
     print("== %s ==" % who)
-    print("%-22s %-6s %-6s %-10s %-8s %s"
-          % ("arm", "pt", "mult", "ascii", "pitch", "pitch / mult"))
-    for label, sz, line, ascii_face in ARMS:
+    print("%-22s %-6s %-6s %-10s %-9s %-9s %s"
+          % ("arm", "pt", "mult", "ascii", "gridPitch", "pitch", "pitch / mult"))
+    for label, sz, line, ascii_face, grid in ARMS:
         p = pitches.get(label)
         mult = line / 240.0
-        print("%-22s %-6.1f %-6.2f %-10s %-8s %s"
-              % (label, sz / 2.0, mult, ascii_face,
+        gp = "-" if grid is None else "%.2f" % (int(re.search(r'linePitch="(\d+)"', grid).group(1)) / 20.0)
+        print("%-22s %-6.1f %-6.2f %-10s %-9s %-9s %s"
+              % (label, sz / 2.0, mult, ascii_face, gp,
                  "-" if p is None else "%.3f" % p,
                  "-" if p is None else "%.3f" % (p / mult)))
 
@@ -128,7 +144,7 @@ def pdf():
     app.DisplayAlerts = 0
     out = {}
     try:
-        for label, _, _, _ in ARMS:
+        for label, _, _, _, _ in ARMS:
             src, dst = docx(label), docx(label).replace(".docx", ".pdf")
             d = app.Documents.Open(src, ReadOnly=True, AddToRecentFiles=False)
             try:
@@ -152,7 +168,7 @@ def oxi(envs=""):
         k, _, v = kv.partition("=")
         env[k] = v or "1"
     out = {}
-    for label, _, _, _ in ARMS:
+    for label, _, _, _, _ in ARMS:
         dump = os.path.join(tempfile.gettempdir(), "cjkmult_%s.json" % label)
         subprocess.run([GDI, docx(label), os.path.join(tempfile.gettempdir(), "cm"),
                         "--dump-layout=" + dump], check=True, capture_output=True, env=env)

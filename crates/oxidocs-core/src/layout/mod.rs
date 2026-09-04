@@ -17887,7 +17887,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     ma + md
                 });
             }
-            let raw = base * para.style.line_spacing.unwrap_or(1.0) * 20.0;
+            let s1306_mult = para.style.line_spacing.unwrap_or(1.0);
+            let raw = base * s1306_mult * 20.0;
             // S584 (2026-06-16): a TYPED docGrid line (body OR cell) is never
             // shorter than 1 grid cell, even with a COMPRESSING auto multiplier
             // (line<240). The BODY multiple-spacing path uses this cumulative
@@ -17914,7 +17915,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     && pitch > 0.0
                     && std::env::var("OXI_S584_DISABLE").is_err()
                 {
-                    raw.max(pitch * 20.0)
+                    // S1306 (2026-09-04, default ON, opt-out `OXI_S1306_DISABLE`): in a TYPED grid
+                    // the multiplier COMPETES with the cell count instead of
+                    // multiplying the natural height -- S1185's composition,
+                    // derived for vertical columns, is the horizontal law too.
+                    // `_pb_cjkmult_gen.py`, one paragraph wrapping 13 times so the
+                    // 0.75pt device step is spent over 12 gaps, Word PDF:
+                    //   pt    mult  pitch    Word     pitch x max(cells, mult)
+                    //   14.0  1.0   14.60    29.204   2 x 14.6   (cells = 2)
+                    //   14.0  1.5   14.60    29.204   2 x 14.6   <- not natural x1.5
+                    //   14.0  2.0   14.60    29.204   2 x 14.6   <- nor x2
+                    //   10.5  1.5   14.60    21.912   1.5 x 14.6 (cells = 1)
+                    //   14.0  1.5   18.00    36.006   2 x 18
+                    //   10.5  1.5   18.00    27.006   1.5 x 18
+                    // The note above ("Word does not snap a multiple-spaced line")
+                    // holds only where the multiplier is at or above the cell
+                    // count -- every arm a cells=1 document can offer. S584's floor
+                    // is the same law truncated to "at least ONE cell".
+                    // ★This is the site that decides it: `effective_lh` takes
+                    // `raw_spaced_tw` for a multiple-spaced line and ignores
+                    // `line_height`, so the snap inside `line_height_for_line_inner`
+                    // never reaches the cursor.
+                    let s1306 = std::env::var("OXI_S1306_DISABLE").is_err();
+                    if s1306 && (s1306_mult - 1.0).abs() > 0.001 {
+                        let p_tw = (pitch * 20.0).round();
+                        let cells = ((base * 20.0).round() / p_tw).ceil().max(1.0);
+                        p_tw * cells.max(s1306_mult)
+                    } else {
+                        raw.max(pitch * 20.0)
+                    }
                 } else {
                     raw
                 }
