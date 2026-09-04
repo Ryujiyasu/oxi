@@ -31,6 +31,49 @@ use oxislides_core::ir::{
 };
 use serde_json::{json, Value};
 
+/// S-FEFFSTRIP: U+FEFF is removed from the renderer's copy of the text,
+/// unless this is set. PowerPoint gives it no width and no ink; the engine's
+/// fallback measurement handed it a default-char width (d50 s18/s19: +5.85pt
+/// on an 87pt footer, twice), and its missing glyph pushed those lines off the
+/// per-run measurement path entirely.
+fn feffstrip_on() -> bool {
+    std::env::var("OXI_FEFFSTRIP_DISABLE").is_err()
+}
+
+/// Remove U+FEFF from every run the renderer will measure or draw. The IR
+/// flattens groups, so slides -> shapes -> paragraphs (and table cells) is
+/// every place text lives.
+fn strip_feff(pres: &mut oxislides_core::ir::Presentation) {
+    use oxislides_core::ir::ShapeContent;
+    fn clean(paragraphs: &mut [oxislides_core::ir::SlideParagraph]) {
+        for para in paragraphs {
+            for run in &mut para.runs {
+                if run.text.contains(FEFF) {
+                    run.text = run.text.replace(FEFF, "");
+                }
+            }
+        }
+    }
+    const FEFF: char = '\u{FEFF}';
+    for slide in &mut pres.slides {
+        for shape in &mut slide.shapes {
+            match &mut shape.content {
+                ShapeContent::AutoShape { paragraphs } | ShapeContent::TextBox { paragraphs } => {
+                    clean(paragraphs)
+                }
+                ShapeContent::Table { table } => {
+                    for row in &mut table.rows {
+                        for cell in row {
+                            clean(&mut cell.paragraphs);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
@@ -72,7 +115,11 @@ fn main() {
     }
 
     let data = std::fs::read(pptx_path).expect("Cannot read pptx file");
-    let pres = oxislides_core::parser::parse_pptx(&data).expect("Cannot parse pptx");
+    let mut pres = oxislides_core::parser::parse_pptx(&data).expect("Cannot parse pptx");
+    if feffstrip_on() {
+        strip_feff(&mut pres);
+    }
+    let pres = pres;
 
     eprintln!(
         "Parsed {} slides, size={}x{}pt, DPI={} supersample={}x",
