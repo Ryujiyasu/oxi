@@ -41,6 +41,11 @@ pub enum Value {
     /// told apart, and left that way so the several hundred places that
     /// already mean Long keep meaning it.
     Integer(i64),
+    /// VBA's `LongLong`, which is also what `LongPtr` is on a 64-bit Office.
+    /// Eight bytes like `Integer` above, and told apart from it only so that
+    /// `VarType` can answer 20 and `TypeName` `LongLong` -- and so that the
+    /// arithmetic ladder can put it where Excel puts it.
+    LongLong(i64),
     /// VBA's `Byte`, which is unsigned and stops at 255.
     Byte(u8),
     /// VBA's `Single`.
@@ -5089,6 +5094,9 @@ fn call_builtin(
                 2_147_483_647,
                 line,
             )?)),
+            // `LongPtr` is `LongLong` on a 64-bit Office, which is what a
+            // browser stands in for: asked of Excel, `TypeName(CLngPtr(1))` is
+            // LongLong and `VarType` is 20.
             "clnglng" | "clngptr" => {
                 let value = number(value).map_err(mismatch)?.round_ties_even();
                 if !value.is_finite()
@@ -5101,7 +5109,7 @@ fn call_builtin(
                         line,
                     ))
                 } else {
-                    Ok(Value::Integer(value as i64))
+                    Ok(Value::LongLong(value as i64))
                 }
             }
             "csng" => {
@@ -8568,6 +8576,7 @@ fn value_type_name(value: &Value) -> String {
         Value::Byte(_) => "Byte".to_string(),
         Value::Single(_) => "Single".to_string(),
         Value::Double(_) => "Double".to_string(),
+        Value::LongLong(_) => "LongLong".to_string(),
         Value::Currency(_) => "Currency".to_string(),
         Value::Date(_) => "Date".to_string(),
         Value::Error(_) => "Error".to_string(),
@@ -8588,6 +8597,7 @@ fn value_var_type(value: &Value) -> i64 {
         Value::Integer(_) => 3,
         Value::Single(_) => 4,
         Value::Double(_) => 5,
+        Value::LongLong(_) => 20,
         Value::Currency(_) => 6,
         Value::Date(_) => 7,
         Value::Byte(_) => 17,
@@ -8624,6 +8634,7 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Byte(value) => Ok(*value as f64),
         Value::Single(value) => Ok(*value as f64),
         Value::Double(value) => Ok(*value),
+        Value::LongLong(value) => Ok(*value as f64),
         Value::Currency(value) => Ok(*value as f64 / 10_000.0),
         Value::Date(value) => Ok(*value),
         Value::Error(value) => Ok(*value as f64),
@@ -8670,6 +8681,7 @@ fn any_number(value: &Value) -> Option<f64> {
         Value::Integer(value) => Some(*value as f64),
         Value::Single(value) => Some(f64::from(*value)),
         Value::Double(value) => Some(*value),
+        Value::LongLong(value) => Some(*value as f64),
         Value::Currency(value) => Some(*value as f64 / 10_000.0),
         _ => None,
     }
@@ -8720,6 +8732,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
         Value::Byte(value) => Ok(*value != 0),
         Value::Single(value) => Ok(*value != 0.0),
         Value::Double(value) => Ok(*value != 0.0),
+        Value::LongLong(value) => Ok(*value != 0),
         Value::Currency(value) => Ok(*value != 0),
         Value::Date(value) => Ok(*value != 0.0),
         // An EMPTY string is not a Boolean at all. Asked of Excel, both
@@ -9182,6 +9195,17 @@ fn arithmetic_result(
         });
     }
     match (NumRank::of(lhs), NumRank::of(rhs)) {
+        // A Single cannot hold every Long, so meeting one widens PAST both to
+        // a Double. Asked of Excel, `CLng(1) + CSng(1)` is a Double where
+        // `CInt(1) + CSng(1)` is a Single -- the exception is the two wide
+        // whole types, not every whole type.
+        (Some(left), Some(right))
+            if [left, right].contains(&NumRank::Single)
+                && (matches!(left, NumRank::Long | NumRank::LongLong)
+                    || matches!(right, NumRank::Long | NumRank::LongLong)) =>
+        {
+            NumRank::Double.hold(answer, None)
+        }
         (Some(left), Some(right)) => left.max(right).hold(answer, None),
         // A side this ladder does not know — a numeric String, most often —
         // answers the way it always did.
@@ -9199,7 +9223,12 @@ fn integer_result(
     let narrow = |value: &Value| {
         matches!(NumRank::of(value), Some(NumRank::Byte) | Some(NumRank::Int16))
     };
-    let rank = if narrow(lhs) && narrow(rhs) {
+    // A LongLong on either side keeps the answer a LongLong: asked of Excel,
+    // `TypeName(CLngLng(1) \ 2)` and `CLngLng(1) Mod 2` are both LongLong.
+    let wide = |value: &Value| matches!(NumRank::of(value), Some(NumRank::LongLong));
+    let rank = if wide(lhs) || wide(rhs) {
+        NumRank::LongLong
+    } else if narrow(lhs) && narrow(rhs) {
         NumRank::Int16
     } else {
         NumRank::Long
@@ -9218,6 +9247,7 @@ enum NumRank {
     Byte,
     Int16,
     Long,
+    LongLong,
     Single,
     Double,
     Currency,
@@ -9229,6 +9259,7 @@ impl NumRank {
             Value::Byte(_) => NumRank::Byte,
             Value::Int16(_) | Value::Boolean(_) => NumRank::Int16,
             Value::Integer(_) => NumRank::Long,
+            Value::LongLong(_) => NumRank::LongLong,
             Value::Single(_) => NumRank::Single,
             Value::Double(_) => NumRank::Double,
             Value::Currency(_) => NumRank::Currency,
@@ -9249,12 +9280,13 @@ impl NumRank {
         };
         let _ = line;
         Ok(match self {
-            NumRank::Byte | NumRank::Int16 | NumRank::Long => {
+            NumRank::Byte | NumRank::Int16 | NumRank::Long | NumRank::LongLong => {
                 let whole = number.round_ties_even();
                 let (low, high) = match self {
                     NumRank::Byte => (0.0, 255.0),
                     NumRank::Int16 => (-32_768.0, 32_767.0),
-                    _ => (-2_147_483_648.0, 2_147_483_647.0),
+                    NumRank::Long => (-2_147_483_648.0, 2_147_483_647.0),
+                    _ => (-9_223_372_036_854_775_808.0, 9_223_372_036_854_775_000.0),
                 };
                 if !whole.is_finite() || whole < low || whole > high {
                     return overflowed();
@@ -9262,7 +9294,8 @@ impl NumRank {
                 match self {
                     NumRank::Byte => Value::Byte(whole as u8),
                     NumRank::Int16 => Value::Int16(whole as i16),
-                    _ => Value::Integer(whole as i64),
+                    NumRank::Long => Value::Integer(whole as i64),
+                    _ => Value::LongLong(whole as i64),
                 }
             }
             NumRank::Single => {
@@ -9309,6 +9342,7 @@ fn text(value: &Value) -> Result<String, String> {
         // widening it to a Double first would say 0.705547511577606.
         Value::Single(value) => vba_number_text(single_text_value(*value)),
         Value::Double(value) => vba_number_text(*value),
+        Value::LongLong(value) => value.to_string(),
         Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
         Value::Date(value) => vba_date_text(*value),
         // The ONE string on this whole surface that follows the Office UI
@@ -13899,6 +13933,91 @@ mod tests {
         assert_eq!(ask("InStr(Empty, \"abc\", \"\")"), "0");
         assert_eq!(ask("InStr(True, \"abc\", \"\")"), "-1");
         assert_eq!(ask("InStr(\"2\", \"abc\", \"b\")"), "2");
+    }
+
+    /// `LongLong`, and where it stands when it meets another number.
+    ///
+    /// `CLngLng` and `CLngPtr` both make one -- LongPtr IS LongLong on a
+    /// 64-bit Office, which is what a browser stands in for. VarType 20,
+    /// TypeName LongLong.
+    ///
+    /// It sits above Long and below Double, and carries through `+`, `-`,
+    /// `*`, `\`, `Mod`, unary minus, `Abs`, `Int`, `Fix` and `Round`. `/`
+    /// gives a Double, as it does for every whole type.
+    ///
+    /// The pair worth naming is LongLong or Long met with SINGLE, which widens
+    /// past both to a Double -- a Single cannot hold every Long. `CInt(1) +
+    /// CSng(1)` is still a Single, so this is about the two wide whole types
+    /// and not about whole types in general. That was wrong here before
+    /// LongLong existed, and stayed wrong for `Long` alone.
+    #[test]
+    fn a_long_long_stands_above_a_long_and_below_a_double() {
+        let kind = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Ask = TypeName({call})
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        assert_eq!(kind("CLngLng(1)"), "LongLong");
+        assert_eq!(kind("CLngPtr(1)"), "LongLong");
+        assert_eq!(
+            run(
+                "Public Function Ask() As String
+                   Ask = CStr(VarType(CLngLng(1)))
+                 End Function
+",
+                "Ask",
+                vec![]
+            )
+            .unwrap(),
+            Value::String("20".to_string())
+        );
+
+        // It carries through everything that keeps a whole number whole.
+        for call in [
+            "CLngLng(1) + 1",
+            "CLngLng(1) + CLng(1)",
+            "CLngLng(1) + CInt(1)",
+            "CLngLng(1) + CByte(1)",
+            "CLngLng(1) + True",
+            "CLngLng(1) + Empty",
+            "CLngLng(1) * 2",
+            "-CLngLng(1)",
+            "Abs(CLngLng(-1))",
+            "Int(CLngLng(5))",
+            "Fix(CLngLng(5))",
+            "Round(CLngLng(5))",
+            r"CLngLng(1) \ 2",
+            "CLngLng(1) Mod 2",
+            "CVar(CLngLng(1))",
+        ] {
+            assert_eq!(kind(call), "LongLong", "{call}");
+        }
+
+        // And gives way where Excel gives way.
+        assert_eq!(kind("CLngLng(1) / 2"), "Double");
+        assert_eq!(kind("CLngLng(1) ^ 2"), "Double");
+        assert_eq!(kind("CLngLng(1) + CDbl(1)"), "Double");
+        assert_eq!(kind("CLngLng(1) + CCur(1)"), "Currency");
+        assert_eq!(kind("CLngLng(1) + #1/2/2003#"), "Date");
+        assert_eq!(kind("CLng(CLngLng(1))"), "Long");
+        assert_eq!(kind("Sgn(CLngLng(-5))"), "Integer");
+
+        // A Single met with either wide whole type widens past both.
+        assert_eq!(kind("CLngLng(1) + CSng(1)"), "Double");
+        assert_eq!(kind("CLng(1) + CSng(1)"), "Double");
+        assert_eq!(kind("CLng(1) - CSng(1)"), "Double");
+        assert_eq!(kind("CSng(1) * CLng(1)"), "Double");
+        // ... but the narrow ones leave it a Single.
+        assert_eq!(kind("CInt(1) + CSng(1)"), "Single");
+        assert_eq!(kind("CByte(1) + CSng(1)"), "Single");
     }
 
     /// `Int` and `Fix` keep the type they were handed.
