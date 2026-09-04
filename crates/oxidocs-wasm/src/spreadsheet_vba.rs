@@ -300,6 +300,8 @@ enum HostObject {
     Hyperlink(u64),
     /// The hyperlinks on a sheet, or the ones a range reaches.
     Hyperlinks(HyperlinkScope),
+    /// `Worksheet.PageSetup`.
+    PageSetup(usize),
     /// The tables of a sheet, one table by its number, and a table's rows
     /// and columns.
     ListObjects(usize),
@@ -1341,6 +1343,86 @@ fn known_table_style(name: &str) -> bool {
     }
 }
 
+
+/// A sheet's page setup, as `Worksheet.PageSetup` reads and writes it.
+///
+/// Nothing here prints, but macros set these on their way to doing other
+/// things and read them back. Held beside the workbook; the file's own
+/// settings are not read in and these are not saved -- a known limit. The
+/// defaults are what a new sheet answered on a Japanese Office: A4, portrait,
+/// margins of 50.4, 54 and 21.6 points.
+#[derive(Debug, Clone)]
+struct PageSetup {
+    orientation: i64,
+    paper_size: i64,
+    /// A percentage, or None for `Zoom = False`, when the pages-wide and
+    /// pages-tall counts take over.
+    zoom: Option<i64>,
+    fit_to_pages_wide: Option<i64>,
+    fit_to_pages_tall: Option<i64>,
+    left_margin: f64,
+    right_margin: f64,
+    top_margin: f64,
+    bottom_margin: f64,
+    header_margin: f64,
+    footer_margin: f64,
+    /// The blocks to print, as Excel writes them: `$A$1:$B$2,$D$1:$D$9`.
+    print_area: Vec<CellRange>,
+    print_title_rows: Option<(u32, u32)>,
+    print_title_columns: Option<(u32, u32)>,
+    center_horizontally: bool,
+    center_vertically: bool,
+    headers: [String; 6],
+    print_gridlines: bool,
+    print_headings: bool,
+    first_page_number: i64,
+    order: i64,
+    black_and_white: bool,
+    draft: bool,
+    print_errors: i64,
+    print_comments: i64,
+    scale_with_doc: bool,
+    align_margins: bool,
+    different_first_page: bool,
+    odd_and_even: bool,
+}
+
+impl Default for PageSetup {
+    fn default() -> Self {
+        Self {
+            orientation: 1,
+            paper_size: 9,
+            zoom: Some(100),
+            fit_to_pages_wide: Some(1),
+            fit_to_pages_tall: Some(1),
+            left_margin: 50.4,
+            right_margin: 50.4,
+            top_margin: 54.0,
+            bottom_margin: 54.0,
+            header_margin: 21.6,
+            footer_margin: 21.6,
+            print_area: Vec::new(),
+            print_title_rows: None,
+            print_title_columns: None,
+            center_horizontally: false,
+            center_vertically: false,
+            headers: Default::default(),
+            print_gridlines: false,
+            print_headings: false,
+            first_page_number: -4105,
+            order: 1,
+            black_and_white: false,
+            draft: false,
+            print_errors: 0,
+            print_comments: -4142,
+            scale_with_doc: true,
+            align_margins: true,
+            different_first_page: false,
+            odd_and_even: false,
+        }
+    }
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -1440,6 +1522,8 @@ struct WorkbookHost<'a> {
     table_handles: Vec<(u64, usize, String)>,
     table_extra: std::collections::HashMap<u64, TableExtra>,
     next_table: u64,
+    /// Each sheet's page setup, once a macro has touched it.
+    page_setups: std::collections::HashMap<usize, PageSetup>,
     /// The number the next new table is named with. Measured: a workbook
     /// counter, not the lowest free number -- with テーブル1 renamed to T,
     /// the next table is still テーブル2.
@@ -1528,6 +1612,7 @@ impl<'a> WorkbookHost<'a> {
             table_handles: Vec::new(),
             table_extra: std::collections::HashMap::new(),
             next_table: 1,
+            page_setups: std::collections::HashMap::new(),
             table_counter,
             next_link: 1,
             linked_once: false,
@@ -1580,6 +1665,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Styles => "Styles",
                 HostObject::Hyperlink(_) => "Hyperlink",
                 HostObject::Hyperlinks(_) => "Hyperlinks",
+                HostObject::PageSetup(_) => "PageSetup",
                 HostObject::ListObjects(_) => "ListObjects",
                 HostObject::ListObject(_) => "ListObject",
                 HostObject::ListRows(_) => "ListRows",
@@ -2828,6 +2914,310 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Some(Value::Empty));
         }
         Ok(None)
+    }
+
+    fn page_setup_sheet(&self, object: &ObjectRef) -> Option<usize> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::PageSetup(sheet)) => Some(*sheet),
+            _ => None,
+        }
+    }
+
+    /// How the print area is written: every block absolute, joined by
+    /// commas.
+    fn print_area_text(&self, sheet: usize) -> String {
+        self.page_setups
+            .get(&sheet)
+            .map(|setup| {
+                setup
+                    .print_area
+                    .iter()
+                    .map(|block| format_range_address(*block, true, true))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default()
+    }
+
+    /// Keep the sheet-scoped names Excel keeps for these: `Print_Area` for
+    /// the print area and `Print_Titles` for the title columns, then rows.
+    /// Measured: `PrintArea = "$A$1:$C$5"` makes `Sheet1!Print_Area` with
+    /// `=Sheet1!$A$1:$C$5`, and clearing it takes the name away.
+    fn refresh_print_names(&mut self, sheet: usize) {
+        let sheet_name = self.workbook.sheets[sheet].name.clone();
+        let quoted = quoted_sheet(&sheet_name);
+        let setup = self.page_setups.get(&sheet).cloned().unwrap_or_default();
+        let area_name = format!("{sheet_name}!Print_Area");
+        let titles_name = format!("{sheet_name}!Print_Titles");
+        self.workbook
+            .defined_names
+            .retain(|(name, _)| !name.eq_ignore_ascii_case(&area_name) && !name.eq_ignore_ascii_case(&titles_name));
+        if !setup.print_area.is_empty() {
+            let refers_to = setup
+                .print_area
+                .iter()
+                .map(|block| format!("{quoted}!{}", format_range_address(*block, true, true)))
+                .collect::<Vec<_>>()
+                .join(",");
+            self.workbook.defined_names.push((area_name, refers_to));
+        }
+        let mut titles = Vec::new();
+        if let Some((first, last)) = setup.print_title_columns {
+            titles.push(format!(
+                "{quoted}!${}:${}",
+                oxicells_core::editor::col_to_letter(first),
+                oxicells_core::editor::col_to_letter(last)
+            ));
+        }
+        if let Some((first, last)) = setup.print_title_rows {
+            titles.push(format!("{quoted}!${first}:${last}"));
+        }
+        if !titles.is_empty() {
+            self.workbook.defined_names.push((titles_name, titles.join(",")));
+        }
+    }
+
+    /// What `PageSetup` answers to.
+    fn page_setup_member(&mut self, sheet: usize, name: &str) -> Result<Option<Value>, String> {
+        let setup = self.page_setups.get(&sheet).cloned().unwrap_or_default();
+        let answer = match name.to_ascii_lowercase().as_str() {
+            "orientation" => Value::Integer(setup.orientation),
+            "papersize" => Value::Integer(setup.paper_size),
+            "zoom" => match setup.zoom {
+                Some(zoom) => Value::Integer(zoom),
+                None => Value::Boolean(false),
+            },
+            "fittopageswide" => match setup.fit_to_pages_wide {
+                Some(pages) => Value::Integer(pages),
+                None => Value::Boolean(false),
+            },
+            "fittopagestall" => match setup.fit_to_pages_tall {
+                Some(pages) => Value::Integer(pages),
+                None => Value::Boolean(false),
+            },
+            "leftmargin" => Value::Double(setup.left_margin),
+            "rightmargin" => Value::Double(setup.right_margin),
+            "topmargin" => Value::Double(setup.top_margin),
+            "bottommargin" => Value::Double(setup.bottom_margin),
+            "headermargin" => Value::Double(setup.header_margin),
+            "footermargin" => Value::Double(setup.footer_margin),
+            "printarea" => Value::String(self.print_area_text(sheet)),
+            "printtitlerows" => Value::String(
+                setup
+                    .print_title_rows
+                    .map(|(first, last)| format!("${first}:${last}"))
+                    .unwrap_or_default(),
+            ),
+            "printtitlecolumns" => Value::String(
+                setup
+                    .print_title_columns
+                    .map(|(first, last)| {
+                        format!(
+                            "${}:${}",
+                            oxicells_core::editor::col_to_letter(first),
+                            oxicells_core::editor::col_to_letter(last)
+                        )
+                    })
+                    .unwrap_or_default(),
+            ),
+            "centerhorizontally" => Value::Boolean(setup.center_horizontally),
+            "centervertically" => Value::Boolean(setup.center_vertically),
+            "leftheader" => Value::String(setup.headers[0].clone()),
+            "centerheader" => Value::String(setup.headers[1].clone()),
+            "rightheader" => Value::String(setup.headers[2].clone()),
+            "leftfooter" => Value::String(setup.headers[3].clone()),
+            "centerfooter" => Value::String(setup.headers[4].clone()),
+            "rightfooter" => Value::String(setup.headers[5].clone()),
+            "printgridlines" => Value::Boolean(setup.print_gridlines),
+            "printheadings" => Value::Boolean(setup.print_headings),
+            "firstpagenumber" => Value::Integer(setup.first_page_number),
+            "order" => Value::Integer(setup.order),
+            "blackandwhite" => Value::Boolean(setup.black_and_white),
+            "draft" => Value::Boolean(setup.draft),
+            "printerrors" => Value::Integer(setup.print_errors),
+            "printcomments" => Value::Integer(setup.print_comments),
+            "scalewithdocheaderfooter" => Value::Boolean(setup.scale_with_doc),
+            "alignmarginsheaderfooter" => Value::Boolean(setup.align_margins),
+            "differentfirstpageheaderfooter" => Value::Boolean(setup.different_first_page),
+            "oddandevenpagesheaderfooter" => Value::Boolean(setup.odd_and_even),
+            "parent" => self.object(HostObject::Worksheet(sheet)),
+            _ => return Ok(None),
+        };
+        Ok(Some(answer))
+    }
+
+    /// Set one part of a sheet's page setup. Measured: Orientation takes 1
+    /// or 2 and is 1004 for 3; Zoom takes 10 to 400, whole, or False; a
+    /// pages count takes 1 up or False; PaperSize 0 or 300 is 1004; a margin
+    /// takes any number, -1 and 10000 included, and text is 1004; Order is
+    /// 1 or 2; PrintErrors 0 to 3 and 9 is error 5.
+    fn set_page_setup(&mut self, sheet: usize, name: &str, value: Value) -> Result<bool, String> {
+        let mut setup = self.page_setups.get(&sheet).cloned().unwrap_or_default();
+        let number = || -> Result<f64, String> {
+            any_number(&value).ok_or_else(|| "PageSetup takes a number here".to_string())
+        };
+        let flag = || style_face_boolean(&value, "PageSetup");
+        let text = || -> Result<String, String> {
+            match &value {
+                Value::String(text) => Ok(text.clone()),
+                other if any_number(other).is_some() => Ok(shown_text(other, None)),
+                _ => Err("PageSetup takes text here".to_string()),
+            }
+        };
+        // A count that may be False: pages wide or tall.
+        let pages = |held: Option<i64>| -> Result<Option<i64>, String> {
+            if matches!(value, Value::Boolean(false)) {
+                return Ok(None);
+            }
+            let asked = number()?;
+            if asked < 1.0 {
+                return Err("a page count starts at 1".to_string());
+            }
+            let _ = held;
+            Ok(Some(asked as i64))
+        };
+        let lower = name.to_ascii_lowercase();
+        match lower.as_str() {
+            "orientation" => {
+                let asked = number()? as i64;
+                if !(1..=2).contains(&asked) {
+                    return Err("Orientation is xlPortrait or xlLandscape".to_string());
+                }
+                setup.orientation = asked;
+            }
+            "papersize" => {
+                let asked = number()? as i64;
+                if !((1..=118).contains(&asked) || asked == 256) {
+                    return Err(format!("{asked} is not a paper size"));
+                }
+                setup.paper_size = asked;
+            }
+            "zoom" => {
+                if matches!(value, Value::Boolean(false)) {
+                    setup.zoom = None;
+                } else {
+                    let asked = number()?.trunc() as i64;
+                    if !(10..=400).contains(&asked) {
+                        return Err("Zoom runs from 10 to 400".to_string());
+                    }
+                    setup.zoom = Some(asked);
+                }
+            }
+            "fittopageswide" => setup.fit_to_pages_wide = pages(setup.fit_to_pages_wide)?,
+            "fittopagestall" => setup.fit_to_pages_tall = pages(setup.fit_to_pages_tall)?,
+            "leftmargin" => setup.left_margin = number()?,
+            "rightmargin" => setup.right_margin = number()?,
+            "topmargin" => setup.top_margin = number()?,
+            "bottommargin" => setup.bottom_margin = number()?,
+            "headermargin" => setup.header_margin = number()?,
+            "footermargin" => setup.footer_margin = number()?,
+            "printarea" => {
+                // Measured: `""` and False clear it; `A1:B2` is kept as
+                // `$A$1:$B$2`; several blocks keep their commas; text that
+                // is no address is 1004 and leaves what was there.
+                if matches!(value, Value::Boolean(false)) {
+                    setup.print_area.clear();
+                } else {
+                    let asked = text()?;
+                    if asked.trim().is_empty() {
+                        setup.print_area.clear();
+                    } else {
+                        let mut blocks = Vec::new();
+                        for piece in asked.split(',') {
+                            let object = self.range_object(
+                                sheet,
+                                &[Value::String(piece.trim().to_string())],
+                                NameReach::ThisSheet,
+                            )?;
+                            let Value::Object(object) = object else {
+                                return Err("the print area is not an address".to_string());
+                            };
+                            match self.range(&object) {
+                                Some(block) => blocks.push(block),
+                                None => match self.blocks(&object) {
+                                    Some(held) => blocks.extend(held.iter().copied()),
+                                    None => return Err("the print area is not an address".to_string()),
+                                },
+                            }
+                        }
+                        setup.print_area = blocks;
+                    }
+                }
+            }
+            "printtitlerows" | "printtitlecolumns" => {
+                // Measured: `$1:$2`, `1:1` and `A3:B4` all set rows -- the
+                // last as `$3:$4` -- and two row bands are 1004; `""` clears.
+                let asked = text()?;
+                let held = if asked.trim().is_empty() {
+                    None
+                } else {
+                    if asked.contains(',') {
+                        return Err("the print titles are one band of rows or columns".to_string());
+                    }
+                    let object = self.range_object(
+                        sheet,
+                        &[Value::String(asked.trim().to_string())],
+                        NameReach::ThisSheet,
+                    )?;
+                    let Value::Object(object) = object else {
+                        return Err("the print titles are not an address".to_string());
+                    };
+                    let block = self
+                        .range(&object)
+                        .ok_or_else(|| "the print titles are one band of rows or columns".to_string())?;
+                    Some(if lower == "printtitlerows" {
+                        (block.start_row, block.end_row)
+                    } else {
+                        (block.start_column, block.end_column)
+                    })
+                };
+                if lower == "printtitlerows" {
+                    setup.print_title_rows = held;
+                } else {
+                    setup.print_title_columns = held;
+                }
+            }
+            "centerhorizontally" => setup.center_horizontally = flag()?.unwrap_or(setup.center_horizontally),
+            "centervertically" => setup.center_vertically = flag()?.unwrap_or(setup.center_vertically),
+            "leftheader" => setup.headers[0] = text()?,
+            "centerheader" => setup.headers[1] = text()?,
+            "rightheader" => setup.headers[2] = text()?,
+            "leftfooter" => setup.headers[3] = text()?,
+            "centerfooter" => setup.headers[4] = text()?,
+            "rightfooter" => setup.headers[5] = text()?,
+            "printgridlines" => setup.print_gridlines = flag()?.unwrap_or(setup.print_gridlines),
+            "printheadings" => setup.print_headings = flag()?.unwrap_or(setup.print_headings),
+            "firstpagenumber" => setup.first_page_number = number()? as i64,
+            "order" => {
+                let asked = number()? as i64;
+                if !(1..=2).contains(&asked) {
+                    return Err("Order is xlDownThenOver or xlOverThenDown".to_string());
+                }
+                setup.order = asked;
+            }
+            "blackandwhite" => setup.black_and_white = flag()?.unwrap_or(setup.black_and_white),
+            "draft" => setup.draft = flag()?.unwrap_or(setup.draft),
+            "printerrors" => {
+                let asked = number()? as i64;
+                if !(0..=3).contains(&asked) {
+                    return Err(host_error(5, "that is not a way of printing errors"));
+                }
+                setup.print_errors = asked;
+            }
+            "printcomments" => setup.print_comments = number()? as i64,
+            "scalewithdocheaderfooter" => setup.scale_with_doc = flag()?.unwrap_or(setup.scale_with_doc),
+            "alignmarginsheaderfooter" => setup.align_margins = flag()?.unwrap_or(setup.align_margins),
+            "differentfirstpageheaderfooter" => {
+                setup.different_first_page = flag()?.unwrap_or(setup.different_first_page)
+            }
+            "oddandevenpagesheaderfooter" => setup.odd_and_even = flag()?.unwrap_or(setup.odd_and_even),
+            _ => return Ok(false),
+        }
+        self.page_setups.insert(sheet, setup);
+        if matches!(lower.as_str(), "printarea" | "printtitlerows" | "printtitlecolumns") {
+            self.refresh_print_names(sheet);
+        }
+        Ok(true)
     }
 
     fn list_objects_sheet(&self, object: &ObjectRef) -> Option<usize> {
@@ -10964,6 +11354,25 @@ impl Host for WorkbookHost<'_> {
                 // `Microsoft Excel`.
                 return Ok(Some(Value::String("Microsoft Excel".to_string())));
             }
+            // The two rulers page setup is measured with: measured,
+            // `InchesToPoints(1)` is 72 and `CentimetersToPoints(2)` is
+            // 56.6929133858268.
+            if self.is_application(receiver)
+                && (name.eq_ignore_ascii_case("inchestopoints")
+                    || name.eq_ignore_ascii_case("centimeterstopoints"))
+            {
+                let [measure] = args else {
+                    return Err(format!("Application.{name} takes one number"));
+                };
+                let measure = any_number(measure)
+                    .ok_or_else(|| format!("Application.{name} takes one number"))?;
+                let points = if name.eq_ignore_ascii_case("inchestopoints") {
+                    measure * 72.0
+                } else {
+                    measure * 72.0 / 2.54
+                };
+                return Ok(Some(Value::Double(points)));
+            }
             if self.is_worksheet_function(receiver) {
                 return self.worksheet_function(name, args).map(Some);
             }
@@ -11012,6 +11421,9 @@ impl Host for WorkbookHost<'_> {
                         [wanted] => self.list_objects_member(sheet, "item", std::slice::from_ref(wanted)),
                         _ => Err("ListObjects expects zero or one argument".to_string()),
                     };
+                }
+                if name.eq_ignore_ascii_case("pagesetup") && args.is_empty() {
+                    return Ok(Some(self.object(HostObject::PageSetup(sheet))));
                 }
                 // `Protect [password, ...]` and `Unprotect [password]`.
                 // Measured: a wrong password on Unprotect is error 1004 and
@@ -11153,6 +11565,9 @@ impl Host for WorkbookHost<'_> {
             }
             if let Some(sheet) = self.list_objects_sheet(receiver) {
                 return self.list_objects_member(sheet, name, args);
+            }
+            if let Some(sheet) = self.page_setup_sheet(receiver) {
+                return self.page_setup_member(sheet, name);
             }
             if let Some((id, part)) = self.table_part(receiver) {
                 return self.table_member(id, part, name, args);
@@ -11940,6 +12355,9 @@ impl Host for WorkbookHost<'_> {
         if let Some(sheet) = self.list_objects_sheet(receiver) {
             return self.list_objects_member(sheet, name, &[]);
         }
+        if let Some(sheet) = self.page_setup_sheet(receiver) {
+            return self.page_setup_member(sheet, name);
+        }
         if let Some((id, part)) = self.table_part(receiver) {
             return self.table_member(id, part, name, &[]);
         }
@@ -12242,6 +12660,9 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("listobjects") {
                 return Ok(Some(self.object(HostObject::ListObjects(sheet))));
+            }
+            if name.eq_ignore_ascii_case("pagesetup") {
+                return Ok(Some(self.object(HostObject::PageSetup(sheet))));
             }
             // What the sheet was protected with. `ProtectContents` is False
             // for a sheet protected with `Contents:=False`, and
@@ -12807,6 +13228,9 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some((id, part)) = self.table_part(receiver) {
             return self.set_table(id, part, name, value);
+        }
+        if let Some(sheet) = self.page_setup_sheet(receiver) {
+            return self.set_page_setup(sheet, name, value);
         }
         if let Some((at, start, length)) = self.characters_of(receiver) {
             if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("caption") {
@@ -15540,6 +15964,24 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastecolumnwidths" => 8,
         "xlpastevaluesandnumberformats" => 12,
         "xlpastecomments" => -4144,
+        // Page setup.
+        "xlportrait" => 1,
+        "xllandscape" => 2,
+        "xlpapera4" => 9,
+        "xlpaperletter" => 1,
+        "xlpapera3" => 8,
+        "xlpaperb5" => 13,
+        "xlpaperb4" => 12,
+        "xlpaperlegal" => 5,
+        "xldownthenover" => 1,
+        "xloverthendown" => 2,
+        "xlprinterrorsdisplayed" => 0,
+        "xlprinterrorsblank" => 1,
+        "xlprinterrorsdash" => 2,
+        "xlprinterrorsna" => 3,
+        "xlprintnocomments" => -4142,
+        "xlprintinplace" => 16,
+        "xlprintsheetend" => 1,
         // Tables.
         "xlsrcrange" => 1,
         "xlsrcexternal" => 0,
@@ -17558,6 +18000,67 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// A sheet's page setup is read and written as Excel keeps it.
+    ///
+    /// Measured against Excel: a new sheet is portrait A4 at 100%, with
+    /// margins of 50.4, 54 and 21.6 points; Orientation 3 is 1004; the print
+    /// area is kept absolute and makes the sheet's `Print_Area` name, and
+    /// `""` takes both away; title rows given as cells become their rows and
+    /// make `Print_Titles`, columns first; Zoom runs 10 to 400 and is False
+    /// when the page counts rule; a margin takes -1 without complaint; and
+    /// `InchesToPoints(1)` is 72.
+    #[test]
+    fn page_setup_is_read_and_written_as_excel_keeps_it() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               On Error Resume Next
+               With ActiveSheet.PageSetup
+                 out = .Orientation & .PaperSize & .Zoom & \"/\" & .LeftMargin & \"/\" & .TopMargin & \"/\" & .HeaderMargin & \"/[\" & .PrintArea & \"]|\"
+                 .Orientation = xlLandscape
+                 .Orientation = 3
+                 out = out & Err.Number & \"/\" & .Orientation & \"|\"
+                 Err.Clear
+                 .PrintArea = \"A1:B2,D1:D9\"
+                 out = out & .PrintArea & \"/\" & ActiveWorkbook.Names(1).Name & \"/\" & ActiveWorkbook.Names(1).RefersTo & \"|\"
+                 .PrintArea = \"\"
+                 .PrintTitleRows = \"A3:B4\"
+                 .PrintTitleColumns = \"$A:$A\"
+                 out = out & .PrintTitleRows & \"/\" & ActiveWorkbook.Names.Count & \"/\" & ActiveWorkbook.Names(1).RefersTo & \"|\"
+                 .Zoom = 55.6
+                 out = out & .Zoom
+                 .Zoom = 401
+                 out = out & Err.Number
+                 Err.Clear
+                 .Zoom = False
+                 .FitToPagesTall = False
+                 out = out & \"/\" & .Zoom & .FitToPagesWide & .FitToPagesTall & \"|\"
+                 .LeftMargin = -1
+                 .TopMargin = Application.InchesToPoints(1)
+                 out = out & Err.Number & \"/\" & .LeftMargin & \"/\" & .TopMargin & \"|\"
+                 .CenterFooter = \"Page &P of &N\"
+                 .PrintErrors = 9
+                 out = out & Err.Number & \"/\" & .CenterFooter
+               End With
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "19100/50.4/54/21.6/[]|1004/2|$A$1:$B$2,$D$1:$D$9/Sheet1!Print_Area/=Sheet1!$A$1:$B$2,Sheet1!$D$1:$D$9|$3:$4/1/=Sheet1!$A:$A,Sheet1!$3:$4|551004/False1False|0/-1/72|5/Page &P of &N"
+                    .to_string()
+            )
         );
     }
 
