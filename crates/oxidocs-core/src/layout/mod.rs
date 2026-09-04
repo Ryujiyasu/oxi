@@ -25596,6 +25596,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // keeps the legacy separate-accumulator positioning behavior.
                     char_width += char_grid_extra;
                 }
+                // S1317 (2026-09-05, default ON, opt-out OXI_S1317_DISABLE): a
+                // grid-pitched character advances the line by the TRUE pitch,
+                // accumulated -- Word's device origins (600 dpi in its PDF) sit at
+                // round(i x pitch), so the advances of ＭＳ 明朝 11pt under
+                // charSpace -2880 alternate 10.20 / 10.32 around 10.297 and 44 of
+                // them fit the S1211C floor of 44 cells EXACTLY. Rounding each
+                // char to whole twips first (10.297 -> 206tw = 10.30) drifts
+                // +0.0625tw per char: 44 x 206 = 9064 > 9061, the 44th char
+                // wraps and reference__0cf9c879 spills to a 2nd page (Word: 1).
+                // The twips accumulator therefore takes round(cum + pitch) -
+                // round(cum) for such a character (integer comparisons kept).
+                let s1317_grid_char = (char_grid_extra < 0.0
+                    || (s466_grid_expand && char_grid_extra > 0.0))
+                    && std::env::var("OXI_S1317_DISABLE").is_err();
+                let s1317_inc = |cum: f32, cw: f32| -> i32 { pt_to_tw(cum + cw) - pt_to_tw(cum) };
 
                 if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
                     // Whitespace: flush word, then handle the whitespace
@@ -26459,6 +26474,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && !s590_legacy_just_cap
                         && s725_chars_after == 0
                         && char_index + 1 == chars_vec.len();
+                    // S1317: this character's twips increment (cumulative for a
+                    // grid-pitched character, per-char rounding otherwise).
+                    let s1317_cw_tw = if s1317_grid_char {
+                        s1317_inc(current_width, char_width)
+                    } else {
+                        pt_to_tw(char_width)
+                    };
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
                         // Word's per-line oikomi is a SMALL budget, not the per-約物 cap.
@@ -26557,12 +26579,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .unwrap_or(8.5)
                                 * font_size
                                 / 12.0;
-                            current_width_tw + pt_to_tw(char_width) - available_tw - pt_to_tw(tol)
+                            current_width_tw + s1317_cw_tw - available_tw - pt_to_tw(tol)
                         } else {
                             current_capw_tw + s475_capinc - available_tw
                         }
                     } else {
-                        current_width_tw + pt_to_tw(char_width) - available_tw
+                        current_width_tw + s1317_cw_tw - available_tw
                     };
                     if std::env::var("OXI_DBG721").is_ok()
                         && text.contains("三六協定で定める時間数")
@@ -27319,12 +27341,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         run_index: frag_run_index,
                         char_offset: char_pos_in_run,
                     });
+                    // S1317: the accumulator follows the cumulative rounding for a
+                    // grid-pitched character (see the flag at the grid fold).
+                    let s1317_acc_tw = if s1317_grid_char {
+                        s1317_inc(current_width, char_width)
+                    } else {
+                        pt_to_tw(char_width)
+                    };
                     current_width += char_width;
-                    current_width_tw += pt_to_tw(char_width);
+                    current_width_tw += s1317_acc_tw;
                     current_capw_tw += if s475_break {
                         s475_capinc
                     } else {
-                        pt_to_tw(char_width)
+                        s1317_acc_tw
                     };
                 } else {
                     // Regular word character — accumulate
