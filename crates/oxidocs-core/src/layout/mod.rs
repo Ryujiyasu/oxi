@@ -22210,7 +22210,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // when no run has ruby). Estimate path is wired in §18.4
                 // estimate_para_height; this is the matching render-side
                 // wiring so cursor positions match the estimate.
-                if line_idx + 1 == lines.len() && ruby_para_expansion_pt > 0.0 {
+                // S1312: the expansion belongs to every LINE that carries a ruby
+                // run, not to the paragraph tail (see the cell site for the
+                // derivation). Opt-out restores the last-line-only advance.
+                let s1312_on = std::env::var("OXI_S1312_DISABLE").is_err();
+                let s1312_line_ruby = s1312_on
+                    && lines.get(line_idx).map_or(false, |l| {
+                        l.fragments.iter().any(|f| para.runs.get(f.run_index).map_or(false, |r| r.ruby.is_some()))
+                    });
+                if ruby_para_expansion_pt > 0.0
+                    && (s1312_line_ruby || (!s1312_on && line_idx + 1 == lines.len()))
+                {
                     // S654 (coverage, 2026-06-24): in a TYPED docGrid the furigana
                     // makes the ruby line taller, and Word snaps the ruby-AUGMENTED
                     // line UP to whole grid cells — perturb_probe.py: Word 2 cells
@@ -35155,6 +35165,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             f32,
                                             bool,
                                             Option<String>,
+                                            bool, // S1312: fragment's run carries ruby
                                         )>,
                                     > = Vec::new();
                                     // S1299 (2026-09-04): the LAST field is the run's own
@@ -35182,6 +35193,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         f32,
                                         bool,
                                         Option<String>,
+                                        bool, // S1312: fragment's run carries ruby
                                     )> = Vec::new();
                                     // Task P (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a cell-inline OLE object
                                     // (Equation.DSMT4, step 3 routed it to run.style.inline_object_*)
@@ -35423,6 +35435,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     100.0,
                                                     std::mem::take(&mut s993_lrpb_pending),
                                                     run.style.font_family_east_asia.clone(),
+                                                    run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                 ));
                                                 line_x += ow;
                                                 continue;
@@ -35466,6 +35479,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     100.0,
                                                     std::mem::take(&mut s993_lrpb_pending),
                                                     run.style.font_family_east_asia.clone(),
+                                                    run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                 ));
                                                 line_x += ow;
                                             }
@@ -35523,6 +35537,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 100.0,
                                                 std::mem::take(&mut s993_lrpb_pending),
                                                 run.style.font_family_east_asia.clone(),
+                                                run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                             ));
                                             line_x += cw;
                                             continue;
@@ -35578,6 +35593,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         run.style.text_scale.unwrap_or(100.0),
                                                         std::mem::take(&mut s993_lrpb_pending),
                                                         run.style.font_family_east_asia.clone(),
+                                                        run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                     ));
                                                     buf.clear();
                                                     buf_w = 0.0;
@@ -37223,6 +37239,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                         &mut s993_lrpb_pending,
                                                                     ),
                                                                     run.style.font_family_east_asia.clone(),
+                                                                    run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                                 ));
                                                                 buf.clear();
                                                                 buf_w = 0.0;
@@ -37270,6 +37287,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             run.style.text_scale.unwrap_or(100.0),
                                                             std::mem::take(&mut s993_lrpb_pending),
                                                             run.style.font_family_east_asia.clone(),
+                                                            run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                         ));
                                                         buf.clear();
                                                         buf_w = 0.0;
@@ -37445,6 +37463,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                         &mut s993_lrpb_pending,
                                                                     ),
                                                                     run.style.font_family_east_asia.clone(),
+                                                                    run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                                 ));
                                                                 buf.clear();
                                                                 buf_w = 0.0;
@@ -37506,6 +37525,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         run.style.text_scale.unwrap_or(100.0),
                                                         std::mem::take(&mut s993_lrpb_pending),
                                                         run.style.font_family_east_asia.clone(),
+                                                        run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                     ));
                                                     buf.clear();
                                                     buf_w = 0.0;
@@ -37559,6 +37579,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         run.style.text_scale.unwrap_or(100.0),
                                                         false,
                                                         run.style.font_family_east_asia.clone(),
+                                                        run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                                     ));
                                                     prev_char_emitted = Some(ch);
                                                     continue;
@@ -37595,6 +37616,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 run.style.text_scale.unwrap_or(100.0),
                                                 std::mem::take(&mut s993_lrpb_pending),
                                                 run.style.font_family_east_asia.clone(),
+                                                run.ruby.is_some(),  // S1312: this fragment's run carries ruby
                                             ));
                                             line_x += buf_w;
                                             current_line_chars.extend(buf_chars.drain(..));
@@ -37948,6 +37970,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     _,
                                                     _,
                                                     _,
+                                                    _, // S1312 ruby flag
                                                 )| {
                                                     let metrics = match font_family.as_deref() {
                                                         Some(ff) => self.registry.get(ff),
@@ -38000,7 +38023,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             .fold(0.0_f32, f32::max);
                                         if lh == 0.0 {
                                             // whitespace-only line: fall back to all fragments
-                                            lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _)| {
+                                            lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _, _)| {
                                     let metrics = match font_family.as_deref() {
                                         Some(ff) => self.registry.get(ff),
                                         None => self.registry.default_metrics(),
@@ -38035,7 +38058,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // 15.56 against Word's 13.8 on this very boundary).
                                             lh = lines.iter().flat_map(|l| l.iter())
                                     .filter(|(text, ..)| !text.trim().is_empty())
-                                    .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _)| {
+                                    .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _, _)| {
                                         let metrics = match font_family.as_deref() {
                                             Some(ff) => self.registry.get(ff),
                                             None => self.registry.default_metrics(),
@@ -38045,6 +38068,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             para.style.snap_to_grid, row_line_pitch, true)
                                     })
                                     .fold(0.0_f32, f32::max);
+                                        }
+                                        // S1312 (2026-09-05, default ON, opt-out OXI_S1312_DISABLE):
+                                        // every LINE that carries a ruby run grows by the ruby
+                                        // expansion -- in a cell as in the body. DERIVED
+                                        // (`_pb_cellruby_gen.py`, HG丸 10pt, hps 5 / raise 9, span
+                                        // over a no-ruby control): body 1 line +3.75, 2 lines both
+                                        // with ruby +7.50, ruby on the first line only +3.75; cell
+                                        // 1 line +3.75, 3 lines all with ruby +11.25, first only
+                                        // +3.75. Oxi gave the cell +2.84 / +0.15 (the estimate's
+                                        // once-per-paragraph term, never the render) and the body
+                                        // +4.18 once. Witness: correspondence__04a3e3e1's content
+                                        // rows, two ruby lines short each (-8/row).
+                                        if std::env::var("OXI_S1312_DISABLE").is_err()
+                                            && line.iter().any(|t| t.15)
+                                        {
+                                            let s1312_fs = self.resolve_font_size(&RunStyle::default(), &para.style);
+                                            lh += ruby::paragraph_ruby_expansion_pt(&para.runs, s1312_fs);
                                         }
 
                                         // S1125 (2026-08-15, opt-out OXI_S1125_DISABLE): a CELL
@@ -38082,7 +38122,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             let mut s1125_asc: f32 = 0.0;
                                             let mut s1125_best_sum: f32 = 0.0;
                                             let mut s1125_ext: f32 = 0.0;
-                                            for (t, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _) in
+                                            for (t, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _, _) in
                                                 line.iter()
                                             {
                                                 if t.trim().is_empty() {
@@ -38202,7 +38242,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // Calculate line total width for alignment
                                         let line_total_w: f32 = line
                                             .iter()
-                                            .map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _, _, _)| tw)
+                                            .map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _, _, _, _)| tw)
                                             .sum();
                                         // S502 (2026-06-08, FALSIFIED as a clean win — NOT shipped):
                                         // hypothesized that docGrid linesAndChars cells must center/right-align
@@ -38290,7 +38330,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             if slack < 0.0 {
                                                 for (
                                                     fi,
-                                                    (text, fs, _, _, _, _, _, _, _, _, _, _, _, _, _),
+                                                    (text, fs, _, _, _, _, _, _, _, _, _, _, _, _, _, _),
                                                 ) in line.iter().enumerate()
                                                 {
                                                     for ch in text.chars() {
@@ -38314,7 +38354,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             if slack > 0.0 {
                                                 let space_count = line.iter()
                                         .enumerate()
-                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
+                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
                                         .count();
                                                 if space_count > 0 {
                                                     let per_space = slack / space_count as f32;
@@ -38336,6 +38376,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             _,
                                                             _,
                                                             _,
+                                                            _, // S1312 ruby flag
                                                         ),
                                                     ) in line.iter().enumerate()
                                                     {
@@ -38376,7 +38417,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     // Only activate when line is noticeably short (>10% slack);
                                                     // COM-confirmed 2026-04-19: for b35 "法令の理解" row with
                                                     // 4% slack Word does NOT distribute, showing natural widths.
-                                                    let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
+                                                    let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
                                                     let slack_ratio = if effective_wrap > 0.0 {
                                                         slack / effective_wrap
                                                     } else {
@@ -38384,7 +38425,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     };
                                                     if has_cjk && slack_ratio > 0.10 {
                                                         let total_chars: usize = line.iter()
-                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
+                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
                                                 .sum();
                                                         if total_chars > 1 {
                                                             let per_char_gap =
@@ -38407,6 +38448,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                     _,
                                                                     _,
                                                                     _,
+                                                                    _, // S1312 ruby flag
                                                                 ),
                                                             ) in line.iter().enumerate()
                                                             {
@@ -38435,7 +38477,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // the character cell; for exact spacing, bottom-aligns.
                                         let cell_max_fs: f32 = line
                                             .iter()
-                                            .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _, _, _)| *fs)
+                                            .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *fs)
                                             .fold(0.0_f32, f32::max);
                                         // S175 (2026-05-22): match body's S166 fix — use word_line_height_table_cell
                                         // (font's natural height incl. ascent+descent) as centering height,
@@ -38450,7 +38492,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             cell_max_fs
                                         } else {
                                             line.iter()
-                                    .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts, _, ea)| {
+                                    .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts, _, ea, _ruby)| {
                                         let mut rs = RunStyle::default();
                                         rs.font_size = Some(*fs);
                                         rs.bold = *bold;
@@ -38620,6 +38662,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 _ts,
                                                 _,
                                                 ea,
+                                                _, // S1312 ruby flag
                                             ) in line.iter()
                                             {
                                                 let mut rs = RunStyle::default();
@@ -38709,6 +38752,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 _ts,
                                                 _,
                                                 ea,
+                                                _, // S1312 ruby flag
                                             ) in line.iter()
                                             {
                                                 let mut rs = RunStyle::default();
@@ -38841,6 +38885,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 ts,
                                                 lrpb_before,
                                                 _,
+                                                _, // S1312 ruby flag
                                             ),
                                         ) in line.iter().enumerate()
                                         {
@@ -42586,11 +42631,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         first_indent_pt: f32,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
-    ) -> usize {
+    ) -> (usize, usize) {
         if para.runs.is_empty() {
-            return 1;
+            return (1, 0);
         }
         let mut lines: usize = 0;
+        // S1312: lines that carry a ruby run (banked wherever `lines` is).
+        let mut ruby_lines: usize = 0;
+        let mut line_has_ruby = false;
         let mut line_x: f32 = 0.0;
         let mut buf_w: f32 = 0.0;
         let mut buf_nonempty = false;
@@ -42639,6 +42687,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
 
         for run in &para.runs {
             let font_size = self.resolve_font_size(&run.style, &para.style);
+            let s1312_run_ruby = run.ruby.is_some();
             // S1225 (2026-08-26): estimate mirror of S703c — a `combine` run
             // (eastAsianLayout w:combine, 割注 / two-lines-in-one) is ONE atomic
             // compact unit: ceil(n/2) half-size chars + brackets, on a single
@@ -42672,17 +42721,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 if buf_nonempty {
                     line_x += buf_w;
                     line_nonempty = true;
+                line_has_ruby |= s1312_run_ruby;
                     buf_w = 0.0;
                     buf_nonempty = false;
                 }
                 if line_x + cw > ew && line_nonempty {
                     lines += 1;
+                if line_has_ruby {
+                    ruby_lines += 1;
+                }
+                line_has_ruby = s1312_run_ruby;
                     line_x = 0.0;
                     is_first_line = false;
                     current_line_chars.clear();
                 }
                 line_x += cw;
                 line_nonempty = true;
+                line_has_ruby |= s1312_run_ruby;
                 prev_char_emitted = None;
                 s1082_gpos += n;
                 continue;
@@ -42707,6 +42762,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // to prevent, per the "Fix C" doc-comment above).
                 if ch == '\n' || ch == '\x0B' || ch == '\x0C' {
                     lines += 1;
+                if line_has_ruby {
+                    ruby_lines += 1;
+                }
+                line_has_ruby = s1312_run_ruby;
                     line_x = 0.0;
                     buf_w = 0.0;
                     buf_nonempty = false;
@@ -42744,6 +42803,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     buf_w += (next_pos - abs_pos).max(0.0);
                     buf_nonempty = true;
                     line_nonempty = true;
+                line_has_ruby |= s1312_run_ruby;
                     prev_char_emitted = Some(ch);
                     continue;
                 }
@@ -43135,8 +43195,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         });
                         line_x += buf_w;
                         line_nonempty = true;
+                line_has_ruby |= s1312_run_ruby;
                         current_line_chars.extend(buf_chars.drain(..));
                         lines += 1;
+                if line_has_ruby {
+                    ruby_lines += 1;
+                }
+                line_has_ruby = s1312_run_ruby;
                         line_x = 0.0;
                         buf_w = 0.0;
                         buf_nonempty = false;
@@ -43227,6 +43292,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                         if let Some(carry) = stage_carry {
                             lines += 1;
+                if line_has_ruby {
+                    ruby_lines += 1;
+                }
+                line_has_ruby = s1312_run_ruby;
                             line_x = 0.0;
                             line_nonempty = false;
                             is_first_line = false;
@@ -43256,11 +43325,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         if buf_nonempty {
                             line_x += buf_w;
                             line_nonempty = true;
+                line_has_ruby |= s1312_run_ruby;
                             buf_w = 0.0;
                             buf_nonempty = false;
                             current_line_chars.extend(buf_chars.drain(..));
                         }
                         lines += 1;
+                if line_has_ruby {
+                    ruby_lines += 1;
+                }
+                line_has_ruby = s1312_run_ruby;
                         line_x = 0.0;
                         line_nonempty = false;
                         is_first_line = false;
@@ -43279,6 +43353,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             if buf_nonempty {
                 line_x += buf_w;
                 line_nonempty = true;
+                line_has_ruby |= s1312_run_ruby;
                 buf_w = 0.0;
                 buf_nonempty = false;
                 current_line_chars.extend(buf_chars.drain(..));
@@ -43286,8 +43361,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         }
         if line_nonempty {
             lines += 1;
+            if line_has_ruby {
+                ruby_lines += 1;
+            }
         }
-        lines.max(1)
+        (lines.max(1), ruby_lines)
     }
 
     /// Session 131 (2026-05-20): vertical-writing helpers.
@@ -44435,6 +44513,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // S1099: does the leading run provably fit on line 0?  Filled inside
             // the cell branch below, where the wrap widths are in scope.
             let mut s1099_first_fits = false;
+            let mut s1312_ruby_lines: usize = 0;
             let line_count = if in_cell {
                 // first line wrap width: same indent math as render (mod.rs:4461)
                 let first_line_wrap_w = if first_indent < 0.0 {
@@ -44530,7 +44609,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         .sum();
                     w > 0.0 && w < first_line_wrap_w
                 });
-                self.count_cell_lines(
+                let (s1312_n, s1312_r) = self.count_cell_lines(
                     para,
                     effective_width,
                     first_line_wrap_w,
@@ -44538,7 +44617,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     first_indent,
                     gcp_for_count,
                     gcr_for_count,
-                )
+                );
+                s1312_ruby_lines = s1312_r;
+                s1312_n
             } else {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para
                     .runs
@@ -44560,6 +44641,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     false,
                     false,
                 );
+                s1312_ruby_lines = lines
+                    .iter()
+                    .filter(|l| l.fragments.iter().any(|f| para.runs.get(f.run_index).map_or(false, |r| r.ruby.is_some())))
+                    .count();
                 lines.len().max(1)
             };
 
@@ -44880,9 +44965,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let pitch = grid_pitch.unwrap();
                     let augmented_snapped =
                         ((max_line_height + ruby_exp - 0.5) / pitch).ceil() * pitch; // S752 tolerance
-                    height += (augmented_snapped - max_line_height).max(0.0);
+                    // S1312: one augmented line per ruby-bearing line.
+                    let s1312_k = if std::env::var("OXI_S1312_DISABLE").is_err() { s1312_ruby_lines.max(1) } else { 1 };
+                    height += (augmented_snapped - max_line_height).max(0.0) * s1312_k as f32;
                 } else {
-                    height += ruby_exp;
+                    let s1312_k = if std::env::var("OXI_S1312_DISABLE").is_err() { s1312_ruby_lines.max(1) } else { 1 };
+                    height += ruby_exp * s1312_k as f32;
                 }
             }
         }
