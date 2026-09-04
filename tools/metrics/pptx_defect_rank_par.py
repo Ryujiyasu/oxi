@@ -29,8 +29,27 @@ from skimage.metrics import structural_similarity
 REPO = Path(__file__).resolve().parents[2]
 ROOT = REPO / "pipeline_data" / "pptx_benchmark"
 SS = ROOT / "ssim_pptx"
+DEV = ROOT / "dev"
 OUT = SS / "_defect_rank_par.json"
+DEV_OUT = DEV / "_defect_rank_par.json"
 BLUR = 1.0
+
+# Which corpus a run is looking at. The blind 50 is measured and never
+# fix-targeted; the dev 40 is the one a fix may be aimed at, and until now
+# nothing ranked it.
+CORPUS = {
+    "blind": {
+        "pdf": lambda doc: SS / "ppt_pdf" / f"{doc}.pdf",
+        "png": lambda doc: SS / "oxi_png" / doc,
+        "out": OUT,
+    },
+    "dev": {
+        "pdf": lambda doc: DEV / "pdf" / f"{doc}.pdf",
+        "png": lambda doc: DEV / "oxi_png" / "head" / doc,
+        "out": DEV_OUT,
+    },
+}
+WHICH = "blind"
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -94,9 +113,17 @@ def masked_mean(smap: np.ndarray, keep: np.ndarray | None) -> float:
     return float(m[k].mean())
 
 
+def _set_which(which: str) -> None:
+    # Each worker is its own process, so the corpus choice has to be handed
+    # over rather than inherited.
+    global WHICH
+    WHICH = which
+
+
 def score_deck(doc: str) -> list[dict]:
-    pdf_path = SS / "ppt_pdf" / f"{doc}.pdf"
-    png_dir = SS / "oxi_png" / doc
+    paths = CORPUS[WHICH]
+    pdf_path = paths["pdf"](doc)
+    png_dir = paths["png"](doc)
     if not pdf_path.exists() or not png_dir.is_dir():
         return []
     out = []
@@ -142,30 +169,42 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--jobs", type=int, default=0)
-    ap.add_argument("--decks", default="", help="comma-separated indices, else all")
+    ap.add_argument("--decks", default="", help="comma-separated ids, else all")
+    ap.add_argument("--dev", action="store_true",
+                    help="rank the dev 40 instead of the blind 50")
     args = ap.parse_args()
-    man = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-    docs = [f"{m['idx']:02d}" for m in man]
-    if args.decks:
-        want = {d.strip().zfill(2) for d in args.decks.split(",") if d.strip()}
-        docs = [d for d in docs if d in want]
+    global WHICH
+    WHICH = "dev" if args.dev else "blind"
+    if args.dev:
+        docs = sorted(p.stem for p in (DEV / "pdf").glob("*.pdf"))
+        if args.decks:
+            want = {d.strip() for d in args.decks.split(",") if d.strip()}
+            docs = [d for d in docs if d in want or d.split("__")[0] in want]
+    else:
+        man = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+        docs = [f"{m['idx']:02d}" for m in man]
+        if args.decks:
+            want = {d.strip().zfill(2) for d in args.decks.split(",") if d.strip()}
+            docs = [d for d in docs if d in want]
     jobs = args.jobs or max(1, (os.cpu_count() or 4) - 1)
     rows: list[dict] = []
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
+    with ProcessPoolExecutor(max_workers=jobs, initializer=_set_which,
+                             initargs=(WHICH,)) as pool:
         for got in pool.map(score_deck, docs):
             rows.extend(got)
             if got:
                 print(f"{got[0]['doc']}: {len(got)} slides", flush=True)
-    if args.decks and OUT.exists():
+    out_path = CORPUS[WHICH]["out"]
+    if args.decks and out_path.exists():
         # A partial run keeps what the others measured, so the ranking can be
         # rebuilt a few decks at a time without losing the rest.
         done = {r["doc"] for r in rows}
         try:
-            old = json.loads(OUT.read_text(encoding="utf-8"))
+            old = json.loads(out_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             old = []
         rows = rows + [r for r in old if r["doc"] not in done]
-    OUT.write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    out_path.write_text(json.dumps(rows, indent=1), encoding="utf-8")
     rows.sort(key=lambda r: -r["defect"])
     print(f"\nworst {args.limit} slides by BLURRED residual (blur r={BLUR}px)")
     print(f"{'slide':<10}{'defect':>9}{'ssim':>9}{'blurred':>9}{'explained':>11}"
@@ -181,7 +220,7 @@ def main() -> None:
     for r in keeps[:args.limit]:
         print(f"{r['doc']}/{r['slide']:<7}{r['defect_nopic']:>9.4f}{r['defect']:>9.4f}"
               f"{r['open_area']:>8.1f}{r['mean_err']:>11.2f}{r['heavy']:>9.2f}")
-    print(f"\nwrote {OUT}  ({len(rows)} slides)")
+    print(f"\nwrote {out_path}  ({len(rows)} slides)")
 
 
 if __name__ == "__main__":

@@ -362,7 +362,12 @@ def com_shapes(shape, acc: list) -> None:
                          # actually measured, this says whether a width
                          # disagreement is about advances or about which face
                          # answered -- the two need different fixes.
-                         (para.Font.Name or "")))
+                         (para.Font.Name or ""),
+                         # PowerPoint's own space-before, because `BoundTop` is
+                         # the box top and the box STARTS with it. Correcting
+                         # the comparison with the ENGINE's number instead would
+                         # hide an engine that gets the spacing wrong.
+                         _space_before(para)))
         acc.append({"x": shape.Left, "y": shape.Top, "w": shape.Width,
                     "turned": turned, "rot": float(shape.Rotation or 0.0),
                     "paras": rows})
@@ -371,6 +376,14 @@ def com_shapes(shape, acc: list) -> None:
         # coverage, and a coverage hole that prints nothing reads as a pass.
         print(f"      shape {shape.Name[:28]!r} refused: {str(e)[:60]}", flush=True)
         return
+
+
+def _space_before(para):
+    try:
+        v = para.ParagraphFormat.SpaceBefore
+        return float(v) if v is not None else 0.0
+    except Exception:
+        return 0.0
 
 
 def deck_path(doc: str) -> Path | None:
@@ -484,7 +497,7 @@ def audit(doc) -> dict | None:
                     # The step from one PARAGRAPH to the next, which the
                     # per-paragraph advance above never sees.
                     prev_para = None
-                    for (cn, cx, ctext, cy, cw, chh, clines, cface),                             (en, ex, etext, ey, ew, eface, espace, elines, ebold,
+                    for (cn, cx, ctext, cy, cw, chh, clines, cface, cbefore),                             (en, ex, etext, ey, ew, eface, espace, elines, ebold,
                              esize, ebefore) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
@@ -571,14 +584,35 @@ def audit(doc) -> dict | None:
                                 if (prev_para is not None and esize > 0
                                         and prev_para[2] == eface
                                         and abs(prev_para[3] - esize) < 0.01
-                                        and abs(ebefore) < 0.01
                                         and cy and ey):
-                                    pstep = ((cy[0] - prev_para[0])
+                                    # ★`BoundTop` is the box top and the box
+                                    # STARTS with the paragraph's space-before,
+                                    # while the engine reports a baseline, which
+                                    # sits after it. So the two are comparable
+                                    # only once each side's own space-before is
+                                    # added back -- d15 s25 reads a clean +8.00pt
+                                    # otherwise, which is exactly the 8pt
+                                    # `spcBef` the PREVIOUS paragraph declares,
+                                    # and the engine's baselines match
+                                    # PowerPoint's to the hundredth.
+                                    # The leading each COMPARED line actually
+                                    # carries. A paragraph's space-before sits
+                                    # inside its FIRST line's box, so the next
+                                    # paragraph's first line carries it -- and
+                                    # the previous paragraph's LAST line carries
+                                    # it only when that paragraph is one line
+                                    # long. Correcting with the paragraph's
+                                    # spacing regardless reads d15 s2's 2-line
+                                    # paragraphs as 8pt out when the engine
+                                    # matches PowerPoint exactly.
+                                    pstep = ((cy[0] - prev_para[0]
+                                              + cbefore - prev_para[4])
                                              - (ey[0] - prev_para[1]))
                                     padv.append(pstep)
                                     if abs(pstep) > 0.5:
                                         pafar.append((si, round(pstep, 2), ctext[:38]))
-                                prev_para = ((cy[-1], ey[-1], eface, esize)
+                                prev_para = ((cy[-1], ey[-1], eface, esize,
+                                              cbefore if len(cy) == 1 else 0.0)
                                              if cy and ey else None)
                                 for a, b in zip(cx, ex):
                                     d = (a + c["x"]) - (m["text_left"] + b)
