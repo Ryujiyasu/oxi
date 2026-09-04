@@ -20,6 +20,11 @@ use oxivba_core::{
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+#[path = "spreadsheet_vba_shapes.rs"]
+mod shapes;
+#[path = "spreadsheet_vba_shapes_members.rs"]
+mod shapes_members;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CellAddress {
     sheet: usize,
@@ -342,6 +347,8 @@ enum HostObject {
     Outline(usize),
     /// `Worksheet.Tab`: the colour of the sheet's tab.
     Tab(usize),
+    /// A shape, a chart, or one of the objects hung off them.
+    Drawing(shapes::DrawingPart),
     /// An object whose worksheet has been deleted. Excel answers every
     /// member of one with error 424 -- measured, a `Worksheet` and a `Range`
     /// kept across the sheet's deletion both raise it, read or written.
@@ -1745,6 +1752,14 @@ struct WorkbookHost<'a> {
     outlines: std::collections::HashMap<usize, Outline>,
     /// The colour of each sheet's tab, where one has been given.
     tabs: std::collections::HashMap<usize, TabColour>,
+    /// Every shape and chart, the file's and the macro's, in the order
+    /// they were made.
+    shapes: Vec<shapes::ShapeRecord>,
+    /// How many shapes each sheet has ever had, which numbers the next.
+    shape_counters: std::collections::HashMap<usize, u32>,
+    next_shape_id: u64,
+    /// The shape a `Copy` set aside for `Worksheet.Paste`.
+    shape_clipboard: Option<u64>,
     /// The turn of every cell written at an angle, in degrees from -90 to
     /// 90. The IR keeps only the stacked kind, which is 771 of the 774
     /// rotations in the conformance corpus; the angles are kept here for
@@ -1815,6 +1830,12 @@ struct WorkbookHost<'a> {
 
 impl<'a> WorkbookHost<'a> {
     fn new(workbook: &'a mut Workbook, active_sheet: usize) -> Result<Self, String> {
+        let mut host = Self::stand_up(workbook, active_sheet)?;
+        host.adopt_drawings();
+        Ok(host)
+    }
+
+    fn stand_up(workbook: &'a mut Workbook, active_sheet: usize) -> Result<Self, String> {
         if active_sheet >= workbook.sheets.len() {
             return Err(format!(
                 "active sheet index is out of range: {active_sheet}"
@@ -1856,6 +1877,10 @@ impl<'a> WorkbookHost<'a> {
             views: std::collections::HashMap::new(),
             outlines: std::collections::HashMap::new(),
             tabs: std::collections::HashMap::new(),
+            shapes: Vec::new(),
+            shape_counters: std::collections::HashMap::new(),
+            next_shape_id: 1,
+            shape_clipboard: None,
             rotations: std::collections::HashMap::new(),
             underlines: std::collections::HashMap::new(),
             hatchings: std::collections::HashMap::new(),
@@ -1948,6 +1973,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::DebugConsole => "Debug",
                 HostObject::Outline(_) => "Outline",
                 HostObject::Tab(_) => "Tab",
+                HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
             }
             .to_string(),
@@ -7448,6 +7474,20 @@ impl<'a> WorkbookHost<'a> {
             .into_iter()
             .filter_map(|(sheet, tab)| Some((moved(sheet)?, tab)))
             .collect();
+        self.shapes = std::mem::take(&mut self.shapes)
+            .into_iter()
+            .filter_map(|mut shape| {
+                shape.sheet = moved(shape.sheet)?;
+                Some(shape)
+            })
+            .collect();
+        self.shape_counters = std::mem::take(&mut self.shape_counters)
+            .into_iter()
+            .filter_map(|(sheet, count)| Some((moved(sheet)?, count)))
+            .collect();
+        if self.shape_clipboard.is_some_and(|id| !self.shapes.iter().any(|shape| shape.id == id)) {
+            self.shape_clipboard = None;
+        }
         self.rotations = std::mem::take(&mut self.rotations)
             .into_iter()
             .filter_map(|(at, turn)| Some((address(at)?, turn)))
@@ -7540,6 +7580,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Comments(sheet) => moved(sheet).map(HostObject::Comments),
                 HostObject::Outline(sheet) => moved(sheet).map(HostObject::Outline),
                 HostObject::Tab(sheet) => moved(sheet).map(HostObject::Tab),
+                HostObject::Drawing(part) => part.renumbered(moved).map(HostObject::Drawing),
                 HostObject::Blocks(_)
                 | HostObject::Areas(_)
                 | HostObject::BlocksStyle(..)
@@ -7919,6 +7960,17 @@ impl<'a> WorkbookHost<'a> {
         }
         if let Some(tab) = self.tabs.get(&from).copied() {
             self.tabs.insert(to, tab);
+        }
+        let copied: Vec<shapes::ShapeRecord> =
+            self.shapes.iter().filter(|shape| shape.sheet == from).cloned().collect();
+        for mut shape in copied {
+            shape.id = self.next_shape_id;
+            self.next_shape_id += 1;
+            shape.sheet = to;
+            self.shapes.push(shape);
+        }
+        if let Some(count) = self.shape_counters.get(&from).copied() {
+            self.shape_counters.insert(to, count);
         }
         let marked: Vec<CellAddress> = self
             .rotations
@@ -13576,6 +13628,9 @@ impl Host for WorkbookHost<'_> {
                 }
                 return Ok(None);
             }
+            if let Some(part) = self.drawing_part(receiver) {
+                return self.drawing_call(part, name, args);
+            }
             // EVERY Excel object can be asked for the Application, and it
             // always answers the same one. Measured: `Range("A1").Application`,
             // `ActiveSheet.Application` and `ActiveWorkbook.Application` are
@@ -13654,6 +13709,9 @@ impl Host for WorkbookHost<'_> {
                             "Worksheet.Paste requires its worksheet to be active".to_string()
                         );
                     }
+                    if let Some(pasted) = self.paste_shape(sheet)? {
+                        return Ok(Some(pasted));
+                    }
                     return self.paste_held(args).map(Some);
                 }
                 // True, like every other member that DOES something: asked
@@ -13727,6 +13785,22 @@ impl Host for WorkbookHost<'_> {
                     }
                     self.activate_sheet(sheet);
                     return Ok(Some(Value::Boolean(true)));
+                }
+                // `Shapes(1)`, `ChartObjects("Chart 1")`: the collection with
+                // an index is its item.
+                if name.eq_ignore_ascii_case("shapes")
+                    || name.eq_ignore_ascii_case("drawingobjects")
+                    || name.eq_ignore_ascii_case("chartobjects")
+                {
+                    let part = if name.eq_ignore_ascii_case("chartobjects") {
+                        shapes::DrawingPart::ChartObjects(sheet)
+                    } else {
+                        shapes::DrawingPart::Shapes(sheet)
+                    };
+                    if args.is_empty() || matches!(args, [Value::Missing]) {
+                        return Ok(Some(self.object(HostObject::Drawing(part))));
+                    }
+                    return self.drawing_call(part, "item", args);
                 }
                 if name.eq_ignore_ascii_case("showalldata") {
                     // Nothing hidden, nothing to show: asked of Excel,
@@ -14654,6 +14728,9 @@ impl Host for WorkbookHost<'_> {
         if let Some(sheet) = self.tab_sheet(receiver) {
             return Ok(self.tab_member(sheet, name));
         }
+        if let Some(part) = self.drawing_part(receiver) {
+            return self.drawing_get(part, name);
+        }
         if let Some(sheet) = self.outline_sheet(receiver) {
             // Measured on a fresh sheet: SummaryRow xlSummaryBelow (1),
             // SummaryColumn xlSummaryOnRight (-4152), AutomaticStyles False.
@@ -15074,6 +15151,12 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("tab") {
                 return Ok(Some(self.object(HostObject::Tab(sheet))));
+            }
+            if name.eq_ignore_ascii_case("shapes") || name.eq_ignore_ascii_case("drawingobjects") {
+                return Ok(Some(self.object(HostObject::Drawing(shapes::DrawingPart::Shapes(sheet)))));
+            }
+            if name.eq_ignore_ascii_case("chartobjects") {
+                return Ok(Some(self.object(HostObject::Drawing(shapes::DrawingPart::ChartObjects(sheet)))));
             }
             // What the sheet was protected with. `ProtectContents` is False
             // for a sheet protected with `Contents:=False`, and
@@ -15712,6 +15795,9 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(sheet) = self.tab_sheet(receiver) {
             return self.set_tab_member(sheet, name, &value);
+        }
+        if let Some(part) = self.drawing_part(receiver) {
+            return self.drawing_set(part, name, value);
         }
         if self.is_workbook(receiver) && name.eq_ignore_ascii_case("saved") {
             self.saved = style_face_boolean(&value, "Workbook.Saved")?.unwrap_or(false);
@@ -16477,6 +16563,24 @@ impl Host for WorkbookHost<'_> {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    fn set_from_object(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        object: &ObjectRef,
+    ) -> Result<Option<bool>, String> {
+        if self.gone(receiver) {
+            return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
+        let Some(part) = self.drawing_part(receiver) else {
+            return Ok(None);
+        };
+        let Some(range) = self.range(object) else {
+            return Ok(None);
+        };
+        self.drawing_set_range(part, name, range)
     }
 
     fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
@@ -25300,6 +25404,99 @@ mod tests {
                 "1004".to_string(),
             ]
         );
+    }
+
+    /// Shapes, text boxes, lines and charts as a macro makes them, measured
+    /// against Excel (shapes.vba, shapes2.vba, 2026-09-05; both cases agree
+    /// in the harness but for ShapeRange, SelectAll and Export).
+    #[test]
+    fn vba_draws_shapes_and_charts_the_way_excel_names_and_places_them() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("游ゴシック".to_string());
+        workbook.sheets[0].default_row_height = 18.75;
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim s As Object, co As Object, ch As Object, v As Variant\n\
+               Set s = ActiveSheet.Shapes.AddShape(1, 10, 10, 100, 50)\n\
+               Debug.Print s.Name; s.Type; s.AutoShapeType; s.Left; s.Width; TypeName(s)\n\
+               Debug.Print s.Fill.ForeColor.RGB; s.Fill.Visible; s.Fill.ForeColor.ObjectThemeColor; s.Line.ForeColor.RGB; s.Line.Weight\n\
+               Debug.Print s.TextFrame.HorizontalAlignment; s.TextFrame.VerticalAlignment; s.TextFrame.MarginLeft; s.TextFrame.Characters.Font.Name; s.TextFrame.Characters.Font.Color\n\
+               s.TextFrame.Characters.Text = \"box\"\n\
+               Debug.Print s.TextFrame.Characters.Text; s.TextFrame2.TextRange.Text; s.TextFrame.Characters.Count; s.TopLeftCell.Address(0, 0); s.BottomRightCell.Address(0, 0)\n\
+               Set s = ActiveSheet.Shapes.AddTextbox(1, 10, 80, 100, 30)\n\
+               Debug.Print s.Name; s.Type; s.Fill.ForeColor.RGB; s.Line.ForeColor.RGB; s.Line.Weight; s.TextFrame.Characters.Font.Color\n\
+               Set s = ActiveSheet.Shapes.AddShape(5, 200, 100, 60, 40)\n\
+               Debug.Print s.Name; s.Adjustments.Count; s.Adjustments(1)\n\
+               Set s = ActiveSheet.Shapes.AddLine(110, 300, 10, 250)\n\
+               Debug.Print s.Name; s.Type; s.AutoShapeType; s.Left; s.Top; s.Width; s.Height; s.HorizontalFlip; s.VerticalFlip\n\
+               Debug.Print ActiveSheet.Shapes.Count; ActiveSheet.Shapes(\"テキスト ボックス 2\").Name\n\
+               ActiveSheet.Shapes(2).Delete\n\
+               Set s = ActiveSheet.Shapes.AddShape(1, 300, 10, 20, 20)\n\
+               s.Name = \"MyBox\": s.Left = 310.5\n\
+               Debug.Print ActiveSheet.Shapes.Count; s.Name; ActiveSheet.Shapes(\"MyBox\").Left; s.TopLeftCell.Address(0, 0)\n\
+               Set s = s.Duplicate\n\
+               Debug.Print s.Name; s.Left; s.Top\n\
+               On Error Resume Next\n\
+               v = ActiveSheet.Shapes(\"nope\").Name\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               On Error GoTo 0\n\
+               Range(\"A1\").Value = \"k\": Range(\"B1\").Value = \"v\": Range(\"A2\").Value = \"a\": Range(\"B2\").Value = 1: Range(\"A3\").Value = \"b\": Range(\"B3\").Value = 2\n\
+               Set co = ActiveSheet.ChartObjects.Add(10, 400, 200, 100)\n\
+               Set ch = co.Chart\n\
+               Debug.Print co.Name; TypeName(co); ch.ChartType; ch.HasTitle; ch.HasLegend; ch.SeriesCollection.Count; ch.Name\n\
+               ch.SetSourceData Source:=Range(\"A1:B3\")\n\
+               Debug.Print ch.SeriesCollection.Count; ch.SeriesCollection(1).Name; ch.SeriesCollection(1).Formula; ch.ChartTitle.Text\n\
+               ch.HasTitle = True: ch.ChartTitle.Text = \"Sales\": ch.Axes(2).HasTitle = True: ch.Axes(2).AxisTitle.Text = \"Yen\": ch.Axes(2).MaximumScale = 10\n\
+               Debug.Print ch.ChartTitle.Text; ch.Axes(2).AxisTitle.Text; ch.Axes(2).MaximumScale; ch.Axes(2).MinimumScaleIsAuto\n\
+               ch.SeriesCollection.NewSeries\n\
+               ch.SeriesCollection(2).Values = Range(\"B2:B3\"): ch.SeriesCollection(2).XValues = Range(\"A2:A3\"): ch.SeriesCollection(2).Name = \"=\"\"S2\"\"\"\n\
+               Debug.Print ch.SeriesCollection(2).Formula; UBound(ch.SeriesCollection(1).Values); ch.SeriesCollection(1).XValues(2)\n\
+               ch.SetSourceData Source:=Range(\"A1:B3\"), PlotBy:=1\n\
+               Debug.Print ch.SeriesCollection.Count; ch.SeriesCollection(1).Name; ch.SeriesCollection(1).Formula\n\
+               Set co = ActiveSheet.ChartObjects.Add(10, 600, 200, 100)\n\
+               co.Chart.SetSourceData Source:=Range(\"B2:B3\")\n\
+               co.Chart.ChartType = 5\n\
+               Debug.Print co.Chart.SeriesCollection(1).Name; co.Chart.SeriesCollection(1).Formula; co.Chart.HasTitle; ActiveSheet.ChartObjects.Count; ActiveSheet.Shapes.Count\n\
+               ActiveSheet.ChartObjects(1).Delete\n\
+               Debug.Print ActiveSheet.ChartObjects.Count; ActiveSheet.Shapes.Count; ActiveSheet.Shapes(ActiveSheet.Shapes.Count).HasChart\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                "Rectangle 1\t1\t1\t10\t100\tShape".to_string(),
+                "8544277\t-1\t5\t3351556\t1.5".to_string(),
+                "-4131\t-4160\t7.2\tAptos Narrow\t16777215".to_string(),
+                "box\tbox\t3\tA1\tC4".to_string(),
+                "TextBox 2\t17\t16777215\t12369084\t0.75\t0".to_string(),
+                "Rounded Rectangle 3\t1\t0.16667".to_string(),
+                // A line drawn back to the top-left is flipped both ways.
+                "Straight Connector 4\t9\t-2\t10\t250\t100\t50\t-1\t-1".to_string(),
+                "4\tTextBox 2".to_string(),
+                // The count closes over a deletion; the number does not.
+                "4\tMyBox\t310.5\tF1".to_string(),
+                "Rectangle 6\t322.5\t22".to_string(),
+                "-2147024809".to_string(),
+                "Chart 7\tChartObject\t51\tFalse\tTrue\t0\tSheet1 グラフ 7".to_string(),
+                "1\tv\t=SERIES(Sheet1!$B$1,Sheet1!$A$2:$A$3,Sheet1!$B$2:$B$3,1)\tv".to_string(),
+                "Sales\tYen\t10\tTrue".to_string(),
+                "=SERIES(\"S2\",Sheet1!$A$2:$A$3,Sheet1!$B$2:$B$3,2)\t2\tb".to_string(),
+                "2\ta\t=SERIES(Sheet1!$A$2,Sheet1!$B$1,Sheet1!$B$2,1)".to_string(),
+                // A headerless column is 系列1; a pie made first shows a title.
+                "系列1\t=SERIES(,,Sheet1!$B$2:$B$3,1)\tTrue\t2\t7".to_string(),
+                // HasChart answers msoTrue, -1.
+                "1\t6\t-1".to_string(),
+            ]
+        );
+        // What was drawn reached the sheet.
+        assert!(!workbook.sheets[0].drawings.is_empty());
     }
 
     #[test]

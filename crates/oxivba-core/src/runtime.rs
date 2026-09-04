@@ -176,6 +176,19 @@ pub trait Host {
         Ok(false)
     }
 
+    /// A property given an OBJECT with `=`: `Series.Values = Range("B2:B3")`
+    /// keeps the range, not the numbers it holds today. A host that wants
+    /// the object answers `Some`; `None` lets the object stand for its
+    /// default value, the way every other `=` does.
+    fn set_from_object(
+        &mut self,
+        _receiver: &ObjectRef,
+        _name: &str,
+        _object: &ObjectRef,
+    ) -> Result<Option<bool>, String> {
+        Ok(None)
+    }
+
     fn enumerate(&mut self, _receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
         Ok(None)
     }
@@ -905,6 +918,23 @@ impl<'a> Runtime<'a> {
                 span,
             } => {
                 let value = self.eval_expr(value, frame)?;
+                // A host property may want the object itself rather than
+                // what it stands for -- a chart's series keeps the RANGE
+                // it plots.
+                if let (Expr::Member { object, name, span: at, .. }, Value::Object(source)) =
+                    (target, &value)
+                {
+                    let receiver = self.eval_object(object, frame, at.line)?;
+                    let taken = match self.host.as_deref_mut() {
+                        Some(host) => host
+                            .set_from_object(&receiver, name, source)
+                            .map_err(|message| host_failure(message, at.line))?,
+                        None => None,
+                    };
+                    if taken == Some(true) {
+                        return Ok(Flow::Continue);
+                    }
+                }
                 let value = self.let_value(value, span.line)?;
                 self.assign(target, value, frame, span.line)?;
                 Ok(Flow::Continue)
