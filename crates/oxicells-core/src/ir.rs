@@ -232,6 +232,15 @@ pub struct Cell {
     /// care about the dressing needs no change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<TextRun>,
+    /// The block of cells this one shares an ARRAY formula with, as
+    /// `(start_row, start_col, end_row, end_col)` — rows one-based, columns
+    /// zero-based, the way a merge is written. One formula is worked out
+    /// once for the block and its answers dealt across the cells; every
+    /// member holds the formula's text in `formula` and its own share of
+    /// the answer in `value`. The file writes the formula on the top-left
+    /// cell alone (`<f t="array" ref="…">`) and only values on the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array_block: Option<(u32, u32, u32, u32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

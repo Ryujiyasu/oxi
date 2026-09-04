@@ -199,7 +199,17 @@ fn assemble_sheets(
         for row in &sheet.rows {
             for cell in &row.cells {
                 let addr = a1(cell.col, row.index);
-                match formula_text(cell.formula.as_deref()) {
+                // A member of an array formula is worked out as its share of
+                // the block; a formula of its own as itself.
+                let placed = match (formula_text(cell.formula.as_deref()), cell.array_block) {
+                    (Some(text), Some((top, left, _, _))) => book
+                        .set_array_member(
+                            &sheet.name,
+                            &addr,
+                            text,
+                            (cell.col.saturating_sub(left), row.index.saturating_sub(top)),
+                        )
+                        .is_ok(),
                     // A formula we cannot parse falls back to its cached value,
                     // so one bad cell does not poison everything downstream.
                     //
@@ -209,10 +219,11 @@ fn assemble_sheets(
                     // agreement. Improving the parser can LOWER a measured
                     // score by letting formulas through to a gap behind them.
                     // `unparsed_formulas` counts them so that cannot hide.
-                    Some(text) if book.set_formula(&sheet.name, &addr, text).is_ok() => {}
-                    _ => {
-                        let _ = book.set_value(&sheet.name, &addr, to_calc(&cell.value));
-                    }
+                    (Some(text), None) => book.set_formula(&sheet.name, &addr, text).is_ok(),
+                    (None, _) => false,
+                };
+                if !placed {
+                    let _ = book.set_value(&sheet.name, &addr, to_calc(&cell.value));
                 }
             }
         }
@@ -367,6 +378,7 @@ mod tests {
             std::collections::BTreeMap::new();
         for (r, c, val, formula) in data {
             rows_map.entry(r).or_default().push(Cell {
+                array_block: None,
                 col: c,
                 value: val,
                 style: CellStyle::default(),

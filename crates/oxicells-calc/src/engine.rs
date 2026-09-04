@@ -129,6 +129,10 @@ enum Cell {
         source: String,
         expr: Expr,
         cached: Value,
+        /// Where this cell sits in the block its ARRAY formula is dealt
+        /// across, as (columns, rows) from the block's top-left; None for a
+        /// formula of its own.
+        share: Option<(u32, u32)>,
     },
 }
 
@@ -320,6 +324,37 @@ impl Workbook {
                 source: formula.to_string(),
                 expr,
                 cached: Value::Blank,
+                share: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// One cell of an ARRAY formula: the formula is worked out once as a
+    /// block and this cell shows the element `offset` (columns, rows) into
+    /// it. Every member is given the whole formula, which is what Excel
+    /// answers for `Formula` on any of them.
+    ///
+    /// A block with one column is dealt down every column of the cells, and
+    /// one with one row across every row -- a scalar reaches them all -- and
+    /// a cell past a block that has more than one is `#N/A`: measured,
+    /// `=A1:A2*2` dealt across three cells gives the third `#N/A`.
+    pub fn set_array_member(
+        &mut self,
+        sheet: &str,
+        a1: &str,
+        formula: &str,
+        offset: (u32, u32),
+    ) -> Result<(), CalcError> {
+        let cell = self.cell_ref(a1)?;
+        let expr = parse(formula)?;
+        self.sheet_mut(sheet)?.cells.insert(
+            cell.coord(),
+            Cell::Formula {
+                source: formula.to_string(),
+                expr,
+                cached: Value::Blank,
+                share: Some(offset),
             },
         );
         Ok(())
@@ -459,7 +494,12 @@ impl Workbook {
             let Some(expr) = self.expr_at(sheet, coord) else {
                 continue;
             };
-            let value = formula_result(self.eval(&expr, sheet, 0, Some(*coord)));
+            let value = match self.share_at(sheet, coord) {
+                Some(offset) => {
+                    formula_result(element_of(self.eval_arg(&expr, sheet, 0, Some(*coord)), offset))
+                }
+                None => formula_result(self.eval(&expr, sheet, 0, Some(*coord))),
+            };
             self.store_cached(sheet, coord, value);
         }
 
@@ -588,6 +628,14 @@ impl Workbook {
     fn expr_at(&self, sheet: &str, coord: &(u32, u32)) -> Option<Expr> {
         match self.sheets.get(sheet)?.cells.get(coord)? {
             Cell::Formula { expr, .. } => Some(expr.clone()),
+            Cell::Literal(_) => None,
+        }
+    }
+
+    /// Where the cell sits in its array formula's block, if it is in one.
+    fn share_at(&self, sheet: &str, coord: &(u32, u32)) -> Option<(u32, u32)> {
+        match self.sheets.get(sheet)?.cells.get(coord)? {
+            Cell::Formula { share, .. } => *share,
             Cell::Literal(_) => None,
         }
     }
@@ -1009,6 +1057,23 @@ impl Workbook {
 /// omitted branch such as `=IF(TRUE,,)`. Excel caches `0` in both cases. The
 /// blank only exists while a reference is being read; once it becomes a
 /// formula's answer it is a number.
+/// The element of a worked-out block that a member of an array formula
+/// shows, with a one-column or one-row block dealt along the other side.
+fn element_of(worked: Arg, (dx, dy): (u32, u32)) -> Value {
+    match worked {
+        Arg::Value(value) => value,
+        Arg::Range(block) => {
+            let col = if block.width == 1 { 0 } else { dx as usize };
+            let row = if block.height == 1 { 0 } else { dy as usize };
+            if col >= block.width || row >= block.height {
+                Value::Error(ExcelError::NA)
+            } else {
+                block.at(col, row)
+            }
+        }
+    }
+}
+
 fn formula_result(value: Value) -> Value {
     if value.is_blank() {
         Value::Number(0.0)
@@ -1766,6 +1831,42 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "E1"), Value::Error(ExcelError::Name));
         // And so the sheet's own way of swallowing it still works.
         assert_eq!(wb.value("Sheet1", "E2"), Value::Number(0.0));
+    }
+
+    /// An ARRAY formula -- `{=A1:A3*2}` dealt across D1:D3 -- is one formula
+    /// whose block of answers is shared out, each member showing its own.
+    /// Measured in Excel: `=A1:A2*2` across C1:C2 gives 2 and 4; across
+    /// three cells the third is #N/A; `=7` across two cells is 7 and 7;
+    /// `=ROW()` across R1:R2 is 1 and 2; and `=TRANSPOSE(A1:A2)` across a
+    /// row F1:G1 is 1 and 2.
+    #[test]
+    fn an_array_formula_deals_its_block_across_its_members() {
+        let mut wb = two_columns();
+        for (at, offset) in [("D1", (0, 0)), ("D2", (0, 1)), ("D3", (0, 2)), ("D4", (0, 3))] {
+            wb.set_array_member("Sheet1", at, "=A1:A3*2", offset).unwrap();
+        }
+        wb.set_array_member("Sheet1", "E1", "=7", (0, 0)).unwrap();
+        wb.set_array_member("Sheet1", "E2", "=7", (0, 1)).unwrap();
+        wb.set_array_member("Sheet1", "F1", "=TRANSPOSE(A1:A2)", (0, 0)).unwrap();
+        wb.set_array_member("Sheet1", "G1", "=TRANSPOSE(A1:A2)", (1, 0)).unwrap();
+        wb.set_array_member("Sheet1", "H1", "=ROW()", (0, 0)).unwrap();
+        wb.set_array_member("Sheet1", "H2", "=ROW()", (0, 1)).unwrap();
+        // A formula reading a member sees that member's share.
+        wb.set_formula("Sheet1", "I1", "=D2+D3").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(2.0));
+        assert_eq!(wb.value("Sheet1", "D2"), Value::Number(4.0));
+        assert_eq!(wb.value("Sheet1", "D3"), Value::Number(6.0));
+        assert_eq!(wb.value("Sheet1", "D4"), Value::Error(ExcelError::NA));
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(7.0));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(7.0));
+        assert_eq!(wb.value("Sheet1", "F1"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "G1"), Value::Number(2.0));
+        assert_eq!(wb.value("Sheet1", "H1"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "H2"), Value::Number(2.0));
+        assert_eq!(wb.value("Sheet1", "I1"), Value::Number(10.0));
+        // Every member answers with the whole formula.
+        assert_eq!(wb.formula("Sheet1", "D3"), Some("=A1:A3*2"));
     }
 
     #[test]

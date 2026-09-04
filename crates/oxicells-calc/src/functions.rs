@@ -319,11 +319,19 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
             return line;
         }
     }
-    // The three that hand back a block rather than a value.
+    // The ones that hand back a block rather than a value.
     if matches!(name, "UNIQUE" | "SORT" | "FILTER" | "SORTBY") {
         return match a_block_of_rows(name, args) {
             Ok(block) => block,
             Err(why) => Arg::Value(Value::Error(why)),
+        };
+    }
+    // TRANSPOSE turns its one block on its side, which is the whole of it:
+    // `{=TRANSPOSE(A1:A2)}` across F1:G1 is 1 and 2.
+    if name == "TRANSPOSE" {
+        return match args {
+            [block] => Arg::Range(on_its_side(&block.as_range())),
+            _ => Arg::Value(Value::Error(ExcelError::Value)),
         };
     }
     if one_at_a_time(name) {

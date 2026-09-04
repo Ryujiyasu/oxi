@@ -9538,10 +9538,12 @@ impl<'a> WorkbookHost<'a> {
             Some(cell) => {
                 cell.value = value;
                 cell.formula = None;
+                cell.array_block = None;
                 cell.runs.clear();
             }
             None => {
                 row.cells.push(Cell {
+                    array_block: None,
                     col: address.column,
                     value,
                     style: CellStyle::default(),
@@ -9607,10 +9609,12 @@ impl<'a> WorkbookHost<'a> {
             Some(cell) => {
                 cell.value = CellValue::Empty;
                 cell.formula = formula;
+                cell.array_block = None;
                 cell.runs.clear();
             }
             None => {
                 row.cells.push(Cell {
+                    array_block: None,
                     col: address.column,
                     value: CellValue::Empty,
                     style: CellStyle::default(),
@@ -9643,6 +9647,126 @@ impl<'a> WorkbookHost<'a> {
     /// - A side the block has SEVERAL of is fixed. Where the block falls
     ///   short, the cells beyond it are left `#N/A`; where it overruns, the
     ///   extra entries are dropped.
+    /// The block of the array formula a cell is a member of, if any.
+    fn array_of(&self, at: CellAddress) -> Option<(u32, u32, u32, u32)> {
+        self.workbook
+            .sheets
+            .get(at.sheet)?
+            .rows
+            .iter()
+            .find(|row| row.index == at.row)?
+            .cells
+            .iter()
+            .find(|cell| cell.col == at.column)?
+            .array_block
+    }
+
+    /// Every array formula's block on a sheet, each once.
+    fn arrays_on(&self, sheet: usize) -> Vec<(u32, u32, u32, u32)> {
+        let mut blocks: Vec<(u32, u32, u32, u32)> = Vec::new();
+        if let Some(held) = self.workbook.sheets.get(sheet) {
+            for row in &held.rows {
+                for cell in &row.cells {
+                    if let Some(block) = cell.array_block {
+                        if !blocks.contains(&block) {
+                            blocks.push(block);
+                        }
+                    }
+                }
+            }
+        }
+        blocks
+    }
+
+    /// Whether a change to `range` would cut an array formula's block --
+    /// which Excel refuses: "You cannot change part of an array". A block
+    /// the range covers whole may be replaced. `Ok(false)` means the change
+    /// is to be dropped without a word: measured, `Range("C1").Value = 9`
+    /// on one cell of C1:C2 raises nothing and changes nothing, where
+    /// `Range("C1").ClearContents` is 1004 -- so a single-cell WRITE is
+    /// silent (`quiet`) and everything else raises.
+    fn arrays_allow(&self, range: CellRange, quiet: bool) -> Result<bool, String> {
+        for block in self.arrays_on(range.sheet) {
+            let (top, left, bottom, right) = block;
+            let crosses = top <= range.end_row
+                && bottom >= range.start_row
+                && left <= range.end_column
+                && right >= range.start_column;
+            if !crosses {
+                continue;
+            }
+            let whole = top >= range.start_row
+                && bottom <= range.end_row
+                && left >= range.start_column
+                && right <= range.end_column;
+            if whole {
+                continue;
+            }
+            if quiet && range.is_single() {
+                return Ok(false);
+            }
+            return Err(host_error(1004, "You cannot change part of an array."));
+        }
+        Ok(true)
+    }
+
+    /// `Range.FormulaArray = "=…"`: one formula dealt across every cell of
+    /// the range, worked out once as a block. Measured: `=A1:A2*2` across
+    /// C1:C2 gives 2 and 4 and both cells answer `HasArray` True and the
+    /// formula's text; `=7` across two cells is 7 and 7; a malformed
+    /// formula is 1004.
+    fn set_formula_array(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+        Self::range_cell_count(range)?;
+        let Value::String(written) = &value else {
+            return Err("Range.FormulaArray takes the formula as text".to_string());
+        };
+        let formula = match written.strip_prefix('=') {
+            Some(rest) if !rest.is_empty() && !formula_is_malformed(rest) => written.clone(),
+            _ => return Err(host_error(1004, "the array formula cannot be read")),
+        };
+        if !self.arrays_allow(range, false)? {
+            return Ok(());
+        }
+        self.guard_locked_cells(range, "Range.FormulaArray")?;
+        let block = (range.start_row, range.start_column, range.end_row, range.end_column);
+        for address in range.addresses() {
+            self.set_cell_formula(address, formula.clone())?;
+            if let Some(cell) = self.cell_mut(address) {
+                cell.array_block = Some(block);
+            }
+        }
+        Ok(())
+    }
+
+    fn cell_mut(&mut self, address: CellAddress) -> Option<&mut Cell> {
+        self.workbook
+            .sheets
+            .get_mut(address.sheet)?
+            .rows
+            .iter_mut()
+            .find(|row| row.index == address.row)?
+            .cells
+            .iter_mut()
+            .find(|cell| cell.col == address.column)
+    }
+
+    /// `Range.FormulaArray` read. Measured: one cell reads as `Formula`
+    /// does (`1`, `""`, `=A1+1`); a block reads the array formula of the
+    /// first cell in it that is in one, even when the block only partly
+    /// covers the array (C1:D2 over C1:C2 reads `=A1:A2*2`); and a block
+    /// with no array formula in it is Null, whether its formulas agree
+    /// (`=A1+1` over `=A2+1`) or not.
+    fn range_formula_array(&self, range: CellRange) -> Result<Value, String> {
+        Self::range_cell_count(range)?;
+        if range.is_single() {
+            return Ok(self.cell_formula(range.first()));
+        }
+        match range.addresses().find(|at| self.array_of(*at).is_some()) {
+            Some(member) => Ok(self.cell_formula(member)),
+            None => Ok(Value::Null),
+        }
+    }
+
     fn set_range_input(
         &mut self,
         range: CellRange,
@@ -9651,6 +9775,9 @@ impl<'a> WorkbookHost<'a> {
         style: FormulaStyle,
     ) -> Result<(), String> {
         Self::range_cell_count(range)?;
+        if !self.arrays_allow(range, true)? {
+            return Ok(());
+        }
         let block = InputBlock::of(value, operation)?;
         // A block with a locked cell in it is not refused whole: measured,
         // `Range("A4:A6").Value = 3` over locked A4 and A6 and unlocked A5
@@ -9846,6 +9973,7 @@ impl<'a> WorkbookHost<'a> {
                 .expect("the destination row was created");
             if !row.cells.iter().any(|cell| cell.col == address.column) {
                 row.cells.push(Cell {
+                    array_block: None,
                     col: address.column,
                     value: CellValue::Empty,
                     style: CellStyle::default(),
@@ -10100,6 +10228,11 @@ impl<'a> WorkbookHost<'a> {
         clear_formats: bool,
     ) -> Result<(), String> {
         Self::range_cell_count(range)?;
+        // Measured: clearing one cell of an array is 1004, clearing the whole
+        // of it goes through, and clearing one cell's FORMATS goes through.
+        if clear_contents {
+            self.arrays_allow(range, false)?;
+        }
         // Measured: `Clear` over an unlocked cell and a locked one clears
         // neither and raises; over unlocked cells alone it goes through, even
         // though it takes the formats off, which `Font.Bold = True` on the
@@ -10152,6 +10285,9 @@ impl<'a> WorkbookHost<'a> {
             for cell in &mut row.cells {
                 if !(range.start_column..=range.end_column).contains(&cell.col) {
                     continue;
+                }
+                if clear_contents {
+                    cell.array_block = None;
                 }
                 if clear_contents {
                     cell.value = CellValue::Empty;
@@ -10262,6 +10398,32 @@ impl<'a> WorkbookHost<'a> {
         // Only cells lying across the range's own width or height take part.
         let taking_part = |crossing: u32| crossing >= across.0 && crossing <= across.1;
 
+        // An array formula's block moves whole or not at all. Measured: a
+        // row put in at the block's first row moves it down; a row put in
+        // inside it, or one of its rows taken out, is 1004.
+        for (top, left, bottom, right) in self.arrays_on(range.sheet) {
+            let (crossing, along) = if sideways {
+                ((top, bottom), (left + 1, right + 1))
+            } else {
+                ((left + 1, right + 1), (top, bottom))
+            };
+            // A block wholly before the shift point is not moved at all,
+            // whatever it lies across.
+            if along.1 < at {
+                continue;
+            }
+            let parts: Vec<bool> = (crossing.0..=crossing.1).map(taking_part).collect();
+            if parts.iter().all(|part| !part) {
+                continue;
+            }
+            let cut = parts.iter().any(|part| !part)
+                || (inserting && at > along.0 && at <= along.1)
+                || (!inserting && moved(along.0).is_some() != moved(along.1).is_some());
+            if cut {
+                return Err(host_error(1004, "You cannot change part of an array."));
+            }
+        }
+
         let Some(worksheet) = self.workbook.sheets.get_mut(range.sheet) else {
             return Err("worksheet is out of range".to_string());
         };
@@ -10328,6 +10490,29 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
             worksheet.rows.retain(|row| !row.cells.is_empty());
+        }
+        // The blocks that moved say where they are now.
+        for row in &mut worksheet.rows {
+            for cell in &mut row.cells {
+                let Some((top, left, bottom, right)) = cell.array_block else {
+                    continue;
+                };
+                let took_part = if sideways { taking_part(top) } else { taking_part(left + 1) };
+                if !took_part {
+                    continue;
+                }
+                cell.array_block = if sideways {
+                    match (moved(left + 1), moved(right + 1)) {
+                        (Some(near), Some(far)) => Some((top, near - 1, bottom, far - 1)),
+                        _ => None,
+                    }
+                } else {
+                    match (moved(top), moved(bottom)) {
+                        (Some(near), Some(far)) => Some((near, left, far, right)),
+                        _ => None,
+                    }
+                };
+            }
         }
 
         worksheet.merge_cells.retain_mut(|merge| {
@@ -11196,6 +11381,7 @@ impl<'a> WorkbookHost<'a> {
         };
         if row.cells.iter().all(|cell| cell.col != address.column) {
             row.cells.push(Cell {
+                array_block: None,
                 col: address.column,
                 value: CellValue::Empty,
                 style: CellStyle::default(),
@@ -11286,10 +11472,28 @@ impl<'a> WorkbookHost<'a> {
         let Some(held) = held else {
             cell.value = CellValue::Empty;
             cell.formula = None;
+            cell.array_block = None;
             return Ok(());
         };
         cell.value = held.value.clone();
         cell.formula = None;
+        // A copied array formula is an array formula where it lands, its
+        // block moved with it: measured, P1:P2 copied onto Q1 answers
+        // `CurrentArray` Q1:Q2. A block copied only in part, or turned,
+        // comes down as its values.
+        cell.array_block = match held.array_block {
+            Some((top, left, bottom, right)) if carries.formulas && !transpose && !skip_blanks => {
+                let down = i64::from(address.row) - i64::from(came_from.row);
+                let across = i64::from(address.column) - i64::from(came_from.column);
+                Some((
+                    (i64::from(top) + down) as u32,
+                    (i64::from(left) + across) as u32,
+                    (i64::from(bottom) + down) as u32,
+                    (i64::from(right) + across) as u32,
+                ))
+            }
+            _ => None,
+        };
         // Not every paste carries the formula; the ones that do move it with
         // the cell.
         if carries.formulas {
@@ -11803,6 +12007,15 @@ impl<'a> WorkbookHost<'a> {
         if down == 0 && across == 0 && destination.sheet == source.sheet {
             return Ok(Value::Empty);
         }
+        self.arrays_allow(source, false)?;
+        let landing_range = CellRange {
+            sheet: destination.sheet,
+            start_row: destination.start_row,
+            start_column: destination.start_column,
+            end_row: destination.start_row + row_count - 1,
+            end_column: destination.start_column + column_count - 1,
+        };
+        self.arrays_allow(landing_range, false)?;
 
         // Lift the whole block before putting any of it down, so that a move
         // onto its own cells does not eat what it has not carried yet.
@@ -11835,6 +12048,16 @@ impl<'a> WorkbookHost<'a> {
                 column: (i64::from(address.column) + across) as u32,
             };
             self.put_cell(landing, cell)?;
+            if let Some(cell) = self.cell_mut(landing) {
+                if let Some((top, left, bottom, right)) = cell.array_block {
+                    cell.array_block = Some((
+                        (i64::from(top) + down) as u32,
+                        (i64::from(left) + across) as u32,
+                        (i64::from(bottom) + down) as u32,
+                        (i64::from(right) + across) as u32,
+                    ));
+                }
+            }
             self.put_marks(landing, marks);
             if let Some(index) = self.note_at(landing) {
                 self.notes.remove(index);
@@ -12021,20 +12244,45 @@ impl<'a> WorkbookHost<'a> {
                                 })
                             })
                             .transpose()?;
+                        // An array formula's block goes along when the whole
+                        // of it is copied; a part of one comes down as values.
+                        let block = cell.array_block.filter(|(top, left, bottom, right)| {
+                            *top >= source.start_row
+                                && *bottom <= source.end_row
+                                && *left >= source.start_column
+                                && *right <= source.end_column
+                        });
+                        let (formula, block) = match block {
+                            Some((top, left, bottom, right)) => (
+                                cell.formula.clone(),
+                                Some((
+                                    (i64::from(top) + row_offset) as u32,
+                                    (i64::from(left) + column_offset) as u32,
+                                    (i64::from(bottom) + row_offset) as u32,
+                                    (i64::from(right) + column_offset) as u32,
+                                )),
+                            ),
+                            None if cell.array_block.is_some() => (None, None),
+                            None => (formula, None),
+                        };
                         Ok::<_, String>((
                             cell.value.clone(),
                             cell.style.clone(),
                             formula,
                             cell.runs.clone(),
+                            block,
                         ))
                     })
-                    .unwrap_or_else(|| Ok((CellValue::Empty, CellStyle::default(), None, Vec::new())))
+                    .unwrap_or_else(|| {
+                        Ok((CellValue::Empty, CellStyle::default(), None, Vec::new(), None))
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        self.arrays_allow(destination, false)?;
         // On a protected sheet the value arrives and the dress does not; see
         // `paste_cell`.
         let dressing = self.cell_protection(destination.sheet).is_none();
-        for (address, (value, style, formula, runs)) in destination.addresses().zip(copied) {
+        for (address, (value, style, formula, runs, block)) in destination.addresses().zip(copied) {
             self.set_cell_value(address, value)?;
             let sheet = &mut self.workbook.sheets[address.sheet];
             let cell = sheet
@@ -12051,6 +12299,7 @@ impl<'a> WorkbookHost<'a> {
                 cell.value = CellValue::Empty;
             }
             cell.formula = formula;
+            cell.array_block = block;
         }
         if dressing {
             self.carry_side_tables(source, destination);
@@ -12926,6 +13175,9 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Range.ClearContents does not accept arguments".to_string());
                     }
+                    // Measured: clearing one cell of an array is 1004, where
+                    // writing to it is quietly nothing.
+                    self.arrays_allow(range, false)?;
                     self.set_range_input(range, Value::Empty, "range assignment", FormulaStyle::A1)?;
                     // Measured: the hyperlink goes with the contents and the
                     // blue underline stays.
@@ -13984,6 +14236,29 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("hasformula") {
             return self.range_has_formula(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("hasarray") {
+            // Measured: C1:D2, with only C1:C2 an array, answers True -- a
+            // Boolean for its first cell, not Null for the disagreement.
+            return Ok(Some(Value::Boolean(self.array_of(range.first()).is_some())));
+        }
+        if name.eq_ignore_ascii_case("formulaarray") {
+            return self.range_formula_array(range).map(Some);
+        }
+        if name.eq_ignore_ascii_case("currentarray") {
+            // The block the cell's array formula covers. Measured: asked of a
+            // cell in no array, it is 1004.
+            let Some((top, left, bottom, right)) = self.array_of(range.first()) else {
+                return Err(host_error(1004, "the cell is not part of an array"));
+            };
+            let held = CellRange {
+                sheet: range.sheet,
+                start_row: top,
+                start_column: left,
+                end_row: bottom,
+                end_column: right,
+            };
+            return Ok(Some(self.object(HostObject::Range(held))));
+        }
         if name.eq_ignore_ascii_case("comment") {
             return Ok(Some(self.comment_of(range)));
         }
@@ -14842,6 +15117,10 @@ impl Host for WorkbookHost<'_> {
             || name.eq_ignore_ascii_case("formulalocal")
         {
             self.set_range_input(range, value, "range formula assignment", FormulaStyle::A1)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("formulaarray") {
+            self.set_formula_array(range, value)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("formular1c1")
@@ -21784,6 +22063,7 @@ mod tests {
             hidden: false,
             cells: vec![
                 Cell {
+                    array_block: None,
                     col: 0,
                     value: CellValue::Number(10.0),
                     style: CellStyle {
@@ -21794,6 +22074,7 @@ mod tests {
                     runs: Vec::new(),
                 },
                 Cell {
+                    array_block: None,
                     col: 1,
                     value: CellValue::String("copied".to_string()),
                     style: CellStyle {
@@ -22829,6 +23110,7 @@ mod tests {
                 hidden: false,
                 cells: (0..4)
                     .map(|column| Cell {
+                        array_block: None,
                         col: column,
                         value: CellValue::String(format!(
                             "{}{row}",
@@ -23419,6 +23701,77 @@ mod tests {
                 "1\t16777215\t-4105\t-4121".to_string(),
                 "-4125\t255\t-4142".to_string(),
                 "True\tFalse\tTrue".to_string(),
+            ]
+        );
+    }
+
+    /// `Range.FormulaArray`: one formula dealt across a block, and what can
+    /// and cannot be done to part of it. Every line measured (arr.vba,
+    /// 2026-09-05; the case agrees in the differential harness).
+    #[test]
+    fn vba_deals_an_array_formula_across_its_block() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 1: Range(\"A2\").Value = 2\n\
+               Range(\"C1:C2\").FormulaArray = \"=A1:A2*2\"\n\
+               Debug.Print Range(\"C1\").Value; Range(\"C2\").Value; Range(\"C1\").HasArray; Range(\"C2\").Formula; Range(\"C1:C2\").FormulaArray\n\
+               Debug.Print Range(\"C1:D2\").HasArray; Range(\"D1\").HasArray; Range(\"C1\").CurrentArray.Address; Range(\"C1:D2\").FormulaArray; IsNull(Range(\"A1:A2\").FormulaArray)\n\
+               On Error Resume Next\n\
+               Range(\"C1\").Value = 9\n\
+               Debug.Print Err.Number; Range(\"C1\").Value\n\
+               Range(\"C1\").ClearContents\n\
+               Debug.Print Err.Number; Range(\"C1\").Value\n\
+               Err.Clear\n\
+               Range(\"C1\").EntireRow.Insert\n\
+               Debug.Print Err.Number; Range(\"C2\").CurrentArray.Address(0, 0)\n\
+               Err.Clear\n\
+               Range(\"C3\").EntireRow.Insert\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               Range(\"A9\").CurrentArray.Select\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               On Error GoTo 0\n\
+               Range(\"C2:C3\").Copy Range(\"E2\")\n\
+               Debug.Print Range(\"E2\").HasArray; Range(\"E3\").Value; Range(\"E2\").CurrentArray.Address(0, 0)\n\
+               Range(\"E2:E3\").Value = 4\n\
+               Debug.Print Range(\"E2\").HasArray; Range(\"E3\").Value\n\
+               Range(\"G1:G3\").FormulaArray = \"=A1:A2*2\"\n\
+               Range(\"H1:H2\").FormulaArray = \"=7\"\n\
+               Range(\"I1:J1\").FormulaArray = \"=TRANSPOSE(A1:A2)\"\n\
+               Debug.Print Range(\"G3\").Text; Range(\"H2\").Value; Range(\"J1\").Value\n\
+               Range(\"A2\").Value = 5\n\
+               Debug.Print Range(\"C2\").Value; Range(\"C3\").Value\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                "2\t4\tTrue\t=A1:A2*2\t=A1:A2*2".to_string(),
+                "True\tFalse\t$C$1:$C$2\t=A1:A2*2\tTrue".to_string(),
+                // Writing one cell of the block is quietly nothing; clearing
+                // it is refused.
+                "0\t2".to_string(),
+                "1004\t2".to_string(),
+                // A row put in at the block's first row moves it; one put in
+                // inside it is refused; CurrentArray off an array is refused.
+                "0\tC2:C3".to_string(),
+                "1004".to_string(),
+                "1004".to_string(),
+                "True\t4\tE2:E3".to_string(),
+                "False\t4".to_string(),
+                // The row put in above moved A1:A2 down to A2:A3, so the
+                // transposed block starts with the empty A1 -- and it is A2
+                // that C2 now reads.
+                "#N/A\t7\t1".to_string(),
+                "10\t4".to_string(),
             ]
         );
     }
@@ -26664,6 +27017,7 @@ End Sub
         workbook.sheets[0].rows.push(Row {
             index: 1,
             cells: vec![Cell {
+                array_block: None,
                 col: 0,
                 value: CellValue::Empty,
                 style: CellStyle {

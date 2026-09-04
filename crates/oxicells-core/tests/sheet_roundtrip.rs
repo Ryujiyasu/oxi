@@ -63,6 +63,7 @@ fn a_sheet_a_run_added_is_saved() {
             thick_bottom: false,
             hidden: false,
             cells: vec![Cell {
+                array_block: None,
                 col: 0,
                 value: CellValue::Number(42.0),
                 style: CellStyle::default(),
@@ -136,3 +137,63 @@ fn leaving_the_sheets_alone_writes_nothing_back() {
     assert!(!editor.has_edits());
 }
 
+
+/// An ARRAY formula is written the way the file keeps it -- on the block's
+/// top-left cell with `t="array" ref`, the rest of the block as values -- and
+/// read back as a block whose every member carries the formula.
+#[test]
+fn an_array_formula_is_saved_on_its_anchor_and_read_back_whole() {
+    let saved = saved_after(|workbook| {
+        let mut added = blank_sheet("Arrays");
+        for (index, value) in [(1u32, 1.0), (2, 2.0)] {
+            added.rows.push(Row {
+                index,
+                height: None,
+                custom_height: false,
+                style_font: None,
+                thick_top: false,
+                thick_bottom: false,
+                hidden: false,
+                cells: vec![
+                    Cell {
+                        array_block: None,
+                        col: 0,
+                        value: CellValue::Number(value),
+                        style: CellStyle::default(),
+                        formula: None,
+                        runs: Vec::new(),
+                    },
+                    Cell {
+                        array_block: Some((1, 2, 2, 2)),
+                        col: 2,
+                        value: CellValue::Empty,
+                        style: CellStyle::default(),
+                        formula: Some("A1:A2*2".to_string()),
+                        runs: Vec::new(),
+                    },
+                ],
+            });
+        }
+        workbook.sheets.push(added);
+    });
+
+    let reread = parse_xlsx(&saved).expect("the saved workbook parses");
+    let sheet = &reread.sheets[1];
+    let at = |row: usize, col: u32| {
+        sheet.rows[row]
+            .cells
+            .iter()
+            .find(|cell| cell.col == col)
+            .expect("the cell is there")
+    };
+    assert_eq!(at(0, 2).array_block, Some((1, 2, 2, 2)));
+    assert_eq!(at(1, 2).array_block, Some((1, 2, 2, 2)));
+    assert_eq!(at(0, 2).formula.as_deref(), Some("A1:A2*2"));
+    assert_eq!(at(1, 2).formula.as_deref(), Some("A1:A2*2"));
+    // Worked out, each member shows its own share of the block.
+    let mut worked = reread.clone();
+    oxicells_core::formula::evaluate_workbook_formulas(&mut worked);
+    let sheet = &worked.sheets[1];
+    assert_eq!(sheet.rows[0].cells[1].value.display(), "2");
+    assert_eq!(sheet.rows[1].cells[1].value.display(), "4");
+}

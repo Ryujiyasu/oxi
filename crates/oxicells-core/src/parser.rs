@@ -2719,6 +2719,12 @@ fn parse_worksheet(
     let mut value_text = String::new();
     let mut in_formula = false;
     let mut formula_text = String::new();
+    // An ARRAY formula is written on its top-left cell alone, with the block
+    // it is dealt across in `ref`; the other cells of the block hold only
+    // their values. Each anchor is noted as it is read and the block filled
+    // in once every cell has been, since the members come later in the file.
+    let mut cell_array_ref: Option<String> = None;
+    let mut array_anchors: Vec<(u32, u32, String, String)> = Vec::new();
     // A cell may carry its text itself, in an <is>, instead of pointing into
     // the shared table. Anything that writes a sheet without building that
     // table does it this way. Its text sits in <t> elements, and its phonetic
@@ -2802,6 +2808,7 @@ fn parse_worksheet(
                         value_text.clear();
                         formula_text.clear();
                         in_formula = false;
+                        cell_array_ref = None;
                         cell_type = get_attr(&e, "t");
                         cell_style_index =
                             get_attr(&e, "s").and_then(|v| v.parse::<usize>().ok());
@@ -2815,6 +2822,9 @@ fn parse_worksheet(
                     "f" if in_cell => {
                         in_formula = true;
                         formula_text.clear();
+                        if get_attr(&e, "t").as_deref() == Some("array") {
+                            cell_array_ref = get_attr(&e, "ref");
+                        }
                     }
                     "v" if in_cell => {
                         in_value = true;
@@ -2883,7 +2893,18 @@ fn parse_worksheet(
                             } else {
                                 Some(formula_text.clone())
                             };
+                            if let (Some(reference), Some(formula)) =
+                                (cell_array_ref.take(), formula.as_ref())
+                            {
+                                array_anchors.push((
+                                    current_row_index,
+                                    cell_col,
+                                    reference,
+                                    formula.clone(),
+                                ));
+                            }
                             current_cells.push(Cell {
+                                array_block: None,
                                 col: cell_col,
                                 value: cell_value,
                                 style,
@@ -2962,6 +2983,7 @@ fn parse_worksheet(
                             get_attr(&e, "s").and_then(|v| v.parse::<usize>().ok());
                         let style = resolve_cell_style(si.unwrap_or(0), stylesheet);
                         current_cells.push(Cell {
+                            array_block: None,
                             col,
                             value: CellValue::Empty,
                             style,
@@ -3142,6 +3164,67 @@ fn parse_worksheet(
             }
         })
     };
+
+    // Deal every array formula across its block: each member gets the
+    // formula's text and the block, and a member the file left out -- a cell
+    // with nothing to say for itself -- is made so it can be worked out.
+    for (anchor_row, anchor_col, reference, formula) in array_anchors {
+        let block = match parse_range_ref(&reference) {
+            Some((start_col, start_row, end_col, end_row)) => {
+                (start_row, start_col, end_row, end_col)
+            }
+            // A single cell's array formula, whose `ref` is the cell itself.
+            None => {
+                let (col, row) = parse_cell_ref(&reference);
+                (row + 1, col, row + 1, col)
+            }
+        };
+        let (start_row, start_col, end_row, end_col) = block;
+        if end_row < start_row || end_col < start_col || (end_row - start_row) * (end_col - start_col) > 1_000_000 {
+            continue;
+        }
+        for row_index in start_row..=end_row {
+            let row = match rows.iter().position(|row| row.index == row_index) {
+                Some(at) => &mut rows[at],
+                None => {
+                    rows.push(Row {
+                        index: row_index,
+                        cells: Vec::new(),
+                        height: None,
+                        custom_height: false,
+                        style_font: None,
+                        thick_top: false,
+                        thick_bottom: false,
+                        hidden: false,
+                    });
+                    rows.sort_by_key(|row| row.index);
+                    rows.iter_mut().find(|row| row.index == row_index).unwrap()
+                }
+            };
+            for col in start_col..=end_col {
+                let is_anchor = row_index == anchor_row && col == anchor_col;
+                match row.cells.iter_mut().find(|cell| cell.col == col) {
+                    Some(cell) => {
+                        cell.array_block = Some(block);
+                        if !is_anchor {
+                            cell.formula = Some(formula.clone());
+                        }
+                    }
+                    None => {
+                        row.cells.push(Cell {
+                            col,
+                            value: CellValue::Empty,
+                            style: resolve_cell_style(0, stylesheet),
+                            formula: Some(formula.clone()),
+                            runs: Vec::new(),
+                            array_block: Some(block),
+                        });
+                        row.cells.sort_by_key(|cell| cell.col);
+                    }
+                }
+            }
+        }
+    }
 
     // The first font in the list, which is what an indent is measured in.
     let first_font = stylesheet.fonts.first().and_then(|font| {

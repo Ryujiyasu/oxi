@@ -43,6 +43,7 @@ fn a_sheet(name: &str) -> Sheet {
             index,
             cells: vec![
                 Cell {
+                    array_block: None,
                     col: 0,
                     value: CellValue::Number(index as f64),
                     style: Default::default(),
@@ -50,6 +51,7 @@ fn a_sheet(name: &str) -> Sheet {
                     runs: Vec::new(),
                 },
                 Cell {
+                    array_block: None,
                     col: 1,
                     value: CellValue::Empty,
                     style: Default::default(),

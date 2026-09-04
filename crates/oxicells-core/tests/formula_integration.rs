@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 
 fn cell(col: u32, value: CellValue, formula: Option<&str>) -> Cell {
     Cell {
+        array_block: None,
         col,
         value,
         style: CellStyle::default(),

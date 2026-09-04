@@ -44,6 +44,9 @@ pub enum CellEditValue {
     Number(f64),
     Boolean(bool),
     Formula(String),
+    /// An ARRAY formula, written on the top-left cell of `reach` (an A1
+    /// range such as `C1:C2`); the other cells of the block hold values only.
+    ArrayFormula { formula: String, reach: String },
     Empty,
 }
 
@@ -245,7 +248,7 @@ impl XlsxEditor {
                     .get(&(row, col))
                     .is_some_and(|before| same_content(before, cell));
                 if !same {
-                    if let Some(value) = edit_for(cell) {
+                    if let Some(value) = edit_for(cell, row) {
                         changes.push(((index, row, col), value));
                     }
                 }
@@ -806,7 +809,7 @@ impl CellEditValue {
         match self {
             Self::String(_) => Some("str"),
             Self::Boolean(_) => Some("b"),
-            Self::Number(_) | Self::Formula(_) | Self::Empty => None,
+            Self::Number(_) | Self::Formula(_) | Self::ArrayFormula { .. } | Self::Empty => None,
         }
     }
 
@@ -818,13 +821,23 @@ impl CellEditValue {
                 "spreadsheet numbers must be finite".to_string(),
             )),
             Self::Boolean(value) => Ok(Some(if *value { "1" } else { "0" }.to_string())),
-            Self::Formula(_) | Self::Empty => Ok(None),
+            Self::Formula(_) | Self::ArrayFormula { .. } | Self::Empty => Ok(None),
         }
     }
 
     fn formula_text(&self) -> Option<&str> {
         match self {
-            Self::Formula(value) => Some(value.strip_prefix('=').unwrap_or(value)),
+            Self::Formula(value) | Self::ArrayFormula { formula: value, .. } => {
+                Some(value.strip_prefix('=').unwrap_or(value))
+            }
+            _ => None,
+        }
+    }
+
+    /// The block an array formula is dealt across, for the `<f>` element.
+    fn array_reach(&self) -> Option<&str> {
+        match self {
+            Self::ArrayFormula { reach, .. } => Some(reach),
             _ => None,
         }
     }
@@ -833,9 +846,15 @@ impl CellEditValue {
 fn write_formula(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     formula: &str,
+    reach: Option<&str>,
 ) -> Result<(), XlsxError> {
+    let mut element = BytesStart::new("f");
+    if let Some(reach) = reach {
+        element.push_attribute(("t", "array"));
+        element.push_attribute(("ref", reach));
+    }
     writer
-        .write_event(Event::Start(BytesStart::new("f")))
+        .write_event(Event::Start(element))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     writer
         .write_event(Event::Text(BytesText::new(formula)))
@@ -872,7 +891,7 @@ fn write_cell_value(
         .write_event(Event::Start(cell))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     if let Some(formula) = value.formula_text() {
-        write_formula(writer, formula)?;
+        write_formula(writer, formula, value.array_reach())?;
     }
     if let Some(text) = value.value_text()? {
         writer
@@ -917,7 +936,9 @@ fn same_merges(before: &[MergeCell], after: &[MergeCell]) -> bool {
 }
 
 fn same_content(before: &crate::ir::Cell, after: &crate::ir::Cell) -> bool {
-    before.formula == after.formula && same_value(&before.value, &after.value)
+    before.formula == after.formula
+        && before.array_block == after.array_block
+        && same_value(&before.value, &after.value)
 }
 
 fn same_value(before: &crate::ir::CellValue, after: &crate::ir::CellValue) -> bool {
@@ -934,8 +955,22 @@ fn same_value(before: &crate::ir::CellValue, after: &crate::ir::CellValue) -> bo
 
 /// How a cell should be written back, or `None` for one this editor cannot
 /// express — an error value has no edit of its own.
-fn edit_for(cell: &crate::ir::Cell) -> Option<CellEditValue> {
-    if let Some(formula) = cell.formula.as_ref() {
+///
+/// A member of an array formula is written the way the file keeps it: the
+/// formula on the block's top-left cell, with the block beside it, and only
+/// a value on every other cell.
+fn edit_for(cell: &crate::ir::Cell, row: u32) -> Option<CellEditValue> {
+    if let Some((top, left, bottom, right)) = cell.array_block {
+        if row == top && cell.col == left {
+            let formula = cell.formula.clone().unwrap_or_default();
+            let reach = format!(
+                "{}{top}:{}{bottom}",
+                col_to_letter(left),
+                col_to_letter(right)
+            );
+            return Some(CellEditValue::ArrayFormula { formula, reach });
+        }
+    } else if let Some(formula) = cell.formula.as_ref() {
         return Some(CellEditValue::Formula(formula.clone()));
     }
     match &cell.value {
@@ -1529,7 +1564,7 @@ fn write_new_sheet(sheet: &crate::ir::Sheet) -> Result<Vec<u8>, XlsxError> {
         for row in &sheet.rows {
             let mut cells = BTreeMap::new();
             for cell in &row.cells {
-                if let Some(value) = edit_for(cell) {
+                if let Some(value) = edit_for(cell, row.index) {
                     cells.insert(cell.col, value);
                 }
             }
@@ -2237,7 +2272,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                             }
                             writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             if let Some(formula) = value.formula_text() {
-                                write_formula(&mut writer, formula)?;
+                                write_formula(&mut writer, formula, value.array_reach())?;
                             }
                         } else {
                             writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -2533,7 +2568,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         }
                         if let Some(formula) = value.formula_text() {
                             writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                            write_formula(&mut writer, formula)?;
+                            write_formula(&mut writer, formula, value.array_reach())?;
                             writer.write_event(Event::End(BytesEnd::new("c"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         } else if let Some(text) = value.value_text()? {
                             writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
