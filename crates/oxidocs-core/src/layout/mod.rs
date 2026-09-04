@@ -28815,6 +28815,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 metrics.word_line_height(font_size, 96.0)
             };
 
+        if std::env::var("OXI_DBG_LHI").is_ok() {
+            eprintln!(
+                "[LHI] family={:?} fs={:.2} ppem={} cell={} single={} cjk83={} gdi={:?} realcjk={} base={:.3}",
+                metrics.family, font_size, ppem, in_table_cell, is_single,
+                metrics.is_cjk_83_64_font(), self.registry.gdi_height(&metrics.family, ppem),
+                self.doc_body_has_real_cjk, base
+            );
+        }
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
             (Some("atLeast"), Some(val)) => {
@@ -31971,8 +31979,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // the empty paragraph a full line (probeqhidemk2 {+1:1}).
                 // Cells with real text are untouched (the corpus's hideMark
                 // rows are all trHeight-bound mixed rows -> byte-identical).
+                let s1311_tail = self.s1311_hidemark_tail_pos(cell);
                 let s751_hide_empty = cell.hide_mark
                     && std::env::var("OXI_S751_DISABLE").is_err()
+                    && s1311_tail.is_none()
                     && cell.blocks.iter().all(|b| {
                         matches!(b, Block::Paragraph(p)
                         if p.runs.iter().all(|r| r.text.is_empty()))
@@ -32025,7 +32035,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if s751_hide_empty {
                         break;
                     } // S751: empty hideMark cell = no content height
-                    if Some(block_pos) == s716_stub {
+                    if Some(block_pos) == s716_stub || Some(block_pos) == s1311_tail {
                         continue;
                     }
                     match block {
@@ -33778,8 +33788,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // pre-pass zero-height; without this the placement pass grew
                     // max_actual_cell_h back and the S648 correction re-inflated
                     // the row).
+                    let s1311_tail_render = self.s1311_hidemark_tail_pos(cell);
                     let s751_hide_render = cell.hide_mark
                         && std::env::var("OXI_S751_DISABLE").is_err()
+                        && s1311_tail_render.is_none()
                         && cell.blocks.iter().all(|b| {
                             matches!(b, Block::Paragraph(p)
                         if p.runs.iter().all(|r| r.text.is_empty()))
@@ -33799,7 +33811,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         if is_exact && content_h + pad_t >= row_height {
                             break;
                         }
-                        if Some(block_pos) == s716_stub_render {
+                        if Some(block_pos) == s716_stub_render || Some(block_pos) == s1311_tail_render {
                             continue;
                         }
                         if s751_hide_render {
@@ -41436,7 +41448,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // to ~0 by Word — exclude it from the split-continuation
                         // formula (the stub is Some only when te == 1 and the
                         // preceding block is a nested table).
-                        if self.nested_table_stub_pos(cell).is_some() {
+                        if self.nested_table_stub_pos(cell).is_some()
+                            || self.s1311_hidemark_tail_pos(cell).is_some()
+                        {
                             te.saturating_sub(1)
                         } else {
                             te
@@ -43324,6 +43338,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// Corpus pattern scan (`</w:tbl>` + one empty `<w:p>` + `</w:tc>`):
     /// exactly 3 docs — tokyoshugyo + the 3a4f/model template twins, 3 each.
     /// Returns the stub's block index when the cell ends [.., Table, empty P].
+    /// S1311 (2026-09-05, default ON, opt-out OXI_S1311_DISABLE): `w:hideMark`
+    /// (ECMA-376 17.4.22) drops the END-OF-CELL MARK from the row height -- i.e.
+    /// the cell's LAST paragraph, when it is empty, contributes no line. Earlier
+    /// empty paragraphs still count and a cell that ends in text is unchanged.
+    /// DERIVED (`_pb_cellend_gen.py` arms + `<w:hideMark/>`, COM: the mark set to
+    /// 40pt moves the next row by +39.0 without hideMark and by +0.0 with it):
+    ///     [t][t][t][e10]  64.50 -> 51.00 (= [t][t][t])      [e10]  29.25 -> 19.50 (borders + floor)
+    ///     [t][e9][e10]    52.50 -> 39.75 (e9 kept)           [e9][e10] 41.25 -> 27.75 (N-1 kept)
+    /// Witness: correspondence__04a3e3e1's timetable -- every content cell ends
+    /// with an empty 10pt paragraph under hideMark; Oxi counted it at 12.97 and
+    /// the row came out +13. S751 already zeroed the ALL-empty hideMark cell; this
+    /// subsumes it (a lone empty paragraph is the tail) and corrects the
+    /// multi-empty case, where S751's "all zero" undercounts by N-1 lines.
+    fn s1311_hidemark_tail_pos(&self, cell: &TableCell) -> Option<usize> {
+        if !cell.hide_mark || std::env::var("OXI_S1311_DISABLE").is_ok() {
+            return None;
+        }
+        let n = cell.blocks.len();
+        match cell.blocks.last() {
+            Some(Block::Paragraph(p)) if p.runs.iter().all(|r| r.text.is_empty()) => Some(n - 1),
+            _ => None,
+        }
+    }
+
     fn nested_table_stub_pos(&self, cell: &TableCell) -> Option<usize> {
         if std::env::var("OXI_S716_DISABLE").is_ok() {
             return None;
@@ -43893,11 +43931,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 .rposition(|b| matches!(b, Block::Paragraph(_)));
             // S716: the post-nested-table stub paragraph contributes no height.
             let s716_stub_nat = self.nested_table_stub_pos(cell);
+            let s1311_tail_nat = self.s1311_hidemark_tail_pos(cell);
             for (block_pos, block) in cell.blocks.iter().enumerate() {
-                if s751_hide_empty {
+                if s751_hide_empty && s1311_tail_nat.is_none() {
                     break;
                 } // S751
-                if Some(block_pos) == s716_stub_nat {
+                if Some(block_pos) == s716_stub_nat || Some(block_pos) == s1311_tail_nat {
                     continue;
                 }
                 match block {
