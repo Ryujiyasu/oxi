@@ -5496,6 +5496,30 @@ impl Host for WorkbookHost<'_> {
         args: &[Value],
     ) -> Result<Option<Value>, String> {
         if let Some(receiver) = receiver {
+            // EVERY Excel object can be asked for the Application, and it
+            // always answers the same one. Measured: `Range("A1").Application`,
+            // `ActiveSheet.Application` and `ActiveWorkbook.Application` are
+            // all an Application, and so is `ActiveWorkbook.Parent` and
+            // `Application.Parent` -- the Application being its own parent is
+            // where the chain stops.
+            //
+            // It was reachable only as a bare global before, so every one of
+            // those answered 438: the object was there and no door led to it.
+            if name.eq_ignore_ascii_case("application") && args.is_empty() {
+                return Ok(Some(self.object(HostObject::Application)));
+            }
+            if name.eq_ignore_ascii_case("parent")
+                && args.is_empty()
+                && (self.is_workbook(receiver) || self.is_application(receiver))
+            {
+                return Ok(Some(self.object(HostObject::Application)));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("name") {
+                // What Excel calls itself, which is also the Application's
+                // default member -- `CStr(Range("A1").Application)` is
+                // `Microsoft Excel`.
+                return Ok(Some(Value::String("Microsoft Excel".to_string())));
+            }
             if self.is_worksheet_function(receiver) {
                 return self.worksheet_function(name, args).map(Some);
             }
@@ -6121,6 +6145,15 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        // The Application's default member is its NAME, not a Value: asked of
+        // Excel, `CStr(Range("A1").Application)` is `Microsoft Excel`. Without
+        // this the object came through and then would not become a value, so
+        // reaching it changed one 438 into another.
+        if self.is_application(receiver)
+            && (name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("name"))
+        {
+            return Ok(Some(Value::String("Microsoft Excel".to_string())));
+        }
         if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
             return self.blocks_member(*handle, name, &[]);
         }
