@@ -261,6 +261,13 @@ pub struct RunStyles<'a> {
     pub lvl_fs: Option<f32>,
 }
 
+/// S-RUNFAMILY: a run is measured in its own FACE, unless this is set, which
+/// restores measuring the whole line in the paragraph's one family.
+fn runfamily_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_RUNFAMILY_DISABLE").is_err())
+}
+
 /// S-LVLRUNSIZE: a run that declares no size is measured at the LEVEL's,
 /// unless this is set, which restores the paragraph's resolved size.
 fn lvlrunsize_on() -> bool {
@@ -279,14 +286,14 @@ fn lvlrunbold_on() -> bool {
 ///
 /// Falls back to the paragraph's own values for a character past the last run,
 /// which is what a line ending in generated text (a field's cached value) hits.
-fn style_at(
-    styles: &RunStyles<'_>,
+fn style_at<'r>(
+    styles: &RunStyles<'r>,
     at: usize,
     fs: f32,
     bold: bool,
     italic: bool,
     letter_spacing: bool,
-) -> (f32, bool, bool, f32) {
+) -> (f32, bool, bool, f32, Option<&'r str>) {
     let mut seen = 0usize;
     for run in styles.runs {
         let n = run.text.chars().count();
@@ -302,11 +309,15 @@ fn style_at(
                 run.bold.unwrap_or(styles.lvl_bold),
                 run.italic,
                 if letter_spacing { run.spacing.unwrap_or(0.0) } else { 0.0 },
+                // The run's own FACE, the style axis this walk used to drop:
+                // measuring d63's DM Sans + Sansita line in one family made it
+                // 11.3% wide. None falls back to the paragraph's family.
+                run.font_family.as_deref(),
             );
         }
         seen += n;
     }
-    (fs, bold, italic, 0.0)
+    (fs, bold, italic, 0.0, None)
 }
 
 /// The paragraph's tracking, taken from its first run.
@@ -348,9 +359,16 @@ pub fn master_units_runs(
     }
     let mut sum: i64 = 0;
     for (i, ch) in text.chars().enumerate() {
-        let (run_fs, run_bold, run_italic, run_track) =
+        let (run_fs, run_bold, run_italic, run_track, run_family) =
             style_at(styles, styles.line_start + i, fs, bold, italic, letter_spacing);
-        let em = metrics.advance_em(family, run_bold, run_italic, ch)?;
+        let fam = run_family.filter(|_| runfamily_on()).unwrap_or(family);
+        // The blanket glyph check above asked the PARAGRAPH's family; a char
+        // set in another face has to be asked of THAT face, or a missing glyph
+        // is measured off a substitute without anyone declining.
+        if fam != family && !metrics.has_all_glyphs(fam, run_bold, run_italic, ch.to_string().as_str()) {
+            return None;
+        }
+        let em = metrics.advance_em(fam, run_bold, run_italic, ch)?;
         sum += f64::from((em * run_fs + run_track) * MASTER_UNITS_PER_PT as f32).round() as i64;
     }
     Some(sum)
@@ -389,15 +407,19 @@ pub fn line_width_pt(
     }
     let mut sum = 0.0f32;
     for (i, ch) in text.chars().enumerate() {
-        let (run_fs, run_bold, run_italic, run_track) = match styles {
+        let (run_fs, run_bold, run_italic, run_track, run_family) = match styles {
             // ★Only for a paragraph that HAS more than one run. A silent run
             // reads as not-bold here (see `style_at`), which for a lone run
             // inside a bold level would measure the line in a face it is not
             // drawn in -- the very defect this exists to fix, in reverse.
             Some(s) => style_at(s, s.line_start + i, fs, bold, italic, true),
-            None => (fs, bold, italic, track),
+            None => (fs, bold, italic, track, None),
         };
-        let em = metrics.advance_em(family, run_bold, run_italic, ch)?;
+        let fam = run_family.filter(|_| runfamily_on()).unwrap_or(family);
+        if fam != family && !metrics.has_all_glyphs(fam, run_bold, run_italic, ch.to_string().as_str()) {
+            return None;
+        }
+        let em = metrics.advance_em(fam, run_bold, run_italic, ch)?;
         sum += if crate::font_adv::mudraw_on() {
             crate::font_adv::mu_advance_pt(em, run_fs, run_track)
         } else {

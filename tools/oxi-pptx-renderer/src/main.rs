@@ -14888,6 +14888,12 @@ struct RunStyles<'a> {
     lvl_fs: Option<f32>,
 }
 
+/// S-RUNFAMILY: a run is measured in its own FACE, unless this is set, which
+/// restores measuring the whole line in the paragraph's one family.
+fn runfamily_on() -> bool {
+    std::env::var("OXI_RUNFAMILY_DISABLE").is_err()
+}
+
 /// S-LVLRUNSIZE: a run that declares no size takes the LEVEL's, unless this is
 /// set, which restores taking the paragraph's -- the largest size any run in it
 /// declares.
@@ -15011,7 +15017,7 @@ fn line_width_pt_runs(
     scale: f64,
     styles: RunStyles<'_>,
 ) -> Option<f32> {
-    let style_at = |at: usize| -> (u32, bool, bool, i32) {
+    let style_at = |at: usize| -> (u32, bool, bool, i32, &str) {
         let mut seen = 0usize;
         for run in styles.runs {
             let n = run.text.chars().count();
@@ -15033,21 +15039,28 @@ fn line_width_pt_runs(
                     }),
                     run.italic || italic,
                     (run_spc(run) * 100.0).round() as i32,
+                    // The run's own FACE (S-RUNFAMILY): d63's DM Sans +
+                    // Sansita line measured 11.3% wide in one family.
+                    if runfamily_on() {
+                        run.font_family.as_deref().unwrap_or(family)
+                    } else {
+                        family
+                    },
                 );
             }
             seen += n;
         }
-        ((fs * 100.0).round() as u32, bold, italic, 0)
+        ((fs * 100.0).round() as u32, bold, italic, 0, family)
     };
-    let measure = |seg: &str, st: (u32, bool, bool, i32)| -> Option<f32> {
+    let measure = |seg: &str, st: (u32, bool, bool, i32, &str)| -> Option<f32> {
         if seg.is_empty() {
             return Some(0.0);
         }
-        let (sz, sb, si, sspc) = st;
+        let (sz, sb, si, sspc, sfam) = st;
         let sfs = sz as f32 / 100.0;
         let spc = sspc as f32 / 100.0;
-        hmtx_width_styled(seg, sfs, family, sb, si, spc).or_else(|| {
-            runtime_width_px(dc, seg, sfs, family, sb, si, scale, spc)
+        hmtx_width_styled(seg, sfs, sfam, sb, si, spc).or_else(|| {
+            runtime_width_px(dc, seg, sfs, sfam, sb, si, scale, spc)
                 .map(|px| px as f32 / scale as f32)
         })
     };
@@ -15055,7 +15068,7 @@ fn line_width_pt_runs(
     // path, so this cannot disagree with it on a uniform paragraph.
     let mut total = 0.0f32;
     let mut seg = String::new();
-    let mut cur: Option<(u32, bool, bool, i32)> = None;
+    let mut cur: Option<(u32, bool, bool, i32, &str)> = None;
     for (i, ch) in text.chars().enumerate() {
         let st = style_at(styles.line_start + i);
         if let Some(c) = cur {
