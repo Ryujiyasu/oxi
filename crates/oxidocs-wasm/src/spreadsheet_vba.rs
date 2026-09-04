@@ -112,6 +112,11 @@ enum BorderSelection {
     EdgeRight,
     InsideVertical,
     InsideHorizontal,
+    /// xlDiagonalDown (5) and xlDiagonalUp (6): the rule from corner to
+    /// corner, which `Borders.LineStyle = xlContinuous` over the whole
+    /// leaves alone -- measured, it answers None after that.
+    DiagonalDown,
+    DiagonalUp,
 }
 
 /// What an undressed cell answers with: its writing is black and its fill is
@@ -335,6 +340,8 @@ enum HostObject {
     Comments(usize),
     /// `Worksheet.Outline`: how one sheet's groups are summarised and shown.
     Outline(usize),
+    /// `Worksheet.Tab`: the colour of the sheet's tab.
+    Tab(usize),
     /// An object whose worksheet has been deleted. Excel answers every
     /// member of one with error 424 -- measured, a `Worksheet` and a `Range`
     /// kept across the sheet's deletion both raise it, read or written.
@@ -1571,6 +1578,17 @@ impl Default for Outline {
     }
 }
 
+/// The colour of a sheet's tab: a plain colour, or one from the theme with
+/// a tint on it. Measured: a fresh tab answers `Color` False (a Boolean),
+/// `ColorIndex` xlNone and `ThemeColor` 0; `Color = 65280` reads back with
+/// ColorIndex 4; `ThemeColor = 5` reads Color 8544277.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TabColour {
+    colour: i64,
+    theme: Option<usize>,
+    tint: f64,
+}
+
 /// A hatching drawn over a cell's fill, and the colour it is drawn in.
 ///
 /// `kind` is the pattern as the FILE numbers it -- solid 1, mediumGray 2,
@@ -1725,6 +1743,8 @@ struct WorkbookHost<'a> {
     views: std::collections::HashMap<usize, View>,
     /// Each sheet's outline, once a macro has grouped anything.
     outlines: std::collections::HashMap<usize, Outline>,
+    /// The colour of each sheet's tab, where one has been given.
+    tabs: std::collections::HashMap<usize, TabColour>,
     /// The turn of every cell written at an angle, in degrees from -90 to
     /// 90. The IR keeps only the stacked kind, which is 771 of the 774
     /// rotations in the conformance corpus; the angles are kept here for
@@ -1781,6 +1801,9 @@ struct WorkbookHost<'a> {
     blocks: Vec<Vec<CellRange>>,
     /// The text of every name a `Name` object was handed out for.
     name_handles: Vec<String>,
+    /// Whether the workbook counts as saved: `ThisWorkbook.Saved`, False
+    /// until a macro says otherwise, and False again after any write.
+    saved: bool,
     /// What the file this workbook came from is called, when the page says.
     /// Excel calls a workbook that was never saved `Book1`, and a browser
     /// never saves one anywhere it can name, so what the page hands over is
@@ -1829,8 +1852,10 @@ impl<'a> WorkbookHost<'a> {
             page_setups: std::collections::HashMap::new(),
             selections: std::collections::HashMap::new(),
             sheet_counter: 0,
+            saved: false,
             views: std::collections::HashMap::new(),
             outlines: std::collections::HashMap::new(),
+            tabs: std::collections::HashMap::new(),
             rotations: std::collections::HashMap::new(),
             underlines: std::collections::HashMap::new(),
             hatchings: std::collections::HashMap::new(),
@@ -1922,6 +1947,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::WorksheetFunction => "WorksheetFunction",
                 HostObject::DebugConsole => "Debug",
                 HostObject::Outline(_) => "Outline",
+                HostObject::Tab(_) => "Tab",
                 HostObject::Gone => "Nothing",
             }
             .to_string(),
@@ -6292,6 +6318,69 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    fn tab_sheet(&self, object: &ObjectRef) -> Option<usize> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Tab(sheet)) => Some(*sheet),
+            _ => None,
+        }
+    }
+
+    fn tab_member(&self, sheet: usize, name: &str) -> Option<Value> {
+        let tab = self.tabs.get(&sheet).copied();
+        Some(match name.to_ascii_lowercase().as_str() {
+            "color" => match tab {
+                Some(tab) => Value::Integer(tab.colour),
+                None => Value::Boolean(false),
+            },
+            "colorindex" => match tab {
+                Some(tab) => Value::Integer(nearest_palette_index(tab.colour)),
+                None => Value::Integer(COLOUR_NONE),
+            },
+            "themecolor" => Value::Integer(tab.and_then(|tab| tab.theme).map_or(0, |theme| theme as i64)),
+            "tintandshade" => Value::Double(tab.map_or(0.0, |tab| tab.tint)),
+            _ => return None,
+        })
+    }
+
+    fn set_tab_member(&mut self, sheet: usize, name: &str, value: &Value) -> Result<bool, String> {
+        if name.eq_ignore_ascii_case("color") {
+            let Some(colour) = color_number(value, "Tab.Color")? else {
+                self.tabs.remove(&sheet);
+                return Ok(true);
+            };
+            self.tabs.insert(sheet, TabColour { colour: colour as i64, theme: None, tint: 0.0 });
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("colorindex") {
+            match palette_choice(value, COLOUR_NONE, "Tab.ColorIndex")? {
+                Some(colour) => {
+                    let colour = colour_to_packed(Some(&colour)).unwrap_or(0);
+                    self.tabs.insert(sheet, TabColour { colour, theme: None, tint: 0.0 });
+                }
+                None => {
+                    self.tabs.remove(&sheet);
+                }
+            }
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("themecolor") {
+            let theme = theme_colour(value)?;
+            self.tabs.insert(sheet, TabColour { colour: THEME_COLOURS[theme - 1], theme: Some(theme), tint: 0.0 });
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("tintandshade") {
+            let tint = tint_asked(value)?;
+            if let Some(tab) = self.tabs.get_mut(&sheet) {
+                tab.tint = tint;
+                if let Some(theme) = tab.theme {
+                    tab.colour = tinted(THEME_COLOURS[theme - 1], tint);
+                }
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// The marks on a cell, as they stand.
     fn marks_of(&self, at: CellAddress) -> CellMarks {
         CellMarks {
@@ -7084,6 +7173,185 @@ impl<'a> WorkbookHost<'a> {
         Ok(Value::Boolean(true))
     }
 
+    /// `Range.BorderAround LineStyle, Weight, ColorIndex, Color, ThemeColor`:
+    /// the four outer edges of the range. Measured: with a LineStyle and
+    /// Weight xlMedium the left and right edges read -4138 and the inside
+    /// edges none; with ColorIndex 3 and Weight 4 the top edge reads Color
+    /// 255, Weight 4, LineStyle 1.
+    fn border_around(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | Some(Value::Empty) | None => None,
+            Some(value) => Some(value),
+        };
+        let line = match given(0) {
+            Some(value) => any_whole_number(value)
+                .ok_or_else(|| host_error(1004, "BorderAround LineStyle takes a line style"))?,
+            None => LINE_CONTINUOUS,
+        };
+        let weight = match given(1) {
+            Some(value) => border_weight(value)?,
+            None => WEIGHT_THIN,
+        };
+        let colour = match (given(2), given(3)) {
+            (_, Some(value)) => {
+                let Some(asked) = any_number(value) else {
+                    return Err(host_error(1004, "BorderAround Color takes an RGB number"));
+                };
+                (asked.is_finite() && (0.0..=16_777_215.0).contains(&asked))
+                    .then(|| colour_from_packed(asked as i64))
+            }
+            (Some(value), None) => palette_choice(value, COLOUR_AUTOMATIC, "BorderAround ColorIndex")?,
+            (None, None) => None,
+        };
+        let drawn = match border_after_line(line, weight) {
+            Some(name) => name,
+            None => return Ok(Value::Boolean(true)),
+        };
+        let drawn = match border_after_weight(line, weight).or(Some(drawn)) {
+            Some(name) => name,
+            None => drawn,
+        };
+        for selection in [
+            BorderSelection::EdgeLeft,
+            BorderSelection::EdgeTop,
+            BorderSelection::EdgeBottom,
+            BorderSelection::EdgeRight,
+        ] {
+            self.forget_theme_paint(range, Paint::Edge(selection));
+            let colour = colour.clone();
+            self.set_range_style(range, |address, style| {
+                let edge = Some(BorderLine { style: drawn.to_string(), color: colour.clone() });
+                match selection {
+                    BorderSelection::EdgeLeft if address.column == range.start_column => {
+                        style.border_left = edge;
+                    }
+                    BorderSelection::EdgeTop if address.row == range.start_row => {
+                        style.border_top = edge;
+                    }
+                    BorderSelection::EdgeBottom if address.row == range.end_row => {
+                        style.border_bottom = edge;
+                    }
+                    BorderSelection::EdgeRight if address.column == range.end_column => {
+                        style.border_right = edge;
+                    }
+                    _ => {}
+                }
+            })?;
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    /// How wide a digit of the workbook's standard font is, in pixels at 96
+    /// dpi, which is the unit column widths are counted in. The renderer
+    /// asks GDI; the browser has no GDI, so the faces Excel opens new
+    /// workbooks in are written down: Calibri and Arial 7 (default column
+    /// 64 pixels, 8.43), 游ゴシック, ＭＳ Ｐゴシック and Meiryo 8 (72 pixels,
+    /// 8.38). Anything else is taken as 7.
+    fn digit_width(&self) -> f32 {
+        let face = self
+            .workbook
+            .default_style
+            .font_name
+            .clone()
+            .or_else(|| self.workbook.sheets.first().and_then(|sheet| sheet.normal_font.clone()).map(|(face, _)| face))
+            .unwrap_or_default();
+        match face.as_str() {
+            "游ゴシック" | "Yu Gothic" | "ＭＳ Ｐゴシック" | "MS PGothic" | "Meiryo" | "メイリオ" | "Meiryo UI"
+            | "游明朝" | "Yu Mincho" | "ＭＳ Ｐ明朝" | "MS PMincho" => 8.0,
+            _ => 7.0,
+        }
+    }
+
+    /// A column's width in pixels, by the rule the renderer draws it with; a
+    /// hidden column is 0.
+    fn column_px(&self, sheet: usize, column: u32) -> f32 {
+        let Some(held) = self.workbook.sheets.get(sheet) else {
+            return 0.0;
+        };
+        if held.hidden_cols.contains(&column) {
+            return 0.0;
+        }
+        let digit = self.digit_width();
+        let stated = held.col_widths.get(column as usize).copied().filter(|width| *width > 0.0);
+        match stated {
+            Some(width) => column_pixels(width, digit),
+            None if held.default_col_width > 0.0 => column_pixels(held.default_col_width, digit),
+            None => (8.0 * digit + 8.0).trunc(),
+        }
+    }
+
+    /// A row's height in pixels: what the sheet shows of a stated height,
+    /// which is the whole pixels in it. Measured: RowHeight 25 shows 24.75,
+    /// 20 shows 19.5, 0.5 shows nothing and reads as hidden.
+    fn row_px(&self, sheet: usize, row: u32) -> f32 {
+        let Some(held) = self.workbook.sheets.get(sheet) else {
+            return 0.0;
+        };
+        let stated = held.rows.iter().find(|held| held.index == row);
+        if stated.is_some_and(|row| row.hidden) {
+            return 0.0;
+        }
+        let points = stated.and_then(|row| row.height).unwrap_or(held.default_row_height);
+        ((points + 0.05) / 0.75).floor()
+    }
+
+    /// `Range.Left`, `Top`, `Width` and `Height`, in points, from the pixels
+    /// the columns and rows take. Measured: A1 is 54 by 18.75; C3 sits at
+    /// 117.75 with column B widened to 10; a hidden row adds nothing.
+    fn range_extent(&self, range: CellRange, which: &str) -> Value {
+        let sheet = range.sheet;
+        let columns = |from: u32, to: u32| -> f32 {
+            (from..=to).map(|column| self.column_px(sheet, column)).sum::<f32>()
+        };
+        let rows = |from: u32, to: u32| -> f32 {
+            let Some(held) = self.workbook.sheets.get(sheet) else {
+                return 0.0;
+            };
+            // The rows the sheet keeps are counted one by one; the rest are
+            // the default, however many there are.
+            let default_px = ((held.default_row_height + 0.05) / 0.75).floor();
+            let mut total = f64::from(to - from + 1) * f64::from(default_px);
+            for row in &held.rows {
+                if row.index >= from && row.index <= to {
+                    total += f64::from(self.row_px(sheet, row.index)) - f64::from(default_px);
+                }
+            }
+            total as f32
+        };
+        let px = match which {
+            "left" => columns(0, range.start_column).max(0.0) - self.column_px(sheet, range.start_column),
+            "width" => columns(range.start_column, range.end_column),
+            "top" => {
+                if range.start_row <= 1 {
+                    0.0
+                } else {
+                    rows(1, range.start_row - 1)
+                }
+            }
+            _ => rows(range.start_row, range.end_row),
+        };
+        Value::Double(f64::from(px) * 0.75)
+    }
+
+    /// Rows that are not pinned at a height take the height their content
+    /// asks for, the way Excel refits them when a font grows or a cell
+    /// starts to wrap. Measured: `Font.Size = 20` takes the row to 33 and
+    /// back to 18.75 at 11; a row set to 30 by hand stays 30.
+    fn refit_rows(&mut self, range: CellRange) -> Result<(), String> {
+        let sheet = range.sheet;
+        let rows: Vec<u32> = self.workbook.sheets[sheet]
+            .rows
+            .iter()
+            .filter(|row| (range.start_row..=range.end_row).contains(&row.index) && !row.custom_height)
+            .map(|row| row.index)
+            .collect();
+        for row in rows {
+            let band = CellRange { sheet, start_row: row, end_row: row, start_column: 0, end_column: MAX_WORKSHEET_COLUMN };
+            self.auto_fit_rows(band)?;
+        }
+        Ok(())
+    }
+
     /// Whether the object's worksheet has been deleted out from under it.
     fn gone(&self, object: &ObjectRef) -> bool {
         matches!(self.objects.get(object.handle as usize), Some(HostObject::Gone))
@@ -7176,6 +7444,10 @@ impl<'a> WorkbookHost<'a> {
             .into_iter()
             .filter_map(|(sheet, outline)| Some((moved(sheet)?, outline)))
             .collect();
+        self.tabs = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .filter_map(|(sheet, tab)| Some((moved(sheet)?, tab)))
+            .collect();
         self.rotations = std::mem::take(&mut self.rotations)
             .into_iter()
             .filter_map(|(at, turn)| Some((address(at)?, turn)))
@@ -7267,6 +7539,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Comment(at) => address(at).map(HostObject::Comment),
                 HostObject::Comments(sheet) => moved(sheet).map(HostObject::Comments),
                 HostObject::Outline(sheet) => moved(sheet).map(HostObject::Outline),
+                HostObject::Tab(sheet) => moved(sheet).map(HostObject::Tab),
                 HostObject::Blocks(_)
                 | HostObject::Areas(_)
                 | HostObject::BlocksStyle(..)
@@ -7644,6 +7917,9 @@ impl<'a> WorkbookHost<'a> {
         if let Some(outline) = self.outlines.get(&from).cloned() {
             self.outlines.insert(to, outline);
         }
+        if let Some(tab) = self.tabs.get(&from).copied() {
+            self.tabs.insert(to, tab);
+        }
         let marked: Vec<CellAddress> = self
             .rotations
             .keys()
@@ -7685,9 +7961,20 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// Measured: 31 characters are taken and 32 refused; `: \\ / ? * [ ]`
+    /// are refused; an apostrophe inside is fine but one at either end is
+    /// not; the empty name is refused and a name of spaces is not; `History`
+    /// is fine on this Office and `履歴` -- its history sheet's own name --
+    /// is refused. Each refusal is 1004 and leaves the name as it was.
     fn rename_worksheet(&mut self, sheet: usize, name: &str) -> Result<(), String> {
-        if name.trim().is_empty() {
-            return Err("a worksheet name cannot be empty".to_string());
+        let refused = name.is_empty()
+            || name.chars().count() > 31
+            || name.chars().any(|c| matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']'))
+            || name.starts_with('\'')
+            || name.ends_with('\'')
+            || name == "履歴";
+        if refused {
+            return Err(host_error(1004, "that is not a name a sheet can have"));
         }
         if self
             .workbook
@@ -8112,9 +8399,21 @@ impl<'a> WorkbookHost<'a> {
             .sheets
             .get(sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        // A cell with nothing in it and nothing on it is not used: measured,
+        // the range shrinks back after `Clear` and after `ClearFormats` on
+        // a cell that was only bold, and does not count a cell that only
+        // held a value once.
+        let bare = CellStyle::default();
         let mut bounds = None::<(u32, u32, u32, u32)>;
         for row in &worksheet.rows {
             for cell in &row.cells {
+                if matches!(cell.value, CellValue::Empty)
+                    && cell.formula.is_none()
+                    && cell.runs.is_empty()
+                    && cell.style == bare
+                {
+                    continue;
+                }
                 bounds = Some(match bounds {
                     Some((start_row, start_column, end_row, end_column)) => (
                         start_row.min(row.index),
@@ -8179,7 +8478,7 @@ impl<'a> WorkbookHost<'a> {
             return Err("Cells expects an index, or a row and a column".to_string());
         };
         let row = positive_index(row, "row")?;
-        let column = positive_index(column, "column")? - 1;
+        let column = column_index(column)? - 1;
         Ok(
             self.object(HostObject::Range(CellRange::single(CellAddress {
                 sheet,
@@ -8228,7 +8527,7 @@ impl<'a> WorkbookHost<'a> {
             return Err("Range.Cells expects an index, or a row and a column".to_string());
         };
         let row = positive_index(row, "row")? - 1;
-        let column = positive_index(column, "column")? - 1;
+        let column = column_index(column)? - 1;
         let row = range
             .start_row
             .checked_add(row)
@@ -10059,6 +10358,7 @@ impl<'a> WorkbookHost<'a> {
             );
         }
         self.wrote = true;
+        self.saved = false;
         let sheet = self
             .workbook
             .sheets
@@ -10129,6 +10429,7 @@ impl<'a> WorkbookHost<'a> {
 
     fn set_cell_formula(&mut self, address: CellAddress, formula: String) -> Result<(), String> {
         self.wrote = true;
+        self.saved = false;
         let sheet = self
             .workbook
             .sheets
@@ -10665,27 +10966,22 @@ impl<'a> WorkbookHost<'a> {
             .sheets
             .get(range.sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        // What a macro reads is characters of the standard font, worked
+        // back from the pixels: measured, a fresh column is 8.38 (72 pixels
+        // of an 8-pixel digit), one set to 10 reads 10 (85 pixels), one set
+        // to 0.5 reads 0.54 (7 pixels), and a hidden one reads 0.
+        let digit = self.digit_width();
+        let _ = sheet;
         let mut first = None;
         for column in range.start_column..=range.end_column {
-            let width = sheet
-                .col_widths
-                .get(column as usize)
-                .copied()
-                .filter(|width| *width > 0.0)
-                .unwrap_or(if sheet.default_col_width > 0.0 {
-                    sheet.default_col_width
-                } else {
-                    // What Excel reports for a column nobody has resized.
-                    8.43
-                });
+            let px = self.column_px(range.sheet, column);
+            let width = characters_of_pixels(px, digit);
             if first.is_some_and(|first| first != width) {
                 return Ok(Value::Null);
             }
             first = Some(width);
         }
-        Ok(Value::Double(f64::from(
-            first.unwrap_or(sheet.default_col_width),
-        )))
+        Ok(Value::Double(first.unwrap_or(0.0)))
     }
 
     fn set_range_column_width(&mut self, range: CellRange, value: Value) -> Result<(), String> {
@@ -10695,14 +10991,38 @@ impl<'a> WorkbookHost<'a> {
             .sheets
             .get_mut(range.sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
-        let width = optional_dimension(value, "Range.ColumnWidth", 255.0)?;
+        let width = optional_dimension(value, "Range.ColumnWidth", 255.0)
+            .map_err(|why| host_error(1004, why))?;
         let required = range.end_column as usize + 1;
         if sheet.col_widths.len() < required {
-            sheet.col_widths.resize(required, sheet.default_col_width);
+            sheet.col_widths.resize(required, 0.0);
         }
-        let width = width.unwrap_or(sheet.default_col_width);
+        // Characters go in; the file's width -- pixels over the digit --
+        // is what is kept, so that what is drawn is what Excel draws.
+        // Measured: 10 is 85 pixels (10 x 8 + 5), 2.5 is 25, 100 is 805,
+        // 0.99 and 1 are 13, 0.5 is 7 -- below one character the gutter
+        // shrinks with the width -- and 0 hides the column.
+        let digit = self.digit_width();
+        let sheet = &mut self.workbook.sheets[range.sheet];
         for column in range.start_column..=range.end_column {
-            sheet.col_widths[column as usize] = width;
+            match width {
+                Some(width) if width <= 0.0 => {
+                    if !sheet.hidden_cols.contains(&column) {
+                        sheet.hidden_cols.push(column);
+                        sheet.hidden_cols.sort_unstable();
+                    }
+                }
+                Some(width) => {
+                    let px = if width < 1.0 {
+                        (width * (digit + 5.0)).round()
+                    } else {
+                        (width * digit + 5.0).trunc()
+                    };
+                    sheet.col_widths[column as usize] = (px * 256.0 / digit).trunc() / 256.0;
+                    sheet.hidden_cols.retain(|held| *held != column);
+                }
+                None => sheet.col_widths[column as usize] = 0.0,
+            }
         }
         sheet.col_count = sheet.col_count.max(required);
         Ok(())
@@ -10722,7 +11042,13 @@ impl<'a> WorkbookHost<'a> {
         let existing_rows = rows.clone().count() as u64;
         let mut first = (existing_rows < selected_rows).then_some(sheet.default_row_height);
         for row in rows {
-            let height = row.height.unwrap_or(sheet.default_row_height);
+            // Measured: a hidden row reads 0; one too short to show a pixel
+            // still reads its height (0.5) though it counts as hidden.
+            let height = if row.hidden {
+                0.0
+            } else {
+                row.height.unwrap_or(sheet.default_row_height)
+            };
             if first.is_some_and(|first| first != height) {
                 return Ok(Value::Null);
             }
@@ -10740,7 +11066,21 @@ impl<'a> WorkbookHost<'a> {
             .sheets
             .get_mut(range.sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
-        let height = optional_dimension(value, "Range.RowHeight", 409.5)?;
+        let height = optional_dimension(value, "Range.RowHeight", 409.5)
+            .map_err(|why| host_error(1004, why))?;
+        // Excel keeps a height to the quarter point, and mostly the quarter
+        // ABOVE: measured, 0.3 reads 0.5, 1.1 reads 1.25, 12.1 reads 12.25,
+        // 0.76 reads 0.75 and 25 stays 25 -- though 20.12 and 20.3 read 20
+        // and 20.25, which no one rule reached. The quarter above, with a
+        // hundredth of tolerance, stands in. A height of nothing hides the
+        // row.
+        let height = height.map(|height| {
+            if height <= 0.0 {
+                0.0
+            } else {
+                ((height - 0.01) * 4.0).ceil() / 4.0
+            }
+        });
         if range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW {
             if let Some(height) = height {
                 sheet.default_row_height = height;
@@ -10769,6 +11109,12 @@ impl<'a> WorkbookHost<'a> {
                 .find(|row| row.index == row_index)
                 .expect("the resized row was created");
             row.height = height;
+            // A height given by hand is pinned; the default lets the row
+            // fit its content again.
+            row.custom_height = height.is_some();
+            if height == Some(0.0) {
+                row.hidden = true;
+            }
         }
         sheet.rows.sort_by_key(|row| row.index);
         Ok(())
@@ -10884,9 +11230,79 @@ impl<'a> WorkbookHost<'a> {
         Ok(sideways)
     }
 
+    /// `Range.Insert Shift`. With a cut or a copy held and the shift SAID,
+    /// what is held goes into the room made -- Excel's "Insert Cut Cells"
+    /// and "Insert Copied Cells". Measured: one/two/three in X1:X3, X3 cut,
+    /// `X1.Insert Shift:=xlDown` gives three/one/two with X4 empty and
+    /// CutCopyMode 0; X1 copied and `X2.Insert Shift:=xlDown` gives
+    /// three/three/one/two with CutCopyMode still 1; Y1:Y2 cut and
+    /// `Z5.Insert Shift:=xlToRight` lands them in Z5:Z6. With no shift
+    /// said the insert is a plain one and the cut stays held.
     fn insert_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let sideways = Self::shift_direction(range, args, true)?;
         self.guard_structure(range.sheet, sideways, true)?;
+        let shift_said = !matches!(args, [] | [Value::Missing]);
+        if shift_said {
+            if let Some(source) = self.pending_cut {
+                let rows = source.end_row - source.start_row + 1;
+                let columns = source.end_column - source.start_column + 1;
+                let block = CellRange {
+                    sheet: range.sheet,
+                    start_row: range.start_row,
+                    start_column: range.start_column,
+                    end_row: range.start_row + rows - 1,
+                    end_column: range.start_column + columns - 1,
+                };
+                if source.sheet == block.sheet && ranges_overlap(source, block) {
+                    return Err(host_error(1004, "the cut cells cannot be inserted into themselves"));
+                }
+                // Make the room first, which may move the source itself
+                // when it lies beyond the room on the same axis.
+                self.shift_cells(block, sideways, true)?;
+                let source = if source.sheet != block.sheet {
+                    source
+                } else if sideways {
+                    let crossing = source.start_row <= block.end_row && source.end_row >= block.start_row;
+                    if crossing && source.start_column >= block.start_column {
+                        CellRange {
+                            start_column: source.start_column + columns,
+                            end_column: source.end_column + columns,
+                            ..source
+                        }
+                    } else {
+                        source
+                    }
+                } else {
+                    let crossing = source.start_column <= block.end_column && source.end_column >= block.start_column;
+                    if crossing && source.start_row >= block.start_row {
+                        CellRange {
+                            start_row: source.start_row + rows,
+                            end_row: source.end_row + rows,
+                            ..source
+                        }
+                    } else {
+                        source
+                    }
+                };
+                self.pending_cut = None;
+                self.move_cells(source, block)?;
+                // And close the hole the cut left, the same way round.
+                self.shift_cells(source, sideways, false)?;
+                return Ok(Value::Boolean(true));
+            }
+            if let Some((rows, columns)) = self.clipboard.as_ref().map(|held| (held.rows, held.columns)) {
+                let block = CellRange {
+                    sheet: range.sheet,
+                    start_row: range.start_row,
+                    start_column: range.start_column,
+                    end_row: range.start_row + rows - 1,
+                    end_column: range.start_column + columns - 1,
+                };
+                self.shift_cells(block, sideways, true)?;
+                self.paste_special(block, &[])?;
+                return Ok(Value::Boolean(true));
+            }
+        }
         self.shift_cells(range, sideways, true)?;
         // True, the way Excel answers every member that acts.
         Ok(Value::Boolean(true))
@@ -11436,6 +11852,15 @@ impl<'a> WorkbookHost<'a> {
                 continue;
             }
             let mut px = base_px;
+            // A medium or thick rule along the top or the bottom of the row
+            // takes a pixel of room each: measured, a row whose cell wears a
+            // thick bottom border fits at 26 pixels, 19.5, where 25 is the
+            // font's own.
+            let heavy = |edge: &Option<BorderLine>| {
+                edge.as_ref().is_some_and(|line| matches!(border_kind(Some(line)).1, -4138 | 4))
+            };
+            let thick_top = row.cells.iter().any(|cell| heavy(&cell.style.border_top));
+            let thick_bottom = row.cells.iter().any(|cell| heavy(&cell.style.border_bottom));
             for cell in &row.cells {
                 let cell_face = cell.style.font_name.as_deref().unwrap_or(&face);
                 let cell_size = cell.style.font_size.unwrap_or(size);
@@ -11449,6 +11874,7 @@ impl<'a> WorkbookHost<'a> {
                 };
                 px = px.max(f32::from(font_px) * lines);
             }
+            px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
             row.height = Some(px * 0.75);
             row.custom_height = false;
         }
@@ -11866,27 +12292,25 @@ impl<'a> WorkbookHost<'a> {
         }
         if carries.column_widths {
             // Nothing about the cells changes: only how wide the columns they
-            // sit in are.
+            // sit in are. The width crosses as the file keeps it, so it
+            // reads back the same on the other side.
             let from_sheet = clipboard.origin.sheet;
-            let default = self.workbook.sheets[from_sheet].default_col_width;
             for block_column in 0..across {
                 for column in 0..columns {
                     let taken = self.workbook.sheets[from_sheet]
                         .col_widths
                         .get((clipboard.origin.column + column) as usize)
                         .copied()
-                        .unwrap_or(default);
+                        .unwrap_or(0.0);
                     let onto = target.start_column + block_column * columns + column;
-                    self.set_range_column_width(
-                        CellRange {
-                            sheet: target.sheet,
-                            start_row: 1,
-                            start_column: onto,
-                            end_row: 1,
-                            end_column: onto,
-                        },
-                        Value::Double(f64::from(taken)),
-                    )?;
+                    self.guard_column_formats(target.sheet, "setting a column width")?;
+                    let sheet = &mut self.workbook.sheets[target.sheet];
+                    let required = onto as usize + 1;
+                    if sheet.col_widths.len() < required {
+                        sheet.col_widths.resize(required, 0.0);
+                    }
+                    sheet.col_widths[onto as usize] = taken;
+                    sheet.col_count = sheet.col_count.max(required);
                 }
             }
             self.clipboard = Some(clipboard);
@@ -12162,12 +12586,13 @@ impl<'a> WorkbookHost<'a> {
     fn range_hidden(&self, range: CellRange) -> Result<Value, String> {
         let sheet = &self.workbook.sheets[range.sheet];
         let hidden = match Self::hidden_band(range)? {
+            // Measured: a row too short to show a pixel reads as hidden.
             ShiftAxis::Rows => (range.start_row..=range.end_row).all(|index| {
                 sheet
                     .rows
                     .iter()
                     .find(|row| row.index == index)
-                    .is_some_and(|row| row.hidden)
+                    .is_some_and(|row| row.hidden || self.row_px(range.sheet, index) == 0.0)
             }),
             ShiftAxis::Columns => (range.start_column..=range.end_column)
                 .all(|column| sheet.hidden_cols.contains(&column)),
@@ -12182,7 +12607,15 @@ impl<'a> WorkbookHost<'a> {
             ShiftAxis::Rows => {
                 for index in range.start_row..=range.end_row {
                     match sheet.rows.iter_mut().find(|row| row.index == index) {
-                        Some(row) => row.hidden = hidden,
+                        Some(row) => {
+                            row.hidden = hidden;
+                            // Measured: a row hidden by a height of 0 comes
+                            // back at the default height when it is shown.
+                            if !hidden && row.height.is_some_and(|height| height <= 0.0) {
+                                row.height = None;
+                                row.custom_height = false;
+                            }
+                        }
                         // A row with nothing in it still remembers being hidden.
                         None if hidden => {
                             sheet.rows.push(Row {
@@ -13311,9 +13744,14 @@ impl Host for WorkbookHost<'_> {
                         .get(sheet)
                         .is_some_and(|worksheet| worksheet.rows.iter().any(|row| row.hidden));
                     if !anything_hidden {
-                        return Err("no filtered data to show on this worksheet".to_string());
+                        return Err(host_error(1004, "no filtered data to show on this worksheet"));
                     }
                     self.show_all_rows(sheet)?;
+                    if let Some(filter) = self.auto_filter.as_mut() {
+                        if filter.range.sheet == sheet {
+                            filter.fields.clear();
+                        }
+                    }
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("delete") {
@@ -13515,6 +13953,15 @@ impl Host for WorkbookHost<'_> {
             if self.is_application(receiver) && name.eq_ignore_ascii_case("wait") {
                 return Ok(Some(Value::Boolean(true)));
             }
+            // Measured: a macro run by hand has no caller -- `Application.Caller`
+            // is Error 2023 -- and `Volatile` does nothing outside a function
+            // a cell calls.
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("caller") {
+                return Ok(Some(Value::Error(2023)));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("volatile") {
+                return Ok(Some(Value::Empty));
+            }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("international") {
                 let [asked] = args else {
                     return Err("Application.International takes one index".to_string());
@@ -13686,6 +14133,9 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("autofill") {
                     return self.auto_fill(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("borderaround") {
+                    return self.border_around(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("subtotal") {
                     return self.subtotal(range, args).map(Some);
@@ -13912,6 +14362,14 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("rgb") {
             return rgb_value(args).map(Some);
+        }
+        // The Application's own, reachable bare: `Union(a, b)`,
+        // `Intersect(a, b)`.
+        if name.eq_ignore_ascii_case("union") {
+            return self.union_ranges(args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("intersect") {
+            return self.intersect_ranges(args).map(Some);
         }
         // A bare `Range` is `Application.Range`, and reaches every name in
         // the workbook: measured, `Range("nm")` from a second sheet, with
@@ -14144,6 +14602,8 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowLevels", "ColumnLevels"][..])
         } else if name.eq_ignore_ascii_case("autofill") {
             Some(&["Destination", "Type"][..])
+        } else if name.eq_ignore_ascii_case("borderaround") {
+            Some(&["LineStyle", "Weight", "ColorIndex", "Color", "ThemeColor"][..])
         } else if name.eq_ignore_ascii_case("subtotal") {
             Some(&["GroupBy", "Function", "TotalList", "Replace", "PageBreaks", "SummaryBelowData"][..])
         } else if name.eq_ignore_ascii_case("addcomment") {
@@ -14190,6 +14650,9 @@ impl Host for WorkbookHost<'_> {
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
+        if let Some(sheet) = self.tab_sheet(receiver) {
+            return Ok(self.tab_member(sheet, name));
         }
         if let Some(sheet) = self.outline_sheet(receiver) {
             // Measured on a fresh sheet: SummaryRow xlSummaryBelow (1),
@@ -14609,6 +15072,9 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("outline") {
                 return Ok(Some(self.object(HostObject::Outline(sheet))));
             }
+            if name.eq_ignore_ascii_case("tab") {
+                return Ok(Some(self.object(HostObject::Tab(sheet))));
+            }
             // What the sheet was protected with. `ProtectContents` is False
             // for a sheet protected with `Contents:=False`, and
             // `ProtectionMode` is the `UserInterfaceOnly` flag.
@@ -14663,12 +15129,13 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Boolean(self.interactive)));
             }
             if name.eq_ignore_ascii_case("cutcopymode") {
-                // 1 is xlCut, 2 is xlCopy, and nothing held answers 0 — which
-                // is False, and is how a macro asks whether anything is.
+                // xlCut is 2 and xlCopy 1 -- measured, a Cut answers 2 and a
+                // Copy 1 -- and nothing held answers 0, which is False, and
+                // is how a macro asks whether anything is.
                 return Ok(Some(Value::Integer(if self.pending_cut.is_some() {
-                    1
-                } else if self.clipboard.is_some() {
                     2
+                } else if self.clipboard.is_some() {
+                    1
                 } else {
                     0
                 })));
@@ -14736,6 +15203,11 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("path") {
                 return Ok(Some(Value::String(String::new())));
+            }
+            // Measured: a fresh workbook is not Saved; saying it is makes it
+            // so until the next cell is written.
+            if name.eq_ignore_ascii_case("saved") {
+                return Ok(Some(Value::Boolean(self.saved)));
             }
         }
         if self.is_worksheets(receiver) {
@@ -14828,6 +15300,15 @@ impl Host for WorkbookHost<'_> {
                     .auto_filter
                     .as_ref()
                     .is_some_and(|filter| filter.range.sheet == sheet);
+                return Ok(Some(Value::Boolean(filtering)));
+            }
+            // Measured: FilterMode is True while a filter hides anything, and
+            // False again after ShowAllData, with AutoFilterMode still True.
+            if name.eq_ignore_ascii_case("filtermode") {
+                let filtering = self
+                    .auto_filter
+                    .as_ref()
+                    .is_some_and(|filter| filter.range.sheet == sheet && !filter.fields.is_empty());
                 return Ok(Some(Value::Boolean(filtering)));
             }
             if name.eq_ignore_ascii_case("index") {
@@ -15110,6 +15591,13 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("rowheight") {
             return self.range_row_height(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("width")
+            || name.eq_ignore_ascii_case("height")
+            || name.eq_ignore_ascii_case("left")
+            || name.eq_ignore_ascii_case("top")
+        {
+            return Ok(Some(self.range_extent(range, &name.to_ascii_lowercase())));
+        }
         if name.eq_ignore_ascii_case("text") {
             self.settle(range);
             return Ok(Some(self.range_text(range)));
@@ -15150,9 +15638,7 @@ impl Host for WorkbookHost<'_> {
             // nothing at all. `CountLarge` answers either way, and is what
             // the whole grid's 17,179,869,184 has to be asked for.
             if name.eq_ignore_ascii_case("count") && count > i64::from(i32::MAX) as u64 {
-                return Err(format!(
-                    "Range.Count cannot hold {count} cells; ask CountLarge"
-                ));
+                return Err(host_error(6, format!("Range.Count cannot hold {count} cells; ask CountLarge")));
             }
             // And `CountLarge` says so in its TYPE: asked of Excel,
             // `TypeName(Range("A1").CountLarge)` is LongLong where `Count` is
@@ -15223,6 +15709,13 @@ impl Host for WorkbookHost<'_> {
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
+        if let Some(sheet) = self.tab_sheet(receiver) {
+            return self.set_tab_member(sheet, name, &value);
+        }
+        if self.is_workbook(receiver) && name.eq_ignore_ascii_case("saved") {
+            self.saved = style_face_boolean(&value, "Workbook.Saved")?.unwrap_or(false);
+            return Ok(true);
         }
         if let Some(sheet) = self.outline_sheet(receiver) {
             let outline = self.outlines.entry(sheet).or_default();
@@ -15398,6 +15891,20 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         }
         if let Some(sheet) = self.worksheet(receiver) {
+            // Measured: `AutoFilterMode = False` takes the filter off and
+            // shows every row; `= True` is 1004 and changes nothing.
+            if name.eq_ignore_ascii_case("autofiltermode") {
+                let asked = style_face_boolean(&value, "Worksheet.AutoFilterMode")?.unwrap_or(false);
+                if asked {
+                    return Err(host_error(1004, "AutoFilterMode can only be turned off"));
+                }
+                if self.auto_filter.as_ref().is_some_and(|filter| filter.range.sheet == sheet) {
+                    self.auto_filter = None;
+                    self.workbook.sheets[sheet].auto_filter = None;
+                    self.show_all_rows(sheet)?;
+                }
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("name") {
                 let Value::String(renamed) = &value else {
                     return Err("a worksheet name must be a String".to_string());
@@ -15641,6 +16148,7 @@ impl Host for WorkbookHost<'_> {
                 let value = font_size(&value)?;
                 self.set_range_style(range, |_, style| style.font_size = value)?;
                 self.redress_runs(range, |dress| dress.size = value);
+                self.refit_rows(range)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("color") {
@@ -15833,6 +16341,7 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             };
             self.set_range_style(range, |_, style| style.wrap_text = wraps)?;
+            self.refit_rows(range)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("shrinktofit") {
@@ -17669,6 +18178,8 @@ fn border_selection(value: &Value) -> Result<BorderSelection, String> {
         _ => return Err("Range.Borders index must be an Excel border constant".to_string()),
     };
     match value {
+        5 => Ok(BorderSelection::DiagonalDown),
+        6 => Ok(BorderSelection::DiagonalUp),
         7 => Ok(BorderSelection::EdgeLeft),
         8 => Ok(BorderSelection::EdgeTop),
         9 => Ok(BorderSelection::EdgeBottom),
@@ -17776,10 +18287,12 @@ fn border_weight(value: &Value) -> Result<i64, String> {
         value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => return Err("Borders.Weight must be an Excel weight constant".to_string()),
     };
+    // Measured: `Weight = 3` is taken, and reads back xlMedium.
+    let value = if value == 3 { -4138 } else { value };
     if BORDER_KINDS.iter().any(|(_, _, weight)| *weight == value) {
         Ok(value)
     } else {
-        Err(format!("unsupported Borders.Weight constant: {value}"))
+        Err(host_error(1004, format!("unsupported Borders.Weight constant: {value}")))
     }
 }
 
@@ -17828,6 +18341,12 @@ fn selected_borders(
                 values.push(kind(style.border_bottom.as_ref()));
             }
             values
+        }
+        BorderSelection::DiagonalDown => {
+            vec![kind(style.border_diagonal.as_ref().filter(|_| style.diagonal_down))]
+        }
+        BorderSelection::DiagonalUp => {
+            vec![kind(style.border_diagonal.as_ref().filter(|_| style.diagonal_up))]
         }
         _ => Vec::new(),
     }
@@ -17964,6 +18483,7 @@ fn set_selected_borders(
         BorderSelection::EdgeTop | BorderSelection::InsideHorizontal => style.border_top.clone(),
         BorderSelection::EdgeBottom => style.border_bottom.clone(),
         BorderSelection::EdgeRight => style.border_right.clone(),
+        BorderSelection::DiagonalDown | BorderSelection::DiagonalUp => style.border_diagonal.clone(),
         BorderSelection::All => style
             .border_top
             .clone()
@@ -18006,6 +18526,18 @@ fn set_selected_borders(
             }
             if address.row < range.end_row {
                 style.border_bottom = drawn.clone();
+            }
+        }
+        BorderSelection::DiagonalDown => {
+            style.diagonal_down = drawn.is_some();
+            if drawn.is_some() || !style.diagonal_up {
+                style.border_diagonal = drawn.clone();
+            }
+        }
+        BorderSelection::DiagonalUp => {
+            style.diagonal_up = drawn.is_some();
+            if drawn.is_some() || !style.diagonal_down {
+                style.border_diagonal = drawn.clone();
             }
         }
         _ => {}
@@ -18399,6 +18931,21 @@ fn host_constant(name: &str) -> Option<Value> {
         "xltimeleadingzero" => 45,
         "xlcontinuous" => 1,
         "xllinestylenone" => -4142,
+        // The rest of the line styles, and the weights.
+        "xldash" => -4115,
+        "xldot" => -4118,
+        "xldouble" => -4119,
+        "xldashdot" => 4,
+        "xldashdotdot" => 5,
+        "xlslantdashdot" => 13,
+        "xlhairline" => 1,
+        "xlthin" => 2,
+        "xlmedium" => -4138,
+        "xlthick" => 4,
+        "xldiagonaldown" => 5,
+        "xldiagonalup" => 6,
+        "xlcut" => 2,
+        "xlcopy" => 1,
         "xledgeleft" => 7,
         "xledgetop" => 8,
         "xledgebottom" => 9,
@@ -18599,6 +19146,38 @@ fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
         return Err(format!("cell column is outside the worksheet: {reference}"));
     }
     Ok((column - 1, row))
+}
+
+/// The characters a column of `px` pixels reads as, to two places: the
+/// gutter of 5 comes off first, unless the column is narrower than a
+/// character, when the gutter shrinks with it.
+fn characters_of_pixels(px: f32, digit: f32) -> f64 {
+    let characters = if px < digit + 5.0 {
+        px / (digit + 5.0)
+    } else {
+        (px - 5.0) / digit
+    };
+    (f64::from(characters) * 100.0).round() / 100.0
+}
+
+/// A stored column width already carries the gutter either side of a
+/// cell's text; pixels come back out of it by OOXML's own rule. The same
+/// function the renderer draws by.
+fn column_pixels(width: f32, digit: f32) -> f32 {
+    let padding = (128.0 / digit).trunc();
+    (((256.0 * width + padding) / 256.0) * digit).trunc()
+}
+
+/// A column for `Cells`: a number, or its letters -- measured,
+/// `Cells(Rows.Count, "N")` is N1048576.
+fn column_index(value: &Value) -> Result<u32, String> {
+    if let Value::String(letters) = value {
+        if let Some(column) = column_from_letters(letters.trim()) {
+            return Ok(column + 1);
+        }
+        return Err(host_error(1004, format!("{letters:?} is not a column")));
+    }
+    positive_index(value, "column")
 }
 
 fn positive_index(value: &Value, label: &str) -> Result<u32, String> {
@@ -20131,7 +20710,7 @@ mod tests {
                 rows: Vec::new(),
                 col_count: 0,
                 col_widths: Vec::new(),
-                default_col_width: 8.43,
+                default_col_width: 0.0,
                 default_row_height: 15.0,
                 default_row_custom: false,
                 col_fonts: vec![],
@@ -21605,8 +22184,9 @@ mod tests {
             execute_with_host(&under, "Ask", vec![], &mut host).unwrap(),
             Value::String("2147467264".to_string())
         );
+        // Measured: the overflow is error 6.
         let refused = execute_with_host(&over, "Ask", vec![], &mut host).unwrap_err();
-        assert!(refused.message.contains("CountLarge"), "{refused:?}");
+        assert_eq!(refused.vba_number, Some(6), "{refused:?}");
         assert_eq!(
             execute_with_host(&large, "Ask", vec![], &mut host).unwrap(),
             Value::String("2147483648".to_string())
@@ -22479,7 +23059,7 @@ mod tests {
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
-            default_col_width: 8.43,
+            default_col_width: 0.0,
             default_row_height: 15.0,
             default_row_custom: false,
             col_fonts: vec![],
@@ -22539,7 +23119,7 @@ mod tests {
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
-            default_col_width: 8.43,
+            default_col_width: 0.0,
             default_row_height: 15.0,
             default_row_custom: false,
             col_fonts: vec![],
@@ -22931,9 +23511,12 @@ mod tests {
 
         let sheet = &workbook.sheets[0];
         assert_eq!(sheet.col_count, 4);
+        // The IR keeps the width the FILE keeps -- the pixels the characters
+        // come to, over the standard font's digit (7 here): 12.5 characters
+        // are 92 pixels, 13.140625 of them.
         assert_eq!(
             sheet.col_widths,
-            vec![sheet.default_col_width, 12.5, 9.0, 11.0]
+            vec![sheet.default_col_width, 13.140625, 9.7109375, 11.7109375]
         );
         assert!(matches!(
             sheet.rows[0].cells[0].value,
@@ -22945,7 +23528,11 @@ mod tests {
         assert_eq!(sheet.rows[2].index, 4);
         assert_eq!(sheet.rows[2].height, Some(18.0));
         assert!(sheet.rows[2].cells.is_empty());
-        assert_eq!(debug_output, vec!["12.5\tNull\t24\t18".to_string()]);
+        // A width is kept in whole pixels, so what is read back is the
+        // characters those pixels come to: 12.5 of a 7-pixel digit is 92.5
+        // pixels, kept as 92, read back as 12.43 -- the way Excel reads
+        // 3.14 back as 3.13 (measured on an 8-pixel digit).
+        assert_eq!(debug_output, vec!["12.43\tNull\t24\t18".to_string()]);
     }
 
     #[test]
@@ -22973,7 +23560,7 @@ mod tests {
         let sheet = &workbook.sheets[0];
         assert_eq!(sheet.col_count, 3);
         assert_eq!(sheet.col_widths.len(), 3);
-        assert_eq!(sheet.col_widths[2], 13.0);
+        assert_eq!(sheet.col_widths[2], 13.7109375);
         let row = sheet.rows.iter().find(|row| row.index == 3).unwrap();
         assert_eq!(row.height, Some(22.0));
         assert!(row.cells.is_empty());
@@ -24582,6 +25169,134 @@ mod tests {
                 // scalar TotalList is taken.
                 "10 集計\t=SUBTOTAL(9,B2:B2)\t総計\t=SUBTOTAL(9,B2:B6)".to_string(),
                 "1004".to_string(),
+                "1004".to_string(),
+            ]
+        );
+    }
+
+    /// The seventh discovery batch (misc4.vba, 2026-09-05; the case agrees
+    /// in the harness but for the locale text of an Error and one row
+    /// height's rounding): tab colours, pixel geometry, sheet names, the
+    /// insert of cut and copied cells, filters, and what is used.
+    #[test]
+    fn vba_answers_the_seventh_batch_of_daily_operations() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("游ゴシック".to_string());
+        workbook.sheets[0].default_row_height = 18.75;
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim v As Variant, c As Object\n\
+               Application.DisplayAlerts = False\n\
+               Debug.Print ActiveSheet.Tab.Color; ActiveSheet.Tab.ColorIndex; ActiveSheet.Tab.ThemeColor\n\
+               ActiveSheet.Tab.Color = 65280\n\
+               Debug.Print ActiveSheet.Tab.Color; ActiveSheet.Tab.ColorIndex\n\
+               ActiveSheet.Tab.ThemeColor = 5\n\
+               Debug.Print ActiveSheet.Tab.Color; ActiveSheet.Tab.ThemeColor\n\
+               Rows(9).RowHeight = 25: Rows(10).RowHeight = 0.5\n\
+               Debug.Print Rows(9).RowHeight; Rows(9).Height; Rows(10).RowHeight; Rows(10).Hidden\n\
+               Columns(\"B\").ColumnWidth = 10: Columns(\"C\").ColumnWidth = 0.5: Columns(\"D\").ColumnWidth = 3.14\n\
+               Debug.Print Columns(\"A\").Width; Columns(\"A\").ColumnWidth; Columns(\"B\").ColumnWidth; Columns(\"B\").Width; Columns(\"C\").ColumnWidth; Columns(\"C\").Width; Columns(\"D\").ColumnWidth\n\
+               Debug.Print Range(\"C3\").Left; Range(\"C3\").Top; Range(\"A1:B2\").Width; Range(\"B12\").Top; TypeName(Range(\"C3\").Left)\n\
+               Columns(\"E\").ColumnWidth = 0\n\
+               Debug.Print Columns(\"E\").Hidden; Columns(\"E\").ColumnWidth; Columns(\"E\").Width\n\
+               Range(\"T2\").Value = \"abc\" & Chr(10) & \"def\": Range(\"T2\").WrapText = True\n\
+               Range(\"T5\").Value = \"abc\": Range(\"T5\").Font.Size = 20\n\
+               Debug.Print Rows(2).RowHeight; Rows(5).RowHeight\n\
+               Range(\"T5\").Font.Size = 11\n\
+               Debug.Print Rows(5).RowHeight\n\
+               Range(\"N1\").Value = 1: Range(\"N5\").Value = 5\n\
+               Debug.Print Cells(Rows.Count, \"N\").End(xlUp).Row; Union(Range(\"A1\"), Range(\"C3\")).Address(0, 0); Intersect(Range(\"A1:C3\"), Range(\"B2:D4\")).Address(0, 0)\n\
+               Debug.Print ThisWorkbook.Saved; ThisWorkbook.FullName; TypeName(Application.Caller)\n\
+               ThisWorkbook.Saved = True\n\
+               Range(\"A1\").Value = 1\n\
+               Debug.Print ThisWorkbook.Saved\n\
+               Range(\"P1\").Borders(xlEdgeBottom).LineStyle = xlContinuous: Range(\"P1\").Borders(xlEdgeBottom).Weight = xlThick\n\
+               Range(\"P2\").Borders(xlEdgeBottom).Weight = 3\n\
+               Range(\"P9:Q10\").BorderAround LineStyle:=xlContinuous, Weight:=xlMedium\n\
+               Range(\"P11:Q12\").BorderAround ColorIndex:=3, Weight:=4\n\
+               Range(\"P13\").Borders.LineStyle = xlContinuous\n\
+               Debug.Print Range(\"P1\").Borders(xlEdgeBottom).Weight; Range(\"P2\").Borders(xlEdgeBottom).Weight; Range(\"P9\").Borders(xlEdgeLeft).Weight; Range(\"P9\").Borders(xlEdgeRight).LineStyle; Range(\"P11\").Borders(xlEdgeTop).Color; Range(\"P13\").Borders(xlDiagonalUp).LineStyle\n\
+               Range(\"A20\").Value = \"x\": Range(\"A20\").Clear\n\
+               Debug.Print ActiveSheet.UsedRange.Address(0, 0)\n\
+               Range(\"X1\").Value = \"one\": Range(\"X2\").Value = \"two\": Range(\"X3\").Value = \"three\": Range(\"X3\").Cut\n\
+               Debug.Print Application.CutCopyMode\n\
+               Range(\"X1\").Insert Shift:=xlDown\n\
+               Debug.Print Range(\"X1\").Value; Range(\"X2\").Value; Range(\"X3\").Value; IsEmpty(Range(\"X4\").Value); Application.CutCopyMode\n\
+               Range(\"X1\").Copy: Range(\"X2\").Insert Shift:=xlDown\n\
+               Debug.Print Range(\"X1\").Value; Range(\"X2\").Value; Range(\"X3\").Value; Range(\"X4\").Value; Application.CutCopyMode\n\
+               Application.CutCopyMode = False\n\
+               Range(\"M1\").Value = \"h\": Range(\"M2\").Value = \"a\": Range(\"M3\").Value = \"b\": Range(\"M1:M3\").AutoFilter Field:=1, Criteria1:=\"a\"\n\
+               Debug.Print ActiveSheet.AutoFilterMode; ActiveSheet.FilterMode; Rows(3).Hidden\n\
+               ActiveSheet.ShowAllData\n\
+               Debug.Print ActiveSheet.AutoFilterMode; ActiveSheet.FilterMode; Rows(3).Hidden\n\
+               ActiveSheet.AutoFilterMode = False\n\
+               Debug.Print ActiveSheet.AutoFilterMode\n\
+               On Error Resume Next\n\
+               v = ActiveSheet.Cells.Count\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               ActiveSheet.Name = String(32, \"y\")\n\
+               Debug.Print Err.Number; ActiveSheet.Name\n\
+               Err.Clear\n\
+               ActiveSheet.Name = \"a:b\"\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               ActiveSheet.Name = \"履歴\"\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               ActiveSheet.Name = \"a'b\"\n\
+               Debug.Print Err.Number; ActiveSheet.Name\n\
+               Err.Clear\n\
+               Set c = Range(\"K1:K2\").Find(\"nothing here\")\n\
+               v = \"a\" & c\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               ActiveSheet.AutoFilterMode = True\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                "False\t-4142\t0".to_string(),
+                "65280\t4".to_string(),
+                "8544277\t5".to_string(),
+                // Height is the whole pixels; a row too short to show one
+                // counts as hidden.
+                "25\t24.75\t0.5\tTrue".to_string(),
+                "54\t8.38\t10\t63.75\t0.54\t5.25\t3.13".to_string(),
+                // Left counts the widened B; Top counts the fitted rows, the
+                // short row 10 for nothing.
+                "117.75\t37.5\t117.75\t193.5\tDouble".to_string(),
+                "True\t0\t0".to_string(),
+                // Rows not pinned by hand fit their content.
+                "37.5\t33".to_string(),
+                "18.75".to_string(),
+                "5\tA1,C3\tB2:C3".to_string(),
+                "False\tBook1\tError".to_string(),
+                "False".to_string(),
+                "4\t-4138\t-4138\t-4142\t255\t-4142".to_string(),
+                // P13 wears a border, so the used range reaches it.
+                "A1:T13".to_string(),
+                "2".to_string(),
+                "three\tone\ttwo\tTrue\t0".to_string(),
+                "three\tthree\tone\ttwo\t1".to_string(),
+                "True\tTrue\tTrue".to_string(),
+                "True\tFalse\tFalse".to_string(),
+                "False".to_string(),
+                "6".to_string(),
+                "1004\tSheet1".to_string(),
+                "1004".to_string(),
+                "1004".to_string(),
+                "0\ta'b".to_string(),
+                "91".to_string(),
                 "1004".to_string(),
             ]
         );
@@ -26549,7 +27264,7 @@ End Sub
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
-            default_col_width: 8.43,
+            default_col_width: 0.0,
             default_row_height: 15.0,
             default_row_custom: false,
             col_fonts: vec![],
@@ -26800,7 +27515,7 @@ End Sub
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
-            default_col_width: 8.43,
+            default_col_width: 0.0,
             default_row_height: 15.0,
             default_row_custom: false,
             col_fonts: vec![],
@@ -26852,7 +27567,7 @@ End Sub
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
-            default_col_width: 8.43,
+            default_col_width: 0.0,
             default_row_height: 15.0,
             default_row_custom: false,
             col_fonts: vec![],
@@ -26976,7 +27691,7 @@ End Sub
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
-            default_col_width: 8.43,
+            default_col_width: 0.0,
             default_row_height: 15.0,
             default_row_custom: false,
             col_fonts: vec![],
@@ -27925,8 +28640,8 @@ End Sub
     /// What Copy sets aside can be put down again; what Cut sets aside is
     /// moved, once.
     ///
-    /// Asked of Excel: `CutCopyMode` answers 0 at rest, `xlCopy` after a Copy
-    /// and `xlCut` after a Cut; `Paste` with no destination lands on the
+    /// Asked of Excel: `CutCopyMode` answers 0 at rest, `xlCopy` (1) after a
+    /// Copy and `xlCut` (2) after a Cut; `Paste` with no destination lands on the
     /// selection; a Copy survives being pasted while a Cut does not; and
     /// pasting with nothing held raises.
     #[test]
@@ -27961,7 +28676,7 @@ End Sub
 
         assert_eq!(
             result,
-            Value::String("0|2|1=D1*10|2|1=G5*10|1|1=J1*10|0|[]".to_string())
+            Value::String("0|1|1=D1*10|1|1=G5*10|2|1=J1*10|0|[]".to_string())
         );
     }
 

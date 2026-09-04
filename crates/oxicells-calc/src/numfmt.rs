@@ -333,6 +333,23 @@ fn looks_like_a_date(format: &str) -> bool {
                 }
             }
             'y' | 'd' | 'h' | 's' => return true,
+            // The Japanese era parts: `g` the era's name, `e` its year, `r`
+            // its year in two digits -- and a run of three or more `a`s is the
+            // weekday. Measured: `ggge年` shows 令和6年, `r` shows 06, `aaa`
+            // shows 金. An `e` before a sign is scientific notation, not an
+            // era; `General` is not a format made of a g and an e.
+            'g' | 'r' => marked_month = true,
+            'e' if !matches!(characters.peek(), Some('+') | Some('-')) => marked_month = true,
+            'a' => {
+                let mut run = 1;
+                while characters.peek().is_some_and(|held| held.eq_ignore_ascii_case(&'a')) {
+                    characters.next();
+                    run += 1;
+                }
+                if run >= 3 {
+                    return true;
+                }
+            }
             // `m` is a month beside the others and minutes beside an `h`, and
             // on its own — `"mmmm"`, the month's name — it is still a date.
             // It cannot simply be added to the line above: `m` is also an
@@ -344,7 +361,7 @@ fn looks_like_a_date(format: &str) -> bool {
             _ => {}
         }
     }
-    marked_month
+    marked_month && !format.trim().eq_ignore_ascii_case("general")
 }
 
 /// What `General` shows: the shortest text that reads back as the same number.
@@ -614,6 +631,11 @@ fn format_datetime(serial: f64, format: &str) -> String {
     };
     // weekday_sunday_one counts Sunday as one; these tables start at zero.
     let weekday = (weekday_sunday_one(whole) - 1).clamp(0, 6) as usize;
+    // The Japanese weekday, which `aaa` and `aaaa` always show, and which
+    // `ddd` and `dddd` show under the Japanese locale tag: measured,
+    // `[$-411]dddd` is 金曜日 where `dddd` is Friday.
+    const JA_DAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
+    let japanese = format.to_ascii_lowercase().contains("[$-411]");
     // Elapsed time counts from the epoch rather than from midnight, so a
     // `[h]` is 1087128 where an `h` is 0. Excel rounds the whole serial to
     // the nearest second once, and every elapsed part reads off that.
@@ -704,9 +726,20 @@ fn format_datetime(serial: f64, format: &str) -> String {
             'd' => match run {
                 1 => rendered.push_str(&day.to_string()),
                 2 => rendered.push_str(&format!("{day:02}")),
+                3 if japanese => rendered.push_str(JA_DAYS[weekday]),
                 3 => rendered.push_str(&DAYS[weekday][..3]),
+                _ if japanese => {
+                    rendered.push_str(JA_DAYS[weekday]);
+                    rendered.push_str("曜日");
+                }
                 _ => rendered.push_str(DAYS[weekday]),
             },
+            'a' if run >= 3 => {
+                rendered.push_str(JA_DAYS[weekday]);
+                if run >= 4 {
+                    rendered.push_str("曜日");
+                }
+            }
             'h' => {
                 if run >= 2 {
                     rendered.push_str(&format!("{hour:02}"));
@@ -744,6 +777,7 @@ fn format_datetime(serial: f64, format: &str) -> String {
                 continue;
             }
             'e' => rendered.push_str(&era_year.to_string()),
+            'r' => rendered.push_str(&format!("{era_year:02}")),
             'g' => rendered.push_str(match run {
                 1 => era_latin,
                 2 => era_short,
@@ -900,6 +934,21 @@ mod tests {
         assert_eq!(format_number(1.5, "mm"), "01");
         assert_eq!(format_number(0.25, "mm"), "01");
         assert_eq!(format_number(45297.75, "mm"), "01");
+        // Measured in Excel on 5 January 2024 (a Friday): the era parts and
+        // the Japanese weekday stand as date formats on their own, without a
+        // locale tag or a y/m/d beside them.
+        assert_eq!(format_number(45296.0, "aaa"), "金");
+        assert_eq!(format_number(45296.0, "aaaa"), "金曜日");
+        assert_eq!(format_number(45296.0, "dddd"), "Friday");
+        assert_eq!(format_number(45296.0, "[$-411]dddd"), "金曜日");
+        assert_eq!(format_number(45296.0, "[$-411]ddd"), "金");
+        assert_eq!(format_number(45296.0, "ggge\"年\""), "令和6年");
+        assert_eq!(format_number(45296.0, "ge.m.d"), "R6.1.5");
+        assert_eq!(format_number(45296.0, "r"), "06");
+        assert_eq!(format_number(45296.0, "e\"年\"m\"月\""), "6年1月");
+        // And what only looks like one of them is not.
+        assert_eq!(format_number(12345.0, "0.00E+00"), "1.23E+04");
+        assert_eq!(format_number(12345.0, "General"), "12345");
         assert_eq!(format_number(45297.0, "[$-411]\"(\"e\"年\"m\"月分)\""), "(6年1月分)");
         assert_eq!(format_number(1.5, "[$-411]\"(\"e\"年\"m\"月分)\""), "(33年1月分)");
         assert_eq!(format_number(0.25, "[$-411]\"(\"e\"年\"m\"月分)\""), "(33年1月分)");

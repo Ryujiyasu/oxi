@@ -8875,12 +8875,20 @@ fn binary(
             )),
         };
     }
+    // Nothing on either side of an operator is error 91, the same as
+    // reading a member of it: measured, `"a" & c` with `c` set to Nothing.
+    if matches!(lhs, Value::Nothing) || matches!(rhs, Value::Nothing) {
+        return Err((
+            RuntimeErrorKind::ObjectVariableNotSet,
+            "Object variable or With block variable not set".to_string(),
+        ));
+    }
     if matches!(
         lhs,
-        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Missing | Value::Nothing
+        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Missing
     ) || matches!(
         rhs,
-        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Missing | Value::Nothing
+        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Missing
     ) {
         return Err((
             RuntimeErrorKind::TypeMismatch,
@@ -8926,6 +8934,8 @@ fn binary(
     };
     match op {
         Concat => {
+            // Measured: `"a" & c` with `c` set to Nothing is error 91, the
+            // same as reading a member of it -- not a type mismatch.
             let side = |value: &Value| match value {
                 Value::Null => Ok(String::new()),
                 value => text(value).map_err(mismatch),
