@@ -156,6 +156,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -429,6 +430,16 @@ def audit(doc) -> dict | None:
     wfar: list = []
     split: list = []
     try:
+        # ★Opened TWICE on purpose. PowerPoint's FIRST open of a session
+        # resolves an italic request to the upright part with a synthetic
+        # slant; only once that open has installed the deck's fonts does it use
+        # the real italic face. Opens 2 and 3 agree exactly, so warm is the
+        # stable state and the one the engine models -- measured on d15 slide
+        # 5, where open #1 reports Barlow-Bold and opens #2/#3 Barlow-BoldItalic
+        # (`pptx_truth_pdf_first_open_is_cold`). Asking cold makes the
+        # instrument report a disagreement that is its own.
+        if warmopen_on():
+            app.Presentations.Open(str(src.resolve()), WithWindow=False).Close()
         pres = app.Presentations.Open(str(src.resolve()), WithWindow=False)
         try:
             for si in range(1, pres.Slides.Count + 1):
@@ -829,6 +840,11 @@ def audit(doc) -> dict | None:
                   f"asks {cf!r}, measured {ef!r}{' BOLD' if eb else ''}{same}",
                   flush=True)
     return got
+
+
+def warmopen_on() -> bool:
+    """The deck is opened once to warm the session, unless this is set."""
+    return "OXI_AUDIT_COLD" not in os.environ
 
 
 def main() -> None:

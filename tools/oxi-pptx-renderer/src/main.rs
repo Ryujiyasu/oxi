@@ -2091,6 +2091,14 @@ thread_local! {
     static PART_IDS: std::cell::RefCell<Vec<PartId>> = const {
         std::cell::RefCell::new(Vec::new())
     };
+    /// What the parts we did NOT load claim to be. A part is skipped when the
+    /// machine already has that family, on the premise that the installed copy
+    /// stands in for it -- so its identity still has to be visible, or a rule
+    /// that asks "does this deck have an honest part at this weight" answers
+    /// from the loaded set instead of from the file.
+    static SKIPPED_IDS: std::cell::RefCell<Vec<(String, u32, bool)>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
 }
 
 /// Comparable form of a family name: case and separators carry no meaning here.
@@ -2184,9 +2192,31 @@ fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)>
     // advance less the two quote side-bearings. Barlow-Bold would be 191.72pt.
     // So ask for the regular part at weight 700 and let GDI thicken it.
     if bold {
+        // ...unless the deck DOES file an honest bold for this family and we
+        // simply skipped it. Then the premise of this branch is false, and the
+        // request belongs to the installed copy the skip counted on: d15's four
+        // "Barlow" parts are all skipped, and borrowing a weight-400 italic
+        // that calls itself Barlow measured the 30pt quotation at 343.00pt
+        // where PowerPoint's own Barlow Bold sums to 356.40.
+        let want = norm_family(family);
+        let skipped_has_it = skipbold_on()
+            && SKIPPED_IDS.with(|ids| {
+                ids.borrow().iter().any(|(fam, weight, ital)| {
+                    norm_family(fam) == want && *ital == italic && *weight >= 600
+                })
+            });
+        if skipped_has_it {
+            return None;
+        }
         return pick(family, false).map(|(face, _)| (face, 700));
     }
     None
+}
+
+/// S-SKIPBOLD: a skipped-but-honest bold part sends the request to the
+/// installed family, unless this is set, which restores borrowing a regular.
+fn skipbold_on() -> bool {
+    std::env::var("OXI_SKIPBOLD_DISABLE").is_err()
 }
 
 /// The face to actually create for a (family, bold, italic) request, and the
@@ -2400,6 +2430,9 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                     "INSTALL typeface={:?} bold={} italic={} SKIPPED -- family is installed",
                     font.typeface, font.bold, font.italic
                 );
+            }
+            if let Some(id) = eot_identity(&font.data) {
+                SKIPPED_IDS.with(|ids| ids.borrow_mut().push(id));
             }
             continue;
         }
@@ -5312,6 +5345,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                             mem_dc, &body, inner, inner,
                                                             scale, fs, &family, bold, false,
                                                             Some((&p.runs[..], 0)),
+                                                            bold,
                                                         )
                                                         .len()
                                                         .max(1);
@@ -5549,6 +5583,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                     bold,
                                                     false,
                                                     Some((&p.runs[..], 0)),
+                                                    bold,
                                                 )
                                                 .len()
                                                 .max(1);
@@ -5654,6 +5689,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             bold,
                                             false,
                                             Some((&p.runs[..], 0)),
+                                            bold,
                                         );
                                         for line in &lines {
                                             // ★A trailing space is not ink and
@@ -14782,6 +14818,16 @@ struct RunStyles<'a> {
     runs: &'a [oxislides_core::ir::SlideRun],
     /// Characters of the paragraph already committed to earlier lines.
     line_start: usize,
+    /// What the placeholder LEVEL says the weight is, which is what a run that
+    /// declares none inherits. Not the paragraph's resolved weight: that would
+    /// make a silent run bold because a sibling is.
+    lvl_bold: bool,
+}
+
+/// S-LVLRUNBOLD: a run that declares no weight is measured at the LEVEL's,
+/// unless this is set, which restores measuring it at 400.
+fn lvlrunbold_on() -> bool {
+    std::env::var("OXI_LVLRUNBOLD_DISABLE").is_err()
 }
 
 /// Per-run master units are used when the paragraph has run styles unless this
@@ -14811,6 +14857,7 @@ fn master_units_runs(
         &oxislides_core::layout::RunStyles {
             runs: styles.runs,
             line_start: styles.line_start,
+            lvl_bold: lvlrunbold_on() && styles.lvl_bold,
         },
         letterspc_on(),
     )
@@ -14902,12 +14949,16 @@ fn line_width_pt_runs(
                 let size = run.font_size.unwrap_or(fs);
                 return (
                     (size * 100.0).round() as u32,
-                    // The run's OWN declaration: `bold` here is the
-                    // PARAGRAPH's resolved weight, so inheriting it would
-                    // make a silent run bold because a sibling is. What a
-                    // silent run inherits is the level, which is not in
-                    // scope this far down.
-                    run.bold.unwrap_or(false),
+                    // The run's own declaration, and the LEVEL's weight when
+                    // it makes none. Inheriting the PARAGRAPH's resolved weight
+                    // instead would make a silent run bold because a sibling is;
+                    // inheriting nothing measures a whole bold title at 400,
+                    // which is what d11's five-run titles did.
+                    run.bold.unwrap_or(if lvlrunbold_on() {
+                        styles.lvl_bold
+                    } else {
+                        false
+                    }),
                     run.italic || italic,
                     (run_spc(run) * 100.0).round() as i32,
                 );
@@ -15878,6 +15929,9 @@ fn gdi_wrap_lines(
     bold: bool,
     italic: bool,
     runs: Option<(&[oxislides_core::ir::SlideRun], usize)>,
+    // What the placeholder LEVEL says the weight is; a run that declares none
+    // is measured at it (see `RunStyles::lvl_bold`).
+    lvl_bold: bool,
 ) -> Vec<String> {
     let opts = oxislides_core::layout::WrapOpts {
         trim_trailing_space: std::env::var("OXI_WRAPTRIM_DISABLE").is_err(),
@@ -15894,6 +15948,7 @@ fn gdi_wrap_lines(
             let styles = runs.map(|(runs, base)| RunStyles {
                 runs,
                 line_start: base + emitted,
+                lvl_bold,
             });
             fits_line(
                 dc, candidate, fs, family, bold, italic, width_pt, width_px, scale, styles,
@@ -16774,7 +16829,10 @@ fn layout_paragraph_baselines(
     // The WRAP has to measure at the weight the line is drawn at, level bold
     // included -- measuring d11's titles at 400 and drawing them at 700 would
     // break them a word later than PowerPoint.
-    let bold = para_is_bold(&para.runs, lvlbold_on() && m.bold.unwrap_or(false));
+    // What the LEVEL alone says, kept beside the paragraph's resolved weight:
+    // a run that declares none is measured at this, not at the paragraph's.
+    let lvl_bold = lvlbold_on() && m.bold.unwrap_or(false);
+    let bold = para_is_bold(&para.runs, lvl_bold);
     // S-ITALADV (2026-08-24): and at the SLANT it is drawn at, level italic
     // included -- the same argument as the bold line above, which this one was
     // missing. The draw loop resolves italic as
@@ -16950,6 +17008,7 @@ fn layout_paragraph_baselines(
             let mut part = gdi_wrap_lines(
                 dc, seg, w, rest_w, scale, fs, &family, bold, italic,
                 Some((&para.runs[..], seg_base)),
+                lvl_bold,
             );
             seg_base += seg.chars().count() + 1;
             if part.is_empty() {
@@ -16962,6 +17021,7 @@ fn layout_paragraph_baselines(
         gdi_wrap_lines(
             dc, &text, first_w, rest_w, scale, fs, &family, bold, italic,
             Some((&para.runs[..], 0)),
+            lvl_bold,
         )
     };
     let n_lines = lines.len();
@@ -17096,7 +17156,11 @@ fn layout_paragraph_baselines(
                 bold,
                 italic,
                 scale,
-                RunStyles { runs: &para.runs, line_start: align_at },
+                RunStyles {
+                    runs: &para.runs,
+                    line_start: align_at,
+                    lvl_bold: lvlbold_on() && m.bold.unwrap_or(false),
+                },
             )
         } else {
             None

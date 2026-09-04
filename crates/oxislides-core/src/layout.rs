@@ -249,6 +249,17 @@ pub struct RunStyles<'a> {
     pub runs: &'a [crate::ir::SlideRun],
     /// Characters of the paragraph already committed to earlier lines.
     pub line_start: usize,
+    /// What the placeholder LEVEL says the weight is. A run that declares none
+    /// inherits THIS -- not the paragraph's resolved weight, which would make a
+    /// silent run bold merely because a sibling is.
+    pub lvl_bold: bool,
+}
+
+/// S-LVLRUNBOLD: a run that declares no weight is measured at the LEVEL's,
+/// unless this is set, which restores measuring it at 400.
+fn lvlrunbold_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_LVLRUNBOLD_DISABLE").is_err())
 }
 
 /// The size, weight, slant and tracking the character at `at` is set in.
@@ -269,12 +280,13 @@ fn style_at(
         if at < seen + n {
             return (
                 run.font_size.unwrap_or(fs),
-                // The run's OWN declaration, not `is_bold(bold)`: the `bold`
-                // here is the PARAGRAPH's resolved weight, so inheriting it
-                // would make a silent run bold merely because a sibling run
-                // is. What a silent run inherits is the LEVEL, and the level
-                // does not reach this far down.
-                run.bold.unwrap_or(false),
+                // The run's own declaration, and the LEVEL's weight when it
+                // makes none -- not `is_bold(bold)`, whose `bold` is the
+                // PARAGRAPH's resolved weight and would make a silent run bold
+                // merely because a sibling is. Inheriting nothing measured
+                // d11's five-run titles, every run silent under a bold level,
+                // at 400: 253.75pt against PowerPoint's own 265.23.
+                run.bold.unwrap_or(styles.lvl_bold),
                 run.italic,
                 if letter_spacing { run.spacing.unwrap_or(0.0) } else { 0.0 },
             );
@@ -438,7 +450,7 @@ mod wrap_tests {
     #[test]
     fn each_character_is_measured_in_its_own_run() {
         let runs = [run("ab", None, false), run("cd", None, true)];
-        let st = RunStyles { runs: &runs, line_start: 0 };
+        let st = RunStyles { runs: &runs, line_start: 0, lvl_bold: false };
         // 2 chars at 0.5em and 2 at 0.6em, 12pt: 2*48 + 2*57.6->58 = 212.
         let got = master_units_runs(&ByWeight, "abcd", 12.0, "X", false, false, &st, true);
         assert_eq!(got, Some(2 * 48 + 2 * 58));
@@ -448,7 +460,7 @@ mod wrap_tests {
     fn line_start_shifts_which_run_owns_a_character() {
         let runs = [run("ab", None, false), run("cd", None, true)];
         // The line is the paragraph's tail, so both its characters are bold.
-        let st = RunStyles { runs: &runs, line_start: 2 };
+        let st = RunStyles { runs: &runs, line_start: 2, lvl_bold: false };
         assert_eq!(
             master_units_runs(&ByWeight, "cd", 12.0, "X", false, false, &st, true),
             Some(2 * 58)
@@ -794,7 +806,11 @@ fn break_segment(
         1.0,
         &opts,
         |candidate, w_pt, _px, emitted| {
-            let styles = RunStyles { runs, line_start: base + emitted };
+            // `break_paragraph` is handed a paragraph, not a placeholder, so
+            // it does not know the level; a run that declares no weight keeps
+            // the old reading here. The caller that DOES know it -- the
+            // renderer's own fit test -- passes it in its `RunStyles`.
+            let styles = RunStyles { runs, line_start: base + emitted, lvl_bold: false };
             let mu = if runs.len() > 1 {
                 master_units_runs(metrics, candidate, fs, family, bold, italic, &styles, true)
             } else {
@@ -2067,7 +2083,14 @@ pub fn layout_text_shape(
             // pays half of that as position. The renderer has measured this
             // per run since S-RUNALIGN; this loop had not.
             let ink = line.trim_end();
-            let styles = RunStyles { runs: &para.runs, line_start: char_at };
+            let styles = RunStyles {
+                runs: &para.runs,
+                line_start: char_at,
+                // Behind the same switch as the renderer's copy of this rule,
+                // so `OXI_LVLRUNBOLD_DISABLE` means the same thing in both
+                // crates: a flag that covers only one of them cannot A/B it.
+                lvl_bold: lvl_bold && lvlrunbold_on(),
+            };
             let line_w = line_width_pt(
                 metrics,
                 ink,
