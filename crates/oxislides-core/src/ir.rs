@@ -286,6 +286,26 @@ fn default_end_size() -> String {
     "med".to_string()
 }
 
+/// One `a:outerShdw` from the shape's `a:effectLst`.
+///
+/// d24's title layout is the measured case: blurRad 571500 (45pt), dist 19050
+/// (1.5pt), dir 10800000 (180 deg), `dk1` at 35% alpha, under two
+/// custom-geometry circles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShapeShadow {
+    /// `@blurRad`, EMU converted to points.
+    pub blur_pt: f32,
+    /// `@dist`, EMU converted to points.
+    pub dist_pt: f32,
+    /// `@dir` in degrees (the file stores 60000ths of a degree). 0 = +x,
+    /// increasing clockwise in slide space.
+    pub dir_deg: f32,
+    /// Resolved hex colour, like every other colour in the IR.
+    pub color: String,
+    /// `<a:alpha>` under the colour, 0..1. 1.0 when absent.
+    pub alpha: f32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Shape {
     pub x: f32,      // position in points
@@ -454,6 +474,9 @@ pub struct Shape {
     /// path using anything else is refused whole (see `unsupported`).
     #[serde(default)]
     pub custom_geometry: Option<CustomGeometry>,
+    /// `a:effectLst/a:outerShdw`, drawn under the shape's own fill.
+    #[serde(default)]
+    pub shadow: Option<ShapeShadow>,
     /// Image source crop (a:blipFill/a:srcRect l,t,r,b), normalized to 0..1.
     /// Only meaningful for ShapeContent::Image. None = full source image.
     /// Word render-truth (01__Biology deck, 2026-08): a full-bleed background

@@ -1569,6 +1569,196 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
     true
 }
 
+/// S-SHADOW: `a:outerShdw` is drawn under the shape's fill, unless this is set.
+fn shadowfx_on() -> bool {
+    std::env::var("OXI_SHADOW_DISABLE").is_err()
+}
+
+/// Three box passes approximating a gaussian blur of `sigma_px`, in place.
+///
+/// For three passes of a box of radius r, sigma^2 = ((2r+1)^2 - 1) / 4, so
+/// r = sigma is within a percent for the radii that matter here.
+fn box_blur3(mask: &mut [u8], w: usize, h: usize, sigma_px: f32) {
+    let r = sigma_px.round().max(1.0) as usize;
+    let mut tmp = vec![0u8; mask.len()];
+    let norm = (2 * r + 1) as u32;
+    // Edge-replicated sliding window: the window at position i is
+    // [i-r, i+r] with out-of-range indices clamped, kept as a running sum.
+    let pass = |src: &[u8], dst: &mut [u8], len: usize, stride: usize, base: usize| {
+        let at = |i: usize| u32::from(src[base + i * stride]);
+        let mut acc: u32 = (r as u32 + 1) * at(0);
+        for i in 1..=r {
+            acc += at(i.min(len - 1));
+        }
+        dst[base] = ((acc + norm / 2) / norm) as u8;
+        for i in 1..len {
+            acc += at((i + r).min(len - 1));
+            acc -= at((i - 1).saturating_sub(r));
+            dst[base + i * stride] = ((acc + norm / 2) / norm) as u8;
+        }
+    };
+    for _ in 0..3 {
+        for y in 0..h {
+            pass(mask, &mut tmp, w, 1, y * w);
+        }
+        for x in 0..w {
+            pass(&tmp, mask, h, w, x);
+        }
+    }
+}
+
+/// Paint the shape's `a:outerShdw` onto the slide, under whatever the shape
+/// itself will draw.
+///
+/// The geometry (custGeom paths, else the preset outline, else the plain box)
+/// is rasterised into a full-slide mask, blurred at the calibrated sigma,
+/// shifted by `dist` along `dir`, tinted, and alpha-composited. Full-slide on
+/// purpose: the same `emit_*` helpers the painters use draw in device space,
+/// so the mask cannot disagree with the shape about where its boundary is.
+#[cfg(windows)]
+unsafe fn paint_shape_shadow(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    sh: &Shape,
+    scale: f64,
+    slide_w: i32,
+    slide_h: i32,
+) {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::*;
+
+    let Some(shadow) = sh.shadow.as_ref() else {
+        return;
+    };
+    if !shadowfx_on() || shadow.alpha <= 0.004 || slide_w <= 0 || slide_h <= 0 {
+        return;
+    }
+    // The shadow is cast by what the shape RENDERS. A shape with no fill of
+    // any kind renders only its outline, and masking its whole area would
+    // hang a filled-shape shadow behind an empty frame. A PICTURE's shadow
+    // follows the picture's own alpha, which this mask cannot see -- blind 47
+    // s14's location pins are 20x24 rects holding a translucent glow PNG with
+    // a blue 1.1pt shadow, and the box mask hung a blue SQUARE behind each --
+    // so pictures are out until the mask can read the alpha channel.
+    if matches!(&sh.content, oxislides_core::ir::ShapeContent::Image { .. }) {
+        return;
+    }
+    let has_fill = sh.fill_color.is_some()
+        || sh.gradient.is_some()
+        || drawable_geometry(sh)
+            .map(|g| g.paths.iter().any(|p| !p.fill_none))
+            .unwrap_or(false);
+    if !has_fill {
+        return;
+    }
+    let Some((cr, cg, cb)) = parse_hex_rgb(&shadow.color) else {
+        return;
+    };
+    let (w, h) = (slide_w as usize, slide_h as usize);
+
+    // 1. the geometry, white on black, in device space.
+    let mask_dc = CreateCompatibleDC(dc);
+    let mut info = BITMAPINFO::default();
+    info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    info.bmiHeader.biWidth = slide_w;
+    info.bmiHeader.biHeight = -slide_h;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB.0;
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let bmp = match CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+        Ok(b) if !bits.is_null() => b,
+        _ => {
+            let _ = DeleteDC(mask_dc);
+            return;
+        }
+    };
+    let old_bmp = SelectObject(mask_dc, bmp);
+    let px = std::slice::from_raw_parts_mut(bits.cast::<u8>(), w * h * 4);
+    px.fill(0);
+
+    let white = CreateSolidBrush(COLORREF(0x00FF_FFFF));
+    let old_brush = SelectObject(mask_dc, white);
+    let old_pen = SelectObject(mask_dc, GetStockObject(NULL_PEN));
+    let old_mode = SetPolyFillMode(mask_dc, ALTERNATE);
+    let mut drew = false;
+    if let Some(geom) = drawable_geometry(sh) {
+        for path in &geom.paths {
+            if path.commands.is_empty() || path.fill_none {
+                continue;
+            }
+            let _ = BeginPath(mask_dc);
+            emit_geom_path_gdi(mask_dc, sh, path, scale);
+            let _ = EndPath(mask_dc);
+            let _ = FillPath(mask_dc);
+            drew = true;
+        }
+    }
+    if !drew {
+        let _ = BeginPath(mask_dc);
+        if emit_shape_path(mask_dc, sh, scale) {
+            let _ = EndPath(mask_dc);
+            let _ = FillPath(mask_dc);
+            drew = true;
+        } else {
+            let _ = AbortPath(mask_dc);
+        }
+    }
+    if !drew {
+        // The box, exactly as the legacy rectangular fill paints it.
+        let rect = windows::Win32::Foundation::RECT {
+            left: (f64::from(sh.x) * scale).round() as i32,
+            top: (f64::from(sh.y) * scale).round() as i32,
+            right: (f64::from(sh.x + sh.width) * scale).round() as i32,
+            bottom: (f64::from(sh.y + sh.height) * scale).round() as i32,
+        };
+        FillRect(mask_dc, &rect, white);
+    }
+    let _ = GdiFlush();
+    SetPolyFillMode(mask_dc, CREATE_POLYGON_RGN_MODE(old_mode));
+    SelectObject(mask_dc, old_pen);
+    SelectObject(mask_dc, old_brush);
+    let _ = DeleteObject(white);
+
+    // 2. blur the coverage at the calibrated width.
+    let mut mask: Vec<u8> = (0..w * h).map(|i| px[i * 4]).collect();
+    let sigma_px = (shadow.blur_pt / 3.0) * scale as f32;
+    if sigma_px >= 0.75 {
+        box_blur3(&mut mask, w, h, sigma_px);
+    }
+
+    // 3. tint, offset, and hand the compositing to AlphaBlend.
+    let dir = f64::from(shadow.dir_deg).to_radians();
+    let dx = (f64::from(shadow.dist_pt) * dir.cos() * scale).round() as isize;
+    let dy = (f64::from(shadow.dist_pt) * dir.sin() * scale).round() as isize;
+    for y in 0..h as isize {
+        for x in 0..w as isize {
+            let (sx, sy) = (x - dx, y - dy);
+            let m = if sx >= 0 && sy >= 0 && (sx as usize) < w && (sy as usize) < h {
+                mask[sy as usize * w + sx as usize]
+            } else {
+                0
+            };
+            let a = (f32::from(m) * shadow.alpha) as u32;
+            let i = (y as usize * w + x as usize) * 4;
+            px[i] = ((u32::from(cb) * a + 127) / 255) as u8;
+            px[i + 1] = ((u32::from(cg) * a + 127) / 255) as u8;
+            px[i + 2] = ((u32::from(cr) * a + 127) / 255) as u8;
+            px[i + 3] = a as u8;
+        }
+    }
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    let _ = AlphaBlend(dc, 0, 0, slide_w, slide_h, mask_dc, 0, 0, slide_w, slide_h, blend);
+
+    SelectObject(mask_dc, old_bmp);
+    let _ = DeleteObject(bmp);
+    let _ = DeleteDC(mask_dc);
+}
+
 /// Draw an `a:custGeom` outline as its real path instead of the bounding box.
 ///
 /// Every deck in the dev corpus uses custGeom (11470 shapes on 628 of 886
@@ -4806,6 +4996,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                 // classifies it as TextBox when it carries text and Placeholder
                 // when it does not -- gating on AutoShape would skip every one
                 // of them. Pictures keep their own draw path untouched.
+                // The shape's drop shadow goes under everything it draws.
+                if sh.shadow.is_some() {
+                    paint_shape_shadow(mem_dc, sh, scale, w, h);
+                }
                 let drew_preset = !matches!(&sh.content, ShapeContent::Image { .. })
                     && (draw_custom_geometry_gdi(mem_dc, sh, scale)
                         || (matches!(&sh.content, ShapeContent::AutoShape { .. })

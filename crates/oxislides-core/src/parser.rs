@@ -1120,6 +1120,13 @@ fn parse_slide(
     // the continents BLACK; 110 shapes across seven decks are shaped like that.
     let mut in_effect_lst = false;
     let s_effectclr = std::env::var("OXI_EFFECTCLR_DISABLE").is_err();
+    // Inside <a:outerShdw>, whose colour and alpha are the SHADOW's.
+    let mut in_outer_shdw = false;
+    // (blur pt, dist pt, dir deg) while the element is open.
+    let mut shape_shadow_draft: Option<(f32, f32, f32)> = None;
+    let mut shape_shadow_color: Option<String> = None;
+    let mut shape_shadow_alpha: f32 = 1.0;
+    let mut shape_shadow: Option<crate::ir::ShapeShadow> = None;
     // Inside <a:solidFill>. `a:alpha` also appears under a gradient stop and a
     // line colour, and only a solid shape fill is composited (S-FILLALPHA).
     let mut in_solid_fill = false;
@@ -1468,6 +1475,11 @@ fn parse_slide(
                         }
                     }
                     // A run's own colour alpha (d35's 26.9% white numerals).
+                    "alpha" if in_outer_shdw => {
+                        if let Some(v) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            shape_shadow_alpha = (v / 100000.0).clamp(0.0, 1.0);
+                        }
+                    }
                     "alpha" if in_run && !in_highlight => {
                         if let Some(v) = get_attr(&e, "val") {
                             if let Ok(pc) = v.parse::<f32>() {
@@ -1649,6 +1661,18 @@ fn parse_slide(
                     }
                     "effectLst" => {
                         in_effect_lst = true;
+                    }
+                    "outerShdw" if in_sp_pr && in_effect_lst => {
+                        in_outer_shdw = true;
+                        let emu = |name: &str| {
+                            get_attr(&e, name)
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .unwrap_or(0.0)
+                        };
+                        shape_shadow_draft =
+                            Some((emu("blurRad") / 12700.0, emu("dist") / 12700.0, emu("dir") / 60000.0));
+                        shape_shadow_color = None;
+                        shape_shadow_alpha = 1.0;
                     }
                     "ln" if in_sp_pr => {
                         in_ln = true;
@@ -1937,7 +1961,9 @@ fn parse_slide(
                     "highlight" if in_run => in_highlight = true,
                     "srgbClr" => {
                         if let Some(val) = get_attr(&e, "val") {
-                            if in_bg_pr {
+                            if in_outer_shdw {
+                                shape_shadow_color = Some(val);
+                            } else if in_bg_pr {
                                 slide_background_color = Some(val);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(val);
@@ -1953,7 +1979,9 @@ fn parse_slide(
                     "schemeClr" => {
                         if let Some(val) = get_attr(&e, "val") {
                             let hex = theme_colors.get(&val).cloned().unwrap_or_else(|| scheme_color_to_hex(&val));
-                            if in_bg_pr {
+                            if in_outer_shdw {
+                                shape_shadow_color = Some(hex);
+                            } else if in_bg_pr {
                                 slide_background_color = Some(hex);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(hex);
@@ -2005,6 +2033,24 @@ fn parse_slide(
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    // A SELF-CLOSING outerShdw is legal (nothing but
+                    // attributes); the schema's default colour is black. The
+                    // Start-arm handler never sees it, so it completes here in
+                    // one step.
+                    "outerShdw" if in_sp_pr && in_effect_lst => {
+                        let emu = |name: &str| {
+                            get_attr(&e, name)
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .unwrap_or(0.0)
+                        };
+                        shape_shadow = Some(crate::ir::ShapeShadow {
+                            blur_pt: emu("blurRad") / 12700.0,
+                            dist_pt: emu("dist") / 12700.0,
+                            dir_deg: emu("dir") / 60000.0,
+                            color: "000000".to_string(),
+                            alpha: 1.0,
+                        });
+                    }
                     // <a:alpha> only ever arrives self-closing (the schema gives
                     // it nothing but @val), which is why a gradient STOP's alpha
                     // has to be read here too. d15's illustrations are white at
@@ -2196,6 +2242,11 @@ fn parse_slide(
                         }
                     }
                     // A run's own colour alpha (d35's 26.9% white numerals).
+                    "alpha" if in_outer_shdw => {
+                        if let Some(v) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            shape_shadow_alpha = (v / 100000.0).clamp(0.0, 1.0);
+                        }
+                    }
                     "alpha" if in_run && !in_highlight => {
                         if let Some(v) = get_attr(&e, "val") {
                             if let Ok(pc) = v.parse::<f32>() {
@@ -2579,7 +2630,9 @@ fn parse_slide(
                     }
                     "srgbClr" => {
                         if let Some(val) = get_attr(&e, "val") {
-                            if in_bg_pr {
+                            if in_outer_shdw {
+                                shape_shadow_color = Some(val);
+                            } else if in_bg_pr {
                                 slide_background_color = Some(val);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(val);
@@ -2595,7 +2648,9 @@ fn parse_slide(
                     "schemeClr" => {
                         if let Some(val) = get_attr(&e, "val") {
                             let hex = theme_colors.get(&val).cloned().unwrap_or_else(|| scheme_color_to_hex(&val));
-                            if in_bg_pr {
+                            if in_outer_shdw {
+                                shape_shadow_color = Some(hex);
+                            } else if in_bg_pr {
                                 slide_background_color = Some(hex);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(hex);
@@ -2640,6 +2695,21 @@ fn parse_slide(
                     }
                     "effectLst" if in_effect_lst => {
                         in_effect_lst = false;
+                    }
+                    "outerShdw" if in_outer_shdw => {
+                        in_outer_shdw = false;
+                        if let Some((blur, dist, dir)) = shape_shadow_draft.take() {
+                            shape_shadow = Some(crate::ir::ShapeShadow {
+                                blur_pt: blur,
+                                dist_pt: dist,
+                                dir_deg: dir,
+                                // The schema's default shadow colour is black.
+                                color: shape_shadow_color
+                                    .take()
+                                    .unwrap_or_else(|| "000000".to_string()),
+                                alpha: shape_shadow_alpha,
+                            });
+                        }
                     }
                     "highlight" if in_highlight => {
                         in_highlight = false;
@@ -2951,6 +3021,7 @@ fn parse_slide(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
                             ),
+                            shadow: shape_shadow.take(),
                         });
                         in_shape = false;
                     }
@@ -3113,6 +3184,7 @@ fn parse_slide(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
                             ),
+                            shadow: shape_shadow.take(),
                         });
                     }
                     "r" | "fld" if in_run => {
@@ -3647,6 +3719,12 @@ fn parse_inherited_shapes(
     let mut in_pic_blip = false;
     let mut ln_depth: u32 = 0;
     let mut in_solid = false;
+    // <a:outerShdw>: geometry attributes while open, then colour and alpha.
+    let mut in_ig_shdw = false;
+    let mut ig_shdw_draft: Option<(f32, f32, f32)> = None;
+    let mut ig_shdw_color: Option<String> = None;
+    let mut ig_shdw_alpha: f32 = 1.0;
+    let mut ig_shadow: Option<crate::ir::ShapeShadow> = None;
     // custGeom paths and a gradient fill are drawable now (S-CUSTGEOM /
     // S-SHAPEGRAD), so inherited shapes carrying them are no longer refused.
     let s_inherit_geom = std::env::var("OXI_LMGEOM_DISABLE").is_err();
@@ -3719,6 +3797,20 @@ fn parse_inherited_shapes(
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "spTree" => in_tree = false,
+                    "outerShdw" if in_ig_shdw => {
+                        in_ig_shdw = false;
+                        if let Some((blur, dist, dir)) = ig_shdw_draft.take() {
+                            ig_shadow = Some(crate::ir::ShapeShadow {
+                                blur_pt: blur,
+                                dist_pt: dist,
+                                dir_deg: dir,
+                                color: ig_shdw_color
+                                    .take()
+                                    .unwrap_or_else(|| "000000".to_string()),
+                                alpha: ig_shdw_alpha,
+                            });
+                        }
+                    }
                     "grpSpPr" if in_grp_pr => {
                         in_grp_pr = false;
                         let base = if ig_grp.len() >= 2 {
@@ -3967,7 +4059,8 @@ fn parse_inherited_shapes(
                                                 unsupported: false,
                                             })
                                         },
-                                    });
+                                        shadow: ig_shadow.take(),
+                                        });
                                 }
                             }
                             kind = None;
@@ -4137,6 +4230,11 @@ fn parse_inherited_shapes(
                     ig_flip = (false, false);
                     ig_img_alpha = None;
                     ig_fill_img = false;
+                    in_ig_shdw = false;
+                    ig_shdw_draft = None;
+                    ig_shdw_color = None;
+                    ig_shdw_alpha = 1.0;
+                    ig_shadow = None;
                     gr_stops.clear();
                     gr_in = false;
                     gr_in_gs = false;
@@ -4365,6 +4463,22 @@ fn parse_inherited_shapes(
             {
                 ok = false;
             }
+            "srgbClr" | "schemeClr" if in_ig_shdw => {
+                let val = get_attr(e, "val").unwrap_or_default();
+                ig_shdw_color = Some(if name == "srgbClr" {
+                    val
+                } else {
+                    theme_colors
+                        .get(&val)
+                        .cloned()
+                        .unwrap_or_else(|| scheme_color_to_hex(&val))
+                });
+            }
+            "alpha" if in_ig_shdw => {
+                if let Some(v) = get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                    ig_shdw_alpha = (v / 100000.0).clamp(0.0, 1.0);
+                }
+            }
             "srgbClr" | "schemeClr" if gr_in_gs && gr_color.is_none() => {
                 gr_color = if name == "srgbClr" {
                     get_attr(e, "val")
@@ -4444,6 +4558,30 @@ fn parse_inherited_shapes(
                 if !s_effectshape =>
             {
                 ok = false
+            }
+            "outerShdw" if in_sp_pr => {
+                let emu = |name: &str| {
+                    get_attr(e, name)
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .unwrap_or(0.0)
+                };
+                let draft = (emu("blurRad") / 12700.0, emu("dist") / 12700.0, emu("dir") / 60000.0);
+                if empty {
+                    // Self-closing: nothing but attributes; black is the
+                    // schema's default shadow colour.
+                    ig_shadow = Some(crate::ir::ShapeShadow {
+                        blur_pt: draft.0,
+                        dist_pt: draft.1,
+                        dir_deg: draft.2,
+                        color: "000000".to_string(),
+                        alpha: 1.0,
+                    });
+                } else {
+                    in_ig_shdw = true;
+                    ig_shdw_draft = Some(draft);
+                    ig_shdw_color = None;
+                    ig_shdw_alpha = 1.0;
+                }
             }
             _ => {}
         }
