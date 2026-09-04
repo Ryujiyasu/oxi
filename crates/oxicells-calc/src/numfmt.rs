@@ -35,7 +35,244 @@ pub fn format_number(value: f64, format: &str) -> String {
     if looks_like_a_date(section) {
         return format_datetime(magnitude, section);
     }
+    if let Some(shape) = fraction_shape(section) {
+        return format_fraction(magnitude, &shape);
+    }
     format_numeric(magnitude, section)
+}
+
+/// The parts of a fraction format: `# ?/?` is a whole part, the text between,
+/// a numerator one place wide and a denominator one place wide; `?/8` has no
+/// whole part and a fixed denominator.
+struct FractionShape {
+    prefix: String,
+    /// The whole part's placeholders, empty for an improper fraction.
+    whole: String,
+    between: String,
+    numerator_width: usize,
+    denominator: Denominator,
+    suffix: String,
+}
+
+enum Denominator {
+    /// Up to this many digits: `?` is 9, `??` is 99.
+    Free(usize),
+    Fixed(u64),
+}
+
+/// A format is a fraction format when a slash outside quotes has a digit
+/// placeholder on its left and a placeholder or a number on its right.
+fn fraction_shape(format: &str) -> Option<FractionShape> {
+    let body: Vec<char> = format.chars().collect();
+    let placeholder = |held: char| matches!(held, '0' | '#' | '?');
+    let mut quoted = false;
+    let mut slash = None;
+    let mut at = 0;
+    while at < body.len() {
+        match body[at] {
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '_' | '\\' | '*' => at += 1,
+            '[' => {
+                while at < body.len() && body[at] != ']' {
+                    at += 1;
+                }
+            }
+            '/' => {
+                slash = Some(at);
+                break;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    let slash = slash?;
+    // The numerator: the run of placeholders ending at the slash.
+    let mut start = slash;
+    while start > 0 && placeholder(body[start - 1]) {
+        start -= 1;
+    }
+    let numerator_width = slash - start;
+    if numerator_width == 0 {
+        return None;
+    }
+    // The text between the whole part and the numerator, then the whole part.
+    let mut cut = start;
+    while cut > 0 && !placeholder(body[cut - 1]) {
+        cut -= 1;
+    }
+    let between: String = body[cut..start].iter().collect();
+    let mut whole_start = cut;
+    while whole_start > 0 && placeholder(body[whole_start - 1]) {
+        whole_start -= 1;
+    }
+    let whole: String = body[whole_start..cut].iter().collect();
+    let prefix: String = body[..whole_start].iter().collect();
+    // The denominator: placeholders, or the digits of a fixed one.
+    let mut end = slash + 1;
+    let denominator = if end < body.len() && body[end].is_ascii_digit() {
+        let mut digits = String::new();
+        while end < body.len() && body[end].is_ascii_digit() {
+            digits.push(body[end]);
+            end += 1;
+        }
+        Denominator::Fixed(digits.parse().ok().filter(|held| *held > 0)?)
+    } else {
+        while end < body.len() && placeholder(body[end]) {
+            end += 1;
+        }
+        if end == slash + 1 {
+            return None;
+        }
+        Denominator::Free(end - slash - 1)
+    };
+    let suffix: String = body[end..].iter().collect();
+    Some(FractionShape {
+        prefix: literal_text(&prefix),
+        whole,
+        between: literal_text(&between),
+        numerator_width,
+        denominator,
+        suffix: literal_text(&suffix),
+    })
+}
+
+/// The text a stretch of format shows for itself: quotes gone, `\x` and `_x`
+/// read as one character, brackets dropped.
+fn literal_text(format: &str) -> String {
+    let mut text = String::new();
+    let mut quoted = false;
+    let mut characters = format.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => quoted = !quoted,
+            _ if quoted => text.push(character),
+            '\\' => text.extend(characters.next()),
+            '_' => {
+                characters.next();
+                text.push(' ');
+            }
+            '*' => {
+                characters.next();
+            }
+            '[' => {
+                for held in characters.by_ref() {
+                    if held == ']' {
+                        break;
+                    }
+                }
+            }
+            other => text.push(other),
+        }
+    }
+    text
+}
+
+/// A number under a fraction format, as Excel shows it.
+///
+/// Measured in `Range.Text`: under `# ?/?` 1.5 is `1 1/2`, 0.75 is ` 3/4` --
+/// the `#` shows nothing for the whole part and the space between stays --
+/// 3.14159265 is `3 1/7`, and 2, 0.96 and 0.05 are `2    `, `1    ` and
+/// `0    `: a fraction that comes to nothing leaves its width in spaces, and a
+/// whole part that would then be all there is shows its zero. `# ??/??` allows
+/// a denominator to 99 and pads the numerator on the left and the denominator
+/// on the right: 1.5 is `1  1/2 ` and 12.3456 is `12 28/81`. `?/?` is
+/// improper, 1.5 being `3/2` and 12.3456 `37/3`. A fixed denominator is not
+/// reduced: `# ?/8` shows 1.5 as `1 4/8` and 0.75 as ` 6/8`, and a numerator
+/// wider than its place is shown whole, ` 12/16`. Which fraction stands for a
+/// value is `nearest_fraction`'s business, and it is not always the nearest.
+fn format_fraction(value: f64, shape: &FractionShape) -> String {
+    let negative = value < 0.0;
+    let magnitude = value.abs();
+    let mixed = !shape.whole.is_empty();
+    let (mut whole, part) = if mixed {
+        (magnitude.trunc(), magnitude - magnitude.trunc())
+    } else {
+        (0.0, magnitude)
+    };
+    let (mut numerator, denominator) = match shape.denominator {
+        Denominator::Fixed(held) => ((part * held as f64 + 0.5).floor() as u64, held),
+        Denominator::Free(width) => {
+            let most = 10u64.pow(width as u32) - 1;
+            nearest_fraction(part, most)
+        }
+    };
+    if mixed && numerator == denominator {
+        whole += 1.0;
+        numerator = 0;
+    }
+    let blank = mixed && numerator == 0;
+
+    let mut text = String::new();
+    text.push_str(&shape.prefix);
+    if negative {
+        text.push('-');
+    }
+    if mixed {
+        let whole = whole as u64;
+        let zero_places = shape.whole.chars().filter(|held| *held == '0').count();
+        let shown = if whole == 0 && zero_places == 0 {
+            // `#` shows no zero -- unless the zero is all there is to show.
+            if blank { "0".to_string() } else { String::new() }
+        } else {
+            format!("{whole:0>zero_places$}")
+        };
+        text.push_str(&shown);
+        text.push_str(&shape.between);
+    }
+    let denominator_width = match shape.denominator {
+        Denominator::Fixed(held) => held.to_string().len(),
+        Denominator::Free(width) => width,
+    };
+    if blank {
+        for _ in 0..shape.numerator_width + 1 + denominator_width {
+            text.push(' ');
+        }
+    } else {
+        let top = numerator.to_string();
+        let bottom = denominator.to_string();
+        text.push_str(&format!("{top:>width$}", width = shape.numerator_width));
+        text.push('/');
+        text.push_str(&format!("{bottom:<width$}", width = denominator_width));
+    }
+    text.push_str(&shape.suffix);
+    text
+}
+
+/// The fraction Excel picks for a value when the denominator may run to
+/// `most`: the last CONVERGENT of the value's continued fraction whose
+/// denominator fits, not the nearest fraction that fits.
+///
+/// The two differ, and Excel is measured on the side of the convergents:
+/// 1.0625 under `# ?/?` shows `1    `, though 1/9 is nearer to 1/16 than 0
+/// is; and 12.3456 under `# ??/??` shows 28/81, which is the convergent
+/// before 47/136, where the nearest fraction under 100 would be found by a
+/// search that Excel does not make.
+fn nearest_fraction(value: f64, most: u64) -> (u64, u64) {
+    let (mut previous, mut current) = ((1u64, 0u64), (value.floor() as u64, 1u64));
+    let mut rest = value - value.floor();
+    for _ in 0..64 {
+        if rest < 1e-9 {
+            break;
+        }
+        let inverted = 1.0 / rest;
+        let term = inverted.floor();
+        rest = inverted - term;
+        let term = term as u64;
+        let Some(next_denominator) = term
+            .checked_mul(current.1)
+            .and_then(|held| held.checked_add(previous.1))
+        else {
+            break;
+        };
+        if next_denominator > most {
+            break;
+        }
+        let next_numerator = term * current.0 + previous.0;
+        previous = current;
+        current = (next_numerator, next_denominator);
+    }
+    current
 }
 
 /// Splits on semicolons that are not inside quotes.
@@ -839,6 +1076,95 @@ mod tests {
             (45000.0, "dddd", "Wednesday"),
         ] {
             assert_eq!(format_number(value, format), shown, "{value} as {format}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod fractions {
+    use super::format_number;
+
+    /// Every expectation is what Excel 16 put in `Range.Text` for that value
+    /// under that format, in a column wide enough to show it all.
+    #[test]
+    fn fractions_are_shown_as_excel_shows_them() {
+        // The last is pi to eight places, which is what was typed into Excel
+        // and not the constant.
+        #[allow(clippy::approx_constant)]
+        let values = [
+            1.5, 0.75, 2.0, 0.333333, 1.0625, -1.5, 0.05, 0.96, 12.3456, 0.0, 0.5, 100.125,
+            3.14159265,
+        ];
+        let table: [(&str, [&str; 13]); 9] = [
+            (
+                "# ?/?",
+                [
+                    "1 1/2", " 3/4", "2    ", " 1/3", "1    ", "-1 1/2", "0    ", "1    ",
+                    "12 1/3", "0    ", " 1/2", "100 1/8", "3 1/7",
+                ],
+            ),
+            (
+                "# ??/??",
+                [
+                    "1  1/2 ", "  3/4 ", "2      ", "  1/3 ", "1  1/16", "-1  1/2 ", "  1/20",
+                    " 24/25", "12 28/81", "0      ", "  1/2 ", "100  1/8 ", "3  1/7 ",
+                ],
+            ),
+            (
+                "?/?",
+                [
+                    "3/2", "3/4", "2/1", "1/3", "1/1", "-3/2", "0/1", "1/1", "37/3", "0/1", "1/2",
+                    "801/8", "22/7",
+                ],
+            ),
+            (
+                "# ?/8",
+                [
+                    "1 4/8", " 6/8", "2    ", " 3/8", "1 1/8", "-1 4/8", "0    ", "1    ",
+                    "12 3/8", "0    ", " 4/8", "100 1/8", "3 1/8",
+                ],
+            ),
+            (
+                "# ?/16",
+                [
+                    "1 8/16", " 12/16", "2     ", " 5/16", "1 1/16", "-1 8/16", " 1/16",
+                    " 15/16", "12 6/16", "0     ", " 8/16", "100 2/16", "3 2/16",
+                ],
+            ),
+            (
+                "# ???/???",
+                [
+                    "1   1/2  ", "   3/4  ", "2        ", "   1/3  ", "1   1/16 ", "-1   1/2  ",
+                    "   1/20 ", "  24/25 ", "12 216/625", "0        ", "   1/2  ", "100   1/8  ",
+                    "3  16/113",
+                ],
+            ),
+            (
+                "0 ?/?",
+                [
+                    "1 1/2", "0 3/4", "2    ", "0 1/3", "1    ", "-1 1/2", "0    ", "1    ",
+                    "12 1/3", "0    ", "0 1/2", "100 1/8", "3 1/7",
+                ],
+            ),
+            (
+                "# ?/2",
+                [
+                    "1 1/2", "1    ", "2    ", " 1/2", "1    ", "-1 1/2", "0    ", "1    ",
+                    "12 1/2", "0    ", " 1/2", "100    ", "3    ",
+                ],
+            ),
+            (
+                "??/??",
+                [
+                    " 3/2 ", " 3/4 ", " 2/1 ", " 1/3 ", "17/16", "- 3/2 ", " 1/20", "24/25",
+                    "1000/81", " 0/1 ", " 1/2 ", "801/8 ", "22/7 ",
+                ],
+            ),
+        ];
+        for (format, shown) in table {
+            for (value, expected) in values.iter().zip(shown) {
+                assert_eq!(format_number(*value, format), expected, "{value} as {format}");
+            }
         }
     }
 }

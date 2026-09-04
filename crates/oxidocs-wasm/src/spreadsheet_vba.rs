@@ -357,6 +357,51 @@ impl Protection {
     }
 }
 
+/// How `Range.TextToColumns` last split a column.
+///
+/// Excel keeps these from one call to the next: measured, a call naming no
+/// delimiter at all splits on whatever the call before it named -- after
+/// `Comma:=True, Tab:=False`, a bare `TextToColumns` splits `k,l` and leaves
+/// a tab alone. A fresh Excel starts on Tab.
+#[derive(Debug, Clone)]
+struct SplitSettings {
+    delimited: bool,
+    consecutive: bool,
+    /// The character that fences a field, or None for `xlTextQualifierNone`.
+    qualifier: Option<char>,
+    tab: bool,
+    semicolon: bool,
+    comma: bool,
+    space: bool,
+    other: Option<char>,
+    trailing_minus: bool,
+}
+
+impl Default for SplitSettings {
+    fn default() -> Self {
+        Self {
+            delimited: true,
+            consecutive: false,
+            qualifier: Some('"'),
+            tab: true,
+            semicolon: false,
+            comma: false,
+            space: false,
+            other: None,
+            trailing_minus: false,
+        }
+    }
+}
+
+/// What `FieldInfo` says about one field: where it starts (fixed width) or
+/// which it is (delimited), and how to read it.
+#[derive(Debug, Clone, Copy)]
+struct FieldRule {
+    at: usize,
+    /// 1 General, 2 Text, 3-8 a date order, 9 skip the field.
+    kind: i64,
+}
+
 /// A note a macro can read and write.
 ///
 /// Kept beside the workbook rather than in it: the IR holds only the notes a
@@ -444,6 +489,8 @@ struct WorkbookHost<'a> {
     unlocked: std::collections::HashSet<CellAddress>,
     /// The notes on every sheet, in the order they were added.
     notes: Vec<Note>,
+    /// How `TextToColumns` last split, which is how it splits next.
+    split: SplitSettings,
     /// What a macro has written across the bottom of the window, while it is
     /// the macro's to write. Nothing here means the bar is Excel's own again,
     /// which is what it answers `False` to say.
@@ -505,6 +552,7 @@ impl<'a> WorkbookHost<'a> {
             protected: Vec::new(),
             unlocked: std::collections::HashSet::new(),
             notes,
+            split: SplitSettings::default(),
             enable_events: true,
             display_alerts: true,
             calculation: -4105,
@@ -671,6 +719,16 @@ impl<'a> WorkbookHost<'a> {
     /// 936,000 cells — takes 15 seconds. Doing that after every assignment
     /// would make a loop that writes a hundred cells unusable, so this build
     /// waits to be told.
+    /// What year it is, for a written date that leaves the year out. It
+    /// comes from the same moment `Now` and `TODAY()` read, so a host given a
+    /// fixed time reads `1/5` against that time and not against the wall.
+    fn this_year(&self) -> i64 {
+        match self.now {
+            Some(now) => year_of_serial(now),
+            None => this_year_now(),
+        }
+    }
+
     fn recalculate(&mut self) {
         match self.now {
             Some(now) => oxicells_core::formula::evaluate_workbook_formulas_at(self.workbook, now),
@@ -1340,6 +1398,171 @@ impl<'a> WorkbookHost<'a> {
             Some(_) => self.object(HostObject::Comment(at)),
             None => Value::Nothing,
         }
+    }
+
+    /// `Range.TextToColumns Destination, DataType, TextQualifier,
+    /// ConsecutiveDelimiter, Tab, Semicolon, Comma, Space, Other, OtherChar,
+    /// FieldInfo, DecimalSeparator, ThousandsSeparator, TrailingMinusNumbers`.
+    ///
+    /// Measured against Excel: the source must be one column (two are 1004);
+    /// each cell's text is split and the pieces written from the destination
+    /// rightwards, over whatever was there, each piece read the way typing it
+    /// would be -- `2.5` a number, `TRUE` a Boolean, `5%` a percentage -- unless
+    /// `FieldInfo` says a field is text (2) or is to be skipped (9); a cell
+    /// holding a formula is left alone; an empty piece between two delimiters
+    /// leaves an empty cell unless `ConsecutiveDelimiter`; runs of SPACES are
+    /// treated as one either way; a trailing delimiter adds nothing; a piece
+    /// fenced by the qualifier keeps its delimiters; `3-` is text unless
+    /// `TrailingMinusNumbers`; fixed width (`DataType:=2`) cuts at the
+    /// character positions `FieldInfo` names, counted from 0. The settings
+    /// stick for the next call, and it answers True.
+    fn text_to_columns(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        if range.start_column != range.end_column {
+            return Err("Range.TextToColumns needs a single column".to_string());
+        }
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let flag = |index: usize, held: bool| -> Result<bool, String> {
+            match given(index) {
+                None => Ok(held),
+                Some(value) => {
+                    Ok(style_face_boolean(value, "Range.TextToColumns")?.unwrap_or(held))
+                }
+            }
+        };
+        let mut split = self.split.clone();
+        if let Some(kind) = given(1) {
+            split.delimited = match sort_number(kind, "TextToColumns DataType")? {
+                1 => true,
+                2 => false,
+                other => return Err(format!("Range.TextToColumns cannot read DataType {other}")),
+            };
+        }
+        if let Some(kind) = given(2) {
+            split.qualifier = match sort_number(kind, "TextToColumns TextQualifier")? {
+                1 => Some('"'),
+                2 => Some('\''),
+                -4142 => None,
+                other => {
+                    return Err(format!("Range.TextToColumns cannot read TextQualifier {other}"))
+                }
+            };
+        }
+        split.consecutive = flag(3, split.consecutive)?;
+        split.tab = flag(4, split.tab)?;
+        split.semicolon = flag(5, split.semicolon)?;
+        split.comma = flag(6, split.comma)?;
+        split.space = flag(7, split.space)?;
+        if given(8).is_some() || given(9).is_some() {
+            let wanted = flag(8, split.other.is_some())?;
+            let character = match given(9) {
+                Some(Value::String(text)) => text.chars().next(),
+                Some(_) => return Err("Range.TextToColumns OtherChar must be text".to_string()),
+                None => split.other,
+            };
+            split.other = if wanted { character } else { None };
+        }
+        split.trailing_minus = flag(13, split.trailing_minus)?;
+        let rules = match given(10) {
+            None => Vec::new(),
+            Some(value) => field_rules(value)?,
+        };
+        if !split.delimited && rules.is_empty() {
+            return Err("Range.TextToColumns needs FieldInfo to cut fixed widths".to_string());
+        }
+        let destination = match given(0) {
+            None => CellAddress {
+                sheet: range.sheet,
+                row: range.start_row,
+                column: range.start_column,
+            },
+            Some(Value::Object(object)) => {
+                let target = self
+                    .range(object)
+                    .ok_or_else(|| "Range.TextToColumns Destination must be a Range".to_string())?;
+                CellAddress {
+                    sheet: target.sheet,
+                    row: target.start_row,
+                    column: target.start_column,
+                }
+            }
+            Some(_) => return Err("Range.TextToColumns Destination must be a Range".to_string()),
+        };
+
+        for (step, address) in range.addresses().enumerate() {
+            let Some(cell) = self.cell_here(address.sheet, address.row, address.column) else {
+                continue;
+            };
+            // A formula is split as WRITTEN, not as it works out: measured,
+            // `="f,g"` gives `="f` and `g"`, the first kept as text since it
+            // is no formula any more.
+            let text = match cell.formula.as_deref() {
+                Some(formula) => format!("={formula}"),
+                None if matches!(cell.value, CellValue::Empty) => continue,
+                None => shown_text(
+                    &from_cell_value(&cell.value),
+                    cell.style.number_format.as_deref(),
+                ),
+            };
+            let pieces = if split.delimited {
+                split_delimited(&text, &split)
+            } else {
+                split_fixed(&text, &rules)
+            };
+            let row = destination.row + step as u32;
+            let mut column = destination.column;
+            for (index, piece) in pieces.into_iter().enumerate() {
+                let rule = rules.iter().find(|rule| {
+                    if split.delimited {
+                        rule.at == index + 1
+                    } else {
+                        rule.at == index
+                    }
+                });
+                let kind = rule.map(|rule| rule.kind).unwrap_or(1);
+                if kind == 9 {
+                    continue;
+                }
+                if column > MAX_WORKSHEET_COLUMN {
+                    return Err("Range.TextToColumns runs off the right of the sheet".to_string());
+                }
+                let landing = CellAddress {
+                    sheet: destination.sheet,
+                    row,
+                    column,
+                };
+                column += 1;
+                if kind == 2 {
+                    self.set_cell_value(landing, CellValue::String(piece))?;
+                    continue;
+                }
+                let piece = match piece.strip_suffix('-') {
+                    Some(body) if split.trailing_minus && !body.is_empty() => {
+                        format!("-{}", body.trim())
+                    }
+                    _ => piece,
+                };
+                if piece.is_empty() {
+                    self.set_cell_value(landing, CellValue::Empty)?;
+                    continue;
+                }
+                let typed = self.set_range_input(
+                    CellRange::single(landing),
+                    Value::String(piece.clone()),
+                    "Range.TextToColumns",
+                    FormulaStyle::A1,
+                );
+                if typed.is_err() && piece.starts_with('=') {
+                    self.set_cell_value(landing, CellValue::String(piece))?;
+                    continue;
+                }
+                typed?;
+            }
+        }
+        self.split = split;
+        Ok(Value::Boolean(true))
     }
 
     /// `Range.AddComment [Text]`: one cell, not yet carrying a note.
@@ -4242,7 +4465,7 @@ impl<'a> WorkbookHost<'a> {
                     self.set_cell_value(address, CellValue::Error("#N/A".to_string()))?;
                     continue;
                 };
-                match cell_input(value)? {
+                match cell_input(value, self.this_year())? {
                     CellInput::Formula(formula) => {
                         let placed = self.placed_formula(
                             address,
@@ -6808,6 +7031,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("addcomment") {
                     return self.add_comment(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("texttocolumns") {
+                    return self.text_to_columns(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("comment") && args.is_empty() {
                     return Ok(Some(self.comment_of(range)));
                 }
@@ -7205,6 +7431,25 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowIndex", "ColumnIndex"][..])
         } else if name.eq_ignore_ascii_case("msgbox") {
             Some(&["Prompt", "Buttons", "Title", "HelpFile", "Context"][..])
+        } else if name.eq_ignore_ascii_case("texttocolumns") {
+            Some(
+                &[
+                    "Destination",
+                    "DataType",
+                    "TextQualifier",
+                    "ConsecutiveDelimiter",
+                    "Tab",
+                    "Semicolon",
+                    "Comma",
+                    "Space",
+                    "Other",
+                    "OtherChar",
+                    "FieldInfo",
+                    "DecimalSeparator",
+                    "ThousandsSeparator",
+                    "TrailingMinusNumbers",
+                ][..],
+            )
         } else if name.eq_ignore_ascii_case("addcomment") {
             Some(&["Text"][..])
         } else if name.eq_ignore_ascii_case("text")
@@ -7704,9 +7949,16 @@ impl Host for WorkbookHost<'_> {
         let Some(range) = self.range(receiver) else {
             return Ok(None);
         };
-        if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
+        if name.eq_ignore_ascii_case("value") {
             self.settle(range);
             return self.range_value(range).map(Some);
+        }
+        // `Value2` is the number under the dress: measured, a cell typed
+        // `1/5/2024` answers a Date to `Value` and 45296 to `Value2`, and a
+        // cell typed `$3` answers a Currency and then 3.
+        if name.eq_ignore_ascii_case("value2") {
+            self.settle(range);
+            return self.range_value(range).map(|value| Some(undressed(value)));
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
             return self.range_formula(range, FormulaStyle::A1).map(Some);
@@ -8631,6 +8883,162 @@ fn cells_index(value: &Value) -> Result<i64, String> {
 /// `Range.Hidden` is NOT one of these, though it looks like one: asked the
 /// same way, a hidden row given `Null` comes BACK. It is the one entrance of
 /// the seven where `Null` does something, so it reads the Option itself.
+/// Cut a line into fields at its delimiters.
+///
+/// A field fenced by the qualifier keeps the delimiters inside it, and the
+/// fence itself goes. With `ConsecutiveDelimiter` a run of delimiters is one;
+/// without it each one ends a field, except that a run of spaces is one
+/// either way -- measured, `"  s  t "` split on Space gives four fields, an
+/// empty one, `s`, `t` and an empty one, whichever way the flag is set. A
+/// delimiter at the very end adds no field.
+fn split_delimited(text: &str, split: &SplitSettings) -> Vec<String> {
+    let is_delimiter = |one: char| {
+        (split.tab && one == '\t')
+            || (split.semicolon && one == ';')
+            || (split.comma && one == ',')
+            || (split.space && one == ' ')
+            || split.other == Some(one)
+    };
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut fenced = false;
+    let mut last: Option<char> = None;
+    for one in text.chars() {
+        if Some(one) == split.qualifier && !fenced && field.is_empty() {
+            fenced = true;
+            last = None;
+            continue;
+        }
+        if Some(one) == split.qualifier && fenced {
+            fenced = false;
+            last = None;
+            continue;
+        }
+        if !fenced && is_delimiter(one) {
+            let collapses = split.consecutive || one == ' ';
+            if collapses && last.is_some_and(is_delimiter) {
+                last = Some(one);
+                continue;
+            }
+            fields.push(std::mem::take(&mut field));
+            last = Some(one);
+            continue;
+        }
+        field.push(one);
+        last = Some(one);
+    }
+    if !field.is_empty() || !last.is_some_and(is_delimiter) {
+        fields.push(field);
+    }
+    fields
+}
+
+/// Cut a line at the character positions `FieldInfo` names, counted from 0.
+fn split_fixed(text: &str, rules: &[FieldRule]) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut starts: Vec<usize> = rules.iter().map(|rule| rule.at).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, &start)| {
+            let end = starts.get(index + 1).copied().unwrap_or(chars.len());
+            chars
+                .get(start.min(chars.len())..end.min(chars.len()))
+                .unwrap_or(&[])
+                .iter()
+                .collect()
+        })
+        .collect()
+}
+
+/// `FieldInfo:=Array(Array(1, 1), Array(2, 9))`: one pair per field.
+fn field_rules(value: &Value) -> Result<Vec<FieldRule>, String> {
+    let Value::Array(outer) = value else {
+        return Err("Range.TextToColumns FieldInfo must be an array of pairs".to_string());
+    };
+    let pair = |value: &Value| -> Result<FieldRule, String> {
+        let Value::Array(inner) = value else {
+            return Err("Range.TextToColumns FieldInfo must be an array of pairs".to_string());
+        };
+        let [at, kind] = inner.values.as_slice() else {
+            return Err("Range.TextToColumns FieldInfo pairs need two numbers".to_string());
+        };
+        let at = sort_number(at, "FieldInfo")?;
+        if at < 0 {
+            return Err("Range.TextToColumns FieldInfo cannot start before 0".to_string());
+        }
+        Ok(FieldRule {
+            at: at as usize,
+            kind: sort_number(kind, "FieldInfo")?,
+        })
+    };
+    // One bare pair is allowed for a single field.
+    if outer.values.iter().all(|value| !matches!(value, Value::Array(_))) {
+        return Ok(vec![pair(value)?]);
+    }
+    outer.values.iter().map(pair).collect()
+}
+
+/// Whether a formula's text is broken in a way no reading could mend: a string
+/// or a quoted sheet name left open, brackets that do not pair, nothing at all,
+/// or an operator with nothing after it. Anything else is left to the engine,
+/// which is the one that knows the functions.
+fn formula_is_malformed(body: &str) -> bool {
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut in_name = false;
+    let mut last = ' ';
+    for one in body.chars() {
+        if in_string {
+            if one == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if in_name {
+            if one == '\'' {
+                in_name = false;
+            }
+            continue;
+        }
+        match one {
+            '"' => in_string = true,
+            '\'' => in_name = true,
+            '(' | '{' => depth += 1,
+            ')' | '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        if !one.is_whitespace() {
+            last = one;
+        }
+    }
+    in_string
+        || in_name
+        || depth != 0
+        || body.trim().is_empty()
+        || matches!(last, '+' | '-' | '*' | '/' | '^' | '&' | '=' | '<' | '>' | ',' | '(' | ':')
+}
+
+/// A value with its Date or Currency dress taken off, as `Value2` answers.
+fn undressed(value: Value) -> Value {
+    match value {
+        Value::Date(serial) => Value::Double(serial),
+        Value::Currency(held) => Value::Double(held as f64 / 10_000.0),
+        Value::Array(mut array) => {
+            array.values = array.values.into_iter().map(undressed).collect();
+            Value::Array(array)
+        }
+        other => other,
+    }
+}
+
 /// The notes the file keeps pinned open, which are the only ones the IR
 /// reads: a macro asking `Range("A1").Comment` on a workbook that has one there
 /// should find it.
@@ -10272,6 +10680,23 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpasteallexceptborders" => 7,
         "xlpastecolumnwidths" => 8,
         "xlpastevaluesandnumberformats" => 12,
+        "xlpastecomments" => -4144,
+        // TextToColumns.
+        "xldelimited" => 1,
+        "xlfixedwidth" => 2,
+        "xltextqualifierdoublequote" => 1,
+        "xltextqualifiersinglequote" => 2,
+        "xltextqualifiernone" => -4142,
+        "xlgeneralformat" => 1,
+        "xltextformat" => 2,
+        "xlmdyformat" => 3,
+        "xldmyformat" => 4,
+        "xlymdformat" => 5,
+        "xlmydformat" => 6,
+        "xldymformat" => 7,
+        "xlydmformat" => 8,
+        "xlskipcolumn" => 9,
+        "xlemdformat" => 10,
         "xlpasteformulas" => -4123,
         "xland" => 1,
         "xlor" => 2,
@@ -10960,7 +11385,328 @@ const APOSTROPHE: char = '\u{27}';
 /// text on purpose until the format can travel with the value and the locale
 /// has been measured rather than assumed.
 fn typed_from_text(written: &str) -> CellValue {
-    typed_from_written(written).0
+    typed_from_written(written, this_year_now()).0
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn this_year_now() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let serial = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64() / 86_400.0 + 25_569.0)
+        .unwrap_or(0.0);
+    year_of_serial(serial)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn this_year_now() -> i64 {
+    let now = js_sys::Date::new_0();
+    year_of_serial((now.get_time() - now.get_timezone_offset() * 60_000.0) / 86_400_000.0 + 25_569.0)
+}
+
+/// The calendar year an Excel serial falls in.
+fn year_of_serial(serial: f64) -> i64 {
+    let days = serial.floor() as i64 + EXCEL_EPOCH_DAYS;
+    civil_year_of_days(days)
+}
+
+/// Days from 1970-01-01 to 1899-12-30, Excel's day zero.
+const EXCEL_EPOCH_DAYS: i64 = -25_569;
+
+/// Days since 1970-01-01 of a calendar date (Howard Hinnant's algorithm).
+fn days_since_epoch(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    let month_index = (i64::from(month) + 9) % 12;
+    let day_of_year = (153 * month_index + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn civil_year_of_days(days: i64) -> i64 {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    if month <= 2 { year + 1 } else { year }
+}
+
+/// The Excel serial of a calendar date, or None when there is no such day.
+fn excel_serial(year: i64, month: u32, day: u32) -> Option<f64> {
+    if !(1900..=9999).contains(&year) || !(1..=12).contains(&month) || day == 0 {
+        return None;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ if leap => 29,
+        _ => 28,
+    };
+    if day > days_in_month {
+        return None;
+    }
+    Some((days_since_epoch(year, month, day) - EXCEL_EPOCH_DAYS) as f64)
+}
+
+/// A two-digit year the way Excel reads one: 00-29 this century, 30-99 last.
+fn widened_year(year: i64, digits: usize) -> i64 {
+    match digits {
+        1 | 2 if year < 30 => year + 2000,
+        1 | 2 => year + 1900,
+        _ => year,
+    }
+}
+
+/// The month an English name stands for, whole or in its first three letters.
+fn month_named(name: &str) -> Option<u32> {
+    const NAMES: [&str; 12] = [
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    ];
+    let lower = name.to_ascii_lowercase();
+    if lower.len() < 3 {
+        return None;
+    }
+    NAMES
+        .iter()
+        .position(|full| *full == lower || (lower.len() == 3 && full.starts_with(&lower)))
+        .map(|index| index as u32 + 1)
+}
+
+fn digits_only(text: &str) -> Option<i64> {
+    if text.is_empty() || text.len() > 4 || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// A time of day as written -- `13:30`, `1:30 PM`, `1:30:15`, `24:00` -- as a
+/// fraction of a day and the format it asks for.
+fn written_time(text: &str) -> Option<(f64, &'static str)> {
+    let text = text.trim();
+    let upper = text.to_ascii_uppercase();
+    let (body, meridiem) = if let Some(body) = upper.strip_suffix("AM") {
+        (&text[..body.trim_end().len()], Some(false))
+    } else if let Some(body) = upper.strip_suffix("PM") {
+        (&text[..body.trim_end().len()], Some(true))
+    } else {
+        (text, None)
+    };
+    let parts: Vec<&str> = body.split(':').collect();
+    if parts.len() < 2 || parts.len() > 3 {
+        return None;
+    }
+    let hour = digits_only(parts[0])?;
+    let minute = digits_only(parts[1])?;
+    let second = match parts.get(2) {
+        Some(part) => Some(digits_only(part)?),
+        None => None,
+    };
+    if minute > 59 || second.is_some_and(|second| second > 59) {
+        return None;
+    }
+    let hour = match meridiem {
+        Some(_) if !(1..=12).contains(&hour) => return None,
+        Some(true) if hour < 12 => hour + 12,
+        Some(false) if hour == 12 => 0,
+        _ => hour,
+    };
+    let fraction = (hour as f64 * 3600.0 + minute as f64 * 60.0 + second.unwrap_or(0) as f64)
+        / 86_400.0;
+    let shown = match (meridiem.is_some(), second.is_some(), hour >= 24) {
+        (_, _, true) => "[h]:mm:ss",
+        (true, true, _) => "h:mm:ss AM/PM",
+        (true, false, _) => "h:mm AM/PM",
+        (false, true, _) => "h:mm:ss",
+        (false, false, _) => "h:mm",
+    };
+    Some((fraction, shown))
+}
+
+/// A calendar date as written, without its time: the serial and the format it
+/// asks for.
+///
+/// Measured on a machine whose Windows reads dates month-day-year and whose
+/// Office speaks Japanese -- which is the pair every other locale-bound
+/// answer in this host was measured under. `2024/1/5` and `2024-01-05` are
+/// year first; `1/5/2024`, `1/5/24` and `5/13/2024` are month first, and
+/// `13/5/2024` is text; `1/5`, `1-5` and `3/4` are this year's, shown
+/// `m"月"d"日"`; `5-Jan` is this year's shown `d-mmm`; `5-Jan-24` and
+/// `January 5, 2024` are shown `d-mmm-yy`; `Feb 30`, with no such day, is
+/// February 1930 shown `mmm-yy`; `Jan 5 2024`, `1.5.2024`, `2/29/2023` and
+/// `Monday` are text.
+fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static str)> {
+    let text = text.trim();
+    // Numeric, with `/` or `-` between the parts.
+    let separator = if text.contains('/') {
+        '/'
+    } else if text.contains('-') {
+        '-'
+    } else {
+        ' '
+    };
+    if separator != ' ' {
+        let parts: Vec<&str> = text.split(separator).map(str::trim).collect();
+        let numeric: Option<Vec<(i64, usize)>> = parts
+            .iter()
+            .map(|part| digits_only(part).map(|value| (value, part.len())))
+            .collect();
+        if let Some(numeric) = numeric {
+            return match numeric.as_slice() {
+                [(first, 4), (month, _), (day, _)] => {
+                    let serial = excel_serial(*first, *month as u32, *day as u32)?;
+                    Some((serial, "m/d/yyyy"))
+                }
+                [(month, _), (day, _), (year, digits)] => {
+                    let year = widened_year(*year, *digits);
+                    let serial = excel_serial(year, *month as u32, *day as u32)?;
+                    Some((serial, "m/d/yyyy"))
+                }
+                [(month, _), (day, _)] => {
+                    let serial = excel_serial(this_year, *month as u32, *day as u32)?;
+                    Some((serial, "m\"月\"d\"日\""))
+                }
+                _ => None,
+            };
+        }
+        // `5-Jan`, `5-Jan-24`, `Feb-30`.
+        if separator == '-' {
+            return match parts.as_slice() {
+                [first, second] => {
+                    // Day and month, or month and year.
+                    if let (Some(day), Some(month)) = (digits_only(first), month_named(second)) {
+                        let serial = excel_serial(this_year, month, day as u32)?;
+                        return Some((serial, "d-mmm"));
+                    }
+                    let month = month_named(first)?;
+                    let year = widened_year(digits_only(second)?, second.len());
+                    let serial = excel_serial(year, month, 1)?;
+                    Some((serial, "mmm-yy"))
+                }
+                [day, month, year] => {
+                    let month = month_named(month)?;
+                    let day = digits_only(day)?;
+                    let year = widened_year(digits_only(year)?, year.len());
+                    let serial = excel_serial(year, month, day as u32)?;
+                    Some((serial, "d-mmm-yy"))
+                }
+                _ => None,
+            };
+        }
+        return None;
+    }
+    // `January 5, 2024` and `Feb 30`.
+    let words: Vec<&str> = text.split_whitespace().collect();
+    match words.as_slice() {
+        [month, day, year] => {
+            let month = month_named(month)?;
+            let day = digits_only(day.strip_suffix(',')?)?;
+            let year = widened_year(digits_only(year)?, year.len());
+            let serial = excel_serial(year, month, day as u32)?;
+            Some((serial, "d-mmm-yy"))
+        }
+        [month, number] => {
+            let month = month_named(month)?;
+            let number = digits_only(number)?;
+            match excel_serial(this_year, month, number as u32) {
+                Some(serial) => Some((serial, "d-mmm")),
+                None => {
+                    let year = widened_year(number, 2);
+                    let serial = excel_serial(year, month, 1)?;
+                    Some((serial, "mmm-yy"))
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A written moment: a date, a time, or a date followed by a time.
+///
+/// A time alone is a Double under a time format, as Excel keeps it. A date
+/// with a time is shown `m/d/yyyy h:mm`; a date with a time whose hour runs
+/// past 23 -- measured, `1/5/2024 25:00` -- is a plain number under General.
+fn written_moment(written: &str, this_year: i64) -> Option<(CellValue, Option<&'static str>)> {
+    let trimmed = written.trim();
+    if let Some((fraction, shown)) = written_time(trimmed) {
+        return Some((CellValue::Number(fraction), Some(shown)));
+    }
+    if let Some((serial, shown)) = written_calendar_date(trimmed, this_year) {
+        return Some((CellValue::Number(serial), Some(shown)));
+    }
+    // A date and then a time: the time is the tail from the last one or two
+    // words, whichever reads as one.
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    for take in [2usize, 1] {
+        if words.len() <= take {
+            continue;
+        }
+        let (head, tail) = words.split_at(words.len() - take);
+        let Some((fraction, _)) = written_time(&tail.join(" ")) else {
+            continue;
+        };
+        let Some((serial, _)) = written_calendar_date(&head.join(" "), this_year) else {
+            continue;
+        };
+        let value = CellValue::Number(serial + fraction);
+        return Some(if fraction >= 1.0 {
+            (value, None)
+        } else {
+            (value, Some("m/d/yyyy h:mm"))
+        });
+    }
+    None
+}
+
+/// A sum of money as written: `$3`, `$1,234.5`, `-$3`, `$-3` and `($3)` are
+/// numbers under a dollar format, with two decimals when the writing had any;
+/// `3$` is text. Measured under a Windows whose currency is the dollar.
+fn written_currency(written: &str) -> Option<(CellValue, Option<&'static str>)> {
+    let trimmed = written.trim();
+    let (body, bracketed) = match trimmed.strip_prefix('(').and_then(|rest| rest.strip_suffix(')'))
+    {
+        Some(inside) => (inside.trim(), true),
+        None => (trimmed, false),
+    };
+    let (negative, body) = match body.strip_prefix('-') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, body),
+    };
+    let body = body.strip_prefix('$')?.trim_start();
+    let (negative, body) = match body.strip_prefix('-') {
+        Some(rest) if !negative => (true, rest.trim_start()),
+        Some(_) => return None,
+        None => (negative, body),
+    };
+    if body.starts_with(['+', '-']) {
+        return None;
+    }
+    let (number, _) = grouped_number(body)?;
+    let number = if negative || bracketed { -number } else { number };
+    let shown = if body.contains('.') {
+        "$#,##0.00_);[Red]($#,##0.00)"
+    } else {
+        "$#,##0_);[Red]($#,##0)"
+    };
+    Some((CellValue::Number(number), Some(shown)))
 }
 
 /// What Excel makes of a written string: the value, and the way of showing it
@@ -10987,7 +11733,7 @@ fn typed_from_text(written: &str) -> CellValue {
 /// the cell is still General — writing `50%` into a cell already showing
 /// `0.000` leaves `0.000` there — and that is decided where the cell is
 /// written, not here.
-fn typed_from_written(written: &str) -> (CellValue, Option<&'static str>) {
+fn typed_from_written(written: &str, this_year: i64) -> (CellValue, Option<&'static str>) {
     // An apostrophe is the instruction "leave this alone", and is not kept.
     if let Some(rest) = written.strip_prefix(APOSTROPHE) {
         return (CellValue::String(rest.to_string()), None);
@@ -11004,6 +11750,12 @@ fn typed_from_written(written: &str) -> (CellValue, Option<&'static str>) {
         return read;
     }
     if let Some(read) = written_fraction(written) {
+        return read;
+    }
+    if let Some(read) = written_currency(written) {
+        return read;
+    }
+    if let Some(read) = written_moment(written, this_year) {
         return read;
     }
     let trimmed = written.trim();
@@ -11305,10 +12057,16 @@ fn text_a_cell_keeps(written: &str) -> &str {
 /// A string beginning with `=` and carrying something after it is a formula;
 /// everything else — including `"="` on its own, which Excel leaves as the
 /// text `=` — is read the way typing it would be.
-fn cell_input(value: Value) -> Result<CellInput, String> {
+fn cell_input(value: Value, this_year: i64) -> Result<CellInput, String> {
     if let Value::String(written) = &value {
         if let Some(rest) = written.strip_prefix('=') {
             if !rest.is_empty() {
+                // Measured: `="f`, `=1+` and `=nosuchfn(` are all refused with
+                // 1004 -- a formula that cannot be read is not stored -- where
+                // `=nosuchfn()` is stored and works out to #NAME?.
+                if formula_is_malformed(rest) {
+                    return Err(format!("the formula {written:?} cannot be read"));
+                }
                 return Ok(CellInput::Formula(written.clone()));
             }
         }
@@ -11316,7 +12074,7 @@ fn cell_input(value: Value) -> Result<CellInput, String> {
     if let Value::String(written) = &value {
         let written = text_a_cell_keeps(written);
         if !written.is_empty() {
-            let (cell, shown) = typed_from_written(written);
+            let (cell, shown) = typed_from_written(written, this_year);
             return Ok(CellInput::Constant(cell, shown));
         }
         return Ok(CellInput::Constant(CellValue::Empty, None));
@@ -11887,6 +12645,128 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// `TextToColumns` splits a column the way Excel does.
+    ///
+    /// Measured against Excel: `a,b,c` on Comma lands a b c across, and
+    /// `1,2.5,x` lands two numbers and a string; `a,,b` leaves the middle cell
+    /// empty unless `ConsecutiveDelimiter`; `"a,b",c` keeps the fenced comma;
+    /// a `Destination` leaves the source alone; two source columns are 1004;
+    /// `FieldInfo` keeps `001` as text and skips a field; fixed widths cut at
+    /// 0, 3 and 5; runs of spaces are one delimiter either way; a call naming
+    /// no delimiter uses the last call's; existing cells to the right are
+    /// written over; `="f,g"` is split as written; and `3-` is text unless
+    /// `TrailingMinusNumbers`.
+    #[test]
+    fn text_to_columns_splits_the_way_excel_does() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, r As Variant
+               On Error Resume Next
+               Range(\"A1\").Value = \"a,b,c\"
+               Range(\"A2\").Value = \"1,2.5,x\"
+               Range(\"A3\").Value = \"a,,b\"
+               r = Range(\"A1:A3\").TextToColumns(DataType:=1, Comma:=True, Tab:=False)
+               out = r & \"|\" & Range(\"A1\").Value & Range(\"B1\").Value & Range(\"C1\").Value & \"|\" & TypeName(Range(\"B2\").Value) & TypeName(Range(\"C2\").Value) & \"|\" & IsEmpty(Range(\"B3\").Value) & Range(\"C3\").Value & \"|\"
+               Range(\"A5\").Value = \"a,,b\"
+               Range(\"A5\").TextToColumns DataType:=1, Comma:=True, Tab:=False, ConsecutiveDelimiter:=True
+               out = out & Range(\"B5\").Value & \"|\"
+               Range(\"A7\").Value = \"\"\"a,b\"\",c\"
+               Range(\"A7\").TextToColumns DataType:=1, Comma:=True, Tab:=False, TextQualifier:=1
+               out = out & Range(\"A7\").Value & \"/\" & Range(\"B7\").Value & \"|\"
+               Range(\"A10\").Value = \"x;y\"
+               Range(\"A10\").TextToColumns Destination:=Range(\"C10\"), DataType:=1, Semicolon:=True, Tab:=False
+               out = out & Range(\"A10\").Value & Range(\"C10\").Value & Range(\"D10\").Value & \"|\"
+               Range(\"A12\").Value = \"a,b\"
+               Range(\"B12\").Value = \"c,d\"
+               Range(\"A12:B12\").TextToColumns DataType:=1, Comma:=True, Tab:=False
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A16\").Value = \"001,skip,003\"
+               Range(\"A16\").TextToColumns DataType:=1, Comma:=True, Tab:=False, FieldInfo:=Array(Array(1, 2), Array(2, 9), Array(3, 1))
+               out = out & Range(\"A16\").Value & TypeName(Range(\"A16\").Value) & Range(\"B16\").Value & IsEmpty(Range(\"C16\").Value) & \"|\"
+               Range(\"A18\").Value = \"abcdefgh\"
+               Range(\"A18\").TextToColumns DataType:=2, FieldInfo:=Array(Array(0, 1), Array(3, 1), Array(5, 1))
+               out = out & Range(\"A18\").Value & \"/\" & Range(\"B18\").Value & \"/\" & Range(\"C18\").Value & \"|\"
+               Range(\"A21\").Value = \"  s  t \"
+               Range(\"A21\").TextToColumns DataType:=1, Space:=True, Tab:=False
+               out = out & \"[\" & Range(\"A21\").Value & \"/\" & Range(\"B21\").Value & \"/\" & Range(\"C21\").Value & \"/\" & Range(\"D21\").Value & \"]|\"
+               Range(\"A28\").Value = \"u\" & vbTab & \"v,w\"
+               Range(\"A28\").TextToColumns DataType:=1, Comma:=True, Tab:=False
+               Range(\"A29\").Value = \"k,l\"
+               Range(\"A29\").TextToColumns
+               out = out & Range(\"B28\").Value & Range(\"B29\").Value & \"|\"
+               Range(\"A30\").Value = \"m,n\"
+               Range(\"B30\").Value = \"old\"
+               Range(\"C30\").Value = \"older\"
+               Range(\"A30\").TextToColumns DataType:=1, Comma:=True, Tab:=False
+               out = out & Range(\"B30\").Value & Range(\"C30\").Value & \"|\"
+               Range(\"A31\").Formula = \"=\"\"f,g\"\"\"
+               Range(\"A31\").TextToColumns DataType:=1, Comma:=True, Tab:=False
+               out = out & Range(\"A31\").Formula & Range(\"B31\").Value & \"|\"
+               Range(\"A37\").Value = \"-5, 7 ,3-\"
+               Range(\"A37\").TextToColumns DataType:=1, Comma:=True, Tab:=False
+               out = out & TypeName(Range(\"B37\").Value) & TypeName(Range(\"C37\").Value) & \"|\"
+               Range(\"A38\").Value = \"3-\"
+               Range(\"A38\").TextToColumns DataType:=1, Comma:=True, Tab:=False, TrailingMinusNumbers:=True
+               out = out & CStr(Range(\"A38\").Value)
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "True|abc|DoubleString|Trueb|b|a,b/c|x;yxy|1004|001String3True|abc/de/fgh|[/s/t/]|wl|nolder|=\"fg\"|DoubleString|-3"
+                    .to_string()
+            )
+        );
+    }
+
+    /// A formula that cannot be read is refused, and never stored.
+    ///
+    /// Measured against Excel: `="f`, `=1+` and `=nosuchfn(` are each 1004
+    /// and leave the cell as it was, where `=nosuchfn()` is stored.
+    #[test]
+    fn a_malformed_formula_is_refused() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               On Error Resume Next
+               Range(\"A1\").Value = \"=\"\"f\"
+               out = Err.Number & \"/\" & Range(\"A1\").HasFormula & \"|\"
+               Err.Clear
+               Range(\"A2\").Value = \"=1+\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A3\").Formula = \"=nosuchfn(\"
+               out = out & Err.Number & \"|\"
+               Err.Clear
+               Range(\"A4\").Formula = \"=nosuchfn()\"
+               out = out & Err.Number & \"/\" & Range(\"A4\").Formula & \"|\"
+               Range(\"A5\").Formula = \"='My Sheet(1)'!A1\"
+               out = out & Err.Number
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("1004/False|1004|1004|0/=nosuchfn()|0".to_string())
         );
     }
 
@@ -20243,13 +21123,74 @@ End Sub
         }
     }
 
+    /// What a written date, time or sum of money becomes. Every line is what
+    /// Excel answered for `TypeName`, `Value2` and `NumberFormat` after the
+    /// text was assigned, on a machine whose Windows reads dates
+    /// month-day-year, whose currency is the dollar, and whose Office is
+    /// Japanese; the year-less forms are read against a fixed 2026.
+    #[test]
+    fn vba_reads_a_written_date_time_or_sum_the_way_excel_does() {
+        let measured = [
+            ("2024/1/5", "Date", "45296", "m/d/yyyy"),
+            ("1/5/2024", "Date", "45296", "m/d/yyyy"),
+            ("1/5", "Date", "46027", "m\"月\"d\"日\""),
+            ("2024-01-05", "Date", "45296", "m/d/yyyy"),
+            ("1-5", "Date", "46027", "m\"月\"d\"日\""),
+            ("5-Jan", "Date", "46027", "d-mmm"),
+            ("5-Jan-24", "Date", "45296", "d-mmm-yy"),
+            ("January 5, 2024", "Date", "45296", "d-mmm-yy"),
+            ("13:30", "Double", "0.5625", "h:mm"),
+            ("1:30 PM", "Double", "0.5625", "h:mm AM/PM"),
+            ("1:30:15", "Double", "6.26736111111111E-02", "h:mm:ss"),
+            ("1/5/2024 13:30", "Date", "45296.5625", "m/d/yyyy h:mm"),
+            ("2024/1/5 1:30 PM", "Date", "45296.5625", "m/d/yyyy h:mm"),
+            ("5/13/2024", "Date", "45425", "m/d/yyyy"),
+            ("3/4", "Date", "46085", "m\"月\"d\"日\""),
+            ("1/5/24", "Date", "45296", "m/d/yyyy"),
+            ("1/5/2024 25:00", "Double", "45297.0416666667", "General"),
+            ("24:00", "Double", "1", "[h]:mm:ss"),
+            ("0:00", "Double", "0", "h:mm"),
+            ("2/29/2024", "Date", "45351", "m/d/yyyy"),
+            ("Feb 30", "Date", "10990", "mmm-yy"),
+            ("$3", "Currency", "3", "$#,##0_);[Red]($#,##0)"),
+            ("$1,234.5", "Currency", "1234.5", "$#,##0.00_);[Red]($#,##0.00)"),
+            ("-$3", "Currency", "-3", "$#,##0_);[Red]($#,##0)"),
+            ("$-3", "Currency", "-3", "$#,##0_);[Red]($#,##0)"),
+            ("($3)", "Currency", "-3", "$#,##0_);[Red]($#,##0)"),
+        ];
+        for (written, kind, value, shown) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()
+                   Range(\"A1\").Value = \"{written}\"
+                   Debug.Print TypeName(Range(\"A1\").Value)
+                   Debug.Print CStr(Range(\"A1\").Value2)
+                   Debug.Print Range(\"A1\").NumberFormat
+                 End Sub
+"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            // The fifth of January 2026.
+            host.now = Some(46027.5);
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![kind.to_string(), value.to_string(), shown.to_string()],
+                "for {written}"
+            );
+        }
+    }
+
     /// And what stays text. A fraction wants a whole part and ONE space; an
     /// exponent wants `E` and a whole power; a per cent wants one sign and a
-    /// plain number around it.
+    /// plain number around it. (`3/4` on its own is not text: it is the
+    /// fourth of March, and is tested with the dates.)
     #[test]
     fn vba_leaves_a_written_number_it_cannot_read_as_text() {
         for written in [
-            "1  1/2", "3/4", "1E", "1E3.5", "1D3", "5%%", "5.5.5%", "1,23", "1E3E3",
+            "1  1/2", "1E", "1E3.5", "1D3", "5%%", "5.5.5%", "1,23", "1E3E3", "13/5/2024",
+            "2/29/2023", "1.5.2024", "Jan 5 2024", "Monday", "3$", "2024/13/5",
         ] {
             let mut workbook = workbook();
             let module = parse_module(&format!(
