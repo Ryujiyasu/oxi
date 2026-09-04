@@ -293,6 +293,11 @@ enum HostObject {
     Style(usize),
     /// All of them.
     Styles,
+    /// One hyperlink, by the number it was given when added -- deleting
+    /// shuffles the list, the number stays.
+    Hyperlink(u64),
+    /// The hyperlinks on a sheet, or the ones a range reaches.
+    Hyperlinks(HyperlinkScope),
     /// The note on one cell, held by the cell rather than by its place in
     /// the list, since adding and deleting shuffle the list about.
     Comment(CellAddress),
@@ -564,6 +569,7 @@ struct BuiltInStyle {
 struct StyleFont {
     bold: bool,
     italic: bool,
+    underline: bool,
     size: f32,
     name: Option<&'static str>,
     /// A packed BGR colour; None is the automatic black.
@@ -576,6 +582,7 @@ const fn themed_font(color: Option<i64>) -> Option<StyleFont> {
     Some(StyleFont {
         bold: false,
         italic: false,
+        underline: false,
         size: 11.0,
         name: None,
         color,
@@ -586,6 +593,7 @@ const fn bold_font(color: Option<i64>, size: f32) -> Option<StyleFont> {
     Some(StyleFont {
         bold: true,
         italic: false,
+        underline: false,
         size,
         name: None,
         color,
@@ -672,7 +680,7 @@ const ACCENT1: i64 = 8_544_277;
 /// The forty-seven, in the order `Styles(1)` counts them -- which is by the
 /// Japanese name, kana by reading and kanji by code point. Every colour, size
 /// and edge is what `Range` answered after the style was applied.
-const BUILT_IN_STYLES: [BuiltInStyle; 47] = [
+const BUILT_IN_STYLES: [BuiltInStyle; 48] = [
     tint("20% - アクセント 1", "20% - アクセント 1", 16_115_392, 5, 0.8),
     tint("20% - アクセント 2", "20% - アクセント 2", 14_017_275, 6, 0.8),
     tint("20% - アクセント 3", "20% - アクセント 3", 13_168_833, 7, 0.8),
@@ -705,6 +713,7 @@ const BUILT_IN_STYLES: [BuiltInStyle; 47] = [
             Some(StyleFont {
                 bold: false,
                 italic: false,
+                underline: false,
                 size: 18.0,
                 name: Some("游ゴシック Light"),
                 color: Some(DARK2),
@@ -847,6 +856,7 @@ const BUILT_IN_STYLES: [BuiltInStyle; 47] = [
         Some(StyleFont {
             bold: false,
             italic: true,
+            underline: false,
             size: 11.0,
             name: None,
             color: Some(8_355_711),
@@ -864,10 +874,39 @@ const BUILT_IN_STYLES: [BuiltInStyle; 47] = [
         None,
         Some([None, Some(("thin", ACCENT1)), Some(("double", ACCENT1)), None]),
     ),
+    // Measured: a cell given a hyperlink reads Style.Name `Hyperlink`, Font
+    // ThemeColor 11, Underline single.
+    BuiltInStyle {
+        font_theme: Some(11),
+        ..plain(
+            "Hyperlink",
+            "ハイパーリンク",
+            Some(StyleFont {
+                bold: false,
+                italic: false,
+                underline: true,
+                size: 11.0,
+                name: None,
+                color: Some(8_812_614),
+            }),
+            None,
+            None,
+        )
+    },
 ];
 
 /// Where `Normal` sits in the table.
 const NORMAL_STYLE: usize = 35;
+
+/// Where `Hyperlink` sits: it is listed only once a hyperlink has been added
+/// -- measured, `Styles.Count` is 47 before the first `Hyperlinks.Add` and
+/// 48 after -- and the table keeps it last.
+const HYPERLINK_STYLE: usize = 47;
+
+/// Where `Hyperlink` falls among the listed styles once it is listed:
+/// measured, `Styles(28)` is `Percent` and `Styles(29)` is `Hyperlink`,
+/// ハイパーリンク sorting after パーセント and before メモ.
+const HYPERLINK_LISTED_AT: usize = 28;
 
 /// The style a name stands for. Measured: `percent`, `PERCENT`, `Percent `
 /// and the Japanese `パーセント` all reach the style, so the case and the
@@ -879,6 +918,53 @@ fn built_in_style(name: &str) -> Option<usize> {
     BUILT_IN_STYLES.iter().position(|style| {
         style.name.to_lowercase() == wanted || style.local.to_lowercase() == wanted
     })
+}
+
+/// Whose hyperlinks a `Hyperlinks` collection speaks for.
+#[derive(Debug, Clone, Copy)]
+enum HyperlinkScope {
+    Sheet(usize),
+    Range(CellRange),
+}
+
+/// A hyperlink a macro added, held beside the workbook the way a note is:
+/// the file's own hyperlinks are not read in, and what a macro adds is for
+/// the macro's own reading and is not saved -- a known limit.
+#[derive(Debug, Clone)]
+struct Link {
+    id: u64,
+    /// The cells it hangs from. Excel lets a hyperlink span a block.
+    anchor: CellRange,
+    address: String,
+    sub_address: String,
+    screen_tip: String,
+}
+
+/// An address the way Excel keeps it: a web address whose host is followed
+/// by nothing, or by a query, gets its `/` -- measured, `http://x.example`
+/// is kept as `http://x.example/` and `https://x.example?q=1` as
+/// `https://x.example/?q=1`, while `http://x.example/a/b`, `mailto:a@b.c`,
+/// `www.x.example` and `C:\temp\a.txt` are kept as written.
+fn kept_address(address: &str) -> String {
+    let lower = address.to_ascii_lowercase();
+    let after_scheme = if lower.starts_with("http://") {
+        7
+    } else if lower.starts_with("https://") {
+        8
+    } else {
+        return address.to_string();
+    };
+    let rest = &address[after_scheme..];
+    if rest.is_empty() {
+        return address.to_string();
+    }
+    let host_end = rest
+        .find(['/', '?', '#'])
+        .unwrap_or(rest.len());
+    if rest[host_end..].starts_with('/') {
+        return address.to_string();
+    }
+    format!("{}{}/{}", &address[..after_scheme], &rest[..host_end], &rest[host_end..])
 }
 
 /// A note a macro can read and write.
@@ -968,6 +1054,13 @@ struct WorkbookHost<'a> {
     unlocked: std::collections::HashSet<CellAddress>,
     /// The notes on every sheet, in the order they were added.
     notes: Vec<Note>,
+    /// The hyperlinks on every sheet, in the order they were added.
+    links: Vec<Link>,
+    /// The number the next hyperlink gets.
+    next_link: u64,
+    /// Whether a hyperlink has ever been added: the `Hyperlink` style joins
+    /// the workbook's styles the first time one is.
+    linked_once: bool,
     /// How `TextToColumns` last split, which is how it splits next.
     split: SplitSettings,
     /// The style each cell was last given, by its place in the table; a cell
@@ -1039,6 +1132,9 @@ impl<'a> WorkbookHost<'a> {
             protected: Vec::new(),
             unlocked: std::collections::HashSet::new(),
             notes,
+            links: Vec::new(),
+            next_link: 1,
+            linked_once: false,
             split: SplitSettings::default(),
             styled: std::collections::HashMap::new(),
             theme_paint: std::collections::HashMap::new(),
@@ -1086,6 +1182,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Window => "Window",
                 HostObject::Style(_) => "Style",
                 HostObject::Styles => "Styles",
+                HostObject::Hyperlink(_) => "Hyperlink",
+                HostObject::Hyperlinks(_) => "Hyperlinks",
                 HostObject::Comment(_) => "Comment",
                 HostObject::Comments(_) => "Comments",
                 HostObject::WorksheetFunction => "WorksheetFunction",
@@ -1940,17 +2038,29 @@ impl<'a> WorkbookHost<'a> {
         self.object(HostObject::Style(seen.unwrap_or(NORMAL_STYLE)))
     }
 
+    /// The styles the workbook lists, in the order `Styles(n)` counts them:
+    /// the table's, with `Hyperlink` left out until a hyperlink has been
+    /// added and then in its alphabetical place.
+    fn listed_styles(&self) -> Vec<usize> {
+        let mut listed: Vec<usize> = (0..HYPERLINK_STYLE).collect();
+        if self.linked_once {
+            listed.insert(HYPERLINK_LISTED_AT, HYPERLINK_STYLE);
+        }
+        listed
+    }
+
     /// `Styles(n)` / `Styles("Percent")`.
     fn style_item(&mut self, wanted: &Value) -> Result<Value, String> {
         let index = match wanted {
             Value::String(name) => built_in_style(name)
+                .filter(|index| *index != HYPERLINK_STYLE || self.linked_once)
                 .ok_or_else(|| host_error(450, format!("there is no style {name:?}")))?,
             value => {
                 let index = positive_index(value, "Styles index")? as usize;
-                if index > BUILT_IN_STYLES.len() {
-                    return Err(format!("the workbook has no style number {index}"));
-                }
-                index - 1
+                let listed = self.listed_styles();
+                *listed
+                    .get(index - 1)
+                    .ok_or_else(|| format!("the workbook has no style number {index}"))?
             }
         };
         Ok(self.object(HostObject::Style(index)))
@@ -1994,6 +2104,7 @@ impl<'a> WorkbookHost<'a> {
             (
                 font.bold,
                 font.italic,
+                font.underline,
                 font.size,
                 font.name.map(str::to_string),
                 font.color.map(colour_from_packed),
@@ -2016,10 +2127,10 @@ impl<'a> WorkbookHost<'a> {
             if let Some(number) = &number {
                 held.number_format = number.clone();
             }
-            if let Some((bold, italic, size, name, color)) = &font {
+            if let Some((bold, italic, underline, size, name, color)) = &font {
                 held.bold = *bold;
                 held.italic = *italic;
-                held.underline = false;
+                held.underline = *underline;
                 held.strikethrough = false;
                 held.font_size = if *size == 11.0 { None } else { Some(*size) };
                 held.font_name = name.clone();
@@ -2081,6 +2192,217 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         Ok(())
+    }
+
+    fn link_id(&self, object: &ObjectRef) -> Option<u64> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Hyperlink(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn hyperlink_scope(&self, object: &ObjectRef) -> Option<HyperlinkScope> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Hyperlinks(scope)) => Some(*scope),
+            _ => None,
+        }
+    }
+
+    /// The hyperlinks a scope reaches, in the order they were added --
+    /// measured, `Hyperlinks(1)` is the first one added, not the highest on
+    /// the sheet.
+    fn links_in(&self, scope: HyperlinkScope) -> Vec<u64> {
+        self.links
+            .iter()
+            .filter(|link| match scope {
+                HyperlinkScope::Sheet(sheet) => link.anchor.sheet == sheet,
+                HyperlinkScope::Range(range) => ranges_overlap(link.anchor, range),
+            })
+            .map(|link| link.id)
+            .collect()
+    }
+
+    fn link_index(&self, id: u64) -> Option<usize> {
+        self.links.iter().position(|link| link.id == id)
+    }
+
+    /// `Hyperlinks.Add Anchor, Address, SubAddress, ScreenTip, TextToDisplay`.
+    ///
+    /// Measured: the anchor's first cell shows `TextToDisplay` when given;
+    /// else, when it is empty, the address as kept, or the sub-address for a
+    /// link with no address; a cell with something in it keeps it. The cells
+    /// are dressed in the `Hyperlink`
+    /// style -- the theme's hyperlink colour, underlined. A second link on the
+    /// same anchor takes the first one's place and leaves the text alone.
+    fn add_hyperlink(&mut self, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let anchor = match given(0) {
+            Some(Value::Object(object)) => self
+                .range(object)
+                .ok_or_else(|| "Hyperlinks.Add needs a Range as its anchor".to_string())?,
+            _ => return Err("Hyperlinks.Add needs a Range as its anchor".to_string()),
+        };
+        let text_of = |value: Option<&Value>| -> Result<String, String> {
+            match value {
+                None => Ok(String::new()),
+                Some(Value::String(text)) => Ok(text.clone()),
+                Some(value) if any_number(value).is_some() => Ok(shown_text(value, None)),
+                Some(_) => Err("Hyperlinks.Add takes text".to_string()),
+            }
+        };
+        let address = kept_address(&text_of(given(1))?);
+        let sub_address = text_of(given(2))?;
+        let screen_tip = text_of(given(3))?;
+        let shown = match given(4) {
+            None => None,
+            Some(value) => Some(text_of(Some(value))?),
+        };
+        let corner = CellAddress {
+            sheet: anchor.sheet,
+            row: anchor.start_row,
+            column: anchor.start_column,
+        };
+        let empty = self
+            .cell_here(corner.sheet, corner.row, corner.column)
+            .is_none_or(|cell| matches!(cell.value, CellValue::Empty) && cell.formula.is_none());
+        let text = match shown {
+            Some(text) => Some(text),
+            None if empty => Some(if address.is_empty() {
+                sub_address.clone()
+            } else {
+                address.clone()
+            }),
+            None => None,
+        };
+        if let Some(text) = text {
+            self.set_cell_value(corner, CellValue::String(text))?;
+        }
+        // A link added where one already hangs takes its place -- the same
+        // number, the same position in the list: measured, `Hyperlinks(1)` is
+        // still the first cell after a second `Add` on it.
+        let id = match self.links.iter_mut().find(|link| ranges_equal(link.anchor, anchor)) {
+            Some(link) => {
+                link.address = address;
+                link.sub_address = sub_address;
+                link.screen_tip = screen_tip;
+                link.id
+            }
+            None => {
+                let id = self.next_link;
+                self.next_link += 1;
+                self.links.push(Link {
+                    id,
+                    anchor,
+                    address,
+                    sub_address,
+                    screen_tip,
+                });
+                id
+            }
+        };
+        self.linked_once = true;
+        self.apply_style(anchor, HYPERLINK_STYLE)?;
+        Ok(self.object(HostObject::Hyperlink(id)))
+    }
+
+    /// Take the hyperlinks off; the cells go back to `Normal`, as measured,
+    /// unless told to keep their dress -- `ClearContents` does that.
+    fn delete_links(&mut self, ids: &[u64], keep_dress: bool) -> Result<(), String> {
+        for id in ids {
+            let Some(index) = self.link_index(*id) else {
+                continue;
+            };
+            let anchor = self.links.remove(index).anchor;
+            if !keep_dress {
+                self.apply_style(anchor, NORMAL_STYLE)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// What one hyperlink answers to.
+    fn hyperlink_member(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let Some(index) = self.link_index(id) else {
+            return Err("the hyperlink has been deleted".to_string());
+        };
+        let corner = CellAddress {
+            sheet: self.links[index].anchor.sheet,
+            row: self.links[index].anchor.start_row,
+            column: self.links[index].anchor.start_column,
+        };
+        let answer = if name.eq_ignore_ascii_case("address") || name.eq_ignore_ascii_case("name")
+        {
+            Value::String(self.links[index].address.clone())
+        } else if name.eq_ignore_ascii_case("subaddress") {
+            Value::String(self.links[index].sub_address.clone())
+        } else if name.eq_ignore_ascii_case("screentip") {
+            Value::String(self.links[index].screen_tip.clone())
+        } else if name.eq_ignore_ascii_case("texttodisplay") {
+            self.range_text(CellRange::single(corner))
+        } else if name.eq_ignore_ascii_case("range") || name.eq_ignore_ascii_case("parent") {
+            let anchor = self.links[index].anchor;
+            self.object(HostObject::Range(anchor))
+        } else if name.eq_ignore_ascii_case("type") {
+            // msoHyperlinkRange.
+            Value::Integer(1)
+        } else if name.eq_ignore_ascii_case("delete") {
+            if !args.is_empty() {
+                return Err("Hyperlink.Delete does not accept arguments".to_string());
+            }
+            self.delete_links(&[id], false)?;
+            Value::Empty
+        } else if name.eq_ignore_ascii_case("follow") {
+            // Nothing here can open it; the macro goes on.
+            Value::Empty
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(answer))
+    }
+
+    /// `Hyperlinks(n)` for a scope.
+    fn hyperlink_item(&mut self, scope: HyperlinkScope, wanted: &Value) -> Result<Value, String> {
+        let index = positive_index(wanted, "Hyperlinks index")? as usize;
+        let held = self.links_in(scope);
+        let Some(&id) = held.get(index - 1) else {
+            return Err(format!("there is no hyperlink number {index} here"));
+        };
+        Ok(self.object(HostObject::Hyperlink(id)))
+    }
+
+    /// What a `Hyperlinks` collection answers to.
+    fn hyperlinks_member(
+        &mut self,
+        scope: HyperlinkScope,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        if name.eq_ignore_ascii_case("count") {
+            return Ok(Some(Value::Integer(self.links_in(scope).len() as i64)));
+        }
+        if name.eq_ignore_ascii_case("item") {
+            let [wanted] = args else {
+                return Err("Hyperlinks.Item takes one number".to_string());
+            };
+            return self.hyperlink_item(scope, wanted).map(Some);
+        }
+        if name.eq_ignore_ascii_case("add") {
+            return self.add_hyperlink(args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("delete") {
+            let ids = self.links_in(scope);
+            self.delete_links(&ids, false)?;
+            return Ok(Some(Value::Empty));
+        }
+        Ok(None)
     }
 
     fn comment_cell(&self, object: &ObjectRef) -> Option<CellAddress> {
@@ -5826,6 +6148,30 @@ impl<'a> WorkbookHost<'a> {
                 })
             })
             .collect();
+        self.links.retain_mut(|link| {
+            if link.anchor.sheet != sheet {
+                return true;
+            }
+            let (near, far, crossing) = if sideways {
+                (link.anchor.start_column + 1, link.anchor.end_column + 1, link.anchor.start_row)
+            } else {
+                (link.anchor.start_row, link.anchor.end_row, link.anchor.start_column + 1)
+            };
+            if !taking_part(crossing) {
+                return true;
+            }
+            let (Some(near), Some(far)) = (moved(near), moved(far)) else {
+                return false;
+            };
+            if sideways {
+                link.anchor.start_column = near - 1;
+                link.anchor.end_column = far - 1;
+            } else {
+                link.anchor.start_row = near;
+                link.anchor.end_row = far;
+            }
+            true
+        });
         self.notes.retain_mut(|note| {
             if note.at.sheet != sheet {
                 return true;
@@ -7394,6 +7740,15 @@ impl<'a> WorkbookHost<'a> {
                 note.at = to;
                 self.notes.push(note);
             }
+            let (from_one, to_one) = (CellRange::single(from), CellRange::single(to));
+            self.links.retain(|link| !ranges_equal(link.anchor, to_one));
+            if let Some(link) = self.links.iter().find(|link| ranges_equal(link.anchor, from_one)) {
+                let mut link = link.clone();
+                link.id = self.next_link;
+                link.anchor = to_one;
+                self.next_link += 1;
+                self.links.push(link);
+            }
         }
     }
 
@@ -7554,6 +7909,14 @@ impl Host for WorkbookHost<'_> {
                         _ => Err("Comments expects zero or one argument".to_string()),
                     };
                 }
+                if name.eq_ignore_ascii_case("hyperlinks") {
+                    let scope = HyperlinkScope::Sheet(sheet);
+                    return match args {
+                        [] => Ok(Some(self.object(HostObject::Hyperlinks(scope)))),
+                        [wanted] => self.hyperlink_item(scope, wanted).map(Some),
+                        _ => Err("Hyperlinks expects zero or one argument".to_string()),
+                    };
+                }
                 // `Protect [password, ...]` and `Unprotect [password]`.
                 // Measured: a wrong password on Unprotect is error 1004 and
                 // leaves the sheet protected; no password either way is fine;
@@ -7683,12 +8046,18 @@ impl Host for WorkbookHost<'_> {
             if let Some(at) = self.comment_cell(receiver) {
                 return self.comment_member(at, name, args);
             }
+            if let Some(id) = self.link_id(receiver) {
+                return self.hyperlink_member(id, name, args);
+            }
+            if let Some(scope) = self.hyperlink_scope(receiver) {
+                return self.hyperlinks_member(scope, name, args);
+            }
             if let Some(index) = self.style_index(receiver) {
                 return self.style_member(index, name);
             }
             if self.is_styles(receiver) {
                 if name.eq_ignore_ascii_case("count") {
-                    return Ok(Some(Value::Integer(BUILT_IN_STYLES.len() as i64)));
+                    return Ok(Some(Value::Integer(self.listed_styles().len() as i64)));
                 }
                 if name.eq_ignore_ascii_case("item") {
                     let [wanted] = args else {
@@ -7882,6 +8251,14 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("style") && args.is_empty() {
                     return Ok(Some(self.style_of(range)));
                 }
+                if name.eq_ignore_ascii_case("hyperlinks") {
+                    let scope = HyperlinkScope::Range(range);
+                    return match args {
+                        [] => Ok(Some(self.object(HostObject::Hyperlinks(scope)))),
+                        [wanted] => self.hyperlink_item(scope, wanted).map(Some),
+                        _ => Err("Hyperlinks expects zero or one argument".to_string()),
+                    };
+                }
                 // Answers True, as `Clear` does.
                 if name.eq_ignore_ascii_case("clearcomments") {
                     if !args.is_empty() {
@@ -8018,6 +8395,10 @@ impl Host for WorkbookHost<'_> {
                         return Err("Range.ClearContents does not accept arguments".to_string());
                     }
                     self.set_range_input(range, Value::Empty, "range assignment", FormulaStyle::A1)?;
+                    // Measured: the hyperlink goes with the contents and the
+                    // blue underline stays.
+                    let ids = self.links_in(HyperlinkScope::Range(range));
+                    self.delete_links(&ids, true)?;
                     return Ok(Some(Value::Empty));
                 }
                 // These answer True, not nothing: asked of Excel,
@@ -8037,6 +8418,8 @@ impl Host for WorkbookHost<'_> {
                     }
                     self.clear_range(range, true, true)?;
                     self.clear_comments(range);
+                    let ids = self.links_in(HyperlinkScope::Range(range));
+                    self.delete_links(&ids, true)?;
                     return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("autofilter") {
@@ -8226,10 +8609,12 @@ impl Host for WorkbookHost<'_> {
                 ][..],
             )
         } else if name.eq_ignore_ascii_case("add") {
-            // Two collections answer to Add, and they name their arguments
+            // Three collections answer to Add, and they name their arguments
             // differently.
             if receiver.is_some_and(|receiver| self.is_names(receiver)) {
                 Some(&["Name", "RefersTo"][..])
+            } else if receiver.is_some_and(|receiver| self.hyperlink_scope(receiver).is_some()) {
+                Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
             } else {
                 Some(&["Before", "After", "Count"][..])
             }
@@ -8372,12 +8757,18 @@ impl Host for WorkbookHost<'_> {
         if let Some(at) = self.comment_cell(receiver) {
             return self.comment_member(at, name, &[]);
         }
+        if let Some(id) = self.link_id(receiver) {
+            return self.hyperlink_member(id, name, &[]);
+        }
+        if let Some(scope) = self.hyperlink_scope(receiver) {
+            return self.hyperlinks_member(scope, name, &[]);
+        }
         if let Some(index) = self.style_index(receiver) {
             return self.style_member(index, name);
         }
         if self.is_styles(receiver) {
             if name.eq_ignore_ascii_case("count") {
-                return Ok(Some(Value::Integer(BUILT_IN_STYLES.len() as i64)));
+                return Ok(Some(Value::Integer(self.listed_styles().len() as i64)));
             }
             return Ok(None);
         }
@@ -8651,6 +9042,9 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("comments") {
                 return Ok(Some(self.object(HostObject::Comments(sheet))));
             }
+            if name.eq_ignore_ascii_case("hyperlinks") {
+                return Ok(Some(self.object(HostObject::Hyperlinks(HyperlinkScope::Sheet(sheet)))));
+            }
             // What the sheet was protected with. `ProtectContents` is False
             // for a sheet protected with `Contents:=False`, and
             // `ProtectionMode` is the `UserInterfaceOnly` flag.
@@ -8918,6 +9312,9 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("style") {
             return Ok(Some(self.style_of(range)));
+        }
+        if name.eq_ignore_ascii_case("hyperlinks") {
+            return Ok(Some(self.object(HostObject::Hyperlinks(HyperlinkScope::Range(range)))));
         }
         if name.eq_ignore_ascii_case("notetext") {
             return self.note_text_member(range, &[]).map(Some);
@@ -9189,6 +9586,39 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(id) = self.link_id(receiver) {
+            let Some(index) = self.link_index(id) else {
+                return Err("the hyperlink has been deleted".to_string());
+            };
+            let text = match &value {
+                Value::String(text) => text.clone(),
+                value if any_number(value).is_some() => shown_text(value, None),
+                _ => return Err("a hyperlink's parts are text".to_string()),
+            };
+            if name.eq_ignore_ascii_case("address") {
+                self.links[index].address = kept_address(&text);
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("subaddress") {
+                self.links[index].sub_address = text;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("screentip") {
+                self.links[index].screen_tip = text;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("texttodisplay") {
+                let anchor = self.links[index].anchor;
+                let corner = CellAddress {
+                    sheet: anchor.sheet,
+                    row: anchor.start_row,
+                    column: anchor.start_column,
+                };
+                self.set_cell_value(corner, CellValue::String(text))?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         if let Some(at) = self.comment_cell(receiver) {
             if name.eq_ignore_ascii_case("visible") {
                 let Some(index) = self.note_at(at) else {
@@ -9781,8 +10211,15 @@ impl Host for WorkbookHost<'_> {
         }
         if self.is_styles(receiver) {
             let mut items = Vec::with_capacity(BUILT_IN_STYLES.len());
-            for index in 0..BUILT_IN_STYLES.len() {
+            for index in self.listed_styles() {
                 items.push(self.object(HostObject::Style(index)));
+            }
+            return Ok(Some(items));
+        }
+        if let Some(scope) = self.hyperlink_scope(receiver) {
+            let mut items = Vec::new();
+            for id in self.links_in(scope) {
+                items.push(self.object(HostObject::Hyperlink(id)));
             }
             return Ok(Some(items));
         }
@@ -13785,6 +14222,60 @@ mod tests {
         assert_eq!(
             answer,
             Value::String("True|False|Null|1004/1|0/77|1004/True|0/False".to_string())
+        );
+    }
+
+    /// A hyperlink is added, read, replaced, moved and taken away as Excel
+    /// does it.
+    ///
+    /// Measured against Excel: `Hyperlinks.Add` answers a Hyperlink; the
+    /// address is kept with its `/` after a bare host; an empty anchor cell
+    /// shows the address, `TextToDisplay` when given, and a cell with
+    /// something in it keeps that; the cell is dressed in `Hyperlink`, which
+    /// joins the workbook's styles right after `Percent`; a second link on
+    /// the same cell takes the first one's place and number; the collection
+    /// counts in the order added; `Delete` puts the cell back to `Normal`;
+    /// `ClearContents` takes the link and leaves the underline; and an
+    /// inserted row moves it.
+    #[test]
+    fn a_hyperlink_is_added_read_replaced_moved_and_taken_away() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String, h As Object
+               On Error Resume Next
+               out = ActiveSheet.Hyperlinks.Count & \"/\" & ActiveWorkbook.Styles.Count & \"|\"
+               Set h = ActiveSheet.Hyperlinks.Add(Anchor:=Range(\"C1\"), Address:=\"http://x.example\")
+               out = out & TypeName(h) & \"/\" & Range(\"C1\").Value & \"/\" & h.Address & \"/\" & h.Range.Address & \"|\"
+               out = out & Range(\"C1\").Font.Color & \"/\" & Range(\"C1\").Font.Underline & \"/\" & Range(\"C1\").Style.Name & \"/\" & ActiveWorkbook.Styles.Count & \"/\" & ActiveWorkbook.Styles(29).Name & \"|\"
+               ActiveSheet.Hyperlinks.Add Range(\"C2\"), \"https://x.example?q=1\", , \"tip\", \"Click\"
+               Range(\"C3\").Value = \"keep\"
+               ActiveSheet.Hyperlinks.Add Range(\"C3\"), \"mailto:a@b.c\"
+               out = out & Range(\"C2\").Value & \"/\" & ActiveSheet.Hyperlinks(2).Address & \"/\" & ActiveSheet.Hyperlinks(2).ScreenTip & \"/\" & Range(\"C3\").Value & \"|\"
+               ActiveSheet.Hyperlinks.Add Range(\"C1\"), \"http://y.example\"
+               out = out & ActiveSheet.Hyperlinks.Count & \"/\" & Range(\"C1\").Value & \"/\" & ActiveSheet.Hyperlinks(1).Address & \"/\" & h.Address & \"|\"
+               out = out & Range(\"C1:C3\").Hyperlinks.Count & \"/\" & Range(\"C1:C3\").Hyperlinks(2).TextToDisplay & \"|\"
+               ActiveSheet.Hyperlinks(2).Delete
+               out = out & ActiveSheet.Hyperlinks.Count & \"/\" & Range(\"C2\").Value & \"/\" & Range(\"C2\").Font.Underline & \"/\" & Range(\"C2\").Style.Name & \"|\"
+               Range(\"C3\").ClearContents
+               out = out & Range(\"C3\").Hyperlinks.Count & \"/\" & Range(\"C3\").Font.Underline & \"|\"
+               Rows(1).Insert
+               out = out & Range(\"C1\").Hyperlinks.Count & Range(\"C2\").Hyperlinks.Count & \"/\" & Range(\"C2\").Hyperlinks(1).Address
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "0/47|Hyperlink/http://x.example//http://x.example//$C$1|8812614/2/Hyperlink/48/Hyperlink|Click/https://x.example/?q=1/tip/keep|3/http://x.example//http://y.example//http://y.example/|3/Click|2/Click/-4142/Normal|0/2|01/http://y.example/"
+                    .to_string()
+            )
         );
     }
 
