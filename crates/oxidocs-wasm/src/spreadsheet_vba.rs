@@ -5956,6 +5956,28 @@ impl Host for WorkbookHost<'_> {
                 self.recalculate();
                 return Ok(Some(Value::Empty));
             }
+            // `Application.Goto` brings a range to the front: its sheet is
+            // activated, the range selected, and the active cell is its first.
+            // Measured: `Goto Range("B2:C3")` leaves Selection B2:C3 and
+            // ActiveCell B2, and `Goto Worksheets("Sheet1").Range("A4")` from
+            // another sheet activates Sheet1 with A4 active. A second argument
+            // asks to scroll, which a browser host has nothing to scroll, and
+            // a STRING reference is error 1004 there.
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("goto") {
+                let Some(first) = args.first() else {
+                    return Err("Application.Goto needs a Range".to_string());
+                };
+                let Value::Object(object) = first else {
+                    return Err("Application.Goto takes a Range object".to_string());
+                };
+                let Some(range) = self.range(object) else {
+                    return Err("Application.Goto takes a Range object".to_string());
+                };
+                self.active_sheet = range.sheet;
+                self.selection = range;
+                self.active_cell = range.first();
+                return Ok(Some(Value::Empty));
+            }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("union") {
                 return self.union_ranges(args).map(Some);
             }
@@ -9266,6 +9288,11 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlshifttoright" => -4161,
         "xlshiftup" => -4162,
         "xlshifttoleft" => -4159,
+        // The two reference styles. `Range.Address` took -4150 all along and
+        // nobody could write it by name, so `Address(0, 0, xlR1C1)` was error
+        // 35 -- an unknown word -- where the feature behind it worked.
+        "xla1" => 1,
+        "xlr1c1" => -4150,
         "xlgeneral" => 1,
         "xlleft" => -4131,
         "xlcenter" => -4108,
@@ -10802,6 +10829,49 @@ mod tests {
         }
         // A real date field beside one is still a date.
         assert_eq!(shown_as(Some("m/d/yyyy h:mm AM/PM")), ShownAs::Moment);
+    }
+
+    /// `Application.Goto` brings a range to the front.
+    ///
+    /// Measured against Excel: `Goto Range("B2:C3")` leaves Selection B2:C3
+    /// and ActiveCell B2; `Goto Worksheets("Sheet1").Range("A4")` from another
+    /// sheet activates Sheet1 with A4 active; a second argument asks to scroll
+    /// and changes nothing here; and a string reference is error 1004.
+    ///
+    /// The two reference-style constants come along with it: `xlR1C1` and
+    /// `xlA1` were missing from the table, so `Address(0, 0, xlR1C1)` was an
+    /// unknown word even though `Address` took -4150 all along. A relative
+    /// R1C1 address is reckoned from A1 whatever cell is active -- asked of
+    /// Excel with A4 selected, B2 is still `R[1]C[1]` -- and only an explicit
+    /// RelativeTo moves the base.
+    #[test]
+    fn goto_brings_a_range_to_the_front() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               On Error Resume Next
+               Application.Goto Range(\"B2:C3\")
+               out = Selection.Address(0, 0) & \"/\" & ActiveCell.Address(0, 0) & \"|\"
+               Application.Goto Range(\"A4\"), True
+               out = out & ActiveCell.Address(0, 0) & \"|\"
+               Application.Goto \"Sheet1!D1\"
+               out = out & \"err\" & Err.Number & \"|\"
+               Err.Clear
+               out = out & Range(\"B2\").Address(0, 0, xlR1C1) & \"/\" &                      Range(\"B2\").Address(1, 1, xlA1)
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("B2:C3/B2|A4|err1004|R[1]C[1]/$B$2".to_string())
+        );
     }
 
     /// `RemoveDuplicates` keeps the first of each and closes the gap.
