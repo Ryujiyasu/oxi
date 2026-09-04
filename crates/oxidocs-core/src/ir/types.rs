@@ -438,6 +438,11 @@ pub struct RunStyle {
     /// runtime-saved equivalent: only docs with explicit eastAsia widen).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_explicit_east_asia: bool,
+    /// S1302: the East Asian family came from a THEME token
+    /// (`w:eastAsiaTheme`), not from a literal `w:eastAsia`. Word measures a ¶
+    /// mark's line with the ASCII font when the East Asian slot is only a theme
+    /// reference, so the ¶-mark path needs to tell the two apart.
+    pub east_asia_from_theme: bool,
     /// East-Asian language tag (`<w:lang w:eastAsia="ja-JP">`). Drives Word's
     /// ambiguous-quote font choice: a CJK eastAsia lang (ja/zh/ko) renders
     /// curly quotes in the eastAsia font; a Latin one (en-US) renders them in
@@ -615,6 +620,7 @@ impl Default for RunStyle {
             font_family: None,
             font_family_east_asia: None,
             has_explicit_east_asia: false,
+            east_asia_from_theme: false,
             east_asia_lang: None,
             latin_lang: None,
             font_size: None,

@@ -4211,6 +4211,7 @@ fn parse_paragraph_properties(
                                                             )
                                                         {
                                                             ppr_rpr.font_family_east_asia = Some(f);
+                                                            ppr_rpr.east_asia_from_theme = true;
                                                         }
                                                     }
                                                 }
@@ -8797,6 +8798,7 @@ fn parse_run_properties(
                                 let font = super::styles::resolve_theme_font_pub(&val, &ctx.theme);
                                 if let Some(f) = font {
                                     style.font_family_east_asia = Some(f);
+                                    style.east_asia_from_theme = true;
                                 }
                             }
                         }
@@ -8908,6 +8910,7 @@ fn parse_run_properties(
                                         super::styles::resolve_theme_font_pub(&val, &ctx.theme);
                                     if let Some(f) = font {
                                         style.font_family_east_asia = Some(f);
+                                        style.east_asia_from_theme = true;
                                     }
                                 }
                             }

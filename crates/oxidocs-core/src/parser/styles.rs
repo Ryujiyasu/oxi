@@ -501,6 +501,7 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                                 };
                                 if let Some(f) = font {
                                     rs.font_family_east_asia = Some(f);
+                            rs.east_asia_from_theme = true;
                                 }
                             }
                         }
@@ -771,6 +772,7 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                         };
                         if let Some(f) = font {
                             rs.font_family_east_asia = Some(f);
+                            rs.east_asia_from_theme = true;
                         }
                     }
                 }
@@ -1240,6 +1242,7 @@ fn parse_style_definition(
                                     };
                                     if let Some(f) = font {
                                         run_style.font_family_east_asia = Some(f);
+                                        run_style.east_asia_from_theme = true;
                                         has_run_style = true;
                                     }
                                 }
@@ -1407,6 +1410,7 @@ fn parse_style_definition(
                                         };
                                         if let Some(f) = font {
                                             run_style.font_family_east_asia = Some(f);
+                                            run_style.east_asia_from_theme = true;
                                             has_run_style = true;
                                         }
                                     }

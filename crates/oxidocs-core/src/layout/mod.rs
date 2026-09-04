@@ -3546,9 +3546,26 @@ impl LayoutEngine {
         // puts the following text 64.23pt below the previous line, which is the
         // ＭＳ 明朝 reading (Oxi's eastAsia reading gives 70.61).
         let s1300 = std::env::var("OXI_S1300_DISABLE").is_err();
-        if prefer_ascii && !s956 && std::env::var("OXI_S707_DISABLE").is_err() {
+        // S1302 (2026-09-04, opt-out OXI_S1302_DISABLE): the same ASCII rule
+        // reaches a TYPED grid when the mark's East Asian family is only a
+        // THEME REFERENCE. `_pb_markea_gen.py`'s grid arm measures 11.66 --
+        // the ASCII line, identical to its no-grid twin -- and the real witness
+        // is `f16f228a`, whose two `<w:rFonts w:eastAsiaTheme="minorEastAsia"/>`
+        // marks sit in a table: Word puts the following text 64.23pt below the
+        // previous line (the ＭＳ 明朝 reading), where taking the theme face
+        // gives 70.61. Narrow on purpose: only a mark that names the theme
+        // ITSELF. A mark that inherits a LITERAL eastAsia is untouched, because
+        // the probe's arms cannot tell that case apart (its ascii and eastAsia
+        // are the same face, so both readings return the same number) -- and a
+        // rule the measurement cannot separate is not a rule yet.
+        // ★An earlier attempt forced `prefer_ascii` on for every typed-grid mark
+        // and regressed ed025 by 0.0065: that document's shortfall is a TEXT
+        // line, not a mark, so the blanket form moved the wrong quantity.
+        let s1302 = run_style.east_asia_from_theme
+            && std::env::var("OXI_S1302_DISABLE").is_err();
+        if (prefer_ascii || s1302) && !s956 && std::env::var("OXI_S707_DISABLE").is_err() {
             let ascii = self.metrics_for(run_style, para_style);
-            if s1300 || !ascii.is_cjk_83_64_font() {
+            if s1300 || s1302 || !ascii.is_cjk_83_64_font() {
                 return ascii;
             }
         }
