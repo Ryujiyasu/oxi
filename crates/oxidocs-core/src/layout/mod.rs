@@ -2249,6 +2249,12 @@ pub struct LayoutEngine {
     doc_body_has_real_cjk: bool,
     /// S811: saved-LRPB distrust for metric-incompatible-substitution docs.
     doc_lrpb_distrust: bool,
+    /// S1304: the same distrust, decided by COUNTING. A file cannot hold more
+    /// `<w:lastRenderedPageBreak/>` markers than it has page breaks, so a
+    /// document whose marker count exceeds `pages - 1` is carrying a cache from
+    /// an older save. That test needs a page count, so `layout` sets this after
+    /// a first pass and lays out once more. `Cell` because `layout` takes &self.
+    lrpb_count_distrust: std::cell::Cell<bool>,
     /// S1062: document-level "every gridded page is a NO-TYPE docGrid".
     /// The cell line-height path (`line_height_inner`) has no `page`, and the
     /// SHARED estimator has none either (threading a per-page flag there would
@@ -2284,6 +2290,32 @@ fn block_has_real_cjk(block: &Block) -> bool {
                 .any(|c| c.blocks.iter().any(block_has_real_cjk))
         }),
         _ => false,
+    }
+}
+
+/// S1304: how many `<w:lastRenderedPageBreak/>` markers this block carries.
+/// A file cannot hold more of them than it has page breaks, so the total over a
+/// document, compared against the page count a first layout pass produced, says
+/// whether the saved cache still describes this layout. Traversal mirrors
+/// `block_has_real_cjk`.
+fn count_lrpb_markers(block: &Block) -> usize {
+    match block {
+        Block::Paragraph(p) => p
+            .runs
+            .iter()
+            .filter(|r| r.has_last_rendered_page_break)
+            .count(),
+        Block::Table(t) => t
+            .rows
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|c| c.blocks.iter().map(count_lrpb_markers).sum::<usize>())
+                    .sum::<usize>()
+            })
+            .sum(),
+        _ => 0,
     }
 }
 
@@ -2578,6 +2610,7 @@ impl LayoutEngine {
             doc_body_has_cjk: false,
             doc_body_has_real_cjk: false,
             doc_lrpb_distrust: false,
+            lrpb_count_distrust: std::cell::Cell::new(false),
             doc_grid_all_no_type: false,
         }
     }
@@ -2769,10 +2802,54 @@ impl LayoutEngine {
                     .pages
                     .iter()
                     .any(|pg| pg.blocks.iter().any(block_uses_incompatible_font)),
+            lrpb_count_distrust: std::cell::Cell::new(false),
         }
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
+        // S1304 (2026-09-04, opt-out OXI_S1304_DISABLE): decide whether this
+        // document's SAVED page-break markers can be trusted, by counting them.
+        //
+        // `<w:lastRenderedPageBreak/>` records where Word broke the page when
+        // the file was last saved. A file cannot carry more of them than it has
+        // page breaks, so `markers > pages - 1` means the cache outlived the
+        // layout it described. MEASURED over the JA blind 100 (`_lrpb_census.py`
+        // against Word's own pagination): of 49 documents that carry markers,
+        //     LIVE  (Word breaks where they say)  40   delta in [-4, +0]
+        //     MIXED                                4   delta in [-7, +0]
+        //     STALE (Word does not)                5   delta = -7, +0, +1, +2, +6
+        // No LIVE or MIXED document has a positive delta -- zero false positives
+        // -- while three of the five stale ones do. A NEGATIVE delta is normal:
+        // Word omits the marker at some breaks.
+        // WITNESS `policies__0353d0b2a7f98e13`, the gate's worst document
+        // (0.1921): 15 markers in a 10-page file. Ignoring them lays it out in
+        // exactly 10 pages, Word's own count.
+        // ★The count needs a page count, so it cannot be decided up front. A
+        // cheap static estimate is NOT safe here: twenty LIVE documents sit at
+        // delta exactly 0, so an estimate off by one page would distrust them.
+        // Lay out, count, and lay out once more only when the file over-counts.
+        if std::env::var("OXI_S1304_DISABLE").is_err() && !self.lrpb_count_distrust.get() {
+            let markers: usize = doc
+                .pages
+                .iter()
+                .flat_map(|pg| pg.blocks.iter())
+                .map(count_lrpb_markers)
+                .sum();
+            if markers > 0 {
+                let first = self.layout_pass(doc);
+                if markers > first.pages.len().saturating_sub(1) {
+                    self.lrpb_count_distrust.set(true);
+                    let second = self.layout_pass(doc);
+                    self.lrpb_count_distrust.set(false);
+                    return second;
+                }
+                return first;
+            }
+        }
+        self.layout_pass(doc)
+    }
+
+    fn layout_pass(&self, doc: &Document) -> LayoutResult {
         // Pre-pass: resolve fitText runs using actual font metrics
         let mut doc_resolved = doc.clone();
         for page in &mut doc_resolved.pages {
@@ -7334,6 +7411,7 @@ cells={} pitch={:.2} text={:?}",
                     // not fire against the EN gate; JP keeps everything).
                     let lrpb_knob_off = std::env::var("OXI_LRPB_DISABLE").is_ok()
                         || self.doc_lrpb_distrust
+                        || self.lrpb_count_distrust.get()
                         || (!self.doc_body_has_real_cjk
                             && std::env::var("OXI_S836_DISABLE").is_err());
                     let has_lrpb_at_start = para
