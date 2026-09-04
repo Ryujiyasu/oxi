@@ -2166,6 +2166,25 @@ fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)>
     // use their embedded italic parts, so the corpus disagrees with itself and
     // this is a property of when PowerPoint was asked, not of the format.
     let italic = italic && !std::env::var("OXI_COLDITAL_ENABLE").is_ok();
+    // ★A part we SKIPPED is still evidence. A part is skipped when the machine
+    // already serves its style, on the premise that the installed copy stands
+    // in for it -- so a request that skipped part would have answered honestly
+    // belongs to the INSTALLED family, and no other typeface's slot may
+    // capture it. d15 (branch 2: a borrowed regular thickened over the real
+    // bold) and d29 (branch 1: "Rubik Medium"'s bold slot claiming 'Rubik'
+    // w=700, 3% narrower than the installed Rubik Bold PowerPoint draws with)
+    // are the two measured captures.
+    if skipbold_on() {
+        let want = norm_family(family);
+        let skipped_has_it = SKIPPED_IDS.with(|ids| {
+            ids.borrow().iter().any(|(fam, weight, ital)| {
+                norm_family(fam) == want && *ital == italic && (*weight >= 600) == bold
+            })
+        });
+        if skipped_has_it {
+            return None;
+        }
+    }
     let pick = |want: &str, want_bold: bool| -> Option<(String, i32)> {
         let want = norm_family(want);
         PART_IDS.with(|ids| {
@@ -2192,29 +2211,14 @@ fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)>
     // advance less the two quote side-bearings. Barlow-Bold would be 191.72pt.
     // So ask for the regular part at weight 700 and let GDI thicken it.
     if bold {
-        // ...unless the deck DOES file an honest bold for this family and we
-        // simply skipped it. Then the premise of this branch is false, and the
-        // request belongs to the installed copy the skip counted on: d15's four
-        // "Barlow" parts are all skipped, and borrowing a weight-400 italic
-        // that calls itself Barlow measured the 30pt quotation at 343.00pt
-        // where PowerPoint's own Barlow Bold sums to 356.40.
-        let want = norm_family(family);
-        let skipped_has_it = skipbold_on()
-            && SKIPPED_IDS.with(|ids| {
-                ids.borrow().iter().any(|(fam, weight, ital)| {
-                    norm_family(fam) == want && *ital == italic && *weight >= 600
-                })
-            });
-        if skipped_has_it {
-            return None;
-        }
         return pick(family, false).map(|(face, _)| (face, 700));
     }
     None
 }
 
-/// S-SKIPBOLD: a skipped-but-honest bold part sends the request to the
-/// installed family, unless this is set, which restores borrowing a regular.
+/// S-SKIPBOLD: a request whose honest part was SKIPPED goes to the installed
+/// family, unless this is set, which restores answering it from whatever part
+/// claims the name.
 fn skipbold_on() -> bool {
     std::env::var("OXI_SKIPBOLD_DISABLE").is_err()
 }
