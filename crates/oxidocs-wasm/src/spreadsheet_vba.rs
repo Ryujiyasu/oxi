@@ -333,6 +333,8 @@ enum HostObject {
     Comment(CellAddress),
     /// The notes on one sheet.
     Comments(usize),
+    /// `Worksheet.Outline`: how one sheet's groups are summarised and shown.
+    Outline(usize),
     /// An object whose worksheet has been deleted. Excel answers every
     /// member of one with error 424 -- measured, a `Worksheet` and a `Range`
     /// kept across the sheet's deletion both raise it, read or written.
@@ -1514,6 +1516,88 @@ struct Note {
     visible: bool,
 }
 
+/// What the window shows of one sheet. Excel keeps each sheet's zoom,
+/// gridlines and scroll position with the sheet, and a window opened on
+/// another sheet shows that sheet's: measured, with Zoom 80 and the gridlines
+/// off on Sheet1, a sheet added answers 100 and True, and Sheet1 answers 80
+/// and False again when it is back in front.
+#[derive(Debug, Clone, Copy)]
+struct View {
+    zoom: f64,
+    gridlines: bool,
+    headings: bool,
+    formulas: bool,
+    zeros: bool,
+    scroll_row: u32,
+    scroll_column: u32,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            zoom: 100.0,
+            gridlines: true,
+            headings: true,
+            formulas: false,
+            zeros: true,
+            scroll_row: 1,
+            scroll_column: 1,
+        }
+    }
+}
+
+/// The outline of one sheet: the level of every grouped row and column --
+/// one being ungrouped, eight the most -- and where its summaries sit.
+#[derive(Debug, Clone)]
+struct Outline {
+    rows: std::collections::HashMap<u32, u8>,
+    columns: std::collections::HashMap<u32, u8>,
+    /// xlSummaryBelow 1, xlSummaryAbove 0.
+    summary_row: i64,
+    /// xlSummaryOnRight -4152, xlSummaryOnLeft -4131.
+    summary_column: i64,
+    automatic_styles: bool,
+}
+
+impl Default for Outline {
+    fn default() -> Self {
+        Self {
+            rows: std::collections::HashMap::new(),
+            columns: std::collections::HashMap::new(),
+            summary_row: 1,
+            summary_column: -4152,
+            automatic_styles: false,
+        }
+    }
+}
+
+/// A hatching drawn over a cell's fill, and the colour it is drawn in.
+///
+/// `kind` is the pattern as the FILE numbers it -- solid 1, mediumGray 2,
+/// darkGray 3, lightGray 4, darkHorizontal 5, darkVertical 6, darkDown 7,
+/// darkUp 8, darkGrid 9, darkTrellis 10, the light ones 11 to 16, gray125
+/// 17, gray0625 18 -- plus 4000 and 4001 for the two gradients. Excel takes
+/// the file's numbers as well as its own names for them, and answers with
+/// the name where it has one: measured, `Pattern = 7` reads back as
+/// `xlDown`, -4121.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Hatching {
+    kind: i64,
+    /// The pattern's colour, packed the way VBA counts it; None is automatic.
+    colour: Option<i64>,
+}
+
+/// The marks this host keeps on a cell beside the workbook: its turn, the
+/// rule under its writing, its hatching, and whether its indent grows with
+/// its rotation. Lifted and put down together when the cell moves.
+#[derive(Debug, Clone, Copy, Default)]
+struct CellMarks {
+    rotation: Option<i32>,
+    underline: Option<i64>,
+    hatching: Option<Hatching>,
+    indented: bool,
+}
+
 /// What `Range.Copy` set aside, as it stood when it was copied. Excel keeps a
 /// live link to the cells instead, so changing them before pasting changes what
 /// arrives; this build pastes what was there at the time.
@@ -1609,6 +1693,23 @@ struct WorkbookHost<'a> {
     /// is Sheet3, or Base, gets Sheet1 next -- so a workbook the browser
     /// has just read starts from nothing.
     sheet_counter: usize,
+    /// What the window shows of each sheet, once a macro has changed it.
+    views: std::collections::HashMap<usize, View>,
+    /// Each sheet's outline, once a macro has grouped anything.
+    outlines: std::collections::HashMap<usize, Outline>,
+    /// The turn of every cell written at an angle, in degrees from -90 to
+    /// 90. The IR keeps only the stacked kind, which is 771 of the 774
+    /// rotations in the conformance corpus; the angles are kept here for
+    /// the macro's own reading, and are not drawn or saved -- the same limit
+    /// the notes a macro adds have.
+    rotations: std::collections::HashMap<CellAddress, i32>,
+    /// The rule under a cell's writing where it is not the single one the
+    /// IR can say: double -4119, single accounting 4, double accounting 5.
+    underlines: std::collections::HashMap<CellAddress, i64>,
+    /// The hatching over each cell that has one.
+    hatchings: std::collections::HashMap<CellAddress, Hatching>,
+    /// The cells whose indent grows with their rotation (`AddIndent`).
+    indented: std::collections::HashSet<CellAddress>,
     /// The number the next new table is named with. Measured: a workbook
     /// counter, not the lowest free number -- with テーブル1 renamed to T,
     /// the next table is still テーブル2.
@@ -1700,6 +1801,12 @@ impl<'a> WorkbookHost<'a> {
             page_setups: std::collections::HashMap::new(),
             selections: std::collections::HashMap::new(),
             sheet_counter: 0,
+            views: std::collections::HashMap::new(),
+            outlines: std::collections::HashMap::new(),
+            rotations: std::collections::HashMap::new(),
+            underlines: std::collections::HashMap::new(),
+            hatchings: std::collections::HashMap::new(),
+            indented: std::collections::HashSet::new(),
             table_counter,
             next_link: 1,
             linked_once: false,
@@ -1786,6 +1893,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Comments(_) => "Comments",
                 HostObject::WorksheetFunction => "WorksheetFunction",
                 HostObject::DebugConsole => "Debug",
+                HostObject::Outline(_) => "Outline",
                 HostObject::Gone => "Nothing",
             }
             .to_string(),
@@ -5569,6 +5677,30 @@ impl<'a> WorkbookHost<'a> {
         Ok(first)
     }
 
+    /// One answer for every cell of a range, read from the cell's dress AND
+    /// the marks the host keeps on it, or None where the cells disagree.
+    fn uniform_marked<T: PartialEq + Clone>(
+        &self,
+        range: CellRange,
+        read: impl Fn(&CellStyle, CellMarks) -> T,
+    ) -> Result<Option<T>, String> {
+        Self::range_cell_count(range)?;
+        let default_style = CellStyle::default();
+        let mut first: Option<T> = None;
+        for address in range.addresses() {
+            let style = self
+                .cell_here(address.sheet, address.row, address.column)
+                .map(|cell| cell.style)
+                .unwrap_or_else(|| default_style.clone());
+            let value = read(&style, self.marks_of(address));
+            if first.as_ref().is_some_and(|held| *held != value) {
+                return Ok(None);
+            }
+            first = Some(value);
+        }
+        Ok(first)
+    }
+
     /// Carry a whole-cell font change into the runs of a cell dressed
     /// unevenly, keeping what else they wear -- measured, `Font.Bold = True`
     /// on such a cell leaves its red word red.
@@ -6125,6 +6257,285 @@ impl<'a> WorkbookHost<'a> {
         )
     }
 
+    fn outline_sheet(&self, object: &ObjectRef) -> Option<usize> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Outline(sheet)) => Some(*sheet),
+            _ => None,
+        }
+    }
+
+    /// The marks on a cell, as they stand.
+    fn marks_of(&self, at: CellAddress) -> CellMarks {
+        CellMarks {
+            rotation: self.rotations.get(&at).copied(),
+            underline: self.underlines.get(&at).copied(),
+            hatching: self.hatchings.get(&at).copied(),
+            indented: self.indented.contains(&at),
+        }
+    }
+
+    /// The marks on a cell, lifted off it.
+    fn take_marks(&mut self, at: CellAddress) -> CellMarks {
+        CellMarks {
+            rotation: self.rotations.remove(&at),
+            underline: self.underlines.remove(&at),
+            hatching: self.hatchings.remove(&at),
+            indented: self.indented.remove(&at),
+        }
+    }
+
+    /// Put marks on a cell in place of whatever it had.
+    fn put_marks(&mut self, at: CellAddress, marks: CellMarks) {
+        match marks.rotation {
+            Some(turn) => {
+                self.rotations.insert(at, turn);
+            }
+            None => {
+                self.rotations.remove(&at);
+            }
+        }
+        match marks.underline {
+            Some(rule) => {
+                self.underlines.insert(at, rule);
+            }
+            None => {
+                self.underlines.remove(&at);
+            }
+        }
+        match marks.hatching {
+            Some(hatching) => {
+                self.hatchings.insert(at, hatching);
+            }
+            None => {
+                self.hatchings.remove(&at);
+            }
+        }
+        if marks.indented {
+            self.indented.insert(at);
+        } else {
+            self.indented.remove(&at);
+        }
+    }
+
+    /// A window property written: what the window shows of the sheet in
+    /// front. `Ok(None)` means the name is not one of them.
+    ///
+    /// Measured: Zoom takes 10 to 400 and refuses 5 and 401 with 1004;
+    /// 80.6 reads back as 80. ScrollRow refuses 0 and 2,000,000, and
+    /// ScrollColumn 20,000, the same way.
+    fn set_view(&mut self, name: &str, value: &Value) -> Result<Option<bool>, String> {
+        let sheet = self.active_sheet;
+        let flag = |what: &str| style_face_boolean(value, what).map(|flag| flag.unwrap_or(false));
+        let whole = |what: &str| -> Result<i64, String> {
+            match any_number(value) {
+                Some(number) if number.is_finite() => Ok(number.trunc() as i64),
+                _ => Err(format!("Window.{what} takes a number")),
+            }
+        };
+        let set = if name.eq_ignore_ascii_case("zoom") {
+            let asked = whole("Zoom")?;
+            if !(10..=400).contains(&asked) {
+                return Err(host_error(1004, "Window.Zoom takes 10 to 400"));
+            }
+            self.views.entry(sheet).or_default().zoom = asked as f64;
+            true
+        } else if name.eq_ignore_ascii_case("displaygridlines") {
+            self.views.entry(sheet).or_default().gridlines = flag("Window.DisplayGridlines")?;
+            true
+        } else if name.eq_ignore_ascii_case("displayheadings") {
+            self.views.entry(sheet).or_default().headings = flag("Window.DisplayHeadings")?;
+            true
+        } else if name.eq_ignore_ascii_case("displayformulas") {
+            self.views.entry(sheet).or_default().formulas = flag("Window.DisplayFormulas")?;
+            true
+        } else if name.eq_ignore_ascii_case("displayzeros") {
+            self.views.entry(sheet).or_default().zeros = flag("Window.DisplayZeros")?;
+            true
+        } else if name.eq_ignore_ascii_case("scrollrow") {
+            let asked = whole("ScrollRow")?;
+            if asked < 1 || asked > i64::from(MAX_WORKSHEET_ROW) {
+                return Err(host_error(1004, "Window.ScrollRow is off the sheet"));
+            }
+            self.views.entry(sheet).or_default().scroll_row = asked as u32;
+            true
+        } else if name.eq_ignore_ascii_case("scrollcolumn") {
+            let asked = whole("ScrollColumn")?;
+            if asked < 1 || asked > i64::from(MAX_WORKSHEET_COLUMN) + 1 {
+                return Err(host_error(1004, "Window.ScrollColumn is off the sheet"));
+            }
+            self.views.entry(sheet).or_default().scroll_column = asked as u32;
+            true
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(set))
+    }
+
+    /// The level of every row or column of a whole band, or None where the
+    /// range is not a band of whole rows or whole columns -- which Excel
+    /// refuses with 1004: measured, `Range("A7").OutlineLevel` raises.
+    fn outline_band(range: CellRange) -> Option<(ShiftAxis, u32, u32)> {
+        match Self::hidden_band(range).ok()? {
+            ShiftAxis::Rows => Some((ShiftAxis::Rows, range.start_row, range.end_row)),
+            ShiftAxis::Columns => {
+                Some((ShiftAxis::Columns, range.start_column, range.end_column))
+            }
+        }
+    }
+
+    fn outline_level(&self, sheet: usize, axis: ShiftAxis, index: u32) -> u8 {
+        let Some(outline) = self.outlines.get(&sheet) else {
+            return 1;
+        };
+        let levels = match axis {
+            ShiftAxis::Rows => &outline.rows,
+            ShiftAxis::Columns => &outline.columns,
+        };
+        levels.get(&index).copied().unwrap_or(1)
+    }
+
+    fn set_outline_level(&mut self, sheet: usize, axis: ShiftAxis, index: u32, level: u8) {
+        let outline = self.outlines.entry(sheet).or_default();
+        let levels = match axis {
+            ShiftAxis::Rows => &mut outline.rows,
+            ShiftAxis::Columns => &mut outline.columns,
+        };
+        if level <= 1 {
+            levels.remove(&index);
+        } else {
+            levels.insert(index, level);
+        }
+    }
+
+    /// `Range.Group` / `Range.Ungroup`: every row or column of the range
+    /// goes one level deeper, or one level up.
+    ///
+    /// Measured: whole rows group rows and whole columns group columns; a
+    /// range that is neither groups its COLUMNS -- `Range("A9:A10").Group`
+    /// and then `Range("A11:B12").Group` leave column A at level 3 and B at
+    /// 2, with rows 9 to 12 still at 1. Grouping past the eighth level, and
+    /// ungrouping what is at the first, are both refused with 1004.
+    fn group_range(&mut self, range: CellRange, deeper: bool) -> Result<Value, String> {
+        let (axis, first, last) = match Self::outline_band(range) {
+            Some(band) => band,
+            None => (ShiftAxis::Columns, range.start_column, range.end_column),
+        };
+        let levels: Vec<u8> = (first..=last)
+            .map(|index| self.outline_level(range.sheet, axis, index))
+            .collect();
+        if deeper && levels.iter().any(|level| *level >= 8) {
+            return Err(host_error(1004, "an outline goes no deeper than eight levels"));
+        }
+        if !deeper && levels.iter().any(|level| *level <= 1) {
+            return Err(host_error(1004, "the rows or columns are not grouped"));
+        }
+        for (index, level) in (first..=last).zip(levels) {
+            let level = if deeper { level + 1 } else { level - 1 };
+            self.set_outline_level(range.sheet, axis, index, level);
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    /// `Outline.ShowLevels RowLevels, ColumnLevels`: what is grouped deeper
+    /// than the level asked for is hidden, and the rest of the grouped
+    /// rows are shown. Measured: after `ShowLevels RowLevels:=1` rows at
+    /// levels 2 and 3 are hidden; after `RowLevels:=2` the level-2 rows are
+    /// back and the level-3 rows still hidden. A row nobody grouped is left
+    /// as it was either way.
+    fn show_outline_levels(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        let asked = |index: usize| -> Result<Option<u8>, String> {
+            match args.get(index) {
+                None | Some(Value::Missing) | Some(Value::Empty) => Ok(None),
+                Some(value) => match any_whole_number(value) {
+                    Some(level) if (0..=8).contains(&level) => Ok(Some(level as u8)),
+                    _ => Err(host_error(1004, "Outline.ShowLevels takes a level from 1 to 8")),
+                },
+            }
+        };
+        let (rows, columns) = (asked(0)?, asked(1)?);
+        if rows.is_none() && columns.is_none() {
+            return Err(host_error(1004, "Outline.ShowLevels needs RowLevels or ColumnLevels"));
+        }
+        if let Some(shown) = rows.filter(|shown| *shown > 0) {
+            let grouped: Vec<(u32, u8)> = self
+                .outlines
+                .get(&sheet)
+                .map(|outline| outline.rows.iter().map(|(index, level)| (*index, *level)).collect())
+                .unwrap_or_default();
+            for (index, level) in grouped {
+                let band = CellRange {
+                    sheet,
+                    start_row: index,
+                    end_row: index,
+                    start_column: 0,
+                    end_column: MAX_WORKSHEET_COLUMN,
+                };
+                self.set_range_hidden(band, level > shown)?;
+            }
+        }
+        if let Some(shown) = columns.filter(|shown| *shown > 0) {
+            let grouped: Vec<(u32, u8)> = self
+                .outlines
+                .get(&sheet)
+                .map(|outline| outline.columns.iter().map(|(index, level)| (*index, *level)).collect())
+                .unwrap_or_default();
+            for (index, level) in grouped {
+                let band = CellRange {
+                    sheet,
+                    start_row: 1,
+                    end_row: MAX_WORKSHEET_ROW,
+                    start_column: index,
+                    end_column: index,
+                };
+                self.set_range_hidden(band, level > shown)?;
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    /// `Range.ClearOutline`: the levels of the range's rows and columns go
+    /// back to one. What was hidden stays hidden.
+    fn clear_outline(&mut self, range: CellRange) {
+        let Some(outline) = self.outlines.get_mut(&range.sheet) else {
+            return;
+        };
+        outline
+            .rows
+            .retain(|index, _| !(range.start_row..=range.end_row).contains(index));
+        outline
+            .columns
+            .retain(|index, _| !(range.start_column..=range.end_column).contains(index));
+    }
+
+    /// The fill was coloured, or uncoloured: a solid of automatic colour
+    /// gives way to the colour, a hatching stays over it -- measured,
+    /// `Color = 65280` over gray50 leaves the pattern gray50 -- and taking
+    /// the colour away takes any pattern with it.
+    fn fill_coloured(&mut self, range: CellRange, coloured: bool) {
+        for at in range.addresses() {
+            match self.hatchings.get(&at) {
+                Some(Hatching { kind: 1, .. }) if coloured => {
+                    self.hatchings.remove(&at);
+                }
+                Some(_) if !coloured => {
+                    self.hatchings.remove(&at);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Give the pattern over every cell a colour. A cell with no pattern
+    /// gets a solid one to carry it.
+    fn paint_pattern(&mut self, range: CellRange, colour: Option<i64>) -> Result<(), String> {
+        Self::range_cell_count(range)?;
+        for at in range.addresses() {
+            let kind = self.hatchings.get(&at).map(|held| held.kind).unwrap_or(1);
+            self.hatchings.insert(at, Hatching { kind, colour });
+        }
+        Ok(())
+    }
+
     /// Whether the object's worksheet has been deleted out from under it.
     fn gone(&self, object: &ObjectRef) -> bool {
         matches!(self.objects.get(object.handle as usize), Some(HostObject::Gone))
@@ -6209,6 +6620,30 @@ impl<'a> WorkbookHost<'a> {
                 Some((moved(sheet)?, (range(selection)?, address(active)?)))
             })
             .collect();
+        self.views = std::mem::take(&mut self.views)
+            .into_iter()
+            .filter_map(|(sheet, view)| Some((moved(sheet)?, view)))
+            .collect();
+        self.outlines = std::mem::take(&mut self.outlines)
+            .into_iter()
+            .filter_map(|(sheet, outline)| Some((moved(sheet)?, outline)))
+            .collect();
+        self.rotations = std::mem::take(&mut self.rotations)
+            .into_iter()
+            .filter_map(|(at, turn)| Some((address(at)?, turn)))
+            .collect();
+        self.underlines = std::mem::take(&mut self.underlines)
+            .into_iter()
+            .filter_map(|(at, rule)| Some((address(at)?, rule)))
+            .collect();
+        self.hatchings = std::mem::take(&mut self.hatchings)
+            .into_iter()
+            .filter_map(|(at, hatching)| Some((address(at)?, hatching)))
+            .collect();
+        self.indented = std::mem::take(&mut self.indented)
+            .into_iter()
+            .filter_map(address)
+            .collect();
         if let Some(filter) = self.auto_filter.as_mut() {
             match range(filter.range) {
                 Some(held) => filter.range = held,
@@ -6283,6 +6718,7 @@ impl<'a> WorkbookHost<'a> {
                 }
                 HostObject::Comment(at) => address(at).map(HostObject::Comment),
                 HostObject::Comments(sheet) => moved(sheet).map(HostObject::Comments),
+                HostObject::Outline(sheet) => moved(sheet).map(HostObject::Outline),
                 HostObject::Blocks(_)
                 | HostObject::Areas(_)
                 | HostObject::BlocksStyle(..)
@@ -6654,6 +7090,25 @@ impl<'a> WorkbookHost<'a> {
             .map(|((at, paint), colour)| ((address(*at), *paint), *colour))
             .collect();
         self.theme_paint.extend(painted);
+        if let Some(view) = self.views.get(&from).copied() {
+            self.views.insert(to, view);
+        }
+        if let Some(outline) = self.outlines.get(&from).cloned() {
+            self.outlines.insert(to, outline);
+        }
+        let marked: Vec<CellAddress> = self
+            .rotations
+            .keys()
+            .chain(self.underlines.keys())
+            .chain(self.hatchings.keys())
+            .chain(self.indented.iter())
+            .filter(|at| at.sheet == from)
+            .copied()
+            .collect();
+        for at in marked {
+            let marks = self.marks_of(at);
+            self.put_marks(address(at), marks);
+        }
     }
 
     fn delete_worksheet(&mut self, sheet: usize) -> Result<(), String> {
@@ -9675,6 +10130,15 @@ impl<'a> WorkbookHost<'a> {
                     || !(range.start_row..=range.end_row).contains(&held.row)
                     || !(range.start_column..=range.end_column).contains(&held.column)
             });
+            let outside = |held: &CellAddress| {
+                held.sheet != range.sheet
+                    || !(range.start_row..=range.end_row).contains(&held.row)
+                    || !(range.start_column..=range.end_column).contains(&held.column)
+            };
+            self.rotations.retain(|held, _| outside(held));
+            self.underlines.retain(|held, _| outside(held));
+            self.hatchings.retain(|held, _| outside(held));
+            self.indented.retain(outside);
         }
         let sheet = self
             .workbook
@@ -9904,32 +10368,70 @@ impl<'a> WorkbookHost<'a> {
         // The notes and the unlocking move with their cells, and go when
         // their cells go.
         let sheet = range.sheet;
-        self.unlocked = self
-            .unlocked
-            .iter()
-            .filter_map(|held| {
-                if held.sheet != sheet {
-                    return Some(*held);
+        let relocate = |held: CellAddress| -> Option<CellAddress> {
+            if held.sheet != sheet {
+                return Some(held);
+            }
+            let (along, crossing) = if sideways {
+                (held.column + 1, held.row)
+            } else {
+                (held.row, held.column + 1)
+            };
+            if !taking_part(crossing) {
+                return Some(held);
+            }
+            let along = moved(along)?;
+            Some(if sideways {
+                CellAddress {
+                    column: along - 1,
+                    ..held
                 }
-                let (along, crossing) = if sideways {
-                    (held.column + 1, held.row)
-                } else {
-                    (held.row, held.column + 1)
-                };
-                if !taking_part(crossing) {
-                    return Some(*held);
-                }
-                let along = moved(along)?;
-                Some(if sideways {
-                    CellAddress {
-                        column: along - 1,
-                        ..*held
-                    }
-                } else {
-                    CellAddress { row: along, ..*held }
-                })
+            } else {
+                CellAddress { row: along, ..held }
             })
+        };
+        self.unlocked = self.unlocked.iter().filter_map(|held| relocate(*held)).collect();
+        self.styled = std::mem::take(&mut self.styled)
+            .into_iter()
+            .filter_map(|(held, style)| Some((relocate(held)?, style)))
             .collect();
+        self.theme_paint = std::mem::take(&mut self.theme_paint)
+            .into_iter()
+            .filter_map(|((held, paint), painted)| Some(((relocate(held)?, paint), painted)))
+            .collect();
+        self.rotations = std::mem::take(&mut self.rotations)
+            .into_iter()
+            .filter_map(|(held, turn)| Some((relocate(held)?, turn)))
+            .collect();
+        self.underlines = std::mem::take(&mut self.underlines)
+            .into_iter()
+            .filter_map(|(held, rule)| Some((relocate(held)?, rule)))
+            .collect();
+        self.hatchings = std::mem::take(&mut self.hatchings)
+            .into_iter()
+            .filter_map(|(held, hatching)| Some((relocate(held)?, hatching)))
+            .collect();
+        self.indented = self.indented.iter().filter_map(|held| relocate(*held)).collect();
+        // A whole band of rows or columns carries its outline levels along;
+        // a band put in starts at level one.
+        if let Some(outline) = self.outlines.get_mut(&sheet) {
+            let whole = if sideways {
+                across.0 == 1 && across.1 == MAX_WORKSHEET_ROW
+            } else {
+                across.0 == 1 && across.1 == MAX_WORKSHEET_COLUMN + 1
+            };
+            if whole {
+                let levels = if sideways { &mut outline.columns } else { &mut outline.rows };
+                *levels = std::mem::take(levels)
+                    .into_iter()
+                    .filter_map(|(index, level)| {
+                        let along = if sideways { index + 1 } else { index };
+                        let along = moved(along)?;
+                        Some((if sideways { along - 1 } else { along }, level))
+                    })
+                    .collect();
+            }
+        }
         let moved_validations: Vec<(CellAddress, Validation)> = self
             .validations
             .drain()
@@ -11316,11 +11818,16 @@ impl<'a> WorkbookHost<'a> {
             .addresses()
             .map(|address| self.unlocked.remove(&address))
             .collect::<Vec<_>>();
-        for (((address, cell), note), was_unlocked) in source
+        let marks = source
+            .addresses()
+            .map(|address| self.take_marks(address))
+            .collect::<Vec<_>>();
+        for ((((address, cell), note), was_unlocked), marks) in source
             .addresses()
             .zip(carried)
             .zip(notes)
             .zip(unlocked)
+            .zip(marks)
         {
             let landing = CellAddress {
                 sheet: destination.sheet,
@@ -11328,6 +11835,7 @@ impl<'a> WorkbookHost<'a> {
                 column: (i64::from(address.column) + across) as u32,
             };
             self.put_cell(landing, cell)?;
+            self.put_marks(landing, marks);
             if let Some(index) = self.note_at(landing) {
                 self.notes.remove(index);
             }
@@ -11604,6 +12112,8 @@ impl<'a> WorkbookHost<'a> {
             for (paint, painted) in paints {
                 self.theme_paint.insert((to, paint), painted);
             }
+            let marks = self.marks_of(from);
+            self.put_marks(to, marks);
             if let Some(index) = self.note_at(to) {
                 self.notes.remove(index);
             }
@@ -11758,6 +12268,12 @@ impl Host for WorkbookHost<'_> {
         if let Some(receiver) = receiver {
             if self.gone(receiver) {
                 return Err(host_error(424, "the object's worksheet has been deleted"));
+            }
+            if let Some(sheet) = self.outline_sheet(receiver) {
+                if name.eq_ignore_ascii_case("showlevels") {
+                    return self.show_outline_levels(sheet, args).map(Some);
+                }
+                return Ok(None);
             }
             // EVERY Excel object can be asked for the Application, and it
             // always answers the same one. Measured: `Range("A1").Application`,
@@ -12289,6 +12805,16 @@ impl Host for WorkbookHost<'_> {
                     }
                     return self.auto_fit(range).map(Some);
                 }
+                if name.eq_ignore_ascii_case("group") {
+                    return self.group_range(range, true).map(Some);
+                }
+                if name.eq_ignore_ascii_case("ungroup") {
+                    return self.group_range(range, false).map(Some);
+                }
+                if name.eq_ignore_ascii_case("clearoutline") {
+                    self.clear_outline(range);
+                    return Ok(Some(Value::Boolean(true)));
+                }
                 if name.eq_ignore_ascii_case("removeduplicates") {
                     return self.remove_duplicates(range, args).map(Some);
                 }
@@ -12721,6 +13247,8 @@ impl Host for WorkbookHost<'_> {
             && receiver.is_some_and(|receiver| self.condition_id(receiver).is_some())
         {
             Some(&["Type", "Operator", "Formula1", "Formula2", "String", "TextOperator"][..])
+        } else if name.eq_ignore_ascii_case("showlevels") {
+            Some(&["RowLevels", "ColumnLevels"][..])
         } else if name.eq_ignore_ascii_case("addcomment") {
             Some(&["Text"][..])
         } else if name.eq_ignore_ascii_case("text")
@@ -12765,6 +13293,17 @@ impl Host for WorkbookHost<'_> {
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
+        if let Some(sheet) = self.outline_sheet(receiver) {
+            // Measured on a fresh sheet: SummaryRow xlSummaryBelow (1),
+            // SummaryColumn xlSummaryOnRight (-4152), AutomaticStyles False.
+            let outline = self.outlines.get(&sheet).cloned().unwrap_or_default();
+            return Ok(match name.to_ascii_lowercase().as_str() {
+                "summaryrow" => Some(Value::Integer(outline.summary_row)),
+                "summarycolumn" => Some(Value::Integer(outline.summary_column)),
+                "automaticstyles" => Some(Value::Boolean(outline.automatic_styles)),
+                _ => None,
+            });
         }
         // The Application's default member is its NAME, not a Value: asked of
         // Excel, `CStr(Range("A1").Application)` is `Microsoft Excel`. Without
@@ -12936,15 +13475,16 @@ impl Host for WorkbookHost<'_> {
                 // `xlUnderlineStyleNone`, and one that has answers
                 // `xlUnderlineStyleSingle` — which is also what it answers
                 // after `Font.Underline = True`.
+                // A double rule or an accounting one is kept beside the
+                // cell, since the IR says only whether there is a rule.
                 return self
-                    .uniform_font(range, |dress| dress.underline)
-                    .map(|value| {
-                        Some(match value {
-                            Some(true) => Value::Integer(UNDERLINE_SINGLE),
-                            Some(false) => Value::Integer(UNDERLINE_NONE),
-                            None => Value::Null,
-                        })
-                    });
+                    .uniform_marked(range, |style, marks| {
+                        if !style.underline {
+                            return UNDERLINE_NONE;
+                        }
+                        marks.underline.unwrap_or(UNDERLINE_SINGLE)
+                    })
+                    .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
             }
             if name.eq_ignore_ascii_case("name") {
                 // As with the alignment, what comes back is what the cells
@@ -13060,30 +13600,52 @@ impl Host for WorkbookHost<'_> {
                     });
             }
             if name.eq_ignore_ascii_case("pattern") {
-                // A cell either has a fill or has none. Asked of Excel, a bare
-                // cell answers `xlPatternNone` and a coloured one `xlSolid`,
-                // and the corpus bears that out: of 744 fills in the 285
-                // conformance workbooks, 741 are one of those two.
+                // A bare cell answers `xlPatternNone` and a coloured one
+                // `xlSolid` -- of 744 fills in the 285 conformance workbooks,
+                // 741 are one of those two -- and a hatched one answers its
+                // hatching by Excel's name for it.
                 return self
-                    .uniform_style(range, |style| style.bg_color.is_some())
-                    .map(|value| {
-                        Some(match value {
-                            Some(true) => Value::Integer(1),
-                            Some(false) => Value::Integer(COLOUR_NONE),
-                            None => Value::Null,
-                        })
-                    });
+                    .uniform_marked(range, |style, marks| match marks.hatching {
+                        Some(hatching) => pattern_name(hatching.kind),
+                        None if style.bg_color.is_some() => 1,
+                        None => COLOUR_NONE,
+                    })
+                    .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
+            }
+            if name.eq_ignore_ascii_case("patterncolor") {
+                // Automatic is black: measured, a bare cell and a fresh gray50
+                // both answer 0.
+                return self
+                    .uniform_marked(range, |_, marks| {
+                        marks.hatching.and_then(|hatching| hatching.colour).unwrap_or(BLACK)
+                    })
+                    .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
+            }
+            if name.eq_ignore_ascii_case("patterncolorindex") {
+                // Measured: xlNone on a bare cell, xlAutomatic on a fresh
+                // gray50, and 3 once the pattern is painted red.
+                return self
+                    .uniform_marked(range, |_, marks| match marks.hatching {
+                        None => COLOUR_NONE,
+                        Some(Hatching { colour: None, .. }) => COLOUR_AUTOMATIC,
+                        Some(Hatching { colour: Some(colour), .. }) => nearest_palette_index(colour),
+                    })
+                    .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
             }
             if name.eq_ignore_ascii_case("colorindex") {
+                // A fill with no colour of its own is xlNone -- unless a
+                // pattern (a solid one included) sits on the cell, when the
+                // colour is xlAutomatic: measured on `Pattern = xlSolid` and
+                // `Pattern = xlGray50` over bare cells.
                 return self
-                    .uniform_style(range, |style| style.bg_color.clone())
-                    .map(|value| {
-                        Some(match value.map(|held| colour_to_packed(held.as_deref())) {
-                            None => Value::Null,
-                            Some(None) => Value::Integer(COLOUR_NONE),
-                            Some(Some(packed)) => Value::Integer(nearest_palette_index(packed)),
-                        })
-                    });
+                    .uniform_marked(range, |style, marks| {
+                        match colour_to_packed(style.bg_color.as_deref()) {
+                            Some(packed) => nearest_palette_index(packed),
+                            None if marks.hatching.is_some() => COLOUR_AUTOMATIC,
+                            None => COLOUR_NONE,
+                        }
+                    })
+                    .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
             }
             return Ok(None);
         }
@@ -13107,6 +13669,31 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("activesheet") {
                 return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
             }
+            // What the window shows of the sheet in front. Measured on a
+            // fresh window: Zoom 100 (a Double), gridlines and headings on,
+            // formulas off, zeros on, and both scrolls at 1.
+            let view = self.views.get(&self.active_sheet).copied().unwrap_or_default();
+            if name.eq_ignore_ascii_case("zoom") {
+                return Ok(Some(Value::Double(view.zoom)));
+            }
+            if name.eq_ignore_ascii_case("displaygridlines") {
+                return Ok(Some(Value::Boolean(view.gridlines)));
+            }
+            if name.eq_ignore_ascii_case("displayheadings") {
+                return Ok(Some(Value::Boolean(view.headings)));
+            }
+            if name.eq_ignore_ascii_case("displayformulas") {
+                return Ok(Some(Value::Boolean(view.formulas)));
+            }
+            if name.eq_ignore_ascii_case("displayzeros") {
+                return Ok(Some(Value::Boolean(view.zeros)));
+            }
+            if name.eq_ignore_ascii_case("scrollrow") {
+                return Ok(Some(Value::Integer(i64::from(view.scroll_row))));
+            }
+            if name.eq_ignore_ascii_case("scrollcolumn") {
+                return Ok(Some(Value::Integer(i64::from(view.scroll_column))));
+            }
             return Ok(None);
         }
         if let Some(sheet) = self.worksheet(receiver) {
@@ -13121,6 +13708,9 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("pagesetup") {
                 return Ok(Some(self.object(HostObject::PageSetup(sheet))));
+            }
+            if name.eq_ignore_ascii_case("outline") {
+                return Ok(Some(self.object(HostObject::Outline(sheet))));
             }
             // What the sheet was protected with. `ProtectContents` is False
             // for a sheet protected with `Contents:=False`, and
@@ -13534,19 +14124,41 @@ impl Host for WorkbookHost<'_> {
                 .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
         }
         if name.eq_ignore_ascii_case("orientation") {
-            // Excel counts a rotation in degrees as well, but of the 774
-            // rotations in the 285 conformance workbooks 771 are the stacked
-            // one, so that is the pair this build keeps apart: writing set in
-            // a line, and writing stacked one letter above the next.
+            // Stacked writing answers xlVertical, and a turn answers its
+            // angle -- except the two Excel has names for: measured, 90
+            // reads back as xlUpward and -90 as xlDownward, where 45 is 45.
             return self
-                .uniform_style(range, |style| style.stacked_text)
-                .map(|value| {
-                    Some(match value {
-                        Some(true) => Value::Integer(-4166),
-                        Some(false) => Value::Integer(-4128),
-                        None => Value::Null,
-                    })
-                });
+                .uniform_marked(range, |style, marks| {
+                    if style.stacked_text {
+                        return -4166;
+                    }
+                    match marks.rotation {
+                        Some(90) => -4171,
+                        Some(-90) => -4170,
+                        Some(turn) => i64::from(turn),
+                        None => -4128,
+                    }
+                })
+                .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
+        }
+        if name.eq_ignore_ascii_case("addindent") {
+            return self
+                .uniform_marked(range, |_, marks| marks.indented)
+                .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+        }
+        if name.eq_ignore_ascii_case("outlinelevel") {
+            let Some((axis, first, last)) = Self::outline_band(range) else {
+                return Err(host_error(1004, "OutlineLevel is a property of whole rows or columns"));
+            };
+            let mut level = None;
+            for index in first..=last {
+                let held = self.outline_level(range.sheet, axis, index);
+                if level.is_some_and(|seen| seen != held) {
+                    return Ok(Some(Value::Null));
+                }
+                level = Some(held);
+            }
+            return Ok(Some(Value::Integer(i64::from(level.unwrap_or(1)))));
         }
         if name.eq_ignore_ascii_case("indentlevel") {
             return self
@@ -13692,6 +14304,29 @@ impl Host for WorkbookHost<'_> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
+        if let Some(sheet) = self.outline_sheet(receiver) {
+            let outline = self.outlines.entry(sheet).or_default();
+            if name.eq_ignore_ascii_case("summaryrow") {
+                match any_whole_number(&value) {
+                    Some(side @ (0 | 1)) => outline.summary_row = side,
+                    _ => return Err(host_error(1004, "Outline.SummaryRow takes xlSummaryAbove or xlSummaryBelow")),
+                }
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("summarycolumn") {
+                match any_whole_number(&value) {
+                    Some(side @ (-4152 | -4131)) => outline.summary_column = side,
+                    _ => return Err(host_error(1004, "Outline.SummaryColumn takes xlSummaryOnLeft or xlSummaryOnRight")),
+                }
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("automaticstyles") {
+                outline.automatic_styles =
+                    style_face_boolean(&value, "Outline.AutomaticStyles")?.unwrap_or(false);
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         if let Some(range) = self.validation_range(receiver) {
             return self.set_validation(range, name, value);
         }
@@ -13797,7 +14432,17 @@ impl Host for WorkbookHost<'_> {
             };
             held.frozen_rows = rows;
             held.frozen_cols = cols;
+            // The scrolling pane starts under the frozen one: measured,
+            // frozen from B2 with the window at the top, ScrollRow is 2.
+            let view = self.views.entry(sheet).or_default();
+            view.scroll_row = rows + 1;
+            view.scroll_column = cols + 1;
             return Ok(true);
+        }
+        if self.is_window(receiver) {
+            if let Some(set) = self.set_view(name, &value)? {
+                return Ok(set);
+            }
         }
         match self.objects.get(receiver.handle as usize) {
             Some(HostObject::Blocks(handle)) => {
@@ -14008,22 +14653,28 @@ impl Host for WorkbookHost<'_> {
                         )
                     }
                 };
-                let underline = match asked {
-                    UNDERLINE_SINGLE => true,
-                    UNDERLINE_NONE => false,
-                    // A double rule and the two accounting ones are styles
-                    // Excel keeps apart. This build carries only whether a
-                    // cell is underlined, and writing one of them down as a
-                    // single rule would be a quieter kind of wrong.
-                    -4119 | 4 | 5 => {
-                        return Err(format!(
-                            "Font.Underline {asked} is a style this build cannot                              keep apart from a single rule"
-                        ))
-                    }
-                    _ => return Err(format!("unsupported Font.Underline constant: {asked}")),
+                // Measured: 2 and True are the single rule, -4142, False and
+                // 1 none, -4119 and 3 the double rule, 4 and 5 the two
+                // accounting rules, and 0 is refused with 1004.
+                let (underline, styled) = match asked {
+                    UNDERLINE_SINGLE => (true, None),
+                    UNDERLINE_NONE | 1 => (false, None),
+                    -4119 | 3 => (true, Some(-4119)),
+                    4 | 5 => (true, Some(asked)),
+                    _ => return Err(host_error(1004, "that is not an underline style")),
                 };
                 self.set_range_style(range, |_, style| style.underline = underline)?;
                 self.redress_runs(range, |dress| dress.underline = underline);
+                for at in range.addresses() {
+                    match styled {
+                        Some(rule) => {
+                            self.underlines.insert(at, rule);
+                        }
+                        None => {
+                            self.underlines.remove(&at);
+                        }
+                    }
+                }
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("name") {
@@ -14096,33 +14747,70 @@ impl Host for WorkbookHost<'_> {
                 let value = style_color(&value, "Interior.Color")?;
                 self.forget_theme_paint(range, Paint::Interior);
                 self.set_range_style(range, |_, style| style.bg_color = value.clone())?;
+                self.fill_coloured(range, value.is_some());
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("colorindex") {
                 let colour = palette_choice(&value, COLOUR_NONE, "Interior.ColorIndex")?;
                 self.forget_theme_paint(range, Paint::Interior);
                 self.set_range_style(range, |_, style| style.bg_color = colour.clone())?;
+                self.fill_coloured(range, colour.is_some());
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("pattern") {
-                // Asked of Excel, `Pattern = xlSolid` on a cell with no fill
-                // leaves it filled WHITE — the fill is there, it just cannot
-                // be told from the paper — and `xlNone` takes the fill away.
                 let asked = match &value {
                     value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
                     _ => return Err("Interior.Pattern takes a pattern by number".to_string()),
                 };
-                match asked {
-                    1 => self.set_range_style(range, |_, style| {
-                        style.bg_color.get_or_insert_with(|| "FFFFFF".to_string());
-                    })?,
-                    COLOUR_NONE => self.set_range_style(range, |_, style| style.bg_color = None)?,
-                    other => {
-                        return Err(format!(
-                            "Interior.Pattern {other} is a hatching this build cannot keep"
-                        ))
+                let kind = pattern_kind(asked)?;
+                Self::range_cell_count(range)?;
+                match kind {
+                    // xlNone takes the fill away with the pattern: measured,
+                    // the cell's Color is white and its ColorIndex xlNone after.
+                    0 => {
+                        self.set_range_style(range, |_, style| style.bg_color = None)?;
+                        for at in range.addresses() {
+                            self.hatchings.remove(&at);
+                        }
+                    }
+                    // xlSolid over a fill is what the fill already is; over a
+                    // bare cell it is a solid of automatic colour -- Color
+                    // white, ColorIndex xlAutomatic -- which cannot be told
+                    // from the paper.
+                    1 => {
+                        for at in range.addresses() {
+                            let filled = self
+                                .cell_here(at.sheet, at.row, at.column)
+                                .is_some_and(|cell| cell.style.bg_color.is_some());
+                            if filled {
+                                self.hatchings.remove(&at);
+                            } else {
+                                let colour = self.hatchings.get(&at).and_then(|held| held.colour);
+                                self.hatchings.insert(at, Hatching { kind: 1, colour });
+                            }
+                        }
+                    }
+                    // A hatching keeps whatever fill and pattern colour the
+                    // cell had: measured, red then gray50 reads Color 255.
+                    kind => {
+                        for at in range.addresses() {
+                            let colour = self.hatchings.get(&at).and_then(|held| held.colour);
+                            self.hatchings.insert(at, Hatching { kind, colour });
+                        }
                     }
                 }
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("patterncolor") {
+                let Some(colour) = color_number(&value, "Interior.PatternColor")? else {
+                    return Ok(true);
+                };
+                self.paint_pattern(range, Some(colour as i64))?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("patterncolorindex") {
+                let colour = palette_choice(&value, COLOUR_AUTOMATIC, "Interior.PatternColorIndex")?;
+                self.paint_pattern(range, colour_to_packed(colour.as_deref()))?;
                 return Ok(true);
             }
             return Ok(false);
@@ -14231,23 +14919,63 @@ impl Host for WorkbookHost<'_> {
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("orientation") {
-            let asked = match &value {
-                value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
-                _ => return Err("Range.Orientation takes a direction by number".to_string()),
+            // A number, or text holding one -- measured, `"30"` is taken --
+            // and a fraction is cut short: 45.6 reads back as 45.
+            let Some(asked) = numeric_text(&value).map(f64::trunc) else {
+                return Err("Range.Orientation takes a direction by number".to_string());
             };
-            let stacked = match asked {
-                // 255 is how the FILE spells stacked, and Excel takes it as
-                // well as its own name for it: setting 255 and reading the
-                // property back answers -4166.
-                255 | -4166 => true,
-                -4128 => false,
-                other => {
-                    return Err(format!(
-                        "Range.Orientation {other} is a turn this build cannot keep"
-                    ))
+            let asked = asked as i64;
+            // 255 is how the FILE spells stacked, and Excel takes it as well
+            // as its own name for it: setting 255 and reading the property
+            // back answers -4166. A turn is -90 to 90; 91, 180 and -91 are
+            // refused with 1004.
+            let turn: Option<i32> = match asked {
+                255 | -4166 => None,
+                -4128 => Some(0),
+                -4171 => Some(90),
+                -4170 => Some(-90),
+                degrees if (-90..=90).contains(&degrees) => Some(degrees as i32),
+                _ => return Err(host_error(1004, "Range.Orientation takes -90 to 90")),
+            };
+            self.set_range_style(range, |_, style| style.stacked_text = turn.is_none())?;
+            for at in range.addresses() {
+                match turn {
+                    Some(0) | None => {
+                        self.rotations.remove(&at);
+                    }
+                    Some(degrees) => {
+                        self.rotations.insert(at, degrees);
+                    }
                 }
+            }
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("addindent") {
+            let Some(indented) = style_face_boolean(&value, "Range.AddIndent")? else {
+                return Ok(true);
             };
-            self.set_range_style(range, |_, style| style.stacked_text = stacked)?;
+            Self::range_cell_count(range)?;
+            for at in range.addresses() {
+                if indented {
+                    self.indented.insert(at);
+                } else {
+                    self.indented.remove(&at);
+                }
+            }
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("outlinelevel") {
+            let Some((axis, first, last)) = Self::outline_band(range) else {
+                return Err(host_error(1004, "OutlineLevel is a property of whole rows or columns"));
+            };
+            // Measured: 3 is taken, and 0 and 9 are refused with 1004.
+            let level = match any_whole_number(&value) {
+                Some(level) if (1..=8).contains(&level) => level as u8,
+                _ => return Err(host_error(1004, "OutlineLevel takes 1 to 8")),
+            };
+            for index in first..=last {
+                self.set_outline_level(range.sheet, axis, index, level);
+            }
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("indentlevel") {
@@ -15638,6 +16366,49 @@ fn any_number(value: &Value) -> Option<f64> {
 }
 
 /// The same, where the caller needs a whole number and a fraction is not one.
+/// A number, or text holding one: `Range.Orientation = "30"` is taken.
+fn numeric_text(value: &Value) -> Option<f64> {
+    match value {
+        Value::String(text) => text.trim().parse::<f64>().ok().filter(|number| number.is_finite()),
+        value => any_number(value),
+    }
+}
+
+/// A pattern as the file numbers it, from either of the numbers Excel takes
+/// for it. Measured: 7 is taken and reads back as xlDown, 19 is refused with
+/// error 9.
+fn pattern_kind(asked: i64) -> Result<i64, String> {
+    Ok(match asked {
+        COLOUR_NONE => 0,
+        // Automatic is a solid of automatic colour.
+        COLOUR_AUTOMATIC => 1,
+        -4125 => 2,
+        -4126 => 3,
+        -4124 => 4,
+        -4128 => 5,
+        -4166 => 6,
+        -4121 => 7,
+        -4162 => 8,
+        1..=18 | 4000 | 4001 => asked,
+        _ => return Err(host_error(9, format!("there is no pattern {asked}"))),
+    })
+}
+
+/// A pattern by Excel's name for it, where it has one.
+fn pattern_name(kind: i64) -> i64 {
+    match kind {
+        0 => COLOUR_NONE,
+        2 => -4125,
+        3 => -4126,
+        4 => -4124,
+        5 => -4128,
+        6 => -4166,
+        7 => -4121,
+        8 => -4162,
+        kind => kind,
+    }
+}
+
 fn any_whole_number(value: &Value) -> Option<i64> {
     let number = any_number(value)?;
     (number.fract() == 0.0 && number.abs() < 9.2e18).then_some(number as i64)
@@ -16601,6 +17372,107 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlunderlinestyledouble" => -4119,
         "xlunderlinestylesingleaccounting" => 4,
         "xlunderlinestyledoubleaccounting" => 5,
+        // Turns.
+        "xlupward" => -4171,
+        "xldownward" => -4170,
+        // Hatchings, by both names Excel gives them.
+        "xlgray50" | "xlpatterngray50" => -4125,
+        "xlgray75" | "xlpatterngray75" => -4126,
+        "xlgray25" | "xlpatterngray25" => -4124,
+        "xlgray16" | "xlpatterngray16" => 17,
+        "xlgray8" | "xlpatterngray8" => 18,
+        "xlchecker" | "xlpatternchecker" => 9,
+        "xlcrisscross" | "xlpatterncrisscross" => 16,
+        "xllightdown" | "xlpatternlightdown" => 13,
+        "xllightup" | "xlpatternlightup" => 14,
+        "xllighthorizontal" | "xlpatternlighthorizontal" => 11,
+        "xllightvertical" | "xlpatternlightvertical" => 12,
+        "xlgrid" | "xlpatterngrid" => 15,
+        "xlsemigray75" | "xlpatternsemigray75" => 10,
+        "xlpatterndown" => -4121,
+        "xlpatternup" => -4162,
+        "xlpatternhorizontal" => -4128,
+        "xlpatternvertical" => -4166,
+        "xlpatternautomatic" => -4105,
+        "xlpatternlineargradient" => 4000,
+        "xlpatternrectangulargradient" => 4001,
+        // Outlines.
+        "xlsummarybelow" | "xlbelow" => 1,
+        "xlsummaryabove" | "xlabove" => 0,
+        "xlsummaryonright" => -4152,
+        "xlsummaryonleft" => -4131,
+        // Consolidation functions, which Subtotal and the tables take.
+        "xlsum" => -4157,
+        "xlcount" => -4112,
+        "xlaverage" => -4106,
+        "xlmax" => -4136,
+        "xlmin" => -4139,
+        "xlproduct" => -4149,
+        "xlcountnums" => -4113,
+        "xlstdev" => -4155,
+        "xlstdevp" => -4156,
+        "xlvar" => -4164,
+        "xlvarp" => -4165,
+        "xlunknown" => 1000,
+        // Fills.
+        "xlfilldefault" => 0,
+        "xlfillcopy" => 1,
+        "xlfillseries" => 2,
+        "xlfillformats" => 3,
+        "xlfillvalues" => 4,
+        "xlfilldays" => 5,
+        "xlfillweekdays" => 6,
+        "xlfillmonths" => 7,
+        "xlfillyears" => 8,
+        "xllineartrend" => 9,
+        "xlgrowthtrend" => 10,
+        "xlflashfill" => 11,
+        // Application.International.
+        "xlcountrycode" => 1,
+        "xlcountrysetting" => 2,
+        "xldecimalseparator" => 3,
+        "xlthousandsseparator" => 4,
+        "xllistseparator" => 5,
+        "xluppercaserowletter" => 6,
+        "xluppercasecolumnletter" => 7,
+        "xllowercaserowletter" => 8,
+        "xllowercasecolumnletter" => 9,
+        "xlleftbracket" => 10,
+        "xlrightbracket" => 11,
+        "xlleftbrace" => 12,
+        "xlrightbrace" => 13,
+        "xlcolumnseparator" => 14,
+        "xlrowseparator" => 15,
+        "xlalternatearrayseparator" => 16,
+        "xldateseparator" => 17,
+        "xltimeseparator" => 18,
+        "xlyearcode" => 19,
+        "xlmonthcode" => 20,
+        "xldaycode" => 21,
+        "xlhourcode" => 22,
+        "xlminutecode" => 23,
+        "xlsecondcode" => 24,
+        "xlcurrencycode" => 25,
+        "xlgeneralformatname" => 26,
+        "xlcurrencydigits" => 27,
+        "xlcurrencynegative" => 28,
+        "xlnoncurrencydigits" => 29,
+        "xlmonthnamechars" => 30,
+        "xlweekdaynamechars" => 31,
+        "xldateorder" => 32,
+        "xl24hourclock" => 33,
+        "xlnonenglishfunctions" => 34,
+        "xlmetric" => 35,
+        "xlcurrencyspacebefore" => 36,
+        "xlcurrencybefore" => 37,
+        "xlcurrencyminussign" => 38,
+        "xlcurrencytrailingzeros" => 39,
+        "xlcurrencyleadingzeros" => 40,
+        "xlmonthleadingzero" => 41,
+        "xldayleadingzero" => 42,
+        "xl4digityears" => 43,
+        "xlmdy" => 44,
+        "xltimeleadingzero" => 45,
         "xlcontinuous" => 1,
         "xllinestylenone" => -4142,
         "xledgeleft" => 7,
@@ -22466,6 +23338,91 @@ mod tests {
         );
     }
 
+    /// What the window shows, and how a sheet is outlined, turned, ruled
+    /// and hatched -- each measured against Excel (misc1.vba, 2026-09-05).
+    #[test]
+    fn vba_keeps_the_view_the_outline_and_the_marks_on_a_cell() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Application.DisplayAlerts = False\n\
+               Debug.Print ActiveWindow.Zoom; ActiveWindow.DisplayGridlines; ActiveWindow.ScrollRow\n\
+               On Error Resume Next\n\
+               ActiveWindow.Zoom = 5\n\
+               Debug.Print Err.Number; ActiveWindow.Zoom\n\
+               Err.Clear\n\
+               ActiveWindow.ScrollRow = 0\n\
+               Debug.Print Err.Number\n\
+               Err.Clear\n\
+               On Error GoTo 0\n\
+               ActiveWindow.Zoom = 80.6: ActiveWindow.DisplayGridlines = False: ActiveWindow.ScrollRow = 5\n\
+               Worksheets.Add After:=Worksheets(1)\n\
+               Debug.Print ActiveWindow.Zoom; ActiveWindow.DisplayGridlines; ActiveWindow.ScrollRow\n\
+               Worksheets(1).Activate\n\
+               Debug.Print ActiveWindow.Zoom; ActiveWindow.DisplayGridlines; ActiveWindow.ScrollRow\n\
+               Rows(\"7:8\").Group: Rows(\"7:8\").Group\n\
+               Debug.Print Rows(7).OutlineLevel; Rows(6).OutlineLevel\n\
+               Rows(\"7:8\").Ungroup: Rows(\"7:8\").Ungroup\n\
+               Range(\"A11:B12\").Group\n\
+               Debug.Print Rows(7).OutlineLevel; Rows(11).OutlineLevel; Columns(1).OutlineLevel\n\
+               Rows(\"30:31\").Group: Rows(20).OutlineLevel = 3\n\
+               ActiveSheet.Outline.ShowLevels RowLevels:=1\n\
+               Debug.Print Rows(30).Hidden; Rows(7).Hidden; Rows(20).Hidden\n\
+               ActiveSheet.Outline.ShowLevels RowLevels:=2\n\
+               Debug.Print Rows(30).Hidden; Rows(20).Hidden; ActiveSheet.Outline.SummaryRow; ActiveSheet.Outline.SummaryColumn\n\
+               Range(\"M1\").Orientation = 45: Range(\"M3\").Orientation = -90: Range(\"M4\").Orientation = -4171: Range(\"M6\").Orientation = \"30\": Range(\"M7\").Orientation = 45.6\n\
+               Debug.Print Range(\"M1\").Orientation; Range(\"M3\").Orientation; Range(\"M4\").Orientation; Range(\"M6\").Orientation; Range(\"M7\").Orientation; IsNull(Range(\"M1:M3\").Orientation)\n\
+               On Error Resume Next\n\
+               Range(\"M2\").Orientation = 91\n\
+               Debug.Print Err.Number; Range(\"M2\").Orientation\n\
+               Err.Clear\n\
+               On Error GoTo 0\n\
+               Debug.Print Range(\"P1\").Interior.Pattern; Range(\"P1\").Interior.PatternColor; Range(\"P1\").Interior.PatternColorIndex\n\
+               Range(\"P1\").Interior.Pattern = -4125\n\
+               Debug.Print Range(\"P1\").Interior.Pattern; Range(\"P1\").Interior.PatternColorIndex; Range(\"P1\").Interior.Color; Range(\"P1\").Interior.ColorIndex\n\
+               Range(\"P1\").Interior.PatternColor = 255: Range(\"P1\").Interior.Color = 65280\n\
+               Debug.Print Range(\"P1\").Interior.Pattern; Range(\"P1\").Interior.PatternColor; Range(\"P1\").Interior.PatternColorIndex; Range(\"P1\").Interior.Color\n\
+               Range(\"P3\").Interior.Pattern = 1: Range(\"P4\").Interior.Pattern = 7\n\
+               Debug.Print Range(\"P3\").Interior.Pattern; Range(\"P3\").Interior.Color; Range(\"P3\").Interior.ColorIndex; Range(\"P4\").Interior.Pattern\n\
+               Range(\"P1\").Copy Range(\"P9\"): Range(\"P1\").ClearFormats\n\
+               Debug.Print Range(\"P9\").Interior.Pattern; Range(\"P9\").Interior.PatternColor; Range(\"P1\").Interior.Pattern\n\
+               Range(\"R1\").AddIndent = True\n\
+               Debug.Print Range(\"R1\").AddIndent; Range(\"R2\").AddIndent; IsNull(Range(\"R1:R2\").AddIndent)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                "100\tTrue\t1".to_string(),
+                "1004\t100".to_string(),
+                "1004".to_string(),
+                // A new sheet has a view of its own; the old one keeps its.
+                "100\tTrue\t1".to_string(),
+                "80\tFalse\t5".to_string(),
+                "3\t1".to_string(),
+                // A block that is neither whole rows nor whole columns groups
+                // its columns.
+                "1\t1\t2".to_string(),
+                "True\tFalse\tTrue".to_string(),
+                "False\tTrue\t1\t-4152".to_string(),
+                "45\t-4170\t-4171\t30\t45\tTrue".to_string(),
+                "1004\t-4128".to_string(),
+                "-4142\t0\t-4142".to_string(),
+                "-4125\t-4105\t16777215\t-4105".to_string(),
+                "-4125\t255\t3\t65280".to_string(),
+                "1\t16777215\t-4105\t-4121".to_string(),
+                "-4125\t255\t-4142".to_string(),
+                "True\tFalse\tTrue".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn vba_places_a_worksheet_before_or_after_another() {
         let mut workbook = workbook();
@@ -25591,8 +26548,9 @@ End Sub
     /// Asked of Excel: a cell nobody has underlined answers
     /// `xlUnderlineStyleNone` (-4142), and one set with either `True` or
     /// `xlUnderlineStyleSingle` answers `2`. A block whose cells disagree
-    /// answers Null. The double and accounting rules are refused, since this
-    /// build carries only whether a cell is underlined.
+    /// answers Null. The double and accounting rules are kept beside the
+    /// cell and read back as themselves -- measured, -4119 and 3 both read
+    /// -4119, 4 and 5 read 4 and 5, and 0 is refused with 1004.
     #[test]
     fn vba_says_which_rule_runs_under_a_cell() {
         let mut workbook = workbook();
@@ -25618,19 +26576,20 @@ End Sub
 
         assert_eq!(result, Value::String("2|2|-4142|-4142|Null|2".to_string()));
 
-        // And the rules it cannot tell apart are refused rather than flattened.
-        for asked in ["xlUnderlineStyleDouble", "4", "5"] {
-            let mut bare = super::tests::workbook();
+        for (asked, read) in [("xlUnderlineStyleDouble", -4119), ("3", -4119), ("4", 4), ("5", 5)] {
             let module = parse_module(&format!(
-                "Public Sub Rule()\n  Range(\"A1\").Font.Underline = {asked}\nEnd Sub\n"
+                "Public Function Rule() As Long\n  Range(\"A1\").Font.Underline = {asked}\n  Rule = Range(\"A1\").Font.Underline\nEnd Function\n"
             ))
             .unwrap();
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
-            let error = execute_with_host(&module, "Rule", vec![], &mut host)
-                .expect_err("this build cannot keep that rule apart")
-                .to_string();
-            assert!(error.contains("keep apart"), "{asked} said {error:?}");
+            let result = execute_with_host(&module, "Rule", vec![], &mut host).unwrap();
+            assert_eq!(result, Value::Integer(read), "{asked}");
         }
+        let module =
+            parse_module("Public Sub Rule()\n  Range(\"A1\").Font.Underline = 0\nEnd Sub\n").unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let refused = execute_with_host(&module, "Rule", vec![], &mut host).unwrap_err();
+        assert_eq!(refused.vba_number, Some(1004));
     }
 
     /// The 28 colours Excel was asked to name, and what it called each.
