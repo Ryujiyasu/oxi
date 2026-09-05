@@ -9276,6 +9276,7 @@ cells={} pitch={:.2} text={:?}",
                             block_idx, dbg_para_start_y, cursor.cursor_y, pages.len()-dbg_para_start_pages,
                             ymin, ymax, para_elements.len(), txt);
                     }
+                    let s1324_col_before = current_column;
                     // S637: layout_paragraph may have advanced the column (flowing
                     // an overflowing line into the next column on the same page)
                     // or page-pushed (resetting to column 0). Sync the loop state.
@@ -9283,6 +9284,108 @@ cells={} pitch={:.2} text={:?}",
                         current_column = final_col;
                         start_x = col_x_positions[current_column];
                         content_width = col_widths[current_column];
+                    }
+                    // S1324 (2026-09-05, default ON, opt-out OXI_S1324_DISABLE): a
+                    // keepNext chain stranded at the foot of the column its follower
+                    // just LEFT (the S1323 whole-move into the next column) follows
+                    // it to that column's top -- Word's keepNext unit crosses a
+                    // column boundary as one, exactly as it crosses a page (S960).
+                    // reports__167853 p28: ●自立支援事業 (keepNext+keepLines) stayed
+                    // at the foot of column 0 while its 4-line paragraph opened
+                    // column 1; Word's column 1 begins with the heading (20/22 lines
+                    // after balancing, Oxi 21/21 with the heading stranded).
+                    if num_columns > 1
+                        && pages.len() == pages_before
+                        && final_col == s1324_col_before + 1
+                        && !para.style.page_break_before
+                        && std::env::var("OXI_S1324_DISABLE").is_err()
+                    {
+                        let new_x = col_x_positions[final_col];
+                        let old_x = col_x_positions[s1324_col_before];
+                        // Whole-move only: a split (S790) keeps lines in the old
+                        // column and the chain stays with them.
+                        let on_new = !para_elements.is_empty()
+                            && para_elements.iter().all(|e| e.x >= new_x - 0.5);
+                        let in_old_col = |pi: usize| {
+                            elements.iter().any(|e| {
+                                e.paragraph_index == Some(pi) && e.x < new_x - 0.5
+                            })
+                        };
+                        let mut pull_from = block_idx;
+                        if on_new {
+                            while pull_from > 0 {
+                                if let Some(Block::Paragraph(pp)) = page.blocks.get(pull_from - 1) {
+                                    if pp.style.keep_next
+                                        && block_page_indices.get(pull_from - 1) == Some(&current_page_idx)
+                                        && in_old_col(pull_from - 1)
+                                    {
+                                        pull_from -= 1;
+                                        continue;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        if pull_from < block_idx {
+                            let pulled_here: Vec<usize> = (pull_from..block_idx).collect();
+                            let mine = |e: &LayoutElement| {
+                                e.paragraph_index.is_some_and(|pi| pulled_here.contains(&pi))
+                            };
+                            let chain_min_y = elements
+                                .iter()
+                                .filter(|e| mine(e))
+                                .map(|e| e.y)
+                                .fold(f32::INFINITY, f32::min);
+                            // Same contract as S960: plain text only, nothing unowned
+                            // in the vacated band, and the old column keeps a body.
+                            let region_clean = chain_min_y.is_finite()
+                                && !elements.iter().any(|e| {
+                                    let m = mine(e);
+                                    (e.x < new_x - 0.5 && e.y >= chain_min_y - 0.1 && !m)
+                                        || (m && !matches!(e.content, LayoutContent::Text { .. }))
+                                });
+                            let old_keeps_body = elements.iter().any(|e| {
+                                e.x < new_x - 0.5 && e.paragraph_index.is_some() && !mine(e)
+                            });
+                            let s1324_gap = s1249_prev_sa.max(para.style.space_before.unwrap_or(0.0));
+                            let chain_advance = dbg_para_start_y - chain_min_y + s1324_gap;
+                            let fits = chain_advance > 0.0
+                                && cursor.cursor_y + chain_advance <= start_y + effective_content_h + 0.05;
+                            if region_clean && old_keeps_body && fits {
+                                let mut pulled: Vec<LayoutElement> = Vec::new();
+                                elements.retain(|e| {
+                                    if mine(e) {
+                                        pulled.push(e.clone());
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
+                                let dx = new_x - old_x;
+                                let dy = col_band_top - chain_min_y;
+                                for e in pulled.iter_mut() {
+                                    e.x += dx;
+                                    e.y += dy;
+                                }
+                                for e in para_elements.iter_mut() {
+                                    e.y += chain_advance;
+                                }
+                                pulled.extend(std::mem::take(&mut para_elements));
+                                para_elements = pulled;
+                                cursor.advance(chain_advance);
+                                for pi in pulled_here.iter() {
+                                    if let Some(y) = block_y_positions.get_mut(*pi) {
+                                        *y += dy;
+                                    }
+                                }
+                                if std::env::var("OXI_DBG_COL").is_ok() {
+                                    eprintln!(
+                                        "[COL] S1324 pull {} block(s) into col {} dy={:.1} advance={:.1}",
+                                        block_idx - pull_from, final_col, dy, chain_advance
+                                    );
+                                }
+                            }
+                        }
                     }
                     // ── S960 (default ON, opt-out OXI_S960_DISABLE): pull a
                     // stranded keepNext chain onto the page its follower
