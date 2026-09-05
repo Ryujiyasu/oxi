@@ -22031,7 +22031,45 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let s326_round = std::env::var("OXI_S326_MID_CELL_ROUND")
                             .map(|v| v != "0" && v != "false")
                             .unwrap_or(true);
-                        let raw = cur_tw + cells * pitch_tw_i;
+                        // S1319 (2026-09-05, default ON, opt-out OXI_S1319_DISABLE): a
+                        // mid-cell line advances the EXACT ideal stream
+                        // (`lm2_ideal_y`, the S494 absolute-snap design) and rounds
+                        // that, instead of rounding cur + pitch from the already
+                        // rounded cursor. correspondence__03ca64d7 (linesAndChars
+                        // 298 = 14.9pt): Word's PDF steps every body line by
+                        // exactly 14.9 (41 lines, 110.5 -> 721.5); Oxi's cursor
+                        // fell off the cell grid after an empty paragraph's
+                        // 0.75pt snap and then rounded 298 -> 300tw on EVERY line
+                        // (15.0), +4.1pt by line 41 and the last paragraph on a
+                        // 2nd page. The same drift showed on the 298-pitch probe
+                        // (`_pb_oikomi_default_gen.py`: 15.0 per line) while the
+                        // cell-aligned branch and the 324-pitch probe (16.5/16.0
+                        // alternating = no compounding) were fine.
+                        // HELD as opt-in (OXI_S1319=1) 2026-09-05: JA blind neutral
+                        // (89 = 89, pcd 6 = 6) but the SSIM sentinel on the 71 grid
+                        // docs is net -0.0631 (probelac -0.071, kojin -0.032,
+                        // d1e8ac8 -0.025 vs harassmanual +0.025, de6e +0.034): the
+                        // EMF references (Word's SCREEN layout, 96dpi) sit closer to
+                        // the per-line rounded stream than to the exact one the
+                        // 600dpi PDF export shows -- the two Word layouts differ,
+                        // and the corpus truth is the screen one.
+                        let s1319 = std::env::var("OXI_S1319").ok().as_deref() == Some("1");
+                        let raw = if s1319 {
+                            let pitch_f = pitch_tw_i as f32;
+                            let cur_f = cur_tw as f32;
+                            let ideal0 = if cursor.lm2_ideal_y > 0.0
+                                && (cursor.lm2_ideal_y - cur_f).abs() < pitch_f * 0.5
+                            {
+                                cursor.lm2_ideal_y
+                            } else {
+                                cur_f
+                            };
+                            let ideal1 = ideal0 + cells as f32 * pitch_f;
+                            cursor.lm2_ideal_y = ideal1;
+                            ideal1.round() as i32
+                        } else {
+                            cur_tw + cells * pitch_tw_i
+                        };
                         if s326_round {
                             // ROUND-half-up to 10tw: (x + 5) / 10 * 10
                             ((raw + 5) / 10) * 10
@@ -22042,6 +22080,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     };
                     cursor.set(target_tw as f32 / 20.0);
+                    if cell_aligned && std::env::var("OXI_S1319").ok().as_deref() == Some("1") {
+                        // S1319: the cell-aligned target is exact from the margin;
+                        // hand the unrounded stream to the next mid-cell line.
+                        let k_raw = offset / pitch_tw_i;
+                        let k = if cell_remainder > pitch_tw_i - 10 { k_raw + 1 } else { k_raw };
+                        cursor.lm2_ideal_y = (margin_tw + (k + cells) * pitch_tw_i) as f32;
+                    }
                     cumul_line_idx += cells as usize;
                 } // end S494 else (legacy cell-aligned / mid-cell branch)
             } else {
