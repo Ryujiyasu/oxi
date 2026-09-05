@@ -1629,6 +1629,175 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
         "ISOWEEKNUM" => weeknum_iso(serial(&args[0])?),
 
+        // ---- financial ---------------------------------------------------
+        // Straight-line, sum-of-years and the two declining-balance
+        // depreciations.
+        "SLN" => {
+            expect(args, 3)?;
+            fin_sln(num(&args[0])?, num(&args[1])?, num(&args[2])?)
+        }
+        "SYD" => {
+            expect(args, 4)?;
+            fin_syd(num(&args[0])?, num(&args[1])?, num(&args[2])?, num(&args[3])?)
+        }
+        "DDB" => {
+            if !(4..=5).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            let factor = match args.get(4) {
+                Some(a) => num(a)?,
+                None => 2.0,
+            };
+            fin_ddb(
+                num(&args[0])?,
+                num(&args[1])?,
+                num(&args[2])?,
+                num(&args[3])?,
+                factor,
+            )
+        }
+        "DB" => {
+            if !(4..=5).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            let month = match args.get(4) {
+                Some(a) => num(a)?,
+                None => 12.0,
+            };
+            fin_db(
+                num(&args[0])?,
+                num(&args[1])?,
+                num(&args[2])?,
+                num(&args[3])?,
+                month,
+            )
+        }
+        // The annuity family. Payment type (end/start of period) is 0 or 1.
+        "PMT" => {
+            if !(3..=5).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            fin_pmt(
+                num(&args[0])?,
+                num(&args[1])?,
+                num(&args[2])?,
+                fin_optional(args, 3)?,
+                fin_kind(args, 4)?,
+            )
+        }
+        "FV" => {
+            if !(3..=5).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            fin_fv(
+                num(&args[0])?,
+                num(&args[1])?,
+                num(&args[2])?,
+                fin_optional(args, 3)?,
+                fin_kind(args, 4)?,
+            )
+        }
+        "PV" => {
+            if !(3..=5).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            fin_pv(
+                num(&args[0])?,
+                num(&args[1])?,
+                num(&args[2])?,
+                fin_optional(args, 3)?,
+                fin_kind(args, 4)?,
+            )
+        }
+        // NPER's arguments are (rate, pmt, pv, [fv], [type]).
+        "NPER" => {
+            if !(3..=5).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            fin_nper(
+                num(&args[0])?,
+                num(&args[1])?,
+                num(&args[2])?,
+                fin_optional(args, 3)?,
+                fin_kind(args, 4)?,
+            )
+        }
+        // The interest and principal parts of one payment.
+        "IPMT" | "PPMT" => {
+            if !(4..=6).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            let rate = num(&args[0])?;
+            let period = num(&args[1])?;
+            let periods = num(&args[2])?;
+            if period < 1.0 || period > periods {
+                return Err(ExcelError::Num);
+            }
+            let present = num(&args[3])?;
+            let future = fin_optional(args, 4)?;
+            let kind = fin_kind(args, 5)?;
+            let payment = fin_pmt_raw(rate, periods, present, future, kind)?;
+            let interest = if kind == 1.0 && period == 1.0 {
+                0.0
+            } else {
+                let balance = fin_fv_raw(rate, period - 1.0, payment, present, kind)?;
+                let raw = balance * rate;
+                if kind == 1.0 { raw / (1.0 + rate) } else { raw }
+            };
+            let answer = if name == "IPMT" { interest } else { payment - interest };
+            fin_finite(answer)
+        }
+        // RATE's arguments are (nper, pmt, pv, [fv], [type], [guess]).
+        "RATE" => {
+            if !(3..=6).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            let guess = match args.get(5) {
+                Some(a) => num(a)?,
+                None => 0.1,
+            };
+            fin_rate(
+                num(&args[0])?,
+                num(&args[1])?,
+                num(&args[2])?,
+                fin_optional(args, 3)?,
+                fin_kind(args, 4)?,
+                guess,
+            )
+        }
+        // NPV discounts a series that follows the first period; unlike the VBA
+        // one it does not require both a positive and a negative flow.
+        "NPV" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let rate = num(&args[0])?;
+            if rate == -1.0 {
+                return Err(ExcelError::DivZero);
+            }
+            let values = numeric_operands(&args[1..])?;
+            let base = 1.0 + rate;
+            fin_finite(
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(period, flow)| flow / base.powf((period + 1) as f64))
+                    .sum(),
+            )
+        }
+        // IRR needs at least one inflow and one outflow, or it is #NUM!.
+        "IRR" => {
+            if args.is_empty() {
+                return Err(ExcelError::Value);
+            }
+            let values = numeric_operands(&args[..1])?;
+            let guess = match args.get(1) {
+                Some(a) => num(a)?,
+                None => 0.1,
+            };
+            fin_irr(&values, guess)
+        }
+
         "VLOOKUP" | "HLOOKUP" => {
             if args.len() < 3 {
                 return Err(ExcelError::Value);
@@ -2257,6 +2426,243 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
         _ => Err(ExcelError::Name),
     }
+}
+
+// ---- financial helpers ----------------------------------------------------
+// Ported from the VBA runtime's annuity and depreciation math, which was
+// measured against Excel; failure is #NUM! here rather than a raised error.
+
+fn fin_finite(value: f64) -> Result<Value, ExcelError> {
+    if value.is_finite() {
+        Ok(Value::Number(if value == 0.0 { 0.0 } else { value }))
+    } else {
+        Err(ExcelError::Num)
+    }
+}
+
+fn fin_optional(args: &[Arg], index: usize) -> Result<f64, ExcelError> {
+    match args.get(index) {
+        None => Ok(0.0),
+        Some(a) => num(a),
+    }
+}
+
+fn fin_kind(args: &[Arg], index: usize) -> Result<f64, ExcelError> {
+    let value = fin_optional(args, index)?;
+    if value == 0.0 || value == 1.0 {
+        Ok(value)
+    } else {
+        Err(ExcelError::Num)
+    }
+}
+
+fn annuity_factor(rate: f64, periods: f64) -> Result<f64, ExcelError> {
+    if rate <= -1.0 {
+        return Err(ExcelError::Num);
+    }
+    let factor = (1.0 + rate).powf(periods);
+    if factor.is_finite() { Ok(factor) } else { Err(ExcelError::Num) }
+}
+
+fn fin_fv_raw(rate: f64, periods: f64, payment: f64, present: f64, kind: f64) -> Result<f64, ExcelError> {
+    if rate == 0.0 {
+        return Ok(-(present + payment * periods));
+    }
+    let factor = annuity_factor(rate, periods)?;
+    Ok(-(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate))
+}
+
+fn fin_pmt_raw(rate: f64, periods: f64, present: f64, future: f64, kind: f64) -> Result<f64, ExcelError> {
+    if periods == 0.0 {
+        return Err(ExcelError::Num);
+    }
+    if rate == 0.0 {
+        return Ok(-(future + present) / periods);
+    }
+    let factor = annuity_factor(rate, periods)?;
+    let denominator = (1.0 + rate * kind) * (factor - 1.0);
+    if denominator == 0.0 {
+        return Err(ExcelError::Num);
+    }
+    Ok(-(future + present * factor) * rate / denominator)
+}
+
+fn fin_fv(rate: f64, periods: f64, payment: f64, present: f64, kind: f64) -> Result<Value, ExcelError> {
+    fin_finite(fin_fv_raw(rate, periods, payment, present, kind)?)
+}
+
+fn fin_pv(rate: f64, periods: f64, payment: f64, future: f64, kind: f64) -> Result<Value, ExcelError> {
+    let value = if rate == 0.0 {
+        -(future + payment * periods)
+    } else {
+        let factor = annuity_factor(rate, periods)?;
+        -(future + payment * (1.0 + rate * kind) * (factor - 1.0) / rate) / factor
+    };
+    fin_finite(value)
+}
+
+fn fin_pmt(rate: f64, periods: f64, present: f64, future: f64, kind: f64) -> Result<Value, ExcelError> {
+    fin_finite(fin_pmt_raw(rate, periods, present, future, kind)?)
+}
+
+fn fin_nper(rate: f64, payment: f64, present: f64, future: f64, kind: f64) -> Result<Value, ExcelError> {
+    if rate == 0.0 {
+        if payment == 0.0 {
+            return Err(ExcelError::Num);
+        }
+        return fin_finite(-(present + future) / payment);
+    }
+    if rate <= -1.0 {
+        return Err(ExcelError::Num);
+    }
+    let adjusted = payment * (1.0 + rate * kind);
+    let denominator = present * rate + adjusted;
+    if denominator == 0.0 {
+        return Err(ExcelError::Num);
+    }
+    let ratio = (adjusted - future * rate) / denominator;
+    if ratio <= 0.0 {
+        return Err(ExcelError::Num);
+    }
+    fin_finite(ratio.ln() / (1.0 + rate).ln())
+}
+
+fn fin_equation(rate: f64, periods: f64, payment: f64, present: f64, future: f64, kind: f64) -> Result<f64, ExcelError> {
+    if rate.abs() < 1e-12 {
+        return Ok(present + payment * periods + future);
+    }
+    let factor = annuity_factor(rate, periods)?;
+    Ok(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate + future)
+}
+
+fn fin_rate(periods: f64, payment: f64, present: f64, future: f64, kind: f64, guess: f64) -> Result<Value, ExcelError> {
+    if periods <= 0.0 || !guess.is_finite() || guess <= -1.0 {
+        return Err(ExcelError::Num);
+    }
+    let mut rate = guess;
+    for _ in 0..20 {
+        let value = fin_equation(rate, periods, payment, present, future, kind)?;
+        let step = (rate.abs() * 1e-6).max(1e-7);
+        let lower = (rate - step).max(-0.999_999_999);
+        let upper = rate + step;
+        let derivative = (fin_equation(upper, periods, payment, present, future, kind)?
+            - fin_equation(lower, periods, payment, present, future, kind)?)
+            / (upper - lower);
+        if derivative == 0.0 || !derivative.is_finite() {
+            break;
+        }
+        let mut next = rate - value / derivative;
+        if next <= -1.0 {
+            next = (rate - 1.0) / 2.0;
+        }
+        if !next.is_finite() {
+            break;
+        }
+        if (next - rate).abs() <= 1e-7 {
+            return fin_finite(next);
+        }
+        rate = next;
+    }
+    Err(ExcelError::Num)
+}
+
+fn fin_irr(values: &[f64], guess: f64) -> Result<Value, ExcelError> {
+    if values.len() < 2
+        || !values.iter().any(|v| *v < 0.0)
+        || !values.iter().any(|v| *v > 0.0)
+        || !guess.is_finite()
+        || guess <= -1.0
+    {
+        return Err(ExcelError::Num);
+    }
+    let mut rate = guess;
+    for _ in 0..20 {
+        let base = 1.0 + rate;
+        let mut value = 0.0;
+        let mut derivative = 0.0;
+        for (period, flow) in values.iter().enumerate() {
+            let period = period as f64;
+            value += flow / base.powf(period);
+            if period != 0.0 {
+                derivative -= period * flow / base.powf(period + 1.0);
+            }
+        }
+        if !value.is_finite() || !derivative.is_finite() || derivative == 0.0 {
+            break;
+        }
+        let mut next = rate - value / derivative;
+        if next <= -1.0 {
+            next = (rate - 1.0) / 2.0;
+        }
+        if !next.is_finite() {
+            break;
+        }
+        if (next - rate).abs() <= 1e-7 {
+            return fin_finite(next);
+        }
+        rate = next;
+    }
+    Err(ExcelError::Num)
+}
+
+fn fin_sln(cost: f64, salvage: f64, life: f64) -> Result<Value, ExcelError> {
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 {
+        return Err(ExcelError::Num);
+    }
+    fin_finite((cost - salvage) / life)
+}
+
+fn fin_syd(cost: f64, salvage: f64, life: f64, period: f64) -> Result<Value, ExcelError> {
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || period > life {
+        return Err(ExcelError::Num);
+    }
+    fin_finite((cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)))
+}
+
+fn fin_ddb(cost: f64, salvage: f64, life: f64, period: f64, factor: f64) -> Result<Value, ExcelError> {
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || factor <= 0.0 {
+        return Err(ExcelError::Num);
+    }
+    if period > life {
+        return Err(ExcelError::Num);
+    }
+    if cost <= salvage {
+        return Ok(Value::Number(0.0));
+    }
+    let rate = (factor / life).min(1.0);
+    let book = cost * (1.0 - rate).powf(period - 1.0);
+    fin_finite((book * rate).min((book - salvage).max(0.0)))
+}
+
+/// Fixed-declining-balance depreciation for one period. The rate is rounded to
+/// three decimals, and the first and last periods are prorated by `month`.
+/// Measured: DB(10000,1000,5,2) = 2328.39, DB(10000,1000,5,6,6) = 238.53.
+fn fin_db(cost: f64, salvage: f64, life: f64, period: f64, month: f64) -> Result<Value, ExcelError> {
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || !(1.0..=12.0).contains(&month) {
+        return Err(ExcelError::Num);
+    }
+    let last = life + if month < 12.0 { 1.0 } else { 0.0 };
+    if period > last {
+        return Err(ExcelError::Num);
+    }
+    // The whole rate is rounded to three decimals, not the ratio inside it.
+    let rate = ((1.0 - (salvage / cost).powf(1.0 / life)) * 1000.0).round() / 1000.0;
+    let target = period.floor() as i64;
+    let mut total = 0.0;
+    let mut answer = 0.0;
+    for p in 1..=target {
+        let book = cost - total;
+        let dep = if p == 1 {
+            book * rate * month / 12.0
+        } else if (p as f64) == last && month < 12.0 {
+            book * rate * (12.0 - month) / 12.0
+        } else {
+            book * rate
+        };
+        answer = dep;
+        total += dep;
+    }
+    fin_finite(answer)
 }
 
 /// n!, refusing a negative and overflowing to #NUM!.
@@ -3344,6 +3750,49 @@ mod tests {
 
     fn l(value: bool) -> Arg {
         Arg::Value(Value::Logical(value))
+    }
+
+    /// The financial functions added 2026-09-05 (flows14), measured against
+    /// Excel. The iterative ones (IRR, RATE) are checked to a tolerance.
+    #[test]
+    fn the_financial_functions_agree_with_excel() {
+        let round2 = |value: Value| match value {
+            Value::Number(x) => (x * 100.0).round() / 100.0,
+            other => panic!("expected a number, got {other:?}"),
+        };
+        assert_eq!(round2(call("PMT", &[v(0.05 / 12.0), v(60.0), v(-10000.0)])), 188.71);
+        assert_eq!(round2(call("FV", &[v(0.05 / 12.0), v(60.0), v(-100.0)])), 6800.61);
+        assert_eq!(round2(call("PV", &[v(0.05 / 12.0), v(60.0), v(-100.0)])), 5299.07);
+        assert_eq!(round2(call("IPMT", &[v(0.05 / 12.0), v(1.0), v(60.0), v(-10000.0)])), 41.67);
+        assert_eq!(round2(call("PPMT", &[v(0.05 / 12.0), v(1.0), v(60.0), v(-10000.0)])), 147.05);
+        assert_eq!(call("SLN", &[v(10000.0), v(1000.0), v(5.0)]), Value::Number(1800.0));
+        assert_eq!(call("SYD", &[v(10000.0), v(1000.0), v(5.0), v(1.0)]), Value::Number(3000.0));
+        assert_eq!(call("DDB", &[v(10000.0), v(1000.0), v(5.0), v(1.0)]), Value::Number(4000.0));
+        assert_eq!(round2(call("DB", &[v(10000.0), v(1000.0), v(5.0), v(1.0)])), 3690.0);
+        assert_eq!(round2(call("DB", &[v(10000.0), v(1000.0), v(5.0), v(2.0)])), 2328.39);
+        assert_eq!(round2(call("DB", &[v(10000.0), v(1000.0), v(5.0), v(6.0), v(6.0)])), 238.53);
+        // NPV takes several values and needs no sign mix; IRR does.
+        let flows = range(&[n(100.0), n(200.0), n(300.0)], 1);
+        assert_eq!(round2(call("NPV", &[v(0.1), flows])), 481.59);
+        let cash = range(&[n(-1000.0), n(300.0), n(400.0), n(500.0)], 1);
+        match call("IRR", &[cash]) {
+            Value::Number(x) => assert!((x - 0.0891).abs() < 5e-4, "IRR {x}"),
+            other => panic!("IRR {other:?}"),
+        }
+        match call("RATE", &[v(60.0), v(-100.0), v(5000.0)]) {
+            Value::Number(x) => assert!((x - 0.006183).abs() < 1e-5, "RATE {x}"),
+            other => panic!("RATE {other:?}"),
+        }
+        match call("NPER", &[v(0.05 / 12.0), v(-100.0), v(5000.0)]) {
+            Value::Number(x) => assert!((x - 56.1843).abs() < 1e-3, "NPER {x}"),
+            other => panic!("NPER {other:?}"),
+        }
+        // A zero-rate annuity and a bad payment type.
+        assert_eq!(call("PMT", &[v(0.0), v(10.0), v(-1000.0)]), Value::Number(100.0));
+        assert_eq!(
+            call("PMT", &[v(0.05), v(10.0), v(-1000.0), v(0.0), v(2.0)]),
+            Value::Error(ExcelError::Num)
+        );
     }
 
     /// The math and information functions added 2026-09-05 (flows13), measured
