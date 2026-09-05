@@ -24721,9 +24721,57 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // 25-page doc moving by one page — the +-1 knife-edge the pcd-first
             // rule calls a sub-pt noise floor.
             let s1269_derived_regime_only = std::env::var("OXI_S1269_DISABLE").is_err();
-            let s1237_at_default_refuse = std::env::var("OXI_S1237_DISABLE").is_err()
+            // S1318 (2026-09-05, default ON, opt-out OXI_S1318_DISABLE): the
+            // at-default refusal holds at compat 14 as well. MEASURED with
+            // `_pb_oikomi_default_gen.py` (03ca64d7's first body line rebuilt:
+            // 41 chars on a 40-cell floor, ＭＳ 明朝 10.5 = docDefaults 10.5,
+            // linesAndChars 298, compressPunctuation): Word keeps 40 and every
+            // mark at 1.00em for M = 1, 2, 3, 4 marks (demand 10.5 .. 2.6 per
+            // mark), with or without kern / balance, in a cell, and at compat
+            // 11; only compat 15 packs (41, marks 0.74). The real doc agrees
+            // (25 mid-line marks at 10.5pt, 0 compressed) and so do 0728f6dd
+            // (0/4) and 0422f651 (0/5). S1269 had narrowed the refusal to
+            // compat < 14 on page counts alone; the body regime it applies to
+            // is the same at 14. With the opt-out set, compat 14 falls back to
+            // the S1269 narrowing (cap-6 packing).
+            // HELD 2026-09-05 (opt-in OXI_S1318=1): the JA blind A/B REGRESSED
+            // 89 -> 88, sum|pcd| 6 -> 10 -- 0b6f3b32 (25 pages, 0.2566),
+            // 167853 (pcd +1 -> +2), 0ea3ec86 (0.73 -> 0.12, pcd +2): the same
+            // three docs S1269 measured. Their Word PDFs DO compress 7-12% of
+            // the at-default 11pt marks (88/891, 36/531, 22/186), so the
+            // regime the probe measured (plain body paragraph, one column) is
+            // not theirs; the discriminator is still open (column / cell
+            // width, numbering, hang). See the S1318 archive note.
+            let s1318_c14_refuse = std::env::var("OXI_S1318").ok().as_deref() == Some("1");
+            // S1318 v2 (2026-09-05, default ON, opt-out OXI_S1318_DISABLE): the
+            // at-default refusal is decided PER CHARACTER, by the character
+            // that would overflow. `_pb_oikomi_default_gen.py` (33 arms): a
+            // normal next character is refused at every compat <= 14 (also
+            // c11), but a LINE-FINAL 、。 (kinsoku forbids it at a line start)
+            // is pulled in by compressing the line's mid marks evenly, each
+            // by at most half (end_m1 0.51, end_m2 0.50/0.50, end_m3 0.67 x3;
+            // end_m0 hangs). That is the S568 cap-half machinery -- kept for
+            // that character class -- while S1237's paragraph-level refusal
+            // (and the S1269 compat narrowing that patched its damage on the
+            // 2-column docs, whose packed lines are all line-final marks)
+            // becomes the per-character rule below (`s1318_refuse_here`).
+            // HELD as opt-in (OXI_S1318=1) 2026-09-05: line-level correct on
+            // every probe arm and on 0ea3ec86 / 0b6f3b32's paragraphs (their
+            // clean 2-column lines hold 20 chars like Word; the old cap-6 path
+            // packed 21-25), yet the JA blind page counts regress because that
+            // over-packing was compensating a VERTICAL surplus elsewhere in the
+            // same docs (0b6f3b32 25->26 pages from +16 lines; 0ea3ec86 43->45).
+            // Ships when that partner is identified (Ra: no ship on a negative
+            // gate without the compensating error named).
+            let s1318_v2 = std::env::var("OXI_S1318").ok().as_deref() == Some("1");
+            let s1318_at_default_regime = s568_legacy_oikomi
+                && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
+            let s1237_at_default_refuse = !s1318_v2
+                && std::env::var("OXI_S1237_DISABLE").is_err()
                 && s568_legacy_oikomi
-                && (!s1269_derived_regime_only || self.compat_mode < 14)
+                && (!s1269_derived_regime_only
+                    || self.compat_mode < 14
+                    || (s1318_c14_refuse && self.compat_mode == 14))
                 && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
             let s568_legacy_oikomi = s568_legacy_oikomi && !s1237_at_default_refuse;
             let s1234_offdefault_light = std::env::var("OXI_S1234_DISABLE").is_err()
@@ -25345,12 +25393,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // standalone = near-full, only compressed on line-slack).
                                 // The demand-absorb below compresses any of them as a
                                 // line's overflow requires.
+                                // S1318b (2026-09-05): the at-default legacy regime
+                                // (S1237/S1318) breaks with standalone marks at their
+                                // NATURAL width too -- the probe's 3- and 4-mark arms
+                                // still packed a 41st character because this flat
+                                // x0.6667 pre-compress banked 70tw per mark at break
+                                // time (Word: every mark 1.00em, line holds 40).
                                 if (s472_demand
                                     || s474_natural
                                     || s475_break
                                     || s557_natural_just15
                                     || s589_legacy_just_natural
-                                    || para_off_grid)
+                                    || para_off_grid
+                                    || s1237_at_default_refuse)
                                     && matches!(ch, '、' | '，' | '。' | '．')
                                 {
                                     // no compression at break; demand-absorb handles fit
@@ -26481,6 +26536,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         pt_to_tw(char_width)
                     };
+                    // S1318 v2: in the at-default legacy regime only a line-final
+                    // mark may spend the line's mark capacity; any other
+                    // overflowing character is refused (plain width test).
+                    let s1318_refuse_here = s1318_v2
+                        && s1318_at_default_regime
+                        && !matches!(ch, '、' | '。' | '，' | '．');
+                    let s475_break = s475_break && !s1318_refuse_here;
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
                         // Word's per-line oikomi is a SMALL budget, not the per-約物 cap.
