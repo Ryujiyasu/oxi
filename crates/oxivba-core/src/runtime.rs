@@ -4448,6 +4448,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "lcase"
             | "left"
             | "len"
+            | "lenb"
             | "log"
             | "ltrim"
             | "mid"
@@ -5277,6 +5278,18 @@ fn call_builtin(
                     text(value).map_err(mismatch)?.encode_utf16().count() as i64,
                 )),
             },
+            "lenb" => match value {
+                Value::Null => Ok(Value::Null),
+                // A `Byte()` array -- what `StrConv(s, vbFromUnicode)` hands
+                // back -- answers its byte count. Every other string answers
+                // twice its UTF-16 length, the two bytes VBA holds each unit
+                // in. (`LenB("ab")` is 4; `LenB(StrConv("ab", vbFromUnicode))`
+                // is 2.)
+                Value::Array(array) => Ok(Value::Integer(array.values.len() as i64)),
+                _ => Ok(Value::Integer(
+                    text(value).map_err(mismatch)?.encode_utf16().count() as i64 * 2,
+                )),
+            },
             "log" => match value {
                 Value::Null => Ok(Value::Null),
                 _ => {
@@ -5989,23 +6002,29 @@ fn call_text_conversion_builtin(
             // `StrComp(Null, "a")` does not. Which side of the line a function
             // falls on is per function -- `Val(Null)` and `Space(Null)` raise
             // 94 while `Len(Null)` and `Abs(Null)` pass it along.
-            if matches!(args[0], Value::Null) {
-                return Ok(Value::Null);
-            }
-            let mut value = text(&args[0]).map_err(mismatch)?;
             let conversion = integer_argument(&args[1], line)?;
             if let Some(locale) = args.get(2) {
                 integer_argument(locale, line)?;
             }
+            if matches!(args[0], Value::Null) {
+                return Ok(Value::Null);
+            }
             if !(0..=255).contains(&conversion)
                 || conversion & 4 != 0 && conversion & 8 != 0
                 || conversion & 16 != 0 && conversion & 32 != 0
+                || conversion & 64 != 0 && conversion & 128 != 0
             {
                 return Err(invalid_procedure_call(
                     format!("invalid StrConv conversion: {conversion}"),
                     line,
                 ));
             }
+            // vbUnicode (64): the input is the `Byte()` array a former
+            // vbFromUnicode handed out; read it back to text.
+            if conversion & 64 != 0 {
+                return Ok(Value::String(ansi_bytes_to_text(&args[0]).map_err(mismatch)?));
+            }
+            let mut value = text(&args[0]).map_err(mismatch)?;
             if conversion & 4 != 0 {
                 value = convert_width_unicode(&value, true);
             }
@@ -6024,6 +6043,14 @@ fn call_text_conversion_builtin(
                 3 => proper_case(&value),
                 _ => unreachable!(),
             };
+            // vbFromUnicode (128): hand back the ANSI bytes as the `Byte()`
+            // array VBA returns. On this (Western) host each character is one
+            // byte -- the codepage's default `?` where it cannot be spelt --
+            // so the array's LenB is the character count. Measured against
+            // Excel: a three-character string of one unmappable char yields three bytes.
+            if conversion & 128 != 0 {
+                return Ok(ansi_byte_array(&value));
+            }
             Ok(Value::String(value))
         }
         _ => unreachable!(),
@@ -6045,6 +6072,45 @@ fn optional_boolean(
         Some(value) => {
             truthy(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))
         }
+    }
+}
+
+/// The `Byte()` array `StrConv(s, vbFromUnicode)` returns: one ANSI byte per
+/// character, the codepage's default `?` (0x3F) where a character has no place
+/// in it. Zero-based, as VBA's is.
+fn ansi_byte_array(value: &str) -> Value {
+    let values: Vec<Value> = value
+        .chars()
+        .map(|character| Value::Byte(u8::try_from(character as u32).unwrap_or(b'?')))
+        .collect();
+    Value::Array(ArrayValue {
+        dimensions: vec![ArrayDimension {
+            lower_bound: 0,
+            length: values.len(),
+        }],
+        values,
+        element_default: Box::new(Value::Byte(0)),
+        resizable: true,
+    })
+}
+
+/// The inverse, for `StrConv(bytes, vbUnicode)`: read a `Byte()` array back to
+/// text, one character per byte.
+fn ansi_bytes_to_text(value: &Value) -> Result<String, String> {
+    match value {
+        Value::Array(array) => array
+            .values
+            .iter()
+            .map(|element| match element {
+                Value::Byte(byte) => Ok(char::from(*byte)),
+                _ => u8::try_from(number(element).map_err(|_| {
+                    "StrConv(..., vbUnicode) expects a byte array".to_string()
+                })? as i64)
+                .map(char::from)
+                .map_err(|_| "StrConv(..., vbUnicode) byte out of range".to_string()),
+            })
+            .collect(),
+        _ => Err("StrConv(..., vbUnicode) expects a byte array".to_string()),
     }
 }
 
@@ -12152,6 +12218,30 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn lenb_counts_bytes_and_strconv_crosses_the_unicode_line() {
+        // Measured against Excel COM on a Western-locale host: LenB of an
+        // ordinary string is twice its UTF-16 length, while LenB of the
+        // Byte() array StrConv(..., vbFromUnicode) returns is the byte
+        // count -- one byte per character here, the default `?` where a
+        // character has no place in the codepage. StrConv(..., vbUnicode)
+        // reads such an array back to text.
+        let value = run(
+            "Public Function ByteWidths() As String\n\
+               ByteWidths = LenB(\"ab\") & \"|\" & LenB(\"\u{3042}\") & \"|\"\n\
+               ByteWidths = ByteWidths & LenB(StrConv(\"ab\", vbFromUnicode)) & \"|\"\n\
+               ByteWidths = ByteWidths & LenB(StrConv(\"\u{3042}\", vbFromUnicode)) & \"|\"\n\
+               ByteWidths = ByteWidths & LenB(StrConv(\"a\u{3042}b\", vbFromUnicode)) & \"|\"\n\
+               ByteWidths = ByteWidths & StrConv(StrConv(\"Hi\", vbFromUnicode), vbUnicode)\n\
+             End Function\n",
+            "ByteWidths",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("4|2|2|1|3|Hi".to_string()));
     }
 
     #[test]
