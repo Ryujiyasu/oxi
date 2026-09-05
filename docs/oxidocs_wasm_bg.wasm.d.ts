@@ -1,6 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const break_slide_paragraph: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: any) => [number, number, number];
 export const build_docx: (a: any) => [number, number, number, number];
 export const build_docx_with_template: (a: any, b: number, c: number) => [number, number, number, number];
 export const create_blank_docx: () => [number, number];
@@ -9,12 +10,14 @@ export const docx_to_pdf: (a: number, b: number) => [number, number, number, num
 export const edit_docx: (a: number, b: number, c: any) => [number, number, number, number];
 export const edit_docx_advanced: (a: number, b: number, c: any) => [number, number, number, number];
 export const edit_pptx: (a: number, b: number, c: any) => [number, number, number, number];
+export const edit_pptx_with_splits: (a: number, b: number, c: any, d: any, e: any, f: any) => [number, number, number, number];
 export const edit_text_and_relayout: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const edit_xlsx: (a: number, b: number, c: any) => [number, number, number, number];
 export const edit_xlsx_from_workbook: (a: number, b: number, c: any) => [number, number, number, number];
 export const format_cell_number: (a: number, b: number, c: number) => [number, number];
 export const generate_hanko_svg: (a: any) => [number, number, number, number];
 export const layout_document: (a: number, b: number) => [number, number, number];
+export const layout_slide_shape: (a: any, b: any, c: any, d: any, e: number, f: number, g: any) => [number, number, number];
 export const list_spreadsheet_vba_procedures: (a: number, b: number) => [number, number, number];
 export const parse_document: (a: number, b: number) => [number, number, number];
 export const parse_pdf: (a: number, b: number) => [number, number, number];
@@ -23,8 +26,15 @@ export const parse_spreadsheet: (a: number, b: number) => [number, number, numbe
 export const pdf_extract_text: (a: number, b: number) => [number, number, number, number];
 export const pdf_verify_signatures: (a: number, b: number) => [number, number, number];
 export const preview_hanko: (a: number, b: number) => [number, number];
-export const run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number) => [number, number, number];
+export const read_macro_safety: (a: number, b: number) => [number, number, number];
+export const recalculate_spreadsheet: (a: any, b: number, c: number) => [number, number, number];
+export const run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
 export const set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
+export const shift_band: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+export const slide_face_advance: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+export const slide_family_measurable: (a: number, b: number) => number;
+export const slide_glyph_offsets: (a: any, b: any) => [number, number, number];
+export const translate_formula: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const update_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
 export const init: () => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;

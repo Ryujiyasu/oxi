@@ -53,8 +53,10 @@ pub struct SlideParagraphSplit {
 
 /// What to change about a run's look. `None` leaves a property alone.
 ///
-/// These are the `a:rPr` ATTRIBUTES, which is why colour is not here: a colour
-/// is a `<a:solidFill>` child element, a different shape of edit.
+/// `bold`/`italic`/`underline`/`font_size` are `a:rPr` ATTRIBUTES, rewritten
+/// in place. `color` is a `<a:solidFill><a:srgbClr>` CHILD, a different shape
+/// of edit: the writer drops the run's existing fill and injects the new one
+/// in schema position (after any `a:ln`).
 #[derive(Debug, Clone, Default)]
 pub struct RunFormat {
     pub bold: Option<bool>,
@@ -62,6 +64,8 @@ pub struct RunFormat {
     pub underline: Option<bool>,
     /// Size in POINTS. The file stores hundredths, which this converts.
     pub font_size: Option<f32>,
+    /// Solid fill colour as a 6-hex string ("RRGGBB"), no leading `#`.
+    pub color: Option<String>,
 }
 
 /// Round-trip pptx editor.
@@ -623,6 +627,56 @@ fn apply_format(tag: &BytesStart<'_>, format: &RunFormat) -> BytesStart<'static>
     out
 }
 
+/// Route one event to the split buffer when a paragraph is being cut, else
+/// straight to the writer -- the pattern this function repeats inline.
+fn emit(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    buffer: &mut Option<(usize, Vec<Event<'static>>)>,
+    ev: Event<'static>,
+) -> Result<(), PptxError> {
+    if let Some((_, buf)) = buffer.as_mut() {
+        buf.push(ev);
+    } else {
+        writer
+            .write_event(ev)
+            .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Emit `<a:solidFill><a:srgbClr val="RRGGBB"/></a:solidFill>` with the run's
+/// own namespace prefix.
+fn emit_fill(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    buffer: &mut Option<(usize, Vec<Event<'static>>)>,
+    prefix: &str,
+    color: &str,
+) -> Result<(), PptxError> {
+    let q = |local: &str| {
+        if prefix.is_empty() {
+            local.to_string()
+        } else {
+            format!("{prefix}:{local}")
+        }
+    };
+    let fill = q("solidFill");
+    emit(writer, buffer, Event::Start(BytesStart::new(fill.clone())))?;
+    let mut clr = BytesStart::new(q("srgbClr"));
+    clr.push_attribute(("val", color));
+    emit(writer, buffer, Event::Empty(clr))?;
+    emit(writer, buffer, Event::End(BytesEnd::new(fill)))?;
+    Ok(())
+}
+
+/// The namespace prefix of a qualified tag name (`"a"` for `a:rPr`, `""` for a
+/// bare one).
+fn tag_prefix(tag: &BytesStart<'_>) -> String {
+    String::from_utf8_lossy(tag.name().as_ref())
+        .rsplit_once(':')
+        .map(|(p, _)| p.to_string())
+        .unwrap_or_default()
+}
+
 /// A fresh `a:rPr` for a run that carries none, named with the run's own prefix.
 fn new_rpr(run_tag: &BytesStart<'_>, format: &RunFormat) -> BytesStart<'static> {
     let run_name = String::from_utf8_lossy(run_tag.name().as_ref()).into_owned();
@@ -667,10 +721,73 @@ fn patch_slide_xml(
     // can be written with the run's own namespace prefix, and the flag says
     // whether one has been seen yet.
     let mut format_run: Option<(BytesStart<'static>, RunFormat)> = None;
+    // Colour is a CHILD of `a:rPr`, so it cannot ride `apply_format`'s
+    // attribute rewrite. While inside the rPr being recoloured, its existing
+    // fill is dropped (`skip_fill_depth`) and the new `<a:solidFill>` is
+    // emitted lazily -- before the first child that is not `a:ln`, or at the
+    // rPr's close -- so it lands in schema position whether or not the run
+    // carries an outline.
+    let mut in_fmt_rpr = false;
+    let mut pending_fill: Option<(String, String)> = None; // (prefix, "RRGGBB")
+    let mut skip_fill_depth: usize = 0;
+    // Nesting below the rPr's direct-child level: 0 = a direct child, >0 = inside
+    // one (e.g. an `a:ln`, whose own `a:solidFill` is the OUTLINE colour and
+    // must not be mistaken for the text fill).
+    let mut fmt_depth: usize = 0;
 
     loop {
         match reader.read_event().map_err(PptxError::Xml)? {
             Event::Eof => break,
+            // Dropping the run's existing `<a:solidFill>` subtree while its
+            // colour is being replaced. Set to 1 when that fill opens; any
+            // nesting deepens it, its close returns it to 0.
+            Event::Start(_) if skip_fill_depth > 0 => skip_fill_depth += 1,
+            Event::End(_) if skip_fill_depth > 0 => skip_fill_depth -= 1,
+            Event::Empty(_) | Event::Text(_) if skip_fill_depth > 0 => {}
+            // Inside the rPr being recoloured. At the direct-child level the new
+            // fill is injected (after any `a:ln`) and the old one dropped;
+            // deeper down every event is copied through untouched.
+            Event::Start(ref e) if in_fmt_rpr => {
+                let ln = local_name(e.name().as_ref());
+                if fmt_depth == 0 && ln == "solidFill" {
+                    skip_fill_depth = 1;
+                } else {
+                    if fmt_depth == 0 && ln != "ln" {
+                        if let Some((pfx, col)) = pending_fill.take() {
+                            emit_fill(&mut writer, &mut buffer, &pfx, &col)?;
+                        }
+                    }
+                    fmt_depth += 1;
+                    emit(&mut writer, &mut buffer, Event::Start(e.clone().into_owned()))?;
+                }
+            }
+            Event::Empty(ref e) if in_fmt_rpr && fmt_depth == 0 => {
+                let ln = local_name(e.name().as_ref());
+                if ln != "solidFill" {
+                    if ln != "ln" {
+                        if let Some((pfx, col)) = pending_fill.take() {
+                            emit_fill(&mut writer, &mut buffer, &pfx, &col)?;
+                        }
+                    }
+                    emit(&mut writer, &mut buffer, Event::Empty(e.clone().into_owned()))?;
+                }
+            }
+            Event::End(ref e) if in_fmt_rpr => {
+                if fmt_depth > 0 {
+                    fmt_depth -= 1;
+                    emit(&mut writer, &mut buffer, Event::End(e.clone().into_owned()))?;
+                } else {
+                    // The rPr closes: flush the fill if no child pulled it in.
+                    if let Some((pfx, col)) = pending_fill.take() {
+                        emit_fill(&mut writer, &mut buffer, &pfx, &col)?;
+                    }
+                    in_fmt_rpr = false;
+                    emit(&mut writer, &mut buffer, Event::End(e.clone().into_owned()))?;
+                }
+            }
+            Event::Text(ref e) if in_fmt_rpr => {
+                emit(&mut writer, &mut buffer, Event::Text(e.clone().into_owned()))?;
+            }
             Event::Start(ref e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
@@ -708,12 +825,13 @@ fn patch_slide_xml(
                         // or the run ends up with two and the original wins.
                         let (_, f) = format_run.take().expect("just checked");
                         let tag = apply_format(e, &f);
-                        if let Some((_, buf)) = buffer.as_mut() {
-                            buf.push(Event::Start(tag));
-                        } else {
-                            writer
-                                .write_event(Event::Start(tag))
-                                .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                        emit(&mut writer, &mut buffer, Event::Start(tag))?;
+                        // A colour is a child, not an attribute: hand the rest
+                        // of this rPr to the recolour arms above.
+                        if let Some(col) = f.color.clone() {
+                            in_fmt_rpr = true;
+                            fmt_depth = 0;
+                            pending_fill = Some((tag_prefix(e), col));
                         }
                         continue;
                     }
@@ -732,13 +850,18 @@ fn patch_slide_xml(
                     // The run carried no `a:rPr`, so one is written before
                     // whatever its first child turned out to be.
                     let (run_tag, f) = format_run.take().expect("just checked");
-                    let fresh = Event::Empty(new_rpr(&run_tag, &f));
-                    if let Some((_, buf)) = buffer.as_mut() {
-                        buf.push(fresh);
-                    } else {
-                        writer
-                            .write_event(fresh)
-                            .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                    let fresh = new_rpr(&run_tag, &f);
+                    match f.color.clone() {
+                        // A colour needs a child, so the fresh rPr opens rather
+                        // than self-closes and carries the fill.
+                        Some(col) => {
+                            let prefix = tag_prefix(&fresh);
+                            let name = String::from_utf8_lossy(fresh.name().as_ref()).into_owned();
+                            emit(&mut writer, &mut buffer, Event::Start(fresh))?;
+                            emit_fill(&mut writer, &mut buffer, &prefix, &col)?;
+                            emit(&mut writer, &mut buffer, Event::End(BytesEnd::new(name)))?;
+                        }
+                        None => emit(&mut writer, &mut buffer, Event::Empty(fresh))?,
                     }
                 }
                 if let Some((_, buf)) = buffer.as_mut() {
@@ -846,12 +969,16 @@ fn patch_slide_xml(
             {
                 let (_, f) = format_run.take().expect("just checked");
                 let tag = apply_format(e, &f);
-                if let Some((_, buf)) = buffer.as_mut() {
-                    buf.push(Event::Empty(tag));
-                } else {
-                    writer
-                        .write_event(Event::Empty(tag))
-                        .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                match f.color.clone() {
+                    // A self-closing rPr has to open to carry a fill child.
+                    Some(col) => {
+                        let prefix = tag_prefix(e);
+                        let name = String::from_utf8_lossy(tag.name().as_ref()).into_owned();
+                        emit(&mut writer, &mut buffer, Event::Start(tag))?;
+                        emit_fill(&mut writer, &mut buffer, &prefix, &col)?;
+                        emit(&mut writer, &mut buffer, Event::End(BytesEnd::new(name)))?;
+                    }
+                    None => emit(&mut writer, &mut buffer, Event::Empty(tag))?,
                 }
             }
             Event::Empty(ref e)
@@ -906,6 +1033,36 @@ mod tests {
         let slide = &pres.slides[0];
         if let crate::ir::ShapeContent::TextBox { paragraphs } = &slide.shapes[0].content {
             assert_eq!(paragraphs[0].runs[0].text, "New Title");
+        } else {
+            panic!("Expected TextBox");
+        }
+    }
+
+    #[test]
+    fn test_editor_run_colour_and_weight() {
+        // The fixture's first run is `<a:rPr .../>` -- the self-closing case,
+        // which the colour writer must reopen to carry a fill child.
+        let data = include_bytes!("../../../tests/fixtures/basic_test.pptx");
+        let mut editor = PptxEditor::new(data).expect("should open");
+        editor.set_run_format(
+            0,
+            0,
+            0,
+            0,
+            RunFormat {
+                bold: Some(false),
+                color: Some("FF0000".to_string()),
+                ..Default::default()
+            },
+        );
+        let saved = editor.save().expect("should save");
+        // The saved bytes must still be a valid deck the parser reads, and the
+        // run must carry the new colour AND the cleared weight together.
+        let pres = parse_pptx(&saved).expect("should parse");
+        if let crate::ir::ShapeContent::TextBox { paragraphs } = &pres.slides[0].shapes[0].content {
+            let run = &paragraphs[0].runs[0];
+            assert_eq!(run.color.as_deref(), Some("FF0000"), "colour persisted");
+            assert_eq!(run.bold, Some(false), "weight cleared beside the colour");
         } else {
             panic!("Expected TextBox");
         }

@@ -824,6 +824,8 @@ struct JsRunFormat {
     underline: Option<bool>,
     #[serde(default)]
     font_size: Option<f32>,
+    #[serde(default)]
+    color: Option<String>,
 }
 
 /// Edit a .pptx and break paragraphs in it, returning the modified bytes.
@@ -891,6 +893,7 @@ pub fn edit_pptx_with_splits(
                 italic: f.italic,
                 underline: f.underline,
                 font_size: f.font_size,
+                color: f.color,
             },
         );
     }

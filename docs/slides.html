@@ -114,6 +114,26 @@ body.editing .slide-shape span[contenteditable]:empty { display: inline-block;
 #btnSave { font-weight: 600 }
 .dirty::after { content: '•'; color: #B7410E; margin-left: 6px }
 
+/* ---- formatting toolbar (shown only while editing) ---- */
+.fmtbar { display: flex; align-items: center; gap: 8px; height: 40px; flex-shrink: 0;
+          background: var(--accent-l, #f3eee9); padding: 0 14px; font-size: 13px;
+          user-select: none; border-bottom: 1px solid var(--border) }
+.fmtbar[hidden] { display: none }
+.fmtbar .fmt { width: 30px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
+               background: #fff; cursor: pointer; font-size: 14px; line-height: 1;
+               color: var(--ink, #1f2a44) }
+.fmtbar .fmt:hover { border-color: var(--accent, #B7410E) }
+.fmtbar .fmt.on { background: var(--accent, #B7410E); border-color: var(--accent, #B7410E); color: #fff }
+.fmtbar .fmtlabel { color: #6b7280; font-size: 12px }
+.fmtbar .fmtnum { width: 56px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
+                  padding: 0 6px; font-size: 13px; box-sizing: border-box }
+.fmtbar .fmtcol { width: 34px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
+                  padding: 0; background: #fff; cursor: pointer }
+.fmtbar .fsep { width: 1px; height: 22px; background: var(--border) }
+.fmtbar .sp { flex: 1 }
+.fmtbar .fmthint { color: #9ca3af; font-size: 12px }
+.fmtbar button:disabled, .fmtbar input:disabled { opacity: .45; cursor: default }
+
 /* ---- presenting ---- */
 #btnPresent { font-weight: 600 }
 body.presenting { overflow: hidden; background: #000 }
@@ -156,6 +176,20 @@ body.presenting #presrail { display: block }
   </span>
 </div>
 
+<div class="fmtbar" id="fmtbar" hidden>
+  <button id="fmtBold" class="fmt" data-i18n-title="fBold" title="Bold" style="font-weight:700">B</button>
+  <button id="fmtItalic" class="fmt" data-i18n-title="fItalic" title="Italic" style="font-style:italic">I</button>
+  <button id="fmtUnder" class="fmt" data-i18n-title="fUnder" title="Underline" style="text-decoration:underline">U</button>
+  <span class="fsep"></span>
+  <label class="fmtlabel" data-i18n="fSize">Size</label>
+  <input id="fmtSize" class="fmtnum" type="number" min="1" max="400" step="1" inputmode="numeric" />
+  <span class="fsep"></span>
+  <label class="fmtlabel" data-i18n="fColor">Colour</label>
+  <input id="fmtColor" class="fmtcol" type="color" value="#1f2a44" />
+  <span class="sp"></span>
+  <span class="fmthint" id="fmtHint" data-i18n="fHint">Select text, then apply</span>
+</div>
+
 <div class="msg" id="msg" hidden></div>
 
 <div id="presbar">
@@ -192,6 +226,8 @@ const I18N = {
     loading: 'Loading the engine…', parsing: 'Parsing…',
     prev: 'Previous', next: 'Next', present: 'Present', close: 'Close',
     edit: 'Edit', editing: 'Done editing', save: 'Save a copy',
+    fBold: 'Bold', fItalic: 'Italic', fUnder: 'Underline', fSize: 'Size',
+    fColor: 'Colour', fHint: 'Select text, then apply a style',
     saved: 'Saved. The file was written in your browser.',
     noEdits: 'Nothing has been changed yet.',
     saveFailed: 'Could not save: ',
@@ -208,6 +244,8 @@ const I18N = {
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
     prev: '前へ', next: '次へ', present: 'プレゼン開始', close: '閉じる',
     edit: '編集', editing: '編集を終える', save: '保存',
+    fBold: '太字', fItalic: '斜体', fUnder: '下線', fSize: 'サイズ',
+    fColor: '色', fHint: '文字を選んでから書式を適用',
     saved: '保存しました。ファイルはブラウザの中で作られています。',
     noEdits: 'まだ変更がありません。',
     saveFailed: '保存できませんでした: ',
@@ -224,6 +262,10 @@ function applyLang() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const v = I18N[lang][el.dataset.i18n];
     if (typeof v === 'string') el.innerHTML = v;
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    const v = I18N[lang][el.dataset.i18nTitle];
+    if (typeof v === 'string') el.title = v;
   });
   document.getElementById('langEn').className = lang === 'en' ? 'on' : '';
   document.getElementById('langJa').className = lang === 'ja' ? 'on' : '';
@@ -484,6 +526,12 @@ function buildChart(chart, shape, scale) {
 
 let editing = false;
 const edits = new Map();
+// Per-run look changes, keyed like `edits`: key -> {bold?, italic?, underline?,
+// size? (pt), color? (hex, no '#')}. Held apart from `edits` because the engine
+// takes them as a separate `formats` list, and applied whole-run -- the run is
+// the unit the file and the IR share, so a style lands on every run the
+// selection touches rather than splitting one.
+const runFmt = new Map();
 
 function slideIndexOf(slide) {
   return pres ? pres.slides.indexOf(slide) : 0;
@@ -510,7 +558,7 @@ function harvest() {
 
 function markDirty() {
   const n = document.getElementById('docName');
-  n.classList.toggle('dirty', edits.size > 0);
+  n.classList.toggle('dirty', edits.size > 0 || runFmt.size > 0);
 }
 
 function buildSlide(container, slide, scale, interactive) {
@@ -575,19 +623,38 @@ function buildSlide(container, slide, scale, interactive) {
           const key = editKey(slideIndexOf(slide), shape, pi, ri);
           const original = run.text || '';
           span.textContent = edits.has(key) ? edits.get(key) : original;
+          // What the file says for this run's look, before any in-page change.
+          const baseSize = run.font_size || (lvl && lvl.font_size) || 18;
+          const baseBold = !!run.bold;
+          const baseItal = !!run.italic;
+          const baseUnder = !!run.underline;
+          const baseColor = run.color || (lvl && lvl.color) || '';
           if (editing && interactive) {
             span.contentEditable = 'true';
             span.spellcheck = false;
             span.dataset.key = key;
             span.dataset.run = ri;
             span.dataset.orig = original;
+            // The file's own look, so a toggle can flip the effective state and
+            // the toolbar can read it back without re-parsing.
+            span.dataset.bold = baseBold ? '1' : '0';
+            span.dataset.italic = baseItal ? '1' : '0';
+            span.dataset.under = baseUnder ? '1' : '0';
+            span.dataset.size = String(baseSize);
+            span.dataset.color = baseColor;
           }
-          span.style.fontSize = ((run.font_size || (lvl && lvl.font_size) || 18) * scale) + 'px';
-          if (run.bold) span.style.fontWeight = 'bold';
-          if (run.italic) span.style.fontStyle = 'italic';
-          if (run.underline) span.style.textDecoration = 'underline';
-          const color = run.color || (lvl && lvl.color);
-          if (color) span.style.color = '#' + color;
+          // The effective look: the file's, with any in-page override on top.
+          const ov = runFmt.get(key) || {};
+          const effBold = ov.bold === undefined ? baseBold : ov.bold;
+          const effItal = ov.italic === undefined ? baseItal : ov.italic;
+          const effUnder = ov.underline === undefined ? baseUnder : ov.underline;
+          const effSize = ov.size === undefined ? baseSize : ov.size;
+          const effColor = ov.color === undefined ? baseColor : ov.color;
+          span.style.fontSize = (effSize * scale) + 'px';
+          if (effBold) span.style.fontWeight = 'bold';
+          if (effItal) span.style.fontStyle = 'italic';
+          if (effUnder) span.style.textDecoration = 'underline';
+          if (effColor) span.style.color = '#' + effColor;
           const face = run.font_family || (lvl && lvl.font_family);
           if (face) span.style.fontFamily = face + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
           // `a:highlight` is a box behind the glyphs, and a LEVEL can declare
@@ -616,7 +683,7 @@ function buildSlide(container, slide, scale, interactive) {
 }
 
 // ---- page state ------------------------------------------------------------
-let pres = null, current = 0, bytes = null;
+let pres = null, current = 0, bytes = null, currentScale = 1;
 const canvas = document.getElementById('canvas');
 const rail = document.getElementById('rail');
 
@@ -631,6 +698,7 @@ function render() {
     : Math.min(avail, 980) / pres.slide_width;
   const thumbScale = 128 / pres.slide_width;
 
+  currentScale = scale;                        // for restyleSpan's live updates
   const slide = pres.slides[current];
   const el = document.createElement('div');
   el.className = 'slide';
@@ -745,6 +813,7 @@ async function open(name, data, opts) {
     say(t('parsing'));
     bytes = data;
     edits.clear();
+    runFmt.clear();
     markDirty();
     pres = parse_presentation(data);
     current = (opts && opts.at) || 0;
@@ -877,8 +946,149 @@ document.getElementById('btnEdit').onclick = () => {
   document.body.classList.toggle('editing', editing);
   document.getElementById('btnEdit').textContent = t(editing ? 'editing' : 'edit');
   document.getElementById('btnSave').hidden = !editing;
+  document.getElementById('fmtbar').hidden = !editing;
   render();
+  syncFmtBar();
 };
+
+/* ---- formatting toolbar ---------------------------------------------------
+   A style applies to every run the selection touches, whole-run: the run is
+   the unit the file and the IR share, so this stays inside the run model and
+   never splits one. The change is remembered in `runFmt` (its own list to the
+   engine) and shown at once by restyling the span; Save hands the list over. */
+
+// The run spans the current selection covers -- the one holding a collapsed
+// caret, or every one an extended selection reaches.
+function touchedRunSpans() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return [];
+  const spans = [...document.querySelectorAll('#canvas span[data-key]')];
+  if (sel.isCollapsed) {
+    let n = sel.anchorNode;
+    while (n && n !== document) {
+      if (n.dataset && n.dataset.key) return [n];
+      n = n.parentNode;
+    }
+    return [];
+  }
+  const range = sel.getRangeAt(0);
+  return spans.filter(s => range.intersectsNode(s));
+}
+
+function spanEff(span, prop) {
+  const ov = runFmt.get(span.dataset.key) || {};
+  if (ov[prop] !== undefined) return ov[prop];
+  switch (prop) {
+    case 'bold': return span.dataset.bold === '1';
+    case 'italic': return span.dataset.italic === '1';
+    case 'underline': return span.dataset.under === '1';
+    case 'size': return parseFloat(span.dataset.size) || 18;
+    case 'color': return span.dataset.color || '';
+  }
+}
+
+// Re-apply one run's effective look to its span, without a full re-render, so
+// the caret and selection survive.
+function restyleSpan(span, scale) {
+  span.style.fontWeight = spanEff(span, 'bold') ? 'bold' : '';
+  span.style.fontStyle = spanEff(span, 'italic') ? 'italic' : '';
+  span.style.textDecoration = spanEff(span, 'underline') ? 'underline' : '';
+  const col = spanEff(span, 'color');
+  span.style.color = col ? '#' + col : '';
+  span.style.fontSize = (spanEff(span, 'size') * (scale || currentScale)) + 'px';
+}
+
+// Merge `patch` into every touched run, drop an override that is back to what
+// the file said, and reflect it at once.
+function applyRunFmt(patch) {
+  const spans = touchedRunSpans();
+  if (!spans.length) { say(t('fHint')); return; }
+  for (const span of spans) {
+    const key = span.dataset.key;
+    const cur = runFmt.get(key) || {};
+    const next = { ...cur, ...patch };
+    // An override equal to the file's own value is not an edit.
+    const base = {
+      bold: span.dataset.bold === '1', italic: span.dataset.italic === '1',
+      underline: span.dataset.under === '1',
+      size: parseFloat(span.dataset.size) || 18, color: span.dataset.color || '',
+    };
+    for (const k of Object.keys(next)) {
+      if (next[k] === base[k]) delete next[k];
+    }
+    if (Object.keys(next).length) runFmt.set(key, next);
+    else runFmt.delete(key);
+    restyleSpan(span);
+  }
+  markDirty();
+  syncFmtBar();
+}
+
+// Reflect the primary touched run's state in the toolbar controls.
+function syncFmtBar() {
+  const bar = document.getElementById('fmtbar');
+  if (!editing || bar.hidden) return;
+  const spans = touchedRunSpans();
+  const has = spans.length > 0;
+  for (const id of ['fmtBold', 'fmtItalic', 'fmtUnder', 'fmtSize', 'fmtColor']) {
+    document.getElementById(id).disabled = !has;
+  }
+  document.getElementById('fmtHint').style.visibility = has ? 'hidden' : 'visible';
+  if (!has) {
+    for (const id of ['fmtBold', 'fmtItalic', 'fmtUnder']) {
+      document.getElementById(id).classList.remove('on');
+    }
+    return;
+  }
+  const s = spans[0];
+  document.getElementById('fmtBold').classList.toggle('on', spanEff(s, 'bold'));
+  document.getElementById('fmtItalic').classList.toggle('on', spanEff(s, 'italic'));
+  document.getElementById('fmtUnder').classList.toggle('on', spanEff(s, 'underline'));
+  document.getElementById('fmtSize').value = Math.round(spanEff(s, 'size'));
+  const col = spanEff(s, 'color');
+  if (col && /^[0-9a-fA-F]{6}$/.test(col)) document.getElementById('fmtColor').value = '#' + col;
+}
+
+document.getElementById('fmtBold').onmousedown = e => {
+  e.preventDefault();                        // keep the selection, don't focus the button
+  const s = touchedRunSpans()[0];
+  if (s) applyRunFmt({ bold: !spanEff(s, 'bold') });
+};
+document.getElementById('fmtItalic').onmousedown = e => {
+  e.preventDefault();
+  const s = touchedRunSpans()[0];
+  if (s) applyRunFmt({ italic: !spanEff(s, 'italic') });
+};
+document.getElementById('fmtUnder').onmousedown = e => {
+  e.preventDefault();
+  const s = touchedRunSpans()[0];
+  if (s) applyRunFmt({ underline: !spanEff(s, 'underline') });
+};
+// The size field and colour picker take the pointer, which clears the run
+// selection; the last touched runs are remembered so the change still lands.
+let fmtTargets = [];
+function rememberTargets() { const s = touchedRunSpans(); if (s.length) fmtTargets = s; }
+function applyToRemembered(patch) {
+  const spans = fmtTargets.filter(s => s.isConnected);
+  if (!spans.length) return;
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.setStartBefore(spans[0]); range.setEndAfter(spans[spans.length - 1]);
+  sel.removeAllRanges(); sel.addRange(range);
+  applyRunFmt(patch);
+}
+// `mousedown`, not `focus`: focusing the field has already cleared the page
+// selection, so the runs must be remembered before the pointer lands.
+document.getElementById('fmtSize').addEventListener('mousedown', rememberTargets);
+document.getElementById('fmtSize').addEventListener('change', e => {
+  const v = parseFloat(e.target.value);
+  if (v >= 1 && v <= 400) applyToRemembered({ size: v });
+});
+document.getElementById('fmtColor').addEventListener('mousedown', rememberTargets);
+document.getElementById('fmtColor').addEventListener('input', e => {
+  applyToRemembered({ color: e.target.value.replace('#', '').toUpperCase() });
+});
+document.addEventListener('selectionchange', () => { if (editing) syncFmtBar(); });
 
 // One listener on the canvas, so a re-render never leaves a run unwired.
 document.getElementById('canvas').addEventListener('input', () => harvest());
@@ -931,6 +1141,7 @@ function splitHere() {
     const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [where], [], []);
     bytes = out;
     edits.clear();
+    runFmt.clear();
     markDirty();
     pres = parse_presentation(new Uint8Array(bytes));
     render();
@@ -961,15 +1172,28 @@ document.getElementById('canvas').addEventListener('paste', e => {
 
 document.getElementById('btnSave').onclick = async () => {
   harvest();
-  if (!edits.size) { say(t('noEdits')); return; }
+  if (!edits.size && !runFmt.size) { say(t('noEdits')); return; }
   const list = [];
   for (const [key, text] of edits) {
     const [si, sh, pi, ri] = key.split('/').map(Number);
     list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
                 run_index: ri, new_text: text });
   }
+  // Each recoloured / re-weighted run as a `formats` entry. Only the fields
+  // the person changed are sent, so the rest of the run's look is left alone.
+  const formats = [];
+  for (const [key, f] of runFmt) {
+    const [si, sh, pi, ri] = key.split('/').map(Number);
+    const entry = { slide_index: si, shape_index: sh, paragraph_index: pi, run_index: ri };
+    if (f.bold !== undefined) entry.bold = f.bold;
+    if (f.italic !== undefined) entry.italic = f.italic;
+    if (f.underline !== undefined) entry.underline = f.underline;
+    if (f.size !== undefined) entry.font_size = f.size;
+    if (f.color !== undefined) entry.color = f.color;
+    formats.push(entry);
+  }
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], []);
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], formats);
     const name = (document.getElementById('docName').textContent || 'slides')
       .replace(/\.pptx$/i, '') + '-edited.pptx';
     const url = URL.createObjectURL(new Blob([out], {
@@ -982,6 +1206,7 @@ document.getElementById('btnSave').onclick = async () => {
     // top of it rather than being applied twice.
     bytes = out;
     edits.clear();
+    runFmt.clear();
     markDirty();
     pres = parse_presentation(new Uint8Array(bytes));
     render();
@@ -1003,6 +1228,7 @@ document.getElementById('btnClose').onclick = async () => {
   document.getElementById('btnSave').hidden = true;
   editing = false;
   edits.clear();
+  runFmt.clear();
   document.body.classList.remove('editing');
   markDirty();
   document.getElementById('canvas').innerHTML = '';
