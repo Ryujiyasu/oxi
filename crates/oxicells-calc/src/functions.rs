@@ -468,7 +468,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
     // because the misses come back as errors and ISNUMBER calls them false.
     let error_transparent = matches!(
         name,
-        "IFERROR" | "IFNA" | "IF"
+        "IFERROR" | "IFNA" | "IF" | "IFS" | "SWITCH"
             | "ISERROR" | "ISNA" | "ISERR" | "ISNUMBER" | "ISTEXT"
             | "ISBLANK" | "ISLOGICAL" | "ISREF"
         // The conditional sums look at one row at a time, so an error in a
@@ -605,6 +605,31 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
             Ok(Value::Number(n - d * (n / d).floor()))
         }
+        // Rounds to the nearest multiple, halves away from zero. Excel: the
+        // number and the multiple must share a sign, else #NUM!; a zero
+        // multiple gives zero. MRound(17,5)=15, MRound(-17,-5)=-15,
+        // MRound(2.5,1)=3.
+        "MROUND" => {
+            expect(args, 2)?;
+            let (n, m) = (num(&args[0])?, num(&args[1])?);
+            if m == 0.0 {
+                return Ok(Value::Number(0.0));
+            }
+            if n != 0.0 && n.signum() != m.signum() {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number((n / m).round() * m))
+        }
+        // The integer part of a division, truncated toward zero:
+        // Quotient(17,5)=3, Quotient(-17,5)=-3. A zero divisor is #DIV/0!.
+        "QUOTIENT" => {
+            expect(args, 2)?;
+            let (n, d) = (num(&args[0])?, num(&args[1])?);
+            if d == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            Ok(Value::Number((n / d).trunc()))
+        }
         "ROUND" | "ROUNDUP" | "ROUNDDOWN" => {
             let n = num(&args.first().ok_or(ExcelError::Value)?.clone())?;
             let digits = match args.get(1) {
@@ -671,6 +696,31 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             Ok(Value::Logical(acc))
+        }
+        // True when an ODD number of its arguments are true. Blanks and text
+        // inside ranges are skipped, as AND/OR skip them. Xor(True,True,True)
+        // is True; Xor(True,False,True) is False.
+        "XOR" => {
+            let mut seen = false;
+            let mut trues = 0u64;
+            for v in args.iter().flat_map(|a| a.flatten()) {
+                if let Some(e) = v.err() {
+                    return Err(e);
+                }
+                let b = match v {
+                    Value::Logical(b) => b,
+                    Value::Number(n) => n != 0.0,
+                    _ => continue,
+                };
+                seen = true;
+                if b {
+                    trues += 1;
+                }
+            }
+            if !seen {
+                return Err(ExcelError::Value);
+            }
+            Ok(Value::Logical(trues % 2 == 1))
         }
         "NOT" => {
             expect(args, 1)?;
@@ -1469,6 +1519,54 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
             Ok(args[index].scalar())
         }
+        // The first condition that holds gives its paired result; a condition
+        // that errors is the answer; nothing true is #N/A. A non-taken
+        // result's error is ignored (IFS is error-transparent, as IF is).
+        "IFS" => {
+            if args.is_empty() {
+                return Err(ExcelError::Value);
+            }
+            let mut i = 0;
+            while i + 1 < args.len() {
+                let cond = args[i].scalar();
+                if let Some(e) = cond.err() {
+                    return Err(e);
+                }
+                if cond.to_logical()? {
+                    return Ok(args[i + 1].scalar());
+                }
+                i += 2;
+            }
+            Err(ExcelError::NA)
+        }
+        // The first value equal to the subject gives its paired result; a
+        // leftover final argument is the default; no match and no default is
+        // #N/A. Equality is Excel's `=`, so text matches case-insensitively.
+        "SWITCH" => {
+            if args.len() < 3 {
+                return Err(ExcelError::Value);
+            }
+            let subject = args[0].scalar();
+            if let Some(e) = subject.err() {
+                return Err(e);
+            }
+            let mut i = 1;
+            while i + 1 < args.len() {
+                let candidate = args[i].scalar();
+                if let Some(e) = candidate.err() {
+                    return Err(e);
+                }
+                if compare(&subject, &candidate) == Ok(Ordering::Equal) {
+                    return Ok(args[i + 1].scalar());
+                }
+                i += 2;
+            }
+            if i < args.len() {
+                Ok(args[i].scalar())
+            } else {
+                Err(ExcelError::NA)
+            }
+        }
         // Codes 1..=11 include manually hidden rows, 101..=111 exclude them.
         // Row visibility is not modelled here, so both behave the same; the
         // difference only shows up on a sheet with hidden rows.
@@ -1723,6 +1821,18 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "DAYS" => {
             expect(args, 2)?;
             Ok(Value::Number((serial(&args[0])? - serial(&args[1])?) as f64))
+        }
+        // The fraction of a year between two dates, on one of five day-count
+        // bases. Symmetric in its dates. All five verified against Excel.
+        "YEARFRAC" => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            let basis = match args.get(2) {
+                Some(a) => num(a)? as i64,
+                None => 0,
+            };
+            Ok(Value::Number(yearfrac(serial(&args[0])?, serial(&args[1])?, basis)?))
         }
         "DATEDIF" => {
             expect(args, 3)?;
@@ -2353,6 +2463,100 @@ fn serial(arg: &Arg) -> Result<i64, ExcelError> {
     Ok(n.floor() as i64)
 }
 
+/// YEARFRAC on Excel's five day-count bases. The dates are put in order first,
+/// so it is symmetric as Excel is.
+fn yearfrac(start: i64, end: i64, basis: i64) -> Result<f64, ExcelError> {
+    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+    if start == end {
+        return Ok(0.0);
+    }
+    match basis {
+        // 30/360, US (NASD) and European. The two differ only in how they
+        // pull a day of 31 -- and whether the last day of February counts.
+        0 => Ok(days_30_360(start, end, false)? as f64 / 360.0),
+        4 => Ok(days_30_360(start, end, true)? as f64 / 360.0),
+        2 => Ok((end - start) as f64 / 360.0),
+        3 => Ok((end - start) as f64 / 365.0),
+        1 => {
+            let (d1, d2) = (datetime::date_from_serial(start)?, datetime::date_from_serial(end)?);
+            let denom = if d1.year == d2.year {
+                days_in_year(d1.year)? as f64
+            } else if d2.year == d1.year + 1
+                && (d1.month > d2.month || (d1.month == d2.month && d1.day >= d2.day))
+            {
+                // A span of a year or less that crosses one year boundary: the
+                // denominator is 366 when a 29 February falls within it, else
+                // 365. Measured: 1 Mar 2023 -> 1 Mar 2024 is exactly 1.
+                if feb29_within(start, end)? { 366.0 } else { 365.0 }
+            } else {
+                // A longer span: the average length of the years it touches.
+                let touched = datetime::serial_from_date(d2.year + 1, 1, 1)?
+                    - datetime::serial_from_date(d1.year, 1, 1)?;
+                touched as f64 / (d2.year - d1.year + 1) as f64
+            };
+            Ok((end - start) as f64 / denom)
+        }
+        _ => Err(ExcelError::Num),
+    }
+}
+
+fn days_in_year(year: i64) -> Result<i64, ExcelError> {
+    Ok(datetime::serial_from_date(year + 1, 1, 1)? - datetime::serial_from_date(year, 1, 1)?)
+}
+
+fn feb29_within(start: i64, end: i64) -> Result<bool, ExcelError> {
+    let (y1, y2) = (
+        datetime::date_from_serial(start)?.year,
+        datetime::date_from_serial(end)?.year,
+    );
+    for year in y1..=y2 {
+        // A 29 February exists only in a leap year; serial_from_date refuses
+        // it otherwise, which is the leap-year test.
+        if let Ok(leap_day) = datetime::serial_from_date(year, 2, 29) {
+            if (start..=end).contains(&leap_day) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The last day of February -- the day whose next day leaves the month.
+fn is_last_of_feb(serial: i64) -> Result<bool, ExcelError> {
+    let date = datetime::date_from_serial(serial)?;
+    Ok(date.month == 2 && datetime::date_from_serial(serial + 1)?.month != 2)
+}
+
+/// The 30/360 day count. In the US (NASD) form the order matters and the D2
+/// test reads the ORIGINAL D1 -- measured: 29 Feb 2024 -> 31 Mar 2024 is 31
+/// days, not 30. The European form just pulls any 31 down to 30.
+fn days_30_360(start: i64, end: i64, european: bool) -> Result<i64, ExcelError> {
+    let (a, b) = (datetime::date_from_serial(start)?, datetime::date_from_serial(end)?);
+    let (mut d1, mut d2) = (a.day, b.day);
+    if european {
+        if d1 == 31 {
+            d1 = 30;
+        }
+        if d2 == 31 {
+            d2 = 30;
+        }
+    } else {
+        if is_last_of_feb(start)? && is_last_of_feb(end)? {
+            d2 = 30;
+        }
+        if d2 == 31 && (d1 == 30 || d1 == 31) {
+            d2 = 30;
+        }
+        if d1 == 31 {
+            d1 = 30;
+        }
+        if is_last_of_feb(start)? {
+            d1 = 30;
+        }
+    }
+    Ok((b.year - a.year) * 360 + (b.month - a.month) * 30 + (d2 - d1))
+}
+
 /// Map Excel's `WEEKDAY` return-type codes onto a day number.
 ///
 /// Types 1 and 17 start the week on Sunday, 2 and 11 on Monday, 12..=16 walk
@@ -2598,6 +2802,70 @@ mod tests {
         );
         let crit = range(&[Value::text("k"), Value::text("x")], 1);
         assert_eq!(call("DAVERAGE", &[db, v(2.0), crit]), Value::Number(20.0));
+    }
+
+    /// The functions added 2026-09-05 (flows12), measured against Excel.
+    #[test]
+    fn the_flows12_worksheet_functions_agree_with_excel() {
+        // MROUND rounds to the nearest multiple, halves away from zero, and
+        // asks the number and multiple to share a sign.
+        assert_eq!(call("MROUND", &[v(17.0), v(5.0)]), Value::Number(15.0));
+        assert_eq!(call("MROUND", &[v(-17.0), v(-5.0)]), Value::Number(-15.0));
+        assert_eq!(call("MROUND", &[v(2.5), v(1.0)]), Value::Number(3.0));
+        assert_eq!(call("MROUND", &[v(3.0), v(0.0)]), Value::Number(0.0));
+        assert_eq!(call("MROUND", &[v(5.0), v(-2.0)]), Value::Error(ExcelError::Num));
+        // QUOTIENT truncates toward zero; a zero divisor is #DIV/0!.
+        assert_eq!(call("QUOTIENT", &[v(17.0), v(5.0)]), Value::Number(3.0));
+        assert_eq!(call("QUOTIENT", &[v(-17.0), v(5.0)]), Value::Number(-3.0));
+        assert_eq!(call("QUOTIENT", &[v(5.0), v(0.0)]), Value::Error(ExcelError::DivZero));
+        // XOR is true for an odd count of truths.
+        assert_eq!(call("XOR", &[l(true), l(false), l(true)]), Value::Logical(false));
+        assert_eq!(call("XOR", &[l(true), l(true), l(true)]), Value::Logical(true));
+        // IFS takes the first true condition; nothing true is #N/A.
+        assert_eq!(
+            call("IFS", &[l(false), t("a"), l(true), t("b")]),
+            Value::text("b")
+        );
+        assert_eq!(call("IFS", &[l(false), t("a")]), Value::Error(ExcelError::NA));
+        // SWITCH takes the first value equal to the subject, then a lone final
+        // default, else #N/A.
+        assert_eq!(
+            call("SWITCH", &[v(3.0), v(1.0), t("a"), v(3.0), t("c"), t("def")]),
+            Value::text("c")
+        );
+        assert_eq!(
+            call("SWITCH", &[v(9.0), v(1.0), t("a"), t("def")]),
+            Value::text("def")
+        );
+        assert_eq!(
+            call("SWITCH", &[v(9.0), v(1.0), t("a"), v(3.0), t("c")]),
+            Value::Error(ExcelError::NA)
+        );
+        // YEARFRAC on all five bases, 1 Jan 2024 -> 1 Jul 2024 (a leap year).
+        let jan1 = Arg::Value(n(datetime::serial_from_date(2024, 1, 1).unwrap() as f64));
+        let jul1 = Arg::Value(n(datetime::serial_from_date(2024, 7, 1).unwrap() as f64));
+        let round4 = |a: Arg, b: Arg, basis: f64| match call("YEARFRAC", &[a, b, v(basis)]) {
+            Value::Number(x) => (x * 1_000_000.0).round() / 1_000_000.0,
+            other => panic!("YEARFRAC gave {other:?}"),
+        };
+        assert_eq!(round4(jan1.clone(), jul1.clone(), 0.0), 0.5);
+        assert_eq!(round4(jan1.clone(), jul1.clone(), 1.0), 0.497268);
+        assert_eq!(round4(jan1.clone(), jul1.clone(), 2.0), 0.505556);
+        assert_eq!(round4(jan1.clone(), jul1.clone(), 3.0), 0.49863);
+        assert_eq!(round4(jan1, jul1, 4.0), 0.5);
+        // The 30/360 US Feb edge: 29 Feb 2024 -> 31 Mar 2024 is 31 days, and
+        // its D2 test reads the day before February pulls D1 to 30.
+        let feb29 = Arg::Value(n(datetime::serial_from_date(2024, 2, 29).unwrap() as f64));
+        let mar31 = Arg::Value(n(datetime::serial_from_date(2024, 3, 31).unwrap() as f64));
+        assert_eq!(round4(feb29, mar31, 0.0), 0.086111);
+        // Symmetric in its dates.
+        let a = Arg::Value(n(datetime::serial_from_date(2024, 1, 1).unwrap() as f64));
+        let b = Arg::Value(n(datetime::serial_from_date(2024, 7, 1).unwrap() as f64));
+        assert_eq!(call("YEARFRAC", &[b, a]), Value::Number(0.5));
+    }
+
+    fn l(value: bool) -> Arg {
+        Arg::Value(Value::Logical(value))
     }
 
     fn n(value: f64) -> Value {
