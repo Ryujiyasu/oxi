@@ -10884,9 +10884,49 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         0.0
                     };
+                    // S1321 (2026-09-05, default ON, opt-out OXI_S1321_DISABLE): an
+                    // inline object in an EXACT-spaced line is painted with its
+                    // BOTTOM on the host line's baseline, overflowing upward.
+                    // MEASURED (`_pb_exactimg_pos_gen.py`, 7 arms, Word's PDF): the
+                    // picture rect's bottom equals the host baseline at every
+                    // distance from the page bottom (182.06 / 594.5 / 650.75 /
+                    // 688.25 / 725.75 -- no clamping to the page), and legal's two
+                    // boxes end at 755.6 / 739.0 = their host lines' baselines.
+                    // The baseline of an exact line sits at
+                    // top + ascent + (exact - natural) / 2 (9pt ＭＳ Ｐ明朝 in a
+                    // 13pt line: 746.2 + 9.4 = 755.6; 12pt ＭＳ 明朝 in 16pt:
+                    // +11.9). The text box that shares the block follows the
+                    // shifted top through `block_y_positions`.
+                    let s1321_top = match img.host_exact_line {
+                        Some(exact) if exact > 0.0 && std::env::var("OXI_S1321_DISABLE").is_err() => {
+                            let (fs, m) = match img.host_paragraph.as_deref() {
+                                Some(host) => {
+                                    let rpr_ref = host.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                    let fs = rpr_ref.font_size.unwrap_or(self.default_font_size);
+                                    (fs, self.metrics_for_para_mark(&rpr_ref, &host.style))
+                                }
+                                None => {
+                                    let rpr_ref = RunStyle::default();
+                                    let fs = self.default_font_size;
+                                    (fs, self.metrics_for_para_mark(&rpr_ref, &ParagraphStyle::default()))
+                                }
+                            };
+                            let asc = m.word_ascent_pt(fs);
+                            let desc = m.word_descent_pt(fs);
+                            let baseline_off = (exact + asc - desc) * 0.5;
+                            Some(cursor.visual_y + baseline_off - img.height)
+                        }
+                        _ => None,
+                    };
+                    let img_y = s1321_top.unwrap_or(cursor.visual_y);
+                    if s1321_top.is_some() {
+                        if let Some(v) = block_y_positions.last_mut() {
+                            *v = img_y;
+                        }
+                    }
                     elements.push(LayoutElement::new(
                         start_x,
-                        cursor.visual_y,
+                        img_y,
                         img.width,
                         img.height,
                         LayoutContent::Image {
@@ -43988,6 +44028,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         if std::env::var("OXI_S971_DISABLE").is_ok() {
             return ext;
         }
+        // S1320: the host's exact line spacing wins before any host metrics.
+        if let Some(exact) = img.host_exact_line {
+            if exact > 0.0 && std::env::var("OXI_S1320_DISABLE").is_err() {
+                return exact;
+            }
+        }
         match img.host_paragraph.as_deref() {
             Some(host) => {
                 let full =
@@ -44002,6 +44048,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     0.0
                 };
                 let host_line = (full - sp).max(0.0);
+                // S1320 (2026-09-05, default ON, opt-out OXI_S1320_DISABLE): an
+                // EXACT-spaced host line does not grow for its inline object --
+                // the object paints from the line top and overflows the lines
+                // below. MEASURED with `_pb_exactimg_gen.py` (100pt inline
+                // picture, body exact 320): Word's paragraph span is 34.50, the
+                // same as the picture-free control (atLeast/auto grow to 131.25,
+                // the 6-cell snap). legal__02f84965 holds four inline text boxes
+                // (455 x 113.85pt) in exact-13pt lines at the foot of its forms:
+                // Word draws each box from its host line's top (655 -> 769 on
+                // p7) and the page still ends where the empties end; Oxi took
+                // the full 113.85 (+ spacing), pushed the box to a page of its
+                // own and the next form a page later -- W9/O11.
+                if let (Some("exact"), Some(exact)) =
+                    (host.style.line_spacing_rule.as_deref(), host.style.line_spacing)
+                {
+                    // The host is an image-only paragraph whose runs were cleared,
+                    // so `estimate_para_height` may answer 0 for it; the exact
+                    // value itself is the line height Word keeps.
+                    if exact > 0.0 && std::env::var("OXI_S1320_DISABLE").is_err() {
+                        return exact.max(host_line);
+                    }
+                }
                 // S1179 (2026-08-20, opt-out OXI_S1179_DISABLE): under an AUTO
                 // MULTIPLE spacing the image line is NOT max(host, ext) — the
                 // multiple's leading rides ON TOP of the image:

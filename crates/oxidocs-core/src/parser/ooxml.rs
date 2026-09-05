@@ -1496,6 +1496,13 @@ fn parse_body(
                         // @276/360/480 = −1.04/−2.67/−4.00, = creative__0158c02a's
                         // per-figure deficit). Stripping here and subtracting nothing
                         // there makes the pair exact for both spacing provenances.
+                        let s1320_exact: Option<f32> = match (
+                            pr.paragraph.style.line_spacing_rule.as_deref(),
+                            pr.paragraph.style.line_spacing,
+                        ) {
+                            (Some("exact"), Some(v)) if v > 0.0 => Some(v),
+                            _ => None,
+                        };
                         let s971_host: Option<crate::ir::Paragraph> = if image_only {
                             let mut h = pr.paragraph.clone();
                             h.runs.clear();
@@ -1671,6 +1678,16 @@ fn parse_body(
                         // legal__00089377 / reports__000e8acd — one formula,
                         // max(prev.after, before) above and max(after, next.before)
                         // below, explains all three.
+                        // S1320: an EXACT-spaced host keeps its line height for any
+                        // inline object; carry the value on every inline image of the
+                        // paragraph (image-only or not).
+                        if let Some(v) = s1320_exact {
+                            for block in pr.inline_images.iter_mut() {
+                                if let Block::Image(img) = block {
+                                    img.host_exact_line = Some(v);
+                                }
+                            }
+                        }
                         if let (Some((before, after)), false) =
                             (s965_sp, pr.inline_images.is_empty())
                         {
@@ -7327,6 +7344,7 @@ fn parse_drawing(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
             placeholder_outline: None,
@@ -7546,6 +7564,7 @@ fn parse_drawing(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
             placeholder_outline: None,
@@ -7574,6 +7593,7 @@ fn parse_drawing(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
             // S1238: carry the wps shape's visible frame so the flowed
@@ -8102,6 +8122,7 @@ fn parse_vml_pict(
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
                 host_paragraph: None,
+                host_exact_line: None,
                 page_break_before: false,
             page_break_after: false,
             placeholder_outline: None,
@@ -8188,6 +8209,7 @@ fn parse_vml_pict(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
             placeholder_outline: None,
@@ -8278,6 +8300,7 @@ fn parse_vml_pict(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
             placeholder_outline: None,
@@ -8461,6 +8484,7 @@ fn parse_ole_object(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
             placeholder_outline: None,
@@ -10191,6 +10215,7 @@ fn parse_table_cell(
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,
                                 host_paragraph: None,
+                                host_exact_line: None,
                                 page_break_before: false,
             page_break_after: false,
             placeholder_outline: None,

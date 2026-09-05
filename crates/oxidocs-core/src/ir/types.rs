@@ -846,6 +846,11 @@ pub struct Image {
     /// cannot compute a line height because it has no font metrics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_paragraph: Option<Box<Paragraph>>,
+    /// S1320: the host paragraph's EXACT line spacing (pt) when it has one. An
+    /// exact-spaced line does not grow for its inline object, whatever else the
+    /// paragraph holds, so this is carried even when `host_paragraph` is not.
+    #[serde(default)]
+    pub host_exact_line: Option<f32>,
     /// S1056: the image-only HOST paragraph led with `<w:br w:type="page"/>`, so
     /// the image starts a new page. S537 drops that paragraph, and the parser's
     /// br-only classifier calls a `[br][pict]` run pair "br-only" (a picture run
