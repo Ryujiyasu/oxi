@@ -947,6 +947,91 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let end = (start + len as usize).min(s.len());
             Ok(Value::Text(from_utf16(&s[start..end])))
         }
+        // Full-width letters, digits and katakana to their half-width forms;
+        // kanji and already-half-width text are left as they are. On an en-US
+        // Excel this is available where JIS, the reverse, is #NAME?.
+        "ASC" => {
+            let source = text(&args[0])?;
+            let mut out = String::with_capacity(source.len());
+            for ch in source.chars() {
+                let code = ch as u32;
+                if (0xFF01..=0xFF5E).contains(&code) {
+                    out.push(char::from_u32(code - 0xFEE0).unwrap_or(ch));
+                } else if let Some(half) = asc_halfwidth(ch) {
+                    out.push_str(half);
+                } else {
+                    out.push(ch);
+                }
+            }
+            Ok(Value::text(out))
+        }
+        // The text on one side of the nth occurrence of a delimiter. A
+        // negative instance counts occurrences from the end; an instance past
+        // the last is #N/A. Match is case-sensitive, as Excel's default.
+        "TEXTBEFORE" | "TEXTAFTER" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let hay = text(&args[0])?;
+            let needle = text(&args[1])?;
+            let instance = match args.get(2) {
+                Some(a) => num(a)? as i64,
+                None => 1,
+            };
+            if needle.is_empty() || instance == 0 {
+                return Err(ExcelError::Value);
+            }
+            let positions: Vec<usize> = hay.match_indices(&needle).map(|(at, _)| at).collect();
+            let count = positions.len() as i64;
+            let index = if instance > 0 { instance - 1 } else { count + instance };
+            if index < 0 || index >= count {
+                return Err(ExcelError::NA);
+            }
+            let at = positions[index as usize];
+            Ok(Value::text(if name == "TEXTBEFORE" {
+                &hay[..at]
+            } else {
+                &hay[at + needle.len()..]
+            }))
+        }
+        // A number written with its own separators: group separators are
+        // dropped, the decimal separator is honoured, and each trailing % (or
+        // Japanese/full-width percents count too, but a plain one here) divides
+        // by a hundred.
+        "NUMBERVALUE" => {
+            let s = text(&args[0])?;
+            let decimal = match args.get(1) {
+                Some(a) => text(a)?,
+                None => ".".to_string(),
+            };
+            let group = match args.get(2) {
+                Some(a) => text(a)?,
+                None => ",".to_string(),
+            };
+            let decimal = decimal.chars().next().unwrap_or('.');
+            let mut body = s.trim().to_string();
+            let mut percents = 0u32;
+            while body.trim_end().ends_with('%') {
+                let trimmed = body.trim_end();
+                body = trimmed[..trimmed.len() - 1].to_string();
+                percents += 1;
+            }
+            let mut cleaned = String::new();
+            for ch in body.chars() {
+                if group.contains(ch) || ch.is_whitespace() {
+                    continue;
+                }
+                cleaned.push(if ch == decimal { '.' } else { ch });
+            }
+            if cleaned.is_empty() {
+                return Ok(Value::Number(0.0));
+            }
+            let mut value: f64 = cleaned.parse().map_err(|_| ExcelError::Value)?;
+            for _ in 0..percents {
+                value /= 100.0;
+            }
+            Ok(Value::Number(value))
+        }
         "TRIM" => {
             // Excel's TRIM also collapses runs of interior spaces to one.
             let s = text(one_arg(args)?)?;
@@ -1997,6 +2082,33 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             expect(args, 2)?;
             Ok(Value::Number((serial(&args[0])? - serial(&args[1])?) as f64))
         }
+        // The 360-day count. In the US (NASD) form a last-of-February start
+        // counts as the 30th, then a 31st start becomes the 30th, and a 31st
+        // end becomes the 30th only once the start is on the 30th. The
+        // European form just pulls any 31 down to 30. Measured: 29 Feb 2024
+        // -> 31 Mar 2024 is 30 in the US form and 31 in the European.
+        "DAYS360" => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            let start = serial(&args[0])?;
+            let end = serial(&args[1])?;
+            let european = match args.get(2) {
+                Some(a) => a.scalar().to_logical()?,
+                None => false,
+            };
+            Ok(Value::Number(days360(start, end, european)? as f64))
+        }
+        // Read a date out of text; the time part, if any, is dropped.
+        "DATEVALUE" => {
+            let s = text(&args[0])?;
+            match datetime::text_as_datetime(&s) {
+                // A serial below 1 is a time with no date, which DATEVALUE
+                // refuses.
+                Some(serial) if serial >= 1.0 => Ok(Value::Number(serial.floor())),
+                _ => Err(ExcelError::Value),
+            }
+        }
         // The fraction of a year between two dates, on one of five day-count
         // bases. Symmetric in its dates. All five verified against Excel.
         "YEARFRAC" => {
@@ -2761,6 +2873,138 @@ fn is_last_of_feb(serial: i64) -> Result<bool, ExcelError> {
     Ok(date.month == 2 && datetime::date_from_serial(serial + 1)?.month != 2)
 }
 
+/// The half-width form of a full-width space or katakana character, for ASC.
+/// Full-width ASCII is a plain offset the caller handles. Generated from
+/// Unicode's compatibility mapping and checked against Excel; the combining
+/// voiced marks U+3099/U+309A are deliberately absent, as Excel leaves them.
+fn asc_halfwidth(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{3000}' => "\u{20}",
+        '\u{3001}' => "\u{FF64}",
+        '\u{3002}' => "\u{FF61}",
+        '\u{300C}' => "\u{FF62}",
+        '\u{300D}' => "\u{FF63}",
+        '\u{309B}' => "\u{FF9E}",
+        '\u{309C}' => "\u{FF9F}",
+        '\u{30A1}' => "\u{FF67}",
+        '\u{30A2}' => "\u{FF71}",
+        '\u{30A3}' => "\u{FF68}",
+        '\u{30A4}' => "\u{FF72}",
+        '\u{30A5}' => "\u{FF69}",
+        '\u{30A6}' => "\u{FF73}",
+        '\u{30A7}' => "\u{FF6A}",
+        '\u{30A8}' => "\u{FF74}",
+        '\u{30A9}' => "\u{FF6B}",
+        '\u{30AA}' => "\u{FF75}",
+        '\u{30AB}' => "\u{FF76}",
+        '\u{30AC}' => "\u{FF76}\u{FF9E}",
+        '\u{30AD}' => "\u{FF77}",
+        '\u{30AE}' => "\u{FF77}\u{FF9E}",
+        '\u{30AF}' => "\u{FF78}",
+        '\u{30B0}' => "\u{FF78}\u{FF9E}",
+        '\u{30B1}' => "\u{FF79}",
+        '\u{30B2}' => "\u{FF79}\u{FF9E}",
+        '\u{30B3}' => "\u{FF7A}",
+        '\u{30B4}' => "\u{FF7A}\u{FF9E}",
+        '\u{30B5}' => "\u{FF7B}",
+        '\u{30B6}' => "\u{FF7B}\u{FF9E}",
+        '\u{30B7}' => "\u{FF7C}",
+        '\u{30B8}' => "\u{FF7C}\u{FF9E}",
+        '\u{30B9}' => "\u{FF7D}",
+        '\u{30BA}' => "\u{FF7D}\u{FF9E}",
+        '\u{30BB}' => "\u{FF7E}",
+        '\u{30BC}' => "\u{FF7E}\u{FF9E}",
+        '\u{30BD}' => "\u{FF7F}",
+        '\u{30BE}' => "\u{FF7F}\u{FF9E}",
+        '\u{30BF}' => "\u{FF80}",
+        '\u{30C0}' => "\u{FF80}\u{FF9E}",
+        '\u{30C1}' => "\u{FF81}",
+        '\u{30C2}' => "\u{FF81}\u{FF9E}",
+        '\u{30C3}' => "\u{FF6F}",
+        '\u{30C4}' => "\u{FF82}",
+        '\u{30C5}' => "\u{FF82}\u{FF9E}",
+        '\u{30C6}' => "\u{FF83}",
+        '\u{30C7}' => "\u{FF83}\u{FF9E}",
+        '\u{30C8}' => "\u{FF84}",
+        '\u{30C9}' => "\u{FF84}\u{FF9E}",
+        '\u{30CA}' => "\u{FF85}",
+        '\u{30CB}' => "\u{FF86}",
+        '\u{30CC}' => "\u{FF87}",
+        '\u{30CD}' => "\u{FF88}",
+        '\u{30CE}' => "\u{FF89}",
+        '\u{30CF}' => "\u{FF8A}",
+        '\u{30D0}' => "\u{FF8A}\u{FF9E}",
+        '\u{30D1}' => "\u{FF8A}\u{FF9F}",
+        '\u{30D2}' => "\u{FF8B}",
+        '\u{30D3}' => "\u{FF8B}\u{FF9E}",
+        '\u{30D4}' => "\u{FF8B}\u{FF9F}",
+        '\u{30D5}' => "\u{FF8C}",
+        '\u{30D6}' => "\u{FF8C}\u{FF9E}",
+        '\u{30D7}' => "\u{FF8C}\u{FF9F}",
+        '\u{30D8}' => "\u{FF8D}",
+        '\u{30D9}' => "\u{FF8D}\u{FF9E}",
+        '\u{30DA}' => "\u{FF8D}\u{FF9F}",
+        '\u{30DB}' => "\u{FF8E}",
+        '\u{30DC}' => "\u{FF8E}\u{FF9E}",
+        '\u{30DD}' => "\u{FF8E}\u{FF9F}",
+        '\u{30DE}' => "\u{FF8F}",
+        '\u{30DF}' => "\u{FF90}",
+        '\u{30E0}' => "\u{FF91}",
+        '\u{30E1}' => "\u{FF92}",
+        '\u{30E2}' => "\u{FF93}",
+        '\u{30E3}' => "\u{FF6C}",
+        '\u{30E4}' => "\u{FF94}",
+        '\u{30E5}' => "\u{FF6D}",
+        '\u{30E6}' => "\u{FF95}",
+        '\u{30E7}' => "\u{FF6E}",
+        '\u{30E8}' => "\u{FF96}",
+        '\u{30E9}' => "\u{FF97}",
+        '\u{30EA}' => "\u{FF98}",
+        '\u{30EB}' => "\u{FF99}",
+        '\u{30EC}' => "\u{FF9A}",
+        '\u{30ED}' => "\u{FF9B}",
+        '\u{30EF}' => "\u{FF9C}",
+        '\u{30F2}' => "\u{FF66}",
+        '\u{30F3}' => "\u{FF9D}",
+        '\u{30F4}' => "\u{FF73}\u{FF9E}",
+        '\u{30F7}' => "\u{FF9C}\u{FF9E}",
+        '\u{30FA}' => "\u{FF66}\u{FF9E}",
+        '\u{30FB}' => "\u{FF65}",
+        '\u{30FC}' => "\u{FF70}",
+        _ => return None,
+    })
+}
+
+/// The 360-day count, US (NASD) or European. Distinct from YEARFRAC basis 0:
+/// here the D2 test runs AFTER the last-of-February start is pulled to 30, so
+/// 29 Feb -> 31 Mar is 30 days, where YEARFRAC basis 0 makes it 31.
+fn days360(start: i64, end: i64, european: bool) -> Result<i64, ExcelError> {
+    let (a, b) = (
+        datetime::date_from_serial(start)?,
+        datetime::date_from_serial(end)?,
+    );
+    let (mut d1, mut d2) = (a.day, b.day);
+    if european {
+        if d1 == 31 {
+            d1 = 30;
+        }
+        if d2 == 31 {
+            d2 = 30;
+        }
+    } else {
+        if is_last_of_feb(start)? {
+            d1 = 30;
+        }
+        if d1 == 31 {
+            d1 = 30;
+        }
+        if d2 == 31 && d1 == 30 {
+            d2 = 30;
+        }
+    }
+    Ok((b.year - a.year) * 360 + (b.month - a.month) * 30 + (d2 - d1))
+}
+
 /// The 30/360 day count. In the US (NASD) form the order matters and the D2
 /// test reads the ORIGINAL D1 -- measured: 29 Feb 2024 -> 31 Mar 2024 is 31
 /// days, not 30. The European form just pulls any 31 down to 30.
@@ -3163,6 +3407,80 @@ mod tests {
         }
         let jan1 = Arg::Value(n(datetime::serial_from_date(2024, 1, 1).unwrap() as f64));
         assert_eq!(call("ISOWEEKNUM", &[jan1]), Value::Number(1.0));
+    }
+
+    /// The date and text functions added 2026-09-05 (flows13), measured
+    /// against Excel.
+    #[test]
+    fn the_flows13_date_and_text_functions_agree_with_excel() {
+        let date = |y, m, d| Arg::Value(n(datetime::serial_from_date(y, m, d).unwrap() as f64));
+        // DAYS360, US and European. The US form differs from YEARFRAC basis 0.
+        assert_eq!(call("DAYS360", &[date(2024, 2, 29), date(2024, 3, 31)]), Value::Number(30.0));
+        assert_eq!(
+            call("DAYS360", &[date(2024, 2, 29), date(2024, 3, 31), l(true)]),
+            Value::Number(31.0)
+        );
+        assert_eq!(call("DAYS360", &[date(2024, 1, 31), date(2024, 3, 31)]), Value::Number(60.0));
+        assert_eq!(call("DAYS360", &[date(2024, 4, 15), date(2024, 5, 31)]), Value::Number(46.0));
+        assert_eq!(call("DAYS360", &[date(2024, 1, 15), date(2024, 2, 29)]), Value::Number(44.0));
+        // DATEVALUE reads a date out of text and drops any time.
+        let serial = datetime::serial_from_date(2024, 3, 15).unwrap() as f64;
+        assert_eq!(call("DATEVALUE", &[t("2024-03-15")]), Value::Number(serial));
+        assert_eq!(call("DATEVALUE", &[t("3/15/2024")]), Value::Number(serial));
+        assert_eq!(call("DATEVALUE", &[t("15-Mar-2024")]), Value::Number(serial));
+        assert_eq!(call("DATEVALUE", &[t("not a date")]), Value::Error(ExcelError::Value));
+        // TEXTBEFORE / TEXTAFTER on the nth delimiter, from either end.
+        assert_eq!(call("TEXTBEFORE", &[t("a-b-c"), t("-")]), Value::text("a"));
+        assert_eq!(call("TEXTAFTER", &[t("a-b-c"), t("-"), v(2.0)]), Value::text("c"));
+        assert_eq!(call("TEXTBEFORE", &[t("a-b-c"), t("-"), v(-1.0)]), Value::text("a-b"));
+        assert_eq!(call("TEXTAFTER", &[t("a-b-c"), t("-"), v(-1.0)]), Value::text("c"));
+        assert_eq!(
+            call("TEXTAFTER", &[t("a-b-c"), t("-"), v(5.0)]),
+            Value::Error(ExcelError::NA)
+        );
+        // NUMBERVALUE with its own separators, a space group, and a percent.
+        assert_eq!(
+            call("NUMBERVALUE", &[t("1,234.5"), t("."), t(",")]),
+            Value::Number(1234.5)
+        );
+        assert_eq!(
+            call("NUMBERVALUE", &[t("1 234,5"), t(","), t(" ")]),
+            Value::Number(1234.5)
+        );
+        assert_eq!(call("NUMBERVALUE", &[t("50%")]), Value::Number(0.5));
+        assert_eq!(call("NUMBERVALUE", &[t("")]), Value::Number(0.0));
+    }
+
+    /// ASC, full-width to half-width, measured against Excel by code point.
+    #[test]
+    fn asc_narrows_full_width_letters_and_kana() {
+        // Full-width ABC12 -> ABC12.
+        assert_eq!(
+            call("ASC", &[t("\u{FF21}\u{FF22}\u{FF23}\u{FF11}\u{FF12}")]),
+            Value::text("ABC12")
+        );
+        // Plain katakana ア イ ウ -> ｱ ｲ ｳ.
+        assert_eq!(
+            call("ASC", &[t("\u{30A2}\u{30A4}\u{30A6}")]),
+            Value::text("\u{FF71}\u{FF72}\u{FF73}")
+        );
+        // Voiced and semi-voiced split into base + mark: ガ パ -> ｶﾞ ﾊﾟ.
+        assert_eq!(
+            call("ASC", &[t("\u{30AC}\u{30D1}")]),
+            Value::text("\u{FF76}\u{FF9E}\u{FF8A}\u{FF9F}")
+        );
+        // ヴ -> ｳﾞ.
+        assert_eq!(call("ASC", &[t("\u{30F4}")]), Value::text("\u{FF73}\u{FF9E}"));
+        // Kanji and half-width digits are left alone; the full-width A narrows.
+        assert_eq!(call("ASC", &[t("\u{FF21}\u{611B}1")]), Value::text("A\u{611B}1"));
+        // The full-width space, and the katakana punctuation.
+        assert_eq!(call("ASC", &[t("\u{3000}")]), Value::text(" "));
+        assert_eq!(
+            call("ASC", &[t("\u{30FC}\u{30FB}\u{3001}\u{3002}\u{300C}\u{300D}")]),
+            Value::text("\u{FF70}\u{FF65}\u{FF64}\u{FF61}\u{FF62}\u{FF63}")
+        );
+        // A standalone combining voiced mark stays as it is, as Excel leaves it.
+        assert_eq!(call("ASC", &[t("\u{3099}")]), Value::text("\u{3099}"));
     }
 
     fn n(value: f64) -> Value {
