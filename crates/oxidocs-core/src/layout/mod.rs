@@ -30773,7 +30773,31 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             if s1306 && !is_single_line {
                                 // Cells from the UNMULTIPLIED natural; the
                                 // multiplier then competes with them as a floor.
-                                let nat_tw = ((base - tol) * 20.0).round();
+                                // S1328 (2026-09-05, default ON, opt-out OXI_S1328_DISABLE):
+                                // an EMPTY line counts its cells from its ASCII face
+                                // when that face is Western (the S583 discriminator),
+                                // not from the eastAsia face `base` carries. DERIVED
+                                // (_pb_gridmult_empty_gen.py, Info6, lines grid 360):
+                                //   14pt mark, line=276: Century ascii 20.7 (=18x1.15,
+                                //   1 cell) / MS Mincho ascii 36 (2 cells) / text 36;
+                                //   line=240 18, line=360 27; 10.5/12pt 20.7; 16/18pt 36.
+                                // = pitch x max(m, ceil(n_ascii/pitch)) -- this branch's
+                                // formula, fed the right natural. policies__0353d0b2 p7:
+                                // three 14pt spacers under the title at 36 instead of
+                                // 20.7 (+46pt, two paragraphs off the page).
+                                let s1328_nat = if is_empty
+                                    && !ascii_is_cjk
+                                    && std::env::var("OXI_S1328_DISABLE").is_err()
+                                {
+                                    let rpr_ref =
+                                        para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                    let fs = rpr_ref.font_size.unwrap_or(para_font_size);
+                                    let m = self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
+                                    m.word_line_height(fs, 96.0).min(base)
+                                } else {
+                                    base
+                                };
+                                let nat_tw = ((s1328_nat - tol) * 20.0).round();
                                 let nat_cells = (nat_tw / p_tw).ceil().max(1.0);
                                 return pitch * nat_cells.max(line_spacing.unwrap_or(1.0));
                             }
