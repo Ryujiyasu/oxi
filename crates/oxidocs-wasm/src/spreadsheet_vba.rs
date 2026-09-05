@@ -3361,7 +3361,19 @@ impl<'a> WorkbookHost<'a> {
     /// pages count takes 1 up or False; PaperSize 0 or 300 is 1004; a margin
     /// takes any number, -1 and 10000 included, and text is 1004; Order is
     /// 1 or 2; PrintErrors 0 to 3 and 9 is error 5.
+    /// A recorder writes every PageSetup member; the ones this build does
+    /// not keep are taken without a word.
     fn set_page_setup(&mut self, sheet: usize, name: &str, value: Value) -> Result<bool, String> {
+        // The recorder-written members this build keeps nothing of, taken
+        // without a word (the ones it DOES keep are handled below).
+        if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "printcomments" | "printquality" | "scale"
+                | "oddandevenpagesheaderfooter" | "differentfirstpageheaderfooter"
+                | "scaletofitpages" | "alignmargins" | "papersize2"
+        ) {
+            return Ok(true);
+        }
         let mut setup = self.page_setups.get(&sheet).cloned().unwrap_or_default();
         let number = || -> Result<f64, String> {
             any_number(&value).ok_or_else(|| "PageSetup takes a number here".to_string())
@@ -11552,9 +11564,13 @@ impl<'a> WorkbookHost<'a> {
                     ))
                 }
             },
+            // A recorder writes the CopyOrigin beside the shift; it says
+            // where the new cells take their format from, which is nothing
+            // this build keeps, so the shift alone is read.
+            [shift, _copy_origin] => return Self::shift_direction(range, std::slice::from_ref(shift), inserting),
             _ => {
                 return Err(format!(
-                    "Range.{} takes at most one shift",
+                    "Range.{} takes at most one shift and a CopyOrigin",
                     if inserting { "Insert" } else { "Delete" }
                 ))
             }
@@ -14357,15 +14373,44 @@ impl Host for WorkbookHost<'_> {
                 let Some(first) = args.first() else {
                     return Err("Application.Goto needs a Range".to_string());
                 };
-                let Value::Object(object) = first else {
-                    return Err("Application.Goto takes a Range object".to_string());
-                };
-                let Some(range) = self.range(object) else {
-                    return Err("Application.Goto takes a Range object".to_string());
+                // A recorder writes the destination as an R1C1 STRING:
+                // `Application.Goto Reference:="R2C2"` lands on B2.
+                let range = match first {
+                    Value::Object(object) => self
+                        .range(object)
+                        .ok_or_else(|| "Application.Goto takes a Range object".to_string())?,
+                    Value::String(text) => {
+                        let (column, row) = parse_r1c1_cell(text)
+                            .or_else(|| parse_a1_reference(text).ok())
+                            .ok_or_else(|| host_error(1004, "Application.Goto cannot read that reference"))?;
+                        CellRange::single(CellAddress { sheet: self.active_sheet, row, column })
+                    }
+                    _ => return Err("Application.Goto takes a Range object".to_string()),
                 };
                 self.activate_sheet(range.sheet);
                 self.selection = range;
                 self.active_cell = range.first();
+                return Ok(Some(Value::Empty));
+            }
+            if self.is_window(receiver)
+                && matches!(name.to_ascii_lowercase().as_str(), "smallscroll" | "largescroll")
+            {
+                // Down / Up / ToRight / ToLeft, by rows and columns for the
+                // small scroll and by screenfuls for the large. Measured:
+                // ScrollRow 1, `SmallScroll Down:=3` -> 4. A screen stands
+                // in for the large scroll at the window Excel opens at.
+                let at = |index: usize| args.get(index).and_then(any_whole_number).unwrap_or(0);
+                let (row_step, col_step) = if name.eq_ignore_ascii_case("largescroll") { (21, 13) } else { (1, 1) };
+                let down = (at(0) - at(1)) * row_step;
+                let right = (at(2) - at(3)) * col_step;
+                let view = self.views.entry(self.active_sheet).or_default();
+                view.scroll_row = (i64::from(view.scroll_row) + down).max(1) as u32;
+                view.scroll_column = (i64::from(view.scroll_column) + right).max(1) as u32;
+                return Ok(Some(Value::Empty));
+            }
+            if self.is_window(receiver)
+                && matches!(name.to_ascii_lowercase().as_str(), "scrollintoview" | "activate" | "activatenext" | "activateprevious" | "close")
+            {
                 return Ok(Some(Value::Empty));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("union") {
@@ -14943,6 +14988,10 @@ impl Host for WorkbookHost<'_> {
             Some(&["Before", "After"][..])
         } else if name.eq_ignore_ascii_case("pastespecial") {
             Some(&["Paste", "Operation", "SkipBlanks", "Transpose"][..])
+        } else if name.eq_ignore_ascii_case("insert") {
+            Some(&["Shift", "CopyOrigin"][..])
+        } else if name.eq_ignore_ascii_case("smallscroll") || name.eq_ignore_ascii_case("largescroll") {
+            Some(&["Down", "Up", "ToRight", "ToLeft"][..])
         } else if name.eq_ignore_ascii_case("merge") {
             Some(&["Across"][..])
         } else if name.eq_ignore_ascii_case("borders") {
@@ -15446,6 +15495,20 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("scrollcolumn") {
                 return Ok(Some(Value::Integer(i64::from(view.scroll_column))));
             }
+            // A window is open at its full size, in the normal view, with the
+            // headings shown: measured on a fresh one.
+            if name.eq_ignore_ascii_case("windowstate") {
+                return Ok(Some(Value::Integer(-4137)));
+            }
+            if name.eq_ignore_ascii_case("view") {
+                return Ok(Some(Value::Integer(1)));
+            }
+            if name.eq_ignore_ascii_case("displayheadings") {
+                return Ok(Some(Value::Boolean(true)));
+            }
+            if name.eq_ignore_ascii_case("freezepanes") {
+                return Ok(Some(Value::Boolean(sheet.frozen_rows > 0 || sheet.frozen_cols > 0)));
+            }
             return Ok(None);
         }
         if let Some(sheet) = self.worksheet(receiver) {
@@ -15525,6 +15588,15 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("interactive") {
                 return Ok(Some(Value::Boolean(self.interactive)));
+            }
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "displayformulabar" | "displaystatusbar"
+            ) {
+                return Ok(Some(Value::Boolean(true)));
+            }
+            if name.eq_ignore_ascii_case("windowstate") {
+                return Ok(Some(Value::Integer(-4137)));
             }
             if name.eq_ignore_ascii_case("cutcopymode") {
                 // xlCut is 2 and xlCopy 1 -- measured, a Cut answers 2 and a
@@ -15962,6 +16034,10 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(Some(Value::Integer(i64::from(level.unwrap_or(1)))));
         }
+        if name.eq_ignore_ascii_case("readingorder") {
+            // Excel leaves a cell reading by context, which is -5002.
+            return Ok(Some(Value::Integer(-5002)));
+        }
         if name.eq_ignore_ascii_case("indentlevel") {
             return self
                 .uniform_style(range, |style| style.indent)
@@ -16260,6 +16336,20 @@ impl Host for WorkbookHost<'_> {
             if let Some(set) = self.set_view(name, &value)? {
                 return Ok(set);
             }
+            // What a recorder does to the window that the browser has no way
+            // to honour but must not refuse: its size, its view, the
+            // headings, and the two scroll members that move by a screen.
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "windowstate" | "view" | "displayheadings" | "displayoutline"
+                    | "displayworkbooktabs" | "displayhorizontalscrollbar"
+                    | "displayverticalscrollbar" | "zoom" | "tabratio"
+            ) {
+                // Zoom is already taken by set_view; the rest are accepted.
+                if !name.eq_ignore_ascii_case("zoom") {
+                    return Ok(true);
+                }
+            }
         }
         match self.objects.get(receiver.handle as usize) {
             Some(HostObject::Blocks(handle)) => {
@@ -16386,6 +16476,18 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("interactive") {
                 self.interactive = application_switch(&value, "Application.Interactive")?;
+                return Ok(true);
+            }
+            // The rest of what a recorder turns off while it works, none of
+            // which a browser has to honour but none of which may refuse.
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "displayformulabar" | "displaystatusbar" | "displayscrollbars"
+                    | "windowstate" | "calculatebeforesave" | "enableanimations"
+                    | "printcommunication" | "displaycommentindicator"
+                    | "askToUpdateLinks" | "asktoupdatelinks" | "enablecancelkey"
+                    | "automationsecurity" | "referencestyle" | "sheetsinnewworkbook"
+            ) {
                 return Ok(true);
             }
             return Ok(false);
@@ -16562,6 +16664,33 @@ impl Host for WorkbookHost<'_> {
                 self.redress_runs(range, |dress| dress.color = value.clone());
                 return Ok(true);
             }
+            if name.eq_ignore_ascii_case("themecolor") {
+                let theme = theme_colour(&value)?;
+                self.paint_from_theme(range, Paint::Font, Some(theme), None)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("tintandshade") {
+                let tint = tint_asked(&value)?;
+                self.paint_from_theme(range, Paint::Font, None, Some(tint))?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("superscript") || name.eq_ignore_ascii_case("subscript") {
+                let held = style_face_boolean(&value, "Font.Superscript")?.unwrap_or(false);
+                let which = if name.eq_ignore_ascii_case("superscript") { "superscript" } else { "subscript" };
+                self.redress_runs(range, |dress| {
+                    dress.vert_align = held.then(|| which.to_string());
+                });
+                return Ok(true);
+            }
+            // A recorder writes the whole of a cell's font: these are the
+            // members this build does not keep, taken without a word so the
+            // block goes through.
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "outlinefont" | "shadow" | "themefont" | "fontstyle"
+            ) {
+                return Ok(true);
+            }
             return Ok(false);
         }
         if let Some(range) = self.range_interior(receiver) {
@@ -16643,6 +16772,11 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("patterncolorindex") {
                 let colour = palette_choice(&value, COLOUR_AUTOMATIC, "Interior.PatternColorIndex")?;
                 self.paint_pattern(range, colour_to_packed(colour.as_deref()))?;
+                return Ok(true);
+            }
+            // The shade on the fill and on its pattern are kept nowhere here,
+            // but a recorder always writes them; taken without a word.
+            if matches!(name.to_ascii_lowercase().as_str(), "patterntintandshade" | "gradient") {
                 return Ok(true);
             }
             return Ok(false);
@@ -16785,6 +16919,10 @@ impl Host for WorkbookHost<'_> {
                     }
                 }
             }
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("readingorder") {
+            // Left-to-right, right-to-left or by context: none kept here.
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("addindent") {
@@ -19265,6 +19403,95 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlguess" => 0,
         "xltoptobottom" => 1,
         "xllefttoright" => 2,
+        "xlsortcolumns" => 1,
+        "xlsortrows" => 2,
+        "xlsortonvalues" => 0,
+        "xlsortoncellcolor" => 1,
+        "xlsortonfontcolor" => 2,
+        "xlsortonicon" => 3,
+        "xlpinyin" => 1,
+        "xlstroke" => 2,
+        "xlsortnormal" => 0,
+        "xlsorttextasnumbers" => 1,
+        // Theme colours by name, for `Font.ThemeColor` / `Interior.ThemeColor`.
+        "xlthemecolordark1" => 1,
+        "xlthemecolorlight1" => 2,
+        "xlthemecolordark2" => 3,
+        "xlthemecolorlight2" => 4,
+        "xlthemecoloraccent1" => 5,
+        "xlthemecoloraccent2" => 6,
+        "xlthemecoloraccent3" => 7,
+        "xlthemecoloraccent4" => 8,
+        "xlthemecoloraccent5" => 9,
+        "xlthemecoloraccent6" => 10,
+        "xlthemecolorhyperlink" => 11,
+        "xlthemecolorfollowedhyperlink" => 12,
+        // Theme fonts.
+        "xlthemefontnone" => 0,
+        "xlthemefontmajor" => 1,
+        "xlthemefontminor" => 2,
+        // The chart types a recorder writes.
+        "xlcolumnclustered" => 51,
+        "xlcolumnstacked" => 52,
+        "xlcolumnstacked100" => 53,
+        "xlbarclustered" => 57,
+        "xlbarstacked" => 58,
+        "xlline" => 4,
+        "xllinemarkers" => 65,
+        "xlpie" => 5,
+        "xlpieofpie" => 68,
+        "xlxyscatter" => -4169,
+        "xlxyscatterlines" => 74,
+        "xlarea" => 1,
+        "xlradar" => -4151,
+        "xldoughnut" => -4120,
+        "xl3dcolumn" => -4100,
+        "xlcombo" => -4111,
+        // Legend positions.
+        "xllegendpositionright" => -4152,
+        "xllegendpositionleft" => -4131,
+        "xllegendpositiontop" => -4160,
+        "xllegendpositionbottom" => -4107,
+        "xllegendpositioncorner" => 2,
+        // Window state and view.
+        "xlnormal" => -4143,
+        "xlmaximized" => -4137,
+        "xlminimized" => -4140,
+        "xlnormalview" => 1,
+        "xlpagebreakpreview" => 2,
+        "xlpagelayoutview" => 3,
+        "xlcontext" => -5002,
+        "xlrtl" => -5004,
+        "xlltr" => -5003,
+        // The mso* a recorder writes for shapes, by their Office numbers.
+        "msoshaperectangle" => 1,
+        "msoshapeparallelogram" => 2,
+        "msoshapetrapezoid" => 3,
+        "msoshapediamond" => 4,
+        "msoshaperoundedrectangle" => 5,
+        "msoshapeoval" => 9,
+        "msoshapeisoscelestriangle" => 7,
+        "msoshaperightarrow" => 33,
+        "msoshapefivepointstar" => 92,
+        "msoline" => 9,
+        "msotextbox" => 17,
+        "msotrue" => -1,
+        "msofalse" => 0,
+        "msoshapemixed" => -2,
+        "msothemecoloraccent1" => 5,
+        "msothemecolordark1" => 1,
+        "msofillsolid" => 1,
+        // Chart axes and the insert/delete CopyOrigin.
+        "xlvalue" => 2,
+        "xlcategory" => 1,
+        "xlseriesaxis" => 3,
+        "xlprimary" => 1,
+        "xlsecondary" => 2,
+        "xlformatfromleftorabove" => 0,
+        "xlformatfromrightorbelow" => 1,
+        "xldatalabelspositionoutsideend" => 2,
+        "xldatalabelspositioncenter" => -4108,
+        "xllabelpositionoutsideend" => 2,
         // The shift an Insert or Delete takes, which share these numbers.
         "xlshiftdown" => -4121,
         "xlshifttoright" => -4161,
@@ -19602,6 +19829,19 @@ fn column_from_letters(letters: &str) -> Option<u32> {
     }
     let column = column.checked_sub(1)?;
     (column <= MAX_WORKSHEET_COLUMN).then_some(column)
+}
+
+/// A single R1C1 cell, `R2C2`, as (column, row) both zero/one as the rest
+/// of the host counts them: column zero-based, row one-based. Relative or
+/// bracketed forms are not a place a `Goto` can name, so they are None.
+fn parse_r1c1_cell(text: &str) -> Option<(u32, u32)> {
+    let text = text.trim();
+    let rest = text.strip_prefix(['R', 'r'])?;
+    let (row, rest) = rest.split_at(rest.find(['C', 'c'])?);
+    let column = &rest[1..];
+    let row: u32 = row.parse().ok()?;
+    let column: u32 = column.parse().ok()?;
+    (row >= 1 && column >= 1).then(|| (column - 1, row))
 }
 
 fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
@@ -26808,8 +27048,12 @@ mod tests {
 
         // A missing argument is the same as none at all.
         assert!(!WorkbookHost::shift_direction(span(2, 1, 2, 1), &[Value::Missing], true).unwrap());
-        // More than one shift is not a thing.
-        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 1), &[Value::Integer(-4121), Value::Integer(-4121)], true).is_err());
+        // A recorder writes the shift and a CopyOrigin; the shift is read
+        // from the first and the CopyOrigin ignored. A third argument is
+        // more than Insert takes.
+        assert!(!WorkbookHost::shift_direction(span(2, 1, 2, 1), &[Value::Integer(-4121), Value::Integer(1)], true).unwrap());
+        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 1), &[Value::Integer(-4161), Value::Integer(1)], true).unwrap());
+        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 1), &[Value::Integer(-4121), Value::Integer(1), Value::Integer(1)], true).is_err());
     }
 
     /// Hidden speaks about whole rows or whole columns and nothing else.
