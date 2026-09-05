@@ -1968,12 +1968,6 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
             Ok(Value::Number(if start <= end { days } else { -days } as f64))
         }
-        "WEEKNUM" => {
-            let s = serial(&args[0])?;
-            let jan1 = datetime::serial_from_date(datetime::date_from_serial(s)?.year, 1, 1)?;
-            let week = ((s - jan1) + datetime::weekday_sunday_one(jan1) - 1) / 7 + 1;
-            Ok(Value::Number(week as f64))
-        }
         _ => Err(ExcelError::Name),
     }
 }
