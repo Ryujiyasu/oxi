@@ -1195,6 +1195,120 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 _ => Value::Number(total / seen),
             })
         }
+        // The largest or smallest of a range where every criterion holds; no
+        // match is 0, as Excel gives.
+        "MAXIFS" | "MINIFS" => {
+            let pairs = &args[1..];
+            if pairs.is_empty() || !pairs.len().is_multiple_of(2) {
+                return Err(ExcelError::Value);
+            }
+            let over = args[0].flatten();
+            for pair in pairs.chunks(2) {
+                if let Some(why) = pair[1].scalar().err() {
+                    return Err(why);
+                }
+            }
+            let want_max = name == "MAXIFS";
+            let mut best: Option<f64> = None;
+            for at in 0..over.len() {
+                let mut all = true;
+                for pair in pairs.chunks(2) {
+                    let tested = pair[0].flatten();
+                    let criteria = Criteria::parse(&pair[1].scalar());
+                    match tested.get(at) {
+                        Some(value) if criteria.matches(value) => {}
+                        _ => {
+                            all = false;
+                            break;
+                        }
+                    }
+                }
+                if !all {
+                    continue;
+                }
+                match over.get(at) {
+                    Some(Value::Error(why)) => return Err(*why),
+                    Some(Value::Number(n)) => {
+                        best = Some(match best {
+                            None => *n,
+                            Some(b) => if want_max { b.max(*n) } else { b.min(*n) },
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Value::Number(best.unwrap_or(0.0)))
+        }
+        // The A-suffix max/min: text counts as zero and logicals as 0/1, in a
+        // range as well as an argument.
+        "MAXA" | "MINA" => {
+            let want_max = name == "MAXA";
+            let mut best: Option<f64> = None;
+            for value in args.iter().flat_map(|a| a.flatten()) {
+                let x = match value {
+                    Value::Error(e) => return Err(e),
+                    Value::Number(n) => n,
+                    Value::Logical(b) => f64::from(b),
+                    Value::Text(_) => 0.0,
+                    Value::Blank => continue,
+                };
+                best = Some(match best {
+                    None => x,
+                    Some(b) => if want_max { b.max(x) } else { b.min(x) },
+                });
+            }
+            Ok(Value::Number(best.unwrap_or(0.0)))
+        }
+        // The A-suffix sample spread, with the same reading of text and logicals.
+        "STDEVA" | "VARA" => {
+            let mut values = Vec::new();
+            for value in args.iter().flat_map(|a| a.flatten()) {
+                match value {
+                    Value::Error(e) => return Err(e),
+                    Value::Number(n) => values.push(n),
+                    Value::Logical(b) => values.push(f64::from(b)),
+                    Value::Text(_) => values.push(0.0),
+                    Value::Blank => {}
+                }
+            }
+            if values.len() < 2 {
+                return Err(ExcelError::DivZero);
+            }
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            let variance =
+                values.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (values.len() - 1) as f64;
+            Ok(Value::Number(if name == "VARA" { variance } else { variance.sqrt() }))
+        }
+        "SQRTPI" => {
+            let n = one(args)?;
+            if n < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number((n * std::f64::consts::PI).sqrt()))
+        }
+        // Combinations with repetition, C(n+k-1, k).
+        "COMBINA" => {
+            let n = num(args.first().ok_or(ExcelError::Value)?)?.trunc();
+            let k = num(args.get(1).ok_or(ExcelError::Value)?)?.trunc();
+            if n < 0.0 || k < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            if n == 0.0 {
+                return if k == 0.0 { Ok(Value::Number(1.0)) } else { Err(ExcelError::Num) };
+            }
+            Ok(Value::Number(combin(n + k - 1.0, k)?))
+        }
+        // The character at a Unicode code point.
+        "UNICHAR" => {
+            let n = one(args)?.trunc();
+            if !(1.0..=1_114_111.0).contains(&n) {
+                return Err(ExcelError::Value);
+            }
+            match char::from_u32(n as u32) {
+                Some(c) => Ok(Value::text(c.to_string())),
+                None => Err(ExcelError::Value),
+            }
+        }
 
         // Multiply the arrays together elementwise and add up the lot. Text and
         // blanks count as nothing rather than spoiling the sum, which is what
@@ -4061,6 +4175,40 @@ mod tests {
 
     fn l(value: bool) -> Arg {
         Arg::Value(Value::Logical(value))
+    }
+
+    /// The conditional and A-suffix aggregates added 2026-09-05 (flows15),
+    /// measured against Excel.
+    #[test]
+    fn the_flows15_aggregates_agree_with_excel() {
+        let a = range(&[n(3.0), n(1.0), n(4.0), n(1.0), n(5.0), n(9.0), n(2.0), n(6.0)], 1);
+        let b = range(&[n(10.0), n(20.0), n(10.0), n(20.0), n(10.0), n(20.0), n(10.0), n(20.0)], 1);
+        assert_eq!(call("MAXIFS", &[a.clone(), b.clone(), v(10.0)]), Value::Number(5.0));
+        assert_eq!(call("MINIFS", &[a.clone(), b.clone(), v(20.0)]), Value::Number(1.0));
+        // Two criteria pairs.
+        assert_eq!(
+            call("MAXIFS", &[a.clone(), b, v(10.0), a, t(">1")]),
+            Value::Number(5.0)
+        );
+        // MAXA/MINA read text as 0 -- so the max of {-5, "abc", -3} is 0.
+        let mixed = range(&[n(-5.0), Value::text("abc"), n(-3.0)], 1);
+        assert_eq!(call("MAXA", &[mixed.clone()]), Value::Number(0.0));
+        assert_eq!(call("MINA", &[mixed]), Value::Number(-5.0));
+        // A logical in a range counts as 1.
+        assert_eq!(call("MAXA", &[range(&[Value::Logical(true), n(0.5)], 1)]), Value::Number(1.0));
+        // STDEVA/VARA, sample spread.
+        let four = range(&[n(3.0), n(1.0), n(4.0), n(1.0)], 1);
+        assert_eq!(call("STDEVA", &[four.clone()]), Value::Number(1.5));
+        assert_eq!(call("VARA", &[four]), Value::Number(2.25));
+        // SQRTPI, COMBINA, UNICHAR.
+        match call("SQRTPI", &[v(2.0)]) {
+            Value::Number(x) => assert!((x - 2.5066282746).abs() < 1e-6, "SQRTPI {x}"),
+            other => panic!("SQRTPI {other:?}"),
+        }
+        assert_eq!(call("COMBINA", &[v(4.0), v(2.0)]), Value::Number(10.0));
+        assert_eq!(call("COMBINA", &[v(3.0), v(0.0)]), Value::Number(1.0));
+        assert_eq!(call("UNICHAR", &[v(65.0)]), Value::text("A"));
+        assert_eq!(call("UNICHAR", &[v(0.0)]), Value::Error(ExcelError::Value));
     }
 
     /// The lookup, reference and statistics functions added 2026-09-05
