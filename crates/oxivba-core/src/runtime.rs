@@ -2682,6 +2682,29 @@ impl<'a> Runtime<'a> {
                         if is_err_object(&receiver) {
                             return err_call(frame, name, &values, span.line);
                         }
+                        // `Application.Run "Macro", a, b` runs a procedure of
+                        // this module by name -- which only the interpreter
+                        // can do, so it never reaches the host. The first
+                        // argument is the macro's name, the rest its
+                        // arguments; measured, it returns what the procedure
+                        // returns (or Empty for a Sub).
+                        if name.eq_ignore_ascii_case("run")
+                            && receiver.kind.eq_ignore_ascii_case("Application")
+                        {
+                            let mut given = values.into_iter();
+                            let macro_name = match given.next() {
+                                Some(Value::String(named)) => named,
+                                _ => {
+                                    return Err(error(
+                                        RuntimeErrorKind::TypeMismatch,
+                                        "Application.Run needs the macro's name",
+                                        Some(span.line),
+                                    ))
+                                }
+                            };
+                            let rest: Vec<Value> = given.collect();
+                            return self.call_procedure(&macro_name, rest, Some(span.line));
+                        }
                         self.host_call_named(
                             Some(&receiver),
                             name,

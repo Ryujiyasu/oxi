@@ -26531,6 +26531,36 @@ mod tests {
         );
     }
 
+    /// `Application.Run "Macro"` runs a procedure of the module by name --
+    /// the interpreter does it, since the host cannot reach a Sub. Measured
+    /// (flows9): after Q1 = 0, `Application.Run "Bump"` then `Call Bump`
+    /// leaves Q1 at 2; a function run by name returns its value.
+    #[test]
+    fn vba_runs_a_macro_by_name() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Range(\"Q1\").Value = 0
+               Application.Run \"Bump\"
+               Call Bump
+               Ask = Range(\"Q1\").Value & \"/\" & Application.Run(\"Twice\", 21)
+             End Function
+             Public Sub Bump()
+               Range(\"Q1\").Value = Range(\"Q1\").Value + 1
+             End Sub
+             Public Function Twice(ByVal n As Long) As Long
+               Twice = n * 2
+             End Function
+",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::String("2/42".to_string()));
+    }
+
     #[test]
     fn vba_places_a_worksheet_before_or_after_another() {
         let mut workbook = workbook();
