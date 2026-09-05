@@ -133,6 +133,7 @@ body.editing .slide-shape span[contenteditable]:empty { display: inline-block;
 .fmtbar .sp { flex: 1 }
 .fmtbar .fmthint { color: #9ca3af; font-size: 12px }
 .fmtbar button:disabled, .fmtbar input:disabled { opacity: .45; cursor: default }
+.fmtbar .fmtnum.geo { width: 50px }
 
 /* ---- move / resize a shape while editing ---- */
 body.editing .slide-shape.movable { cursor: move }
@@ -194,6 +195,12 @@ body.presenting #presrail { display: block }
   <span class="fsep"></span>
   <label class="fmtlabel" data-i18n="fColor">Colour</label>
   <input id="fmtColor" class="fmtcol" type="color" value="#1f2a44" />
+  <span class="fsep"></span>
+  <label class="fmtlabel" data-i18n="fPos">Shape</label>
+  <input id="geoX" class="fmtnum geo" type="number" step="1" title="X" disabled />
+  <input id="geoY" class="fmtnum geo" type="number" step="1" title="Y" disabled />
+  <input id="geoW" class="fmtnum geo" type="number" min="1" step="1" title="W" disabled />
+  <input id="geoH" class="fmtnum geo" type="number" min="1" step="1" title="H" disabled />
   <span class="sp"></span>
   <span class="fmthint" id="fmtHint" data-i18n="fHint">Select text, then apply</span>
 </div>
@@ -236,6 +243,7 @@ const I18N = {
     edit: 'Edit', editing: 'Done editing', save: 'Save a copy',
     fBold: 'Bold', fItalic: 'Italic', fUnder: 'Underline', fSize: 'Size',
     fColor: 'Colour', fHint: 'Select text, then apply a style',
+    fPos: 'Shape',
     saved: 'Saved. The file was written in your browser.',
     noEdits: 'Nothing has been changed yet.',
     saveFailed: 'Could not save: ',
@@ -254,6 +262,7 @@ const I18N = {
     edit: '編集', editing: '編集を終える', save: '保存',
     fBold: '太字', fItalic: '斜体', fUnder: '下線', fSize: 'サイズ',
     fColor: '色', fHint: '文字を選んでから書式を適用',
+    fPos: '図形',
     saved: '保存しました。ファイルはブラウザの中で作られています。',
     noEdits: 'まだ変更がありません。',
     saveFailed: '保存できませんでした: ',
@@ -1169,6 +1178,7 @@ function clearSelection() {
     if (h) h.remove();
     selectedDiv = null;
   }
+  syncGeomBar();
 }
 function selectShape(div) {
   if (selectedDiv === div) return;
@@ -1178,6 +1188,7 @@ function selectShape(div) {
   const h = document.createElement('div');
   h.className = 'rz-handle';
   div.appendChild(h);
+  syncGeomBar();
 }
 function commitGeom(div) {
   geomEdits.set(div.dataset.geokey, {
@@ -1185,7 +1196,60 @@ function commitGeom(div) {
     width: +div.dataset.gw, height: +div.dataset.gh,
   });
   markDirty();
+  syncGeomBar();
 }
+
+// The selected shape's box, in the inspector fields. Empty and disabled when
+// nothing is selected.
+function syncGeomBar() {
+  const on = !!selectedDiv;
+  for (const id of ['geoX', 'geoY', 'geoW', 'geoH']) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !on;
+  }
+  if (!on) return;
+  document.getElementById('geoX').value = Math.round(+selectedDiv.dataset.gx);
+  document.getElementById('geoY').value = Math.round(+selectedDiv.dataset.gy);
+  document.getElementById('geoW').value = Math.round(+selectedDiv.dataset.gw);
+  document.getElementById('geoH').value = Math.round(+selectedDiv.dataset.gh);
+}
+// Push the shape's current box (from its dataset) to the DOM.
+function paintGeom(div) {
+  const s = currentScale;
+  div.style.left = (+div.dataset.gx * s) + 'px';
+  div.style.top = (+div.dataset.gy * s) + 'px';
+  div.style.width = (+div.dataset.gw * s) + 'px';
+  div.style.height = (+div.dataset.gh * s) + 'px';
+}
+function applyGeoField(prop, v) {
+  if (!selectedDiv || Number.isNaN(v)) return;
+  if ((prop === 'gw' || prop === 'gh') && v < 1) v = 1;
+  selectedDiv.dataset[prop] = v;
+  paintGeom(selectedDiv);
+  commitGeom(selectedDiv);
+}
+for (const [id, prop] of [['geoX', 'gx'], ['geoY', 'gy'], ['geoW', 'gw'], ['geoH', 'gh']]) {
+  document.getElementById(id).addEventListener('change', e => applyGeoField(prop, parseFloat(e.target.value)));
+}
+// Arrow keys nudge the selected shape (Shift = 10pt), as long as the caret is
+// not in text and no field has focus.
+document.addEventListener('keydown', e => {
+  if (!editing || !selectedDiv) return;
+  const ae = document.activeElement;
+  if (ae && (ae.isContentEditable || ae.tagName === 'INPUT')) return;
+  const step = e.shiftKey ? 10 : 1;
+  let dx = 0, dy = 0;
+  if (e.key === 'ArrowLeft') dx = -step;
+  else if (e.key === 'ArrowRight') dx = step;
+  else if (e.key === 'ArrowUp') dy = -step;
+  else if (e.key === 'ArrowDown') dy = step;
+  else return;
+  e.preventDefault();
+  selectedDiv.dataset.gx = +selectedDiv.dataset.gx + dx;
+  selectedDiv.dataset.gy = +selectedDiv.dataset.gy + dy;
+  paintGeom(selectedDiv);
+  commitGeom(selectedDiv);
+});
 function dragLoop(startX, startY, onMove) {
   document.body.classList.add('dragging');
   function mv(ev) { onMove((ev.clientX - startX) / currentScale, (ev.clientY - startY) / currentScale); }
@@ -1220,6 +1284,8 @@ canvas.addEventListener('mousedown', e => {
   // shape body (background, image, padding) begins a move.
   if (e.target.closest('[contenteditable]')) { selectShape(div); return; }
   selectShape(div);
+  // Drop the caret so the arrow keys nudge the shape instead of moving it.
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   const gx0 = +div.dataset.gx, gy0 = +div.dataset.gy;
   e.preventDefault();
   dragLoop(e.clientX, e.clientY, (dx, dy) => {
