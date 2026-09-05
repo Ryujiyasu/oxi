@@ -349,6 +349,9 @@ enum HostObject {
     Tab(usize),
     /// `Workbooks`: the one workbook the browser has open.
     Workbooks,
+    /// `Worksheet.Sort`, and its `.SortFields`.
+    Sort(usize),
+    SortFields(usize),
     /// A shape, a chart, or one of the objects hung off them.
     Drawing(shapes::DrawingPart),
     /// An object whose worksheet has been deleted. Excel answers every
@@ -1587,6 +1590,20 @@ impl Default for Outline {
     }
 }
 
+/// The recorder's `Worksheet.Sort` object, built up before `.Apply`. A
+/// field is the key's lane -- its column, or its row when the sort runs
+/// sideways -- and whether it descends. Measured: `SortFields.Add Key:=
+/// Range("A2:A3"), Order:=xlAscending` then `.SetRange`, `.Header`, `.Apply`
+/// sorts the range by column A.
+#[derive(Debug, Clone, Default)]
+struct SortState {
+    range: Option<CellRange>,
+    header: i64,
+    match_case: bool,
+    sideways: bool,
+    fields: Vec<(u32, bool)>,
+}
+
 /// The colour of a sheet's tab: a plain colour, or one from the theme with
 /// a tint on it. Measured: a fresh tab answers `Color` False (a Boolean),
 /// `ColorIndex` xlNone and `ThemeColor` 0; `Color = 65280` reads back with
@@ -1781,6 +1798,8 @@ struct WorkbookHost<'a> {
     outlines: std::collections::HashMap<usize, Outline>,
     /// The colour of each sheet's tab, where one has been given.
     tabs: std::collections::HashMap<usize, TabColour>,
+    /// Each sheet's pending `Sort` object.
+    sorts: std::collections::HashMap<usize, SortState>,
     /// Every shape and chart, the file's and the macro's, in the order
     /// they were made.
     shapes: Vec<shapes::ShapeRecord>,
@@ -1909,6 +1928,7 @@ impl<'a> WorkbookHost<'a> {
             views: std::collections::HashMap::new(),
             outlines: std::collections::HashMap::new(),
             tabs: std::collections::HashMap::new(),
+            sorts: std::collections::HashMap::new(),
             shapes: Vec::new(),
             shape_counters: std::collections::HashMap::new(),
             next_shape_id: 1,
@@ -2007,6 +2027,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Outline(_) => "Outline",
                 HostObject::Tab(_) => "Tab",
                 HostObject::Workbooks => "Workbooks",
+                HostObject::Sort(_) => "Sort",
+                HostObject::SortFields(_) => "SortFields",
                 HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
             }
@@ -2803,11 +2825,31 @@ impl<'a> WorkbookHost<'a> {
     ) -> Result<(), String> {
         Self::sized(range)?;
         for address in self.touched(range) {
-            let (held_theme, held_tint) = self
-                .theme_paint
-                .get(&(address, paint))
-                .copied()
-                .unwrap_or((if paint == Paint::Interior { 1 } else { 2 }, 0.0));
+            let held = self.theme_paint.get(&(address, paint)).copied();
+            // A shade given to a cell that was coloured by NUMBER, not from
+            // the theme, tints that plain colour and is not itself a theme
+            // paint -- so `.TintAndShade = 0` after `.Color` leaves the
+            // colour alone, as Excel does. A shade on a bare part tints the
+            // theme's default.
+            if theme.is_none() && held.is_none() {
+                let plain = match paint {
+                    Paint::Font => self.uniform_style(range, |style| style.font_color.clone())?.flatten(),
+                    Paint::Interior => self.uniform_style(range, |style| style.bg_color.clone())?.flatten(),
+                    Paint::Edge(_) => None,
+                };
+                if let Some(plain) = plain {
+                    let shade = tint.unwrap_or(0.0);
+                    let colour = colour_from_packed(tinted(colour_to_packed(Some(&plain)).unwrap_or(0), shade));
+                    let one = CellRange::single(address);
+                    match paint {
+                        Paint::Font => self.set_range_style(one, |_, style| style.font_color = Some(colour.clone()))?,
+                        Paint::Interior => self.set_range_style(one, |_, style| style.bg_color = Some(colour.clone()))?,
+                        Paint::Edge(_) => {}
+                    }
+                    continue;
+                }
+            }
+            let (held_theme, held_tint) = held.unwrap_or((if paint == Paint::Interior { 1 } else { 2 }, 0.0));
             let (theme, tint) = match (theme, tint) {
                 (Some(theme), _) => (theme, 0.0),
                 (None, Some(tint)) => (held_theme, tint),
@@ -7621,6 +7663,16 @@ impl<'a> WorkbookHost<'a> {
             .into_iter()
             .filter_map(|(sheet, tab)| Some((moved(sheet)?, tab)))
             .collect();
+        self.sorts = std::mem::take(&mut self.sorts)
+            .into_iter()
+            .filter_map(|(sheet, mut state)| {
+                let sheet = moved(sheet)?;
+                if let Some(range) = state.range {
+                    state.range = moved(range.sheet).map(|sheet| CellRange { sheet, ..range });
+                }
+                Some((sheet, state))
+            })
+            .collect();
         self.shapes = std::mem::take(&mut self.shapes)
             .into_iter()
             .filter_map(|mut shape| {
@@ -7738,6 +7790,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Comments(sheet) => moved(sheet).map(HostObject::Comments),
                 HostObject::Outline(sheet) => moved(sheet).map(HostObject::Outline),
                 HostObject::Tab(sheet) => moved(sheet).map(HostObject::Tab),
+                HostObject::Sort(sheet) => moved(sheet).map(HostObject::Sort),
+                HostObject::SortFields(sheet) => moved(sheet).map(HostObject::SortFields),
                 HostObject::Drawing(part) => part.renumbered(moved).map(HostObject::Drawing),
                 HostObject::Blocks(_)
                 | HostObject::Areas(_)
@@ -12383,68 +12437,77 @@ impl<'a> WorkbookHost<'a> {
             .cloned()
     }
 
-    fn sort_range(&mut self, range: CellRange, args: &[Value]) -> Result<(), String> {
-        self.guard_sort(range)?;
-        let given = |index: usize| match args.get(index) {
-            Some(Value::Missing) | None => None,
-            Some(value) => Some(value),
-        };
-        let match_case = given(9).is_some_and(|value| matches!(value, Value::Boolean(true)));
-        let sideways = match given(10) {
-            None => false,
-            Some(value) => match sort_number(value, "Orientation")? {
-                1 => false,
-                2 => true,
-                other => return Err(format!("Range.Sort has no orientation {other}")),
-            },
-        };
-        let header = match given(7) {
-            None => false,
-            Some(value) => match sort_number(value, "Header")? {
-                2 => false,
-                1 => true,
-                0 => self.guessed_header(range, sideways),
-                other => return Err(format!("Range.Sort has no header setting {other}")),
-            },
-        };
-
-        let mut keys = Vec::new();
-        for (key, order) in [(0, 1), (2, 4), (5, 6)] {
-            let Some(key) = given(key) else { continue };
-            let Value::Object(object) = key else {
-                return Err("Range.Sort takes a cell as a key".to_string());
-            };
-            let Some(key) = self.range(object) else {
-                return Err("Range.Sort takes a cell as a key".to_string());
-            };
-            let lane = if sideways {
-                key.start_row
-            } else {
-                key.start_column
-            };
-            let (first, last) = if sideways {
-                (range.start_row, range.end_row)
-            } else {
-                (range.start_column, range.end_column)
-            };
-            if lane < first || lane > last {
-                // Excel quietly sorts nothing here; saying so is more use.
-                return Err("Range.Sort was given a key outside the range".to_string());
+    /// `Worksheet.Sort.SetRange` / `.Apply`, and the members a recorder
+    /// touches on the way. Measured: after building the fields, setting the
+    /// range and Header, `.Apply` sorts the range and leaves the fields in
+    /// place (Count stays).
+    fn sort_object_call(&mut self, sheet: usize, name: &str, args: &[Value]) -> Result<Value, String> {
+        match name.to_ascii_lowercase().as_str() {
+            "sortfields" => Ok(self.object(HostObject::SortFields(sheet))),
+            "setrange" => {
+                let range = args
+                    .first()
+                    .and_then(|value| match value {
+                        Value::Object(object) => self.range(object),
+                        _ => None,
+                    })
+                    .ok_or_else(|| host_error(1004, "Sort.SetRange takes a Range"))?;
+                self.sorts.entry(sheet).or_default().range = Some(range);
+                Ok(Value::Empty)
             }
-            let descending = match given(order) {
-                None => false,
-                Some(value) => match sort_number(value, "Order")? {
-                    1 => false,
-                    2 => true,
-                    other => return Err(format!("Range.Sort has no order {other}")),
-                },
-            };
-            keys.push((lane, descending));
+            "apply" => {
+                let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
+                let Some(range) = state.range else {
+                    return Err(host_error(1004, "Sort.Apply has no range set"));
+                };
+                if state.fields.is_empty() {
+                    return Ok(Value::Empty);
+                }
+                self.guard_sort(range)?;
+                let header = match state.header {
+                    1 => true,
+                    0 => self.guessed_header(range, state.sideways),
+                    _ => false,
+                };
+                self.apply_sort(range, &state.fields, header, state.match_case, state.sideways)?;
+                Ok(Value::Empty)
+            }
+            _ => Ok(Value::Empty),
         }
-        if keys.is_empty() {
-            return Err("Range.Sort expects at least one key".to_string());
-        }
+    }
 
+    fn sort_fields_call(&mut self, sheet: usize, name: &str, args: &[Value]) -> Result<Value, String> {
+        match name.to_ascii_lowercase().as_str() {
+            "clear" => {
+                self.sorts.entry(sheet).or_default().fields.clear();
+                Ok(Value::Empty)
+            }
+            "count" => Ok(Value::Integer(
+                self.sorts.get(&sheet).map_or(0, |state| state.fields.len() as i64),
+            )),
+            "add" | "add2" => {
+                let key = args.first().and_then(|value| match value {
+                    Value::Object(object) => self.range(object),
+                    _ => None,
+                });
+                let Some(key) = key else {
+                    return Err(host_error(1004, "SortFields.Add needs a key Range"));
+                };
+                let sideways = self.sorts.get(&sheet).is_some_and(|state| state.sideways);
+                let lane = if sideways { key.start_row } else { key.start_column };
+                // Order is the third argument: xlAscending 1, xlDescending 2.
+                let descending = matches!(args.get(2).and_then(any_whole_number), Some(2));
+                self.sorts.entry(sheet).or_default().fields.push((lane, descending));
+                Ok(Value::Empty)
+            }
+            _ => Ok(Value::Empty),
+        }
+    }
+
+    /// Reorder a range by its keys, each a (lane, descending) within the
+    /// range -- a column top-to-bottom, a row when it runs sideways.
+    /// Shared by `Range.Sort` and the recorder's `Worksheet.Sort` object.
+    fn apply_sort(&mut self, range: CellRange, keys: &[(u32, bool)], header: bool, match_case: bool, sideways: bool) -> Result<(), String> {
         // Each line is one row of the range, or one column when sorting sideways.
         let (first, last) = if sideways {
             (range.start_column, range.end_column)
@@ -12472,7 +12535,7 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         lines.sort_by(|left, right| {
-            for (lane, descending) in &keys {
+            for (lane, descending) in keys {
                 let ordering = sort_compare_cased(
                     &self.cell_value(cell_at(*left, *lane)),
                     &self.cell_value(cell_at(*right, *lane)),
@@ -12543,6 +12606,71 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         Ok(())
+    }
+
+    fn sort_range(&mut self, range: CellRange, args: &[Value]) -> Result<(), String> {
+        self.guard_sort(range)?;
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let match_case = given(9).is_some_and(|value| matches!(value, Value::Boolean(true)));
+        let sideways = match given(10) {
+            None => false,
+            Some(value) => match sort_number(value, "Orientation")? {
+                1 => false,
+                2 => true,
+                other => return Err(format!("Range.Sort has no orientation {other}")),
+            },
+        };
+        let header = match given(7) {
+            None => false,
+            Some(value) => match sort_number(value, "Header")? {
+                2 => false,
+                1 => true,
+                0 => self.guessed_header(range, sideways),
+                other => return Err(format!("Range.Sort has no header setting {other}")),
+            },
+        };
+
+        let mut keys = Vec::new();
+        for (key, order) in [(0, 1), (2, 4), (5, 6)] {
+            let Some(key) = given(key) else { continue };
+            let Value::Object(object) = key else {
+                return Err("Range.Sort takes a cell as a key".to_string());
+            };
+            let Some(key) = self.range(object) else {
+                return Err("Range.Sort takes a cell as a key".to_string());
+            };
+            let lane = if sideways {
+                key.start_row
+            } else {
+                key.start_column
+            };
+            let (first, last) = if sideways {
+                (range.start_row, range.end_row)
+            } else {
+                (range.start_column, range.end_column)
+            };
+            if lane < first || lane > last {
+                // Excel quietly sorts nothing here; saying so is more use.
+                return Err("Range.Sort was given a key outside the range".to_string());
+            }
+            let descending = match given(order) {
+                None => false,
+                Some(value) => match sort_number(value, "Order")? {
+                    1 => false,
+                    2 => true,
+                    other => return Err(format!("Range.Sort has no order {other}")),
+                },
+            };
+            keys.push((lane, descending));
+        }
+        if keys.is_empty() {
+            return Err("Range.Sort expects at least one key".to_string());
+        }
+
+        self.apply_sort(range, &keys, header, match_case, sideways)
     }
 
     fn fill_clipboard(&mut self, source: CellRange) -> Result<(), String> {
@@ -13936,6 +14064,12 @@ impl Host for WorkbookHost<'_> {
             if let Some(part) = self.drawing_part(receiver) {
                 return self.drawing_call(part, name, args);
             }
+            if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+                return self.sort_object_call(sheet, name, args).map(Some);
+            }
+            if let Some(HostObject::SortFields(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+                return self.sort_fields_call(sheet, name, args).map(Some);
+            }
             if self.is_workbooks(receiver) {
                 return match name.to_ascii_lowercase().as_str() {
                     "item" => match args {
@@ -14927,7 +15061,11 @@ impl Host for WorkbookHost<'_> {
         } else if name.eq_ignore_ascii_case("add") {
             // Three collections answer to Add, and they name their arguments
             // differently.
-            if receiver.is_some_and(|receiver| self.is_names(receiver)) {
+            if receiver.is_some_and(|receiver| {
+                matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SortFields(_)))
+            }) {
+                Some(&["Key", "SortOn", "Order", "CustomOrder", "DataOption"][..])
+            } else if receiver.is_some_and(|receiver| self.is_names(receiver)) {
                 Some(&["Name", "RefersTo"][..])
             } else if receiver.is_some_and(|receiver| self.hyperlink_scope(receiver).is_some()) {
                 Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
@@ -15033,6 +15171,14 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowLevels", "ColumnLevels"][..])
         } else if name.eq_ignore_ascii_case("autofill") {
             Some(&["Destination", "Type"][..])
+        } else if name.eq_ignore_ascii_case("add2")
+            && receiver.is_some_and(|receiver| {
+                matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SortFields(_)))
+            })
+        {
+            Some(&["Key", "SortOn", "Order", "CustomOrder", "DataOption"][..])
+        } else if name.eq_ignore_ascii_case("setrange") {
+            Some(&["Range"][..])
         } else if name.eq_ignore_ascii_case("borderaround") {
             Some(&["LineStyle", "Weight", "ColorIndex", "Color", "ThemeColor"][..])
         } else if name.eq_ignore_ascii_case("subtotal") {
@@ -15084,6 +15230,28 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(sheet) = self.tab_sheet(receiver) {
             return Ok(self.tab_member(sheet, name));
+        }
+        if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
+            return Ok(match name.to_ascii_lowercase().as_str() {
+                "sortfields" => Some(self.object(HostObject::SortFields(sheet))),
+                "header" => Some(Value::Integer(if state.header == 0 { 0 } else { state.header })),
+                "matchcase" => Some(Value::Boolean(state.match_case)),
+                "orientation" => Some(Value::Integer(if state.sideways { 2 } else { 1 })),
+                "rng" | "range" => state
+                    .range
+                    .map(|range| self.object(HostObject::Range(range))),
+                "parent" => Some(self.object(HostObject::Worksheet(sheet))),
+                _ => None,
+            });
+        }
+        if let Some(HostObject::SortFields(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            return Ok(match name.to_ascii_lowercase().as_str() {
+                "count" => Some(Value::Integer(
+                    self.sorts.get(&sheet).map_or(0, |state| state.fields.len() as i64),
+                )),
+                _ => None,
+            });
         }
         if self.is_workbooks(receiver) {
             return Ok(match name.to_ascii_lowercase().as_str() {
@@ -15254,6 +15422,21 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(range) = self.range_font(receiver) {
+            // Measured: a cell in the workbook's own face reads ThemeFont
+            // xlThemeFontMinor (2); this build keeps no other, so it always
+            // answers the minor. OutlineFont and Shadow are always False.
+            if name.eq_ignore_ascii_case("themefont") {
+                return Ok(Some(Value::Integer(2)));
+            }
+            if name.eq_ignore_ascii_case("outlinefont") || name.eq_ignore_ascii_case("shadow") {
+                return Ok(Some(Value::Boolean(false)));
+            }
+            if name.eq_ignore_ascii_case("superscript") || name.eq_ignore_ascii_case("subscript") {
+                let want = if name.eq_ignore_ascii_case("superscript") { "superscript" } else { "subscript" };
+                return self
+                    .uniform_font(range, |dress| dress.vert_align.as_deref() == Some(want))
+                    .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+            }
             if name.eq_ignore_ascii_case("bold") {
                 return self
                     .uniform_font(range, |dress| dress.bold)
@@ -15366,6 +15549,10 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(range) = self.range_interior(receiver) {
+            // The shade on the pattern is kept nowhere here; Excel answers 0.
+            if name.eq_ignore_ascii_case("patterntintandshade") {
+                return Ok(Some(Value::Double(0.0)));
+            }
             // Measured: a cell with no fill answers ThemeColor xlNone; one
             // filled by number answers 0; one filled from the theme answers
             // its number.
@@ -15529,6 +15716,9 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("tab") {
                 return Ok(Some(self.object(HostObject::Tab(sheet))));
+            }
+            if name.eq_ignore_ascii_case("sort") {
+                return Ok(Some(self.object(HostObject::Sort(sheet))));
             }
             if name.eq_ignore_ascii_case("shapes") || name.eq_ignore_ascii_case("drawingobjects") {
                 return Ok(Some(self.object(HostObject::Drawing(shapes::DrawingPart::Shapes(sheet)))));
@@ -16189,6 +16379,18 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(sheet) = self.tab_sheet(receiver) {
             return self.set_tab_member(sheet, name, &value);
+        }
+        if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            let state = self.sorts.entry(sheet).or_default();
+            match name.to_ascii_lowercase().as_str() {
+                "header" => state.header = any_whole_number(&value).unwrap_or(0),
+                "matchcase" => state.match_case = style_face_boolean(&value, "Sort.MatchCase")?.unwrap_or(false),
+                "orientation" => state.sideways = any_whole_number(&value) == Some(2),
+                // SortMethod (xlPinYin / xlStroke) is kept nowhere here.
+                "sortmethod" => {}
+                _ => return Ok(false),
+            }
+            return Ok(true);
         }
         if let Some(part) = self.drawing_part(receiver) {
             return self.drawing_set(part, name, value);
@@ -26195,6 +26397,75 @@ mod tests {
                 "2024/01/05".to_string(),
                 "-2147220991\tsrc\tdesc".to_string(),
                 "1004".to_string(),
+            ]
+        );
+    }
+
+    /// The macro recorder's `Worksheet.Sort` object, measured against Excel
+    /// (flows9, 2026-09-05; the case agrees but for the recorder idioms this
+    /// build does not draw -- shapes selected into a ShapeRange, ActiveChart,
+    /// Application.Run).
+    #[test]
+    fn vba_sorts_through_the_recorder_sort_object() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = \"h\": Range(\"A2\").Value = 3: Range(\"A3\").Value = 1
+               Range(\"B1\").Value = \"k\": Range(\"B2\").Value = \"x\": Range(\"B3\").Value = \"y\"
+               ActiveWorkbook.Worksheets(\"Sheet1\").Sort.SortFields.Clear
+               ActiveWorkbook.Worksheets(\"Sheet1\").Sort.SortFields.Add2 Key:=Range(\"A2:A3\"), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+               With ActiveWorkbook.Worksheets(\"Sheet1\").Sort
+                 .SetRange Range(\"A1:B3\")
+                 .Header = xlYes
+                 .MatchCase = False
+                 .Orientation = xlTopToBottom
+                 .SortMethod = xlPinYin
+                 .Apply
+               End With
+               Debug.Print Range(\"A2\").Value; Range(\"B2\").Value; ActiveSheet.Sort.SortFields.Count; ActiveSheet.Sort.Header
+               ActiveSheet.Sort.SortFields.Clear
+               ActiveSheet.Sort.SortFields.Add Key:=Range(\"A2\"), SortOn:=xlSortOnValues, Order:=xlDescending
+               ActiveSheet.Sort.SetRange Range(\"A1:B3\")
+               ActiveSheet.Sort.Header = xlYes
+               ActiveSheet.Sort.Apply
+               Debug.Print Range(\"A2\").Value; Range(\"B2\").Value
+               Range(\"D1\").Select
+               With Selection.Interior
+                 .Pattern = xlSolid
+                 .PatternColorIndex = xlAutomatic
+                 .Color = 65535
+                 .TintAndShade = 0
+                 .PatternTintAndShade = 0
+               End With
+               Debug.Print Range(\"D1\").Interior.Color; Range(\"D1\").Interior.Pattern; Range(\"D1\").Interior.PatternTintAndShade
+               With Selection.Font
+                 .Name = \"游ゴシック\": .Size = 14: .Superscript = False
+                 .ThemeColor = xlThemeColorLight1: .TintAndShade = 0: .ThemeFont = xlThemeFontMinor
+               End With
+               Debug.Print Range(\"D1\").Font.Size; Range(\"D1\").Font.Superscript; Range(\"D1\").Font.ThemeFont; Range(\"D1\").Font.ThemeColor
+               ActiveWindow.ScrollRow = 1: ActiveWindow.SmallScroll Down:=3
+               Application.Goto Reference:=\"R2C2\"
+               Debug.Print ActiveWindow.ScrollRow; Selection.Address(0, 0)
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                // Ascending by A: the row with 1 comes up, its neighbour y
+                // with it; the fields stay after Apply.
+                "1	y	1	1".to_string(),
+                "3	x".to_string(),
+                // TintAndShade = 0 after Color = 65535 leaves the yellow.
+                "65535	1	0".to_string(),
+                "14	False	2	2".to_string(),
+                "4	B2".to_string(),
             ]
         );
     }
