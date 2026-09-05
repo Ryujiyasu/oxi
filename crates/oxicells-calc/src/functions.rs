@@ -68,6 +68,20 @@ impl Arg {
         }
     }
 
+    /// The first value of a block, whatever its size.
+    ///
+    /// `scalar` refuses a block larger than one cell, which is right where a
+    /// block is a mistake. It is wrong for a lookup's needle: asked of Excel,
+    /// `SUM(VLOOKUP({"x","y"},A1:B3,2,FALSE))` is 10 -- the first needle's
+    /// answer alone, not one answer per needle, which is what MATCH gives.
+    /// The two look alike and behave the other way round.
+    pub fn first(&self) -> Value {
+        match self {
+            Arg::Value(v) => v.clone(),
+            Arg::Range(r) => r.cells.first().cloned().unwrap_or(Value::Blank),
+        }
+    }
+
     /// Every value, flattened. Used by the aggregate functions.
     pub fn flatten(&self) -> Vec<Value> {
         match self {
@@ -307,6 +321,39 @@ fn one_at_a_time(name: &str) -> bool {
     )
 }
 
+/// Whether argument `at` is one this function takes a cell at a time.
+///
+/// `one_at_a_time` says a function works on single values; that is enough for
+/// `LEN` or `IF`, where EVERY argument is a single value. It is not enough for
+/// a lookup: `MATCH($S$1:$S$20,$A2,0)` hands a block as the thing to look FOR
+/// and a single value as the place to look IN, and Excel answers a block —
+/// one match per thing looked for. `COUNTIF(range,{"LONG","SHORT"})` is the
+/// same shape the other way round: the range is read whole and the criterion
+/// is taken one at a time, which is why `SUMPRODUCT` of it is 3 and not 2.
+///
+/// So the question is per argument. A function absent from both lists takes
+/// everything whole.
+fn taken_one_at_a_time(name: &str, at: usize) -> bool {
+    if one_at_a_time(name) {
+        return true;
+    }
+    match name {
+        // The needle, not the haystack. MATCH does this and the LOOKUPs do
+        // NOT: asked of Excel, `SUM(MATCH({"y","x"},A1:A3,0))` is 3 — one
+        // answer per needle — while `SUM(VLOOKUP({"x","y"},A1:B3,2,FALSE))` is
+        // 10, the first needle's answer alone. They look alike and they are
+        // not, so only the one that was measured is here.
+        "MATCH" => at == 0,
+        // range, criteria[, sum range] — the criteria only.
+        "COUNTIF" | "SUMIF" | "AVERAGEIF" => at == 1,
+        // range, criteria, range, criteria, … — every second one.
+        "COUNTIFS" => at % 2 == 1,
+        // sum range, then the pairs, so the criteria are the even ones.
+        "SUMIFS" | "AVERAGEIFS" => at >= 2 && at.is_multiple_of(2),
+        _ => false,
+    }
+}
+
 /// Call `name`, applying it a cell at a time when it has been handed a block
 /// and only knows what to do with one value.
 pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
@@ -334,21 +381,39 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
             _ => Arg::Value(Value::Error(ExcelError::Value)),
         };
     }
-    if one_at_a_time(name) {
-        let width = args.iter().map(|one| block_of(one).width).max().unwrap_or(1);
-        let height = args.iter().map(|one| block_of(one).height).max().unwrap_or(1);
+    // The shape of the answer comes from the arguments taken a cell at a time;
+    // the ones read whole say nothing about it.
+    let spread: Vec<bool> = (0..args.len())
+        .map(|at| taken_one_at_a_time(name, at))
+        .collect();
+    if spread.iter().any(|one| *one) {
+        let sized = |pick: fn(&RangeData) -> usize| {
+            args.iter()
+                .zip(&spread)
+                .filter(|(_, taken)| **taken)
+                .map(|(one, _)| pick(&block_of(one)))
+                .max()
+                .unwrap_or(1)
+        };
+        let width = sized(|block| block.width);
+        let height = sized(|block| block.height);
         if width * height > 1 {
             let blocks: Vec<RangeData> = args.iter().map(block_of).collect();
             let mut cells = Vec::with_capacity(width * height);
             for row in 0..height {
                 for col in 0..width {
-                    let picked: Vec<Arg> = blocks
+                    let picked: Vec<Arg> = args
                         .iter()
-                        .map(|block| {
-                            Arg::Value(
-                                reach(block, col, row)
-                                    .unwrap_or(Value::Error(ExcelError::NA)),
-                            )
+                        .zip(&blocks)
+                        .zip(&spread)
+                        .map(|((whole, block), taken)| {
+                            if *taken {
+                                Arg::Value(
+                                    reach(block, col, row).unwrap_or(Value::Error(ExcelError::NA)),
+                                )
+                            } else {
+                                whole.clone()
+                            }
                         })
                         .collect();
                     cells.push(call(name, &picked));
@@ -689,7 +754,34 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if old.is_empty() {
                 return Ok(Value::Text(s));
             }
-            Ok(Value::Text(s.replace(&old, &new)))
+            // With a fourth argument only that one occurrence, counted from
+            // one, is replaced: measured, `SUBSTITUTE("aaa","a","b",2)` is
+            // "aba". Without it every occurrence goes.
+            match args.get(3) {
+                None => Ok(Value::Text(s.replace(&old, &new))),
+                Some(which) => {
+                    let which = num(which)?;
+                    if which < 1.0 {
+                        return Err(ExcelError::Value);
+                    }
+                    let which = which as usize;
+                    let mut seen = 0usize;
+                    let mut out = String::new();
+                    let mut rest = s.as_str();
+                    while let Some(at) = rest.find(&old) {
+                        seen += 1;
+                        out.push_str(&rest[..at]);
+                        if seen == which {
+                            out.push_str(&new);
+                        } else {
+                            out.push_str(&old);
+                        }
+                        rest = &rest[at + old.len()..];
+                    }
+                    out.push_str(rest);
+                    Ok(Value::Text(out))
+                }
+            }
         }
         // FIND is case-sensitive, SEARCH is not. Both are 1-based in UTF-16 units.
         "FIND" | "SEARCH" => {
@@ -1231,7 +1323,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if args.len() < 3 {
                 return Err(ExcelError::Value);
             }
-            let key = args[0].scalar();
+            // The needle is taken as the FIRST of whatever it was given rather
+            // than one answer per needle -- see `Arg::first`. MATCH, below,
+            // does the opposite.
+            let key = args[0].first();
             // Looking for an error finds nothing: the error is the answer.
             if let Some(why) = key.err() {
                 return Err(why);
@@ -1639,7 +1734,336 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             )?))
         }
 
+        // ---- more aggregates ---------------------------------------------
+        "SUMSQ" => Ok(Value::Number(numeric_operands(args)?.iter().map(|n| n * n).sum())),
+        "GCD" => {
+            let mut g = 0i64;
+            for n in numeric_operands(args)? {
+                if n < 0.0 {
+                    return Err(ExcelError::Num);
+                }
+                g = gcd(g, n.trunc() as i64);
+            }
+            Ok(Value::Number(g as f64))
+        }
+        "LCM" => {
+            let mut l = 1i64;
+            for n in numeric_operands(args)? {
+                if n < 0.0 {
+                    return Err(ExcelError::Num);
+                }
+                let n = n.trunc() as i64;
+                if n == 0 {
+                    return Ok(Value::Number(0.0));
+                }
+                let g = gcd(l, n);
+                l = l / g * n;
+            }
+            Ok(Value::Number(l as f64))
+        }
+        // ---- more one-number maths --------------------------------------
+        "EVEN" | "ODD" => {
+            let n = num(&args.first().ok_or(ExcelError::Value)?.clone())?;
+            let mut up = n.abs().ceil() as i64;
+            let want_even = name == "EVEN";
+            if (up % 2 == 0) != want_even {
+                up += 1;
+            }
+            Ok(Value::Number(if n < 0.0 { -up } else { up } as f64))
+        }
+        "ROMAN" => {
+            let n = num(&args.first().ok_or(ExcelError::Value)?.clone())? as i64;
+            if !(0..=3999).contains(&n) {
+                return Err(ExcelError::Value);
+            }
+            Ok(Value::Text(roman_numeral(n)))
+        }
+        "ARABIC" => {
+            let s = text(&args.first().ok_or(ExcelError::Value)?.clone())?;
+            arabic_number(&s).map(|n| Value::Number(n as f64)).ok_or(ExcelError::Value)
+        }
+        // ---- more text ---------------------------------------------------
+        "CLEAN" => {
+            let s = text(&args.first().ok_or(ExcelError::Value)?.clone())?;
+            Ok(Value::Text(s.chars().filter(|c| (*c as u32) >= 32).collect()))
+        }
+        "FIXED" | "DOLLAR" => {
+            let n = num(&args.first().ok_or(ExcelError::Value)?.clone())?;
+            let digits = match args.get(1) {
+                Some(a) => num(a)? as i32,
+                None => 2,
+            };
+            // A negative digit count rounds to the left of the point, the way
+            // ROUND does; the shown number carries no decimals then.
+            let places = digits.max(0) as usize;
+            let no_commas = name == "FIXED"
+                && matches!(args.get(2), Some(a) if a.scalar().to_logical().unwrap_or(false));
+            let rounded = {
+                let factor = 10f64.powi(digits);
+                (n * factor).round() / factor
+            };
+            let dp = if name == "DOLLAR" { places.max(0) } else { places };
+            let group = if no_commas { "" } else { "#,##" };
+            let body = if dp == 0 {
+                format!("{group}0")
+            } else {
+                format!("{group}0.{}", "0".repeat(dp))
+            };
+            let format = if name == "DOLLAR" {
+                format!("\"$\"{body};(\"$\"{body})")
+            } else {
+                body
+            };
+            Ok(Value::Text(crate::numfmt::format_number(rounded, &format)))
+        }
+        // ---- lookup ------------------------------------------------------
+        "LOOKUP" => {
+            // The vector form: find the largest value not over the needle in
+            // an ascending vector, and answer the matching cell of the
+            // result vector -- or of the same vector, with none given.
+            let needle = args.first().ok_or(ExcelError::Value)?.scalar();
+            let vector = args.get(1).ok_or(ExcelError::Value)?.flatten();
+            let result = match args.get(2) {
+                Some(a) => a.flatten(),
+                None => vector.clone(),
+            };
+            let mut found = None;
+            for (at, cell) in vector.iter().enumerate() {
+                if lookup_le(cell, &needle) {
+                    found = Some(at);
+                } else {
+                    break;
+                }
+            }
+            match found {
+                Some(at) => Ok(result.get(at).cloned().unwrap_or(Value::Error(ExcelError::NA))),
+                None => Err(ExcelError::NA),
+            }
+        }
+        // ---- database ----------------------------------------------------
+        "DSUM" | "DAVERAGE" | "DCOUNT" | "DCOUNTA" | "DMAX" | "DMIN" | "DGET" | "DPRODUCT" => {
+            database_function(name, args)
+        }
+        // ---- more dates --------------------------------------------------
+        "NETWORKDAYS" => {
+            let (start, end) = (serial(&args[0])?, serial(&args[1])?);
+            let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+            let mut days = 0i64;
+            for day in lo..=hi {
+                // weekday_sunday_one: 1 Sunday .. 7 Saturday.
+                let w = datetime::weekday_sunday_one(day);
+                if w != 1 && w != 7 {
+                    days += 1;
+                }
+            }
+            Ok(Value::Number(if start <= end { days } else { -days } as f64))
+        }
+        "WEEKNUM" => {
+            let s = serial(&args[0])?;
+            let jan1 = datetime::serial_from_date(datetime::date_from_serial(s)?.year, 1, 1)?;
+            let week = ((s - jan1) + datetime::weekday_sunday_one(jan1) - 1) / 7 + 1;
+            Ok(Value::Number(week as f64))
+        }
         _ => Err(ExcelError::Name),
+    }
+}
+
+/// The greatest common divisor, for GCD/LCM.
+fn gcd(mut a: i64, mut b: i64) -> i64 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a.abs()
+}
+
+/// Whether the largest-not-over test of LOOKUP holds for a candidate against
+/// the needle: numbers compare as numbers, text as text without case.
+fn lookup_le(cell: &Value, needle: &Value) -> bool {
+    match (cell, needle) {
+        (Value::Number(a), Value::Number(b)) => a <= b,
+        (Value::Text(a), Value::Text(b)) => a.to_lowercase() <= b.to_lowercase(),
+        (Value::Number(_), _) => true,
+        _ => false,
+    }
+}
+
+/// The classic subtractive Roman numeral for 0..=3999 (0 is empty, as Excel).
+fn roman_numeral(mut n: i64) -> String {
+    const TABLE: [(i64, &str); 13] = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"),
+        (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"),
+        (5, "V"), (4, "IV"), (1, "I"),
+    ];
+    let mut out = String::new();
+    for (value, sign) in TABLE {
+        while n >= value {
+            out.push_str(sign);
+            n -= value;
+        }
+    }
+    out
+}
+
+/// The number a classic Roman numeral stands for, for ARABIC.
+fn arabic_number(text: &str) -> Option<i64> {
+    let text = text.trim().to_uppercase();
+    let (negative, text) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, text),
+    };
+    let value = |c: char| match c {
+        'I' => Some(1),
+        'V' => Some(5),
+        'X' => Some(10),
+        'L' => Some(50),
+        'C' => Some(100),
+        'D' => Some(500),
+        'M' => Some(1000),
+        _ => None,
+    };
+    let mut total = 0i64;
+    let mut prev = 0i64;
+    for c in text.chars().rev() {
+        let v = value(c)?;
+        if v < prev {
+            total -= v;
+        } else {
+            total += v;
+            prev = v;
+        }
+    }
+    Some(if negative { -total } else { total })
+}
+
+/// The database functions -- `DSUM(database, field, criteria)` and its kin.
+/// The database's first row names its columns; the field is a column by name
+/// or by one-based number; the criteria range's first row names columns and
+/// each row under it is one set of conditions, joined across a row by AND and
+/// down the rows by OR.
+fn database_function(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
+    let database = args.first().ok_or(ExcelError::Value)?.as_range();
+    let criteria = args.get(2).ok_or(ExcelError::Value)?.as_range();
+    if database.height < 1 || criteria.height < 1 {
+        return Err(ExcelError::Value);
+    }
+    let headers: Vec<String> = (0..database.width)
+        .map(|c| database.at(c, 0).to_number().map(|n| n.to_string()).unwrap_or_else(|_| match database.at(c, 0) {
+            Value::Text(t) => t,
+            other => other.to_number().map(|n| n.to_string()).unwrap_or_default(),
+        }))
+        .collect();
+    let field = match args.get(1).map(|a| a.scalar()) {
+        Some(Value::Number(n)) => (n as usize).checked_sub(1).ok_or(ExcelError::Value)?,
+        Some(Value::Text(t)) => headers
+            .iter()
+            .position(|h| h.eq_ignore_ascii_case(&t))
+            .ok_or(ExcelError::Value)?,
+        _ => return Err(ExcelError::Value),
+    };
+    if field >= database.width {
+        return Err(ExcelError::Value);
+    }
+    let crit_headers: Vec<String> = (0..criteria.width)
+        .map(|c| match criteria.at(c, 0) {
+            Value::Text(t) => t,
+            other => other.to_number().map(|n| n.to_string()).unwrap_or_default(),
+        })
+        .collect();
+    let mut chosen: Vec<Value> = Vec::new();
+    for row in 1..database.height {
+        let mut any = false;
+        for crow in 1..criteria.height {
+            let mut all = true;
+            for ccol in 0..criteria.width {
+                let cond = criteria.at(ccol, crow);
+                if matches!(cond, Value::Blank) {
+                    continue;
+                }
+                let Some(dcol) = headers.iter().position(|h| h.eq_ignore_ascii_case(&crit_headers[ccol])) else {
+                    all = false;
+                    break;
+                };
+                if !criterion_matches(&database.at(dcol, row), &cond) {
+                    all = false;
+                    break;
+                }
+            }
+            if all {
+                any = true;
+                break;
+            }
+        }
+        if any {
+            chosen.push(database.at(field, row));
+        }
+    }
+    let numbers: Vec<f64> = chosen.iter().filter_map(|v| match v {
+        Value::Number(n) => Some(*n),
+        _ => None,
+    }).collect();
+    match name {
+        "DSUM" => Ok(Value::Number(numbers.iter().sum())),
+        "DPRODUCT" => Ok(Value::Number(numbers.iter().product())),
+        "DAVERAGE" => {
+            if numbers.is_empty() {
+                return Err(ExcelError::DivZero);
+            }
+            Ok(Value::Number(numbers.iter().sum::<f64>() / numbers.len() as f64))
+        }
+        "DMAX" => Ok(Value::Number(numbers.iter().cloned().fold(f64::MIN, f64::max))),
+        "DMIN" => Ok(Value::Number(numbers.iter().cloned().fold(f64::MAX, f64::min))),
+        "DCOUNT" => Ok(Value::Number(numbers.len() as f64)),
+        "DCOUNTA" => Ok(Value::Number(chosen.iter().filter(|v| !matches!(v, Value::Blank)).count() as f64)),
+        "DGET" => match numbers.len() {
+            1 => Ok(chosen[0].clone()),
+            0 => Err(ExcelError::Value),
+            _ => Err(ExcelError::Num),
+        },
+        _ => Err(ExcelError::Name),
+    }
+}
+
+/// Whether a database cell meets a criterion cell: a bare value is an equal
+/// test, and a leading `>`, `<`, `>=`, `<=`, `<>` or `=` a compare.
+fn criterion_matches(cell: &Value, criterion: &Value) -> bool {
+    let text = match criterion {
+        Value::Text(t) => t.clone(),
+        Value::Number(n) => return matches!(cell, Value::Number(c) if (c - n).abs() < 1e-9),
+        _ => return true,
+    };
+    let text = text.trim();
+    for op in ["<=", ">=", "<>", ">", "<", "="] {
+        if let Some(rest) = text.strip_prefix(op) {
+            let rest = rest.trim();
+            if let Ok(threshold) = rest.parse::<f64>() {
+                if let Value::Number(c) = cell {
+                    return match op {
+                        ">" => *c > threshold,
+                        "<" => *c < threshold,
+                        ">=" => *c >= threshold,
+                        "<=" => *c <= threshold,
+                        "<>" => (*c - threshold).abs() >= 1e-9,
+                        _ => (*c - threshold).abs() < 1e-9,
+                    };
+                }
+                return false;
+            }
+            let held = match cell {
+                Value::Text(t) => t.clone(),
+                other => other.to_number().map(|n| n.to_string()).unwrap_or_default(),
+            };
+            return match op {
+                "<>" => !held.eq_ignore_ascii_case(rest),
+                _ => held.eq_ignore_ascii_case(rest),
+            };
+        }
+    }
+    // A bare value: text matches text without case, a number matches a number.
+    match cell {
+        Value::Text(t) => t.eq_ignore_ascii_case(text),
+        other => other.to_number().ok().map(|n| n.to_string()).as_deref() == Some(text),
     }
 }
 
@@ -2136,6 +2560,44 @@ mod tests {
             height: values.len() / width,
             cells: values.to_vec(),
         })
+    }
+
+    /// The functions added 2026-09-05 (flows10), measured against Excel.
+    #[test]
+    fn the_later_worksheet_functions_agree_with_excel() {
+        assert_eq!(call("SUMSQ", &[v(3.0), v(4.0)]), Value::Number(25.0));
+        assert_eq!(call("GCD", &[v(12.0), v(18.0)]), Value::Number(6.0));
+        assert_eq!(call("LCM", &[v(4.0), v(6.0)]), Value::Number(12.0));
+        assert_eq!(call("EVEN", &[v(3.0)]), Value::Number(4.0));
+        assert_eq!(call("ODD", &[v(4.0)]), Value::Number(5.0));
+        assert_eq!(call("EVEN", &[v(-1.0)]), Value::Number(-2.0));
+        assert_eq!(call("ROMAN", &[v(49.0)]), Value::text("XLIX"));
+        assert_eq!(call("ROMAN", &[v(2024.0)]), Value::text("MMXXIV"));
+        assert_eq!(call("ARABIC", &[t("XLIX")]), Value::Number(49.0));
+        assert_eq!(call("CLEAN", &[t("a	b")]), Value::text("ab"));
+        assert_eq!(call("FIXED", &[v(1234.567), v(2.0)]), Value::text("1,234.57"));
+        assert_eq!(call("FIXED", &[v(1234.5), v(0.0), Arg::Value(Value::Logical(true))]), Value::text("1235"));
+        assert_eq!(call("DOLLAR", &[v(1234.5), v(0.0)]), Value::text("$1,235"));
+        assert_eq!(call("SUBSTITUTE", &[t("aaa"), t("a"), t("b"), v(2.0)]), Value::text("aba"));
+        // LOOKUP's vector form: the largest not over the needle.
+        let col = range(&[n(10.0), n(20.0), n(30.0), n(40.0)], 1);
+        assert_eq!(call("LOOKUP", &[v(25.0), col.clone()]), Value::Number(20.0));
+        // NETWORKDAYS counts the weekdays, both ends in: Mon 1 Jan to Sun 7.
+        let mon = Arg::Value(Value::Number(datetime::serial_from_date(2024, 1, 1).unwrap() as f64));
+        let sun = Arg::Value(Value::Number(datetime::serial_from_date(2024, 1, 7).unwrap() as f64));
+        assert_eq!(call("NETWORKDAYS", &[mon, sun]), Value::Number(5.0));
+        // DAVERAGE: the field's average over rows matching the criteria.
+        let db = range(
+            &[
+                Value::text("k"), Value::text("v"),
+                Value::text("x"), n(10.0),
+                Value::text("y"), n(20.0),
+                Value::text("x"), n(30.0),
+            ],
+            2,
+        );
+        let crit = range(&[Value::text("k"), Value::text("x")], 1);
+        assert_eq!(call("DAVERAGE", &[db, v(2.0), crit]), Value::Number(20.0));
     }
 
     fn n(value: f64) -> Value {

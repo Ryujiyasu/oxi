@@ -1805,19 +1805,15 @@ mod tests {
 
     #[test]
     fn a_function_handed_ranges_on_purpose_is_left_alone() {
-        // DGET takes three ranges and means something by all of them. It is
-        // not implemented, so it answers `#NAME?` — and a great many real
-        // sheets are written to swallow exactly that: `IF(ISERR(DGET(...)),,
-        // DGET(...))` gives nothing whether DGET works or not.
+        // DGET takes three ranges and means something by all of them. It now
+        // works, and with no row matching the criteria it answers `#VALUE!`,
+        // as Excel does -- and a great many real sheets swallow exactly that:
+        // `IF(ISERR(DGET(...)),, DGET(...))` gives nothing either way.
         //
-        // The first version of this asked "is it a known aggregate?" rather
-        // than "is it known to take one value?", so DGET fell through, was
-        // applied to each of six hundred cells in turn, and answered with six
-        // hundred `#NAME?`s. A block of them does not fit in a cell, so the
-        // swallow stopped working and the formula turned `#VALUE!` — seventy
-        // eight cells of a corpus that had been right for months.
-        //
-        // Anything not named as one-at-a-time keeps the behaviour it had.
+        // What this pins is that DGET is worked out ONCE, as one answer, not
+        // applied to each of six hundred cells in turn (a block of `#NAME?`s
+        // does not fit in a cell, and turned seventy-eight cells `#VALUE!`
+        // when it was). Anything not named one-at-a-time keeps that.
         let mut wb = book();
         wb.set_value("Sheet1", "A1", Value::text("name")).unwrap();
         wb.set_value("Sheet1", "A2", Value::text("ann")).unwrap();
@@ -1828,7 +1824,7 @@ mod tests {
             .unwrap();
         wb.recalculate();
         // One answer, not a block of them.
-        assert_eq!(wb.value("Sheet1", "E1"), Value::Error(ExcelError::Name));
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Error(ExcelError::Value));
         // And so the sheet's own way of swallowing it still works.
         assert_eq!(wb.value("Sheet1", "E2"), Value::Number(0.0));
     }
@@ -2188,5 +2184,51 @@ mod tests {
     fn refuses_a_reference_inside_an_array() {
         assert!(crate::parse("SUM({A1,2})").is_err());
         assert!(crate::parse("SUM({SUM(1),2})").is_err());
+    }
+
+    /// Which ARGUMENTS a function takes one at a time, measured in Excel with
+    /// A1:A3 holding x, y, x and B1:B3 holding 10, 20, 30.
+    ///
+    /// A lookup reads its haystack whole and its needle one at a time; a
+    /// conditional aggregate is the same shape reversed. Getting the grain
+    /// wrong either way answers one thing where Excel answers several.
+    #[test]
+    fn a_function_takes_some_of_its_arguments_one_at_a_time() {
+        let mut book = Workbook::new();
+        book.add_sheet("Sheet1");
+        let _ = book.set_value("Sheet1", "A1", Value::text("x"));
+        let _ = book.set_value("Sheet1", "A2", Value::text("y"));
+        let _ = book.set_value("Sheet1", "A3", Value::text("x"));
+        let _ = book.set_value("Sheet1", "B1", Value::Number(10.0));
+        let _ = book.set_value("Sheet1", "B2", Value::Number(20.0));
+        let _ = book.set_value("Sheet1", "B3", Value::Number(30.0));
+
+        let measured = [
+            // The criterion is taken one at a time, so a cell shows the first
+            // answer and an aggregate over it sees both.
+            ("COUNTIF(A1:A3,{\"x\",\"y\"})", 2.0),
+            ("SUM(COUNTIF(A1:A3,{\"x\",\"y\"}))", 3.0),
+            ("SUMPRODUCT(COUNTIF(A1:A3,{\"x\",\"y\"}))", 3.0),
+            ("SUM(COUNTIFS(A1:A3,{\"x\",\"y\"}))", 3.0),
+            ("SUM(SUMIF(A1:A3,{\"x\",\"y\"},B1:B3))", 60.0),
+            ("SUM(SUMIFS(B1:B3,A1:A3,{\"x\",\"y\"}))", 60.0),
+            // MATCH takes its needle one at a time — one answer per needle.
+            ("MATCH({\"y\",\"x\"},A1:A3,0)", 2.0),
+            ("SUM(MATCH({\"y\",\"x\"},A1:A3,0))", 3.0),
+            ("SUMPRODUCT(--ISNUMBER(MATCH({\"x\",\"z\"},A1:A3,0)))", 1.0),
+            // Every argument, for a function that only knows single values.
+            ("SUM(LEN({\"ab\",\"cde\"}))", 5.0),
+            // ★ And one that does NOT: a lookup answers for the first needle
+            // alone. `SUM(VLOOKUP({"x","y"},A1:B3,2,FALSE))` is 10 in Excel,
+            // not 30 — it looks like MATCH and behaves the other way.
+            ("SUM(VLOOKUP({\"x\",\"y\"},A1:B3,2,FALSE))", 10.0),
+        ];
+        for (formula, want) in measured {
+            assert_eq!(
+                book.evaluate("Sheet1", formula).unwrap(),
+                Value::Number(want),
+                "for {formula}"
+            );
+        }
     }
 }
