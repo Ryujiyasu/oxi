@@ -16762,6 +16762,10 @@ impl Host for WorkbookHost<'_> {
                     } else {
                         None
                     }
+                } else if any_whole_number(&value) == Some(0) {
+                    // A recorder writes `.ColorIndex = 0` for the automatic
+                    // colour, which Excel reads back as xlAutomatic (-4105).
+                    None
                 } else {
                     palette_choice(&value, COLOUR_AUTOMATIC, "Borders.ColorIndex")?
                 };
