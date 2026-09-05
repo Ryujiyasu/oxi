@@ -88,6 +88,17 @@ enum Extent<'a> {
 /// Which cell is being worked out, when that is known. `ROW()` with no
 /// argument is the only thing that needs it, and a formula evaluated on its
 /// own rather than in a cell has no answer for it.
+fn parse_range_string(address: &str) -> Option<RangeRef> {
+    match address.split_once(':') {
+        Some((a, b)) => {
+            let start = parse_a1(a.trim())?;
+            let end = parse_a1(b.trim())?;
+            Some(RangeRef::normalised(start, end))
+        }
+        None => Some(RangeRef::single(parse_a1(address.trim())?)),
+    }
+}
+
 type At = Option<(u32, u32)>;
 use crate::lexer::ParseError;
 use crate::parser::parse;
@@ -800,6 +811,15 @@ impl Workbook {
                 self.how_many_lines(name, args, at)
             }
 
+            // OFFSET and INDIRECT hand back a *reference*, computed here where
+            // the sheet grid is in reach, then materialised like any other.
+            Expr::Function { name, args } if name == "OFFSET" => {
+                self.offset_reference(args, sheet, depth, at)
+            }
+            Expr::Function { name, args } if name == "INDIRECT" => {
+                self.indirect_reference(args, sheet, depth, at)
+            }
+
             Expr::Function { name, args } => {
                 // SUBTOTAL ignores any cell in its range that is itself a
                 // SUBTOTAL, which is how a column of group subtotals can be
@@ -977,6 +997,149 @@ impl Workbook {
             (range.start.col, range.end.col)
         };
         Arg::Value(Value::Number((to.saturating_sub(from) + 1) as f64))
+    }
+
+    /// The sheet and range a reference-shaped expression names, for OFFSET.
+    fn reference_of(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Option<(String, RangeRef)> {
+        match expr {
+            Expr::Ref(reference) if reference.book.is_none() => Some((
+                reference.sheet.clone().unwrap_or_else(|| sheet.to_string()),
+                reference.range,
+            )),
+            Expr::Table { name, asked } => self.table_range(name, asked, at).ok(),
+            Expr::Name(name) => {
+                let bound = self.names.get(name)?.clone();
+                self.reference_of(&bound, sheet, depth, at)
+            }
+            // A reference can be built by another OFFSET or INDIRECT --
+            // `OFFSET(INDIRECT("A1"), 4, 0)` -- so those are followed to their
+            // own reference rather than to their materialised values.
+            Expr::Function { name, args } if name == "OFFSET" => {
+                self.offset_range(args, sheet, depth, at).ok()
+            }
+            Expr::Function { name, args } if name == "INDIRECT" => {
+                self.indirect_range(args, sheet, depth, at).ok()
+            }
+            _ => None,
+        }
+    }
+
+    /// `OFFSET(reference, rows, cols, [height], [width])`: the base range moved
+    /// by rows/cols and, if asked, resized. Off the sheet is #REF!.
+    fn offset_range(
+        &self,
+        args: &[Expr],
+        sheet: &str,
+        depth: u32,
+        at: At,
+    ) -> Result<(String, RangeRef), ExcelError> {
+        if !(3..=5).contains(&args.len()) {
+            return Err(ExcelError::Value);
+        }
+        let (base_sheet, base) = self
+            .reference_of(&args[0], sheet, depth, at)
+            .ok_or(ExcelError::Value)?;
+        let whole = |index: usize, default: i64| -> Result<i64, ExcelError> {
+            match args.get(index) {
+                None => Ok(default),
+                Some(expr) => {
+                    let value = self.eval_arg(expr, sheet, depth + 1, at).scalar();
+                    if let Some(why) = value.err() {
+                        return Err(why);
+                    }
+                    Ok(value.to_number()?.trunc() as i64)
+                }
+            }
+        };
+        let rows = whole(1, 0)?;
+        let cols = whole(2, 0)?;
+        let height = whole(3, base.height() as i64)?;
+        let width = whole(4, base.width() as i64)?;
+        if height <= 0 || width <= 0 {
+            return Err(ExcelError::Ref);
+        }
+        let start_col = base.start.col as i64 + cols;
+        let start_row = base.start.row as i64 + rows;
+        let end_col = start_col + width - 1;
+        let end_row = start_row + height - 1;
+        if start_col < 0
+            || start_row < 0
+            || end_col > MAX_COL as i64
+            || end_row > MAX_ROW as i64
+        {
+            return Err(ExcelError::Ref);
+        }
+        if !self.sheets.contains_key(&base_sheet) {
+            return Err(ExcelError::Ref);
+        }
+        Ok((
+            base_sheet,
+            RangeRef::normalised(
+                CellRef::new(start_col as u32, start_row as u32),
+                CellRef::new(end_col as u32, end_row as u32),
+            ),
+        ))
+    }
+
+    fn offset_reference(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Arg {
+        match self.offset_range(args, sheet, depth, at) {
+            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, false)),
+            Err(why) => Arg::Value(Value::Error(why)),
+        }
+    }
+
+    /// `INDIRECT(ref_text, [a1])`: read a reference out of text. Only A1-style
+    /// text is understood; R1C1 (a1 = FALSE) is #REF! here.
+    fn indirect_range(
+        &self,
+        args: &[Expr],
+        sheet: &str,
+        depth: u32,
+        at: At,
+    ) -> Result<(String, RangeRef), ExcelError> {
+        if args.is_empty() || args.len() > 2 {
+            return Err(ExcelError::Value);
+        }
+        let text = match self.eval_arg(&args[0], sheet, depth + 1, at).scalar() {
+            Value::Text(s) => s,
+            Value::Error(why) => return Err(why),
+            _ => return Err(ExcelError::Ref),
+        };
+        let a1 = match args.get(1) {
+            None => true,
+            Some(expr) => self
+                .eval_arg(expr, sheet, depth + 1, at)
+                .scalar()
+                .to_logical()
+                .unwrap_or(true),
+        };
+        if !a1 {
+            return Err(ExcelError::Ref);
+        }
+        let (target, address) = match text.rfind('!') {
+            Some(pos) => {
+                let raw = text[..pos].trim();
+                let name = if raw.len() >= 2 && raw.starts_with('\'') && raw.ends_with('\'') {
+                    raw[1..raw.len() - 1].replace("''", "'")
+                } else {
+                    raw.to_string()
+                };
+                (name, text[pos + 1..].trim().to_string())
+            }
+            None => (sheet.to_string(), text.trim().to_string()),
+        };
+        if !self.sheets.contains_key(&target) {
+            return Err(ExcelError::Ref);
+        }
+        let range = parse_range_string(&address).ok_or(ExcelError::Ref)?;
+        Ok((target, range))
+    }
+
+    fn indirect_reference(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Arg {
+        match self.indirect_range(args, sheet, depth, at) {
+            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, false)),
+            Err(why) => Arg::Value(Value::Error(why)),
+        }
     }
 
     /// Every value in `range`, as a block.
@@ -1884,6 +2047,30 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "D1"), Value::Number(2.0));
         assert_eq!(wb.value("Sheet1", "D2"), Value::Number(1.0));
         assert_eq!(wb.value("Sheet1", "D3"), Value::Number(0.0), "1 is not > 1");
+    }
+
+    #[test]
+    fn offset_and_indirect_resolve_references() {
+        // A1:A3 = 1,2,3 and B1:B3 = 10,20,30.
+        let mut wb = two_columns();
+        wb.set_formula("Sheet1", "D1", "=OFFSET(A1,2,0)").unwrap();
+        wb.set_formula("Sheet1", "D2", "=OFFSET(A1,0,1)").unwrap();
+        wb.set_formula("Sheet1", "D3", "=SUM(OFFSET(A1,0,0,3,1))").unwrap();
+        wb.set_formula("Sheet1", "D4", "=IFERROR(OFFSET(A1,-1,0),\"REF\")").unwrap();
+        wb.set_formula("Sheet1", "D5", "=INDIRECT(\"B2\")").unwrap();
+        wb.set_formula("Sheet1", "D6", "=SUM(INDIRECT(\"A1:A3\"))").unwrap();
+        // A reference built by a nested INDIRECT is followed, not materialised.
+        wb.set_formula("Sheet1", "D7", "=OFFSET(INDIRECT(\"A1\"),2,1)").unwrap();
+        wb.set_formula("Sheet1", "D8", "=IFERROR(INDIRECT(\"nope\"),\"REF\")").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(3.0), "A3");
+        assert_eq!(wb.value("Sheet1", "D2"), Value::Number(10.0), "B1");
+        assert_eq!(wb.value("Sheet1", "D3"), Value::Number(6.0), "A1:A3");
+        assert_eq!(wb.value("Sheet1", "D4"), Value::text("REF"), "off the sheet");
+        assert_eq!(wb.value("Sheet1", "D5"), Value::Number(20.0), "B2");
+        assert_eq!(wb.value("Sheet1", "D6"), Value::Number(6.0), "A1:A3 again");
+        assert_eq!(wb.value("Sheet1", "D7"), Value::Number(30.0), "B3 via nesting");
+        assert_eq!(wb.value("Sheet1", "D8"), Value::text("REF"), "unparseable");
     }
 
     #[test]
