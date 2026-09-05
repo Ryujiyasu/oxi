@@ -347,6 +347,8 @@ enum HostObject {
     Outline(usize),
     /// `Worksheet.Tab`: the colour of the sheet's tab.
     Tab(usize),
+    /// `Workbooks`: the one workbook the browser has open.
+    Workbooks,
     /// A shape, a chart, or one of the objects hung off them.
     Drawing(shapes::DrawingPart),
     /// An object whose worksheet has been deleted. Excel answers every
@@ -1642,6 +1644,33 @@ const SUBTOTAL_FUNCTIONS: [(i64, i64, &str, &str); 11] = [
     (-4165, 11, "分散", "全体の分散"),
 ];
 
+/// Where a format that reaches every cell of a sheet, a column or a row
+/// is kept: `Cells.Font.Name = "Meiryo"`, `Columns("C").NumberFormat =
+/// "0.00"`, `Rows(1).Font.Bold = True`. Excel keeps such a format on the
+/// column or the row itself and hands it to a cell the moment one is made
+/// there; here the cells that exist are dressed at once and the rest take
+/// the dress from these templates when they come to be, or when they are
+/// asked. A row's template stands over a column's, and both over the sheet's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum FormatScope {
+    Sheet(usize),
+    Column(usize, u32),
+    Row(usize, u32),
+}
+
+/// The shape of a range, as far as formats and clears care.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Band {
+    /// Every cell of the sheet.
+    Whole,
+    /// Whole rows.
+    Rows,
+    /// Whole columns.
+    Columns,
+    /// A block of cells.
+    Cells,
+}
+
 /// Which edge of a range `FillDown` and its three siblings copy from.
 #[derive(Debug, Clone, Copy)]
 enum FillEdge {
@@ -1773,6 +1802,9 @@ struct WorkbookHost<'a> {
     hatchings: std::collections::HashMap<CellAddress, Hatching>,
     /// The cells whose indent grows with their rotation (`AddIndent`).
     indented: std::collections::HashSet<CellAddress>,
+    /// The formats given to whole sheets, columns and rows, for the cells
+    /// not yet made there.
+    templates: std::collections::HashMap<FormatScope, CellStyle>,
     /// The number the next new table is named with. Measured: a workbook
     /// counter, not the lowest free number -- with テーブル1 renamed to T,
     /// the next table is still テーブル2.
@@ -1885,6 +1917,7 @@ impl<'a> WorkbookHost<'a> {
             underlines: std::collections::HashMap::new(),
             hatchings: std::collections::HashMap::new(),
             indented: std::collections::HashSet::new(),
+            templates: std::collections::HashMap::new(),
             table_counter,
             next_link: 1,
             linked_once: false,
@@ -1973,6 +2006,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::DebugConsole => "Debug",
                 HostObject::Outline(_) => "Outline",
                 HostObject::Tab(_) => "Tab",
+                HostObject::Workbooks => "Workbooks",
                 HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
             }
@@ -2751,7 +2785,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn forget_theme_paint(&mut self, range: CellRange, paint: Paint) {
-        for address in range.addresses() {
+        for address in self.touched(range) {
             self.theme_paint.remove(&(address, paint));
         }
     }
@@ -2767,8 +2801,8 @@ impl<'a> WorkbookHost<'a> {
         theme: Option<usize>,
         tint: Option<f64>,
     ) -> Result<(), String> {
-        Self::range_cell_count(range)?;
-        for address in range.addresses() {
+        Self::sized(range)?;
+        for address in self.touched(range) {
             let (held_theme, held_tint) = self
                 .theme_paint
                 .get(&(address, paint))
@@ -2885,7 +2919,7 @@ impl<'a> WorkbookHost<'a> {
     /// `Range.Style = "Percent"`: put the style's parts onto every cell and
     /// remember which style it was.
     fn apply_style(&mut self, range: CellRange, index: usize) -> Result<(), String> {
-        Self::range_cell_count(range)?;
+        Self::sized(range)?;
         let style = &BUILT_IN_STYLES[index];
         let font = style.font.as_ref().map(|font| {
             (
@@ -2940,7 +2974,7 @@ impl<'a> WorkbookHost<'a> {
             }
         })?;
         if style.protection {
-            for address in range.addresses() {
+            for address in self.touched(range) {
                 self.unlocked.remove(&address);
             }
         }
@@ -2950,7 +2984,7 @@ impl<'a> WorkbookHost<'a> {
             style.font.is_some(),
             style.fill.is_some(),
         );
-        for address in range.addresses() {
+        for address in self.touched(range) {
             if index == NORMAL_STYLE {
                 self.styled.remove(&address);
             } else {
@@ -5735,11 +5769,20 @@ impl<'a> WorkbookHost<'a> {
         range: CellRange,
         read: impl Fn(&Dress) -> T,
     ) -> Result<Option<T>, String> {
-        Self::range_cell_count(range)?;
+        // A whole sheet, column or row: the cells that exist, and the dress
+        // every other cell there would wear.
+        let addresses: Vec<CellAddress> = if Self::band_of(range) == Band::Cells {
+            Self::range_cell_count(range)?;
+            range.addresses().collect()
+        } else {
+            let mut listed = self.existing_cells_in(range);
+            listed.push(CellAddress { sheet: range.sheet, row: MAX_WORKSHEET_ROW, column: MAX_WORKSHEET_COLUMN });
+            listed
+        };
         let mut first: Option<T> = None;
-        for address in range.addresses() {
+        for address in addresses {
             let values: Vec<T> = match self.cell_here(address.sheet, address.row, address.column) {
-                None => vec![read(&Dress::of_style(&CellStyle::default()))],
+                None => vec![read(&Dress::of_style(&self.template_style(address)))],
                 Some(cell) if cell.runs.is_empty() => vec![read(&Dress::of_style(&cell.style))],
                 Some(cell) => cell
                     .runs
@@ -5765,13 +5808,12 @@ impl<'a> WorkbookHost<'a> {
         read: impl Fn(&CellStyle, CellMarks) -> T,
     ) -> Result<Option<T>, String> {
         Self::range_cell_count(range)?;
-        let default_style = CellStyle::default();
         let mut first: Option<T> = None;
         for address in range.addresses() {
             let style = self
                 .cell_here(address.sheet, address.row, address.column)
                 .map(|cell| cell.style)
-                .unwrap_or_else(|| default_style.clone());
+                .unwrap_or_else(|| self.template_style(address));
             let value = read(&style, self.marks_of(address));
             if first.as_ref().is_some_and(|held| *held != value) {
                 return Ok(None);
@@ -5785,7 +5827,7 @@ impl<'a> WorkbookHost<'a> {
     /// unevenly, keeping what else they wear -- measured, `Font.Bold = True`
     /// on such a cell leaves its red word red.
     fn redress_runs(&mut self, range: CellRange, update: impl Fn(&mut Dress)) {
-        for address in range.addresses() {
+        for address in self.touched(range) {
             let Some(sheet) = self.workbook.sheets.get_mut(address.sheet) else {
                 continue;
             };
@@ -6337,6 +6379,35 @@ impl<'a> WorkbookHost<'a> {
         )
     }
 
+    fn is_workbooks(&self, object: &ObjectRef) -> bool {
+        matches!(self.objects.get(object.handle as usize), Some(HostObject::Workbooks))
+    }
+
+    /// `Workbooks`, `Workbooks(1)`, `Workbooks("Book1")`: there is one, and
+    /// the browser cannot open or add another. Measured: Count 1, Item(1)
+    /// is the Workbook, `Workbooks.Add` makes a second in Excel -- which is
+    /// the one thing here that must refuse.
+    fn workbooks_member(&mut self, args: &[Value]) -> Result<Value, String> {
+        match args {
+            [] | [Value::Missing] => Ok(self.object(HostObject::Workbooks)),
+            [index] => self.workbook_item(index),
+            _ => Err("Workbooks takes one index".to_string()),
+        }
+    }
+
+    fn workbook_item(&mut self, index: &Value) -> Result<Value, String> {
+        let own = self.file_name.clone().unwrap_or_else(|| "Book1".to_string());
+        let found = match index {
+            Value::String(name) => name.eq_ignore_ascii_case(&own),
+            value => any_whole_number(value) == Some(1),
+        };
+        if found {
+            Ok(self.object(HostObject::Workbook))
+        } else {
+            Err(host_error(9, "there is no such workbook open"))
+        }
+    }
+
     fn outline_sheet(&self, object: &ObjectRef) -> Option<usize> {
         match self.objects.get(object.handle as usize) {
             Some(HostObject::Outline(sheet)) => Some(*sheet),
@@ -6655,7 +6726,7 @@ impl<'a> WorkbookHost<'a> {
     /// `Color = 65280` over gray50 leaves the pattern gray50 -- and taking
     /// the colour away takes any pattern with it.
     fn fill_coloured(&mut self, range: CellRange, coloured: bool) {
-        for at in range.addresses() {
+        for at in self.touched(range) {
             match self.hatchings.get(&at) {
                 Some(Hatching { kind: 1, .. }) if coloured => {
                     self.hatchings.remove(&at);
@@ -6671,8 +6742,8 @@ impl<'a> WorkbookHost<'a> {
     /// Give the pattern over every cell a colour. A cell with no pattern
     /// gets a solid one to carry it.
     fn paint_pattern(&mut self, range: CellRange, colour: Option<i64>) -> Result<(), String> {
-        Self::range_cell_count(range)?;
-        for at in range.addresses() {
+        Self::sized(range)?;
+        for at in self.touched(range) {
             let kind = self.hatchings.get(&at).map(|held| held.kind).unwrap_or(1);
             self.hatchings.insert(at, Hatching { kind, colour });
         }
@@ -7378,6 +7449,70 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    fn band_of(range: CellRange) -> Band {
+        let rows = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
+        let columns = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
+        match (rows, columns) {
+            (true, true) => Band::Whole,
+            (true, false) => Band::Columns,
+            (false, true) => Band::Rows,
+            (false, false) => Band::Cells,
+        }
+    }
+
+    /// The dress a cell wears before anything is written on it: its row's,
+    /// its column's, or its sheet's format, where one has been given.
+    fn template_style(&self, at: CellAddress) -> CellStyle {
+        if let Some(style) = self.templates.get(&FormatScope::Row(at.sheet, at.row)) {
+            return style.clone();
+        }
+        if let Some(style) = self.templates.get(&FormatScope::Column(at.sheet, at.column)) {
+            return style.clone();
+        }
+        self.templates
+            .get(&FormatScope::Sheet(at.sheet))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The cells of a sheet that exist inside a range, as addresses.
+    fn existing_cells_in(&self, range: CellRange) -> Vec<CellAddress> {
+        let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
+            return Vec::new();
+        };
+        sheet
+            .rows
+            .iter()
+            .filter(|row| (range.start_row..=range.end_row).contains(&row.index))
+            .flat_map(|row| {
+                row.cells
+                    .iter()
+                    .filter(|cell| (range.start_column..=range.end_column).contains(&cell.col))
+                    .map(move |cell| CellAddress { sheet: range.sheet, row: row.index, column: cell.col })
+            })
+            .collect()
+    }
+
+    /// The cap on a block's size, which a band of whole rows or columns is
+    /// not held to: a change to one reaches only the cells that exist.
+    fn sized(range: CellRange) -> Result<(), String> {
+        if Self::band_of(range) == Band::Cells {
+            Self::range_cell_count(range)?;
+        }
+        Ok(())
+    }
+
+    /// The cells a change to a range reaches, one address each: every cell
+    /// of a block, but for whole rows, columns or the sheet only the cells
+    /// that exist -- the rest are the template's business.
+    fn touched(&self, range: CellRange) -> Vec<CellAddress> {
+        if Self::band_of(range) == Band::Cells {
+            range.addresses().collect()
+        } else {
+            self.existing_cells_in(range)
+        }
+    }
+
     /// Whether the object's worksheet has been deleted out from under it.
     fn gone(&self, object: &ObjectRef) -> bool {
         matches!(self.objects.get(object.handle as usize), Some(HostObject::Gone))
@@ -7504,6 +7639,17 @@ impl<'a> WorkbookHost<'a> {
             .into_iter()
             .filter_map(address)
             .collect();
+        self.templates = std::mem::take(&mut self.templates)
+            .into_iter()
+            .filter_map(|(scope, style)| {
+                let scope = match scope {
+                    FormatScope::Sheet(sheet) => FormatScope::Sheet(moved(sheet)?),
+                    FormatScope::Column(sheet, column) => FormatScope::Column(moved(sheet)?, column),
+                    FormatScope::Row(sheet, row) => FormatScope::Row(moved(sheet)?, row),
+                };
+                Some((scope, style))
+            })
+            .collect();
         if let Some(filter) = self.auto_filter.as_mut() {
             match range(filter.range) {
                 Some(held) => filter.range = held,
@@ -7589,6 +7735,7 @@ impl<'a> WorkbookHost<'a> {
                 | HostObject::DefinedName(_)
                 | HostObject::Workbook
                 | HostObject::Application
+                | HostObject::Workbooks
                 | HostObject::WorksheetFunction
                 | HostObject::DebugConsole
                 | HostObject::Window
@@ -7972,6 +8119,20 @@ impl<'a> WorkbookHost<'a> {
         if let Some(count) = self.shape_counters.get(&from).copied() {
             self.shape_counters.insert(to, count);
         }
+        let templates: Vec<(FormatScope, CellStyle)> = self
+            .templates
+            .iter()
+            .filter_map(|(scope, style)| {
+                let scope = match *scope {
+                    FormatScope::Sheet(sheet) if sheet == from => FormatScope::Sheet(to),
+                    FormatScope::Column(sheet, column) if sheet == from => FormatScope::Column(to, column),
+                    FormatScope::Row(sheet, row) if sheet == from => FormatScope::Row(to, row),
+                    _ => return None,
+                };
+                Some((scope, style.clone()))
+            })
+            .collect();
+        self.templates.extend(templates);
         let marked: Vec<CellAddress> = self
             .rotations
             .keys()
@@ -8049,6 +8210,14 @@ impl<'a> WorkbookHost<'a> {
     fn worksheets_object_or_item(&mut self, args: &[Value]) -> Result<Value, String> {
         match args {
             [] => Ok(self.object(HostObject::Worksheets)),
+            // `Sheets(Array("Sheet1", "Sheet2"))` groups the sheets named;
+            // what a macro then does with the group -- `.Select` -- lands on
+            // the first, which is what this build keeps of it. Measured:
+            // after it ActiveSheet is Sheet1.
+            [Value::Array(listed)] => match listed.values.first() {
+                Some(first) => self.worksheet_object(first),
+                None => Err(host_error(1004, "Sheets takes at least one name")),
+            },
             [value] => self.worksheet_object(value),
             _ => Err("Worksheets expects zero or one argument".to_string()),
         }
@@ -8135,6 +8304,32 @@ impl<'a> WorkbookHost<'a> {
             },
             [Value::String(start), Value::String(end)] => {
                 (parse_a1_reference(start)?, parse_a1_reference(end)?)
+            }
+            // `Range(Cells(1, 1), Cells(3, 3))`: the block the two span.
+            [Value::Object(_), _] | [_, Value::Object(_)] => {
+                let corner = |value: &Value| -> Result<CellRange, String> {
+                    match value {
+                        Value::Object(object) => self
+                            .range(object)
+                            .ok_or_else(|| host_error(1004, "Range takes two cells")),
+                        Value::String(text) => {
+                            let (column, row) = parse_a1_reference(text)?;
+                            Ok(CellRange::single(CellAddress { sheet, row, column }))
+                        }
+                        _ => Err(host_error(1004, "Range takes two cells")),
+                    }
+                };
+                let (one, other) = (corner(&args[0])?, corner(&args[1])?);
+                if one.sheet != other.sheet {
+                    return Err(host_error(1004, "Range takes two cells of one sheet"));
+                }
+                return Ok(self.object(HostObject::Range(CellRange {
+                    sheet: one.sheet,
+                    start_row: one.start_row.min(other.start_row),
+                    start_column: one.start_column.min(other.start_column),
+                    end_row: one.end_row.max(other.end_row),
+                    end_column: one.end_column.max(other.end_column),
+                })));
             }
             _ => return Err("Range expects one range reference or two cell references".to_string()),
         };
@@ -8514,7 +8709,9 @@ impl<'a> WorkbookHost<'a> {
         // across a range — by rows, 16384 to a row. Asked of Excel,
         // `Cells(16384)` is XFD1 and `Cells(16385)` is A2, and the last one it
         // will give is `Cells(17179869184)` = XFD1048576.
-        if let [_] = args {
+        // `Cells` alone, and `Cells(n)`, are the whole sheet and one cell
+        // of it counted across the whole sheet.
+        if matches!(args, [] | [Value::Missing] | [_]) {
             return self.range_cells_object(
                 CellRange {
                     sheet,
@@ -9947,7 +10144,7 @@ impl<'a> WorkbookHost<'a> {
         } else {
             range
         };
-        Self::range_cell_count(range)?;
+        Self::sized(range)?;
         let what = args
             .first()
             .filter(|value| !matches!(value, Value::Missing))
@@ -10084,7 +10281,7 @@ impl<'a> WorkbookHost<'a> {
         if !(2..=8).contains(&args.len()) {
             return Err("Range.Replace expects between two and eight arguments".to_string());
         }
-        Self::range_cell_count(range)?;
+        Self::sized(range)?;
         let what = args
             .first()
             .filter(|value| !matches!(value, Value::Missing))
@@ -10127,7 +10324,7 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Value::Boolean(false));
         }
         let mut changed = false;
-        for address in range.addresses() {
+        for address in self.touched(range) {
             let formula = self
                 .workbook
                 .sheets
@@ -10333,7 +10530,12 @@ impl<'a> WorkbookHost<'a> {
         if self.cell_protection(range.sheet).is_none() {
             return Ok(());
         }
-        if range.addresses().any(|address| self.write_is_protected(address)) {
+        // A band has more cells than could ever have been unlocked one by
+        // one, so a locked one is in it.
+        let cells = Self::range_cell_count_large(range).unwrap_or(u64::MAX);
+        let all_unlocked = cells <= self.unlocked.len() as u64
+            && range.addresses().all(|address| !self.write_is_protected(address));
+        if !all_unlocked {
             return Err(format!(
                 "{doing} touches a locked cell on a protected sheet; unprotect it first"
             ));
@@ -10411,6 +10613,7 @@ impl<'a> WorkbookHost<'a> {
         }
         self.wrote = true;
         self.saved = false;
+        let starting = self.template_style(address);
         let sheet = self
             .workbook
             .sheets
@@ -10451,7 +10654,7 @@ impl<'a> WorkbookHost<'a> {
                     array_block: None,
                     col: address.column,
                     value,
-                    style: CellStyle::default(),
+                    style: starting,
                     formula: None,
                     runs: Vec::new(),
                 });
@@ -10482,6 +10685,7 @@ impl<'a> WorkbookHost<'a> {
     fn set_cell_formula(&mut self, address: CellAddress, formula: String) -> Result<(), String> {
         self.wrote = true;
         self.saved = false;
+        let starting = self.template_style(address);
         let sheet = self
             .workbook
             .sheets
@@ -10523,7 +10727,7 @@ impl<'a> WorkbookHost<'a> {
                     array_block: None,
                     col: address.column,
                     value: CellValue::Empty,
-                    style: CellStyle::default(),
+                    style: starting,
                     formula,
                     runs: Vec::new(),
                 });
@@ -10850,9 +11054,54 @@ impl<'a> WorkbookHost<'a> {
         range: CellRange,
         mut update: impl FnMut(CellAddress, &mut CellStyle),
     ) -> Result<(), String> {
-        Self::range_cell_count(range)?;
         self.guard_formats(range.sheet, "formatting cells")?;
+        let band = Self::band_of(range);
+        if band != Band::Cells {
+            // Every cell there is, and the template for the rest.
+            for address in self.existing_cells_in(range) {
+                if let Some(cell) = self.cell_mut(address) {
+                    update(address, &mut cell.style);
+                }
+            }
+            let sheet = range.sheet;
+            match band {
+                Band::Whole => {
+                    let mut scopes: Vec<FormatScope> = self
+                        .templates
+                        .keys()
+                        .copied()
+                        .filter(|scope| matches!(scope, FormatScope::Column(held, _) | FormatScope::Row(held, _) if *held == sheet))
+                        .collect();
+                    scopes.push(FormatScope::Sheet(sheet));
+                    for scope in scopes {
+                        let mut style = self.templates.get(&scope).cloned().unwrap_or_default();
+                        update(CellAddress { sheet, row: 1, column: 0 }, &mut style);
+                        self.templates.insert(scope, style);
+                    }
+                }
+                Band::Columns => {
+                    for column in range.start_column..=range.end_column {
+                        let at = CellAddress { sheet, row: 1, column };
+                        let mut style = self.template_style(at);
+                        update(at, &mut style);
+                        self.templates.insert(FormatScope::Column(sheet, column), style);
+                    }
+                }
+                Band::Rows => {
+                    for row in range.start_row..=range.end_row {
+                        let at = CellAddress { sheet, row, column: 0 };
+                        let mut style = self.template_style(at);
+                        update(at, &mut style);
+                        self.templates.insert(FormatScope::Row(sheet, row), style);
+                    }
+                }
+                Band::Cells => {}
+            }
+            return Ok(());
+        }
+        Self::range_cell_count(range)?;
         for address in range.addresses() {
+            let starting = self.template_style(address);
             let sheet = self
                 .workbook
                 .sheets
@@ -10882,7 +11131,7 @@ impl<'a> WorkbookHost<'a> {
                     array_block: None,
                     col: address.column,
                     value: CellValue::Empty,
-                    style: CellStyle::default(),
+                    style: starting,
                     formula: None,
                     runs: Vec::new(),
                 });
@@ -10903,23 +11152,39 @@ impl<'a> WorkbookHost<'a> {
         range: CellRange,
         read: impl Fn(&CellStyle) -> T,
     ) -> Result<Option<T>, String> {
-        Self::range_cell_count(range)?;
-        let default_style = CellStyle::default();
         let mut first = None;
-        for address in range.addresses() {
-            let style = self
-                .workbook
-                .sheets
-                .get(address.sheet)
-                .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
-                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
-                .map(|cell| &cell.style)
-                .unwrap_or(&default_style);
-            let value = read(style);
-            if first.as_ref().is_some_and(|first| first != &value) {
-                return Ok(None);
+        let mut take = |value: T| -> bool {
+            if first.as_ref().is_some_and(|held| held != &value) {
+                return false;
             }
             first = Some(value);
+            true
+        };
+        // Whole rows, columns or the sheet: the cells there are, and the
+        // template every other cell there would wear.
+        if Self::band_of(range) != Band::Cells {
+            for address in self.existing_cells_in(range) {
+                if let Some(cell) = self.cell_here(address.sheet, address.row, address.column) {
+                    if !take(read(&cell.style)) {
+                        return Ok(None);
+                    }
+                }
+            }
+            let blank = self.template_style(range.first());
+            if !take(read(&blank)) {
+                return Ok(None);
+            }
+            return Ok(first);
+        }
+        Self::range_cell_count(range)?;
+        for address in range.addresses() {
+            let style = match self.cell_here(address.sheet, address.row, address.column) {
+                Some(cell) => cell.style,
+                None => self.template_style(address),
+            };
+            if !take(read(&style)) {
+                return Ok(None);
+            }
         }
         Ok(first)
     }
@@ -11178,7 +11443,22 @@ impl<'a> WorkbookHost<'a> {
         clear_contents: bool,
         clear_formats: bool,
     ) -> Result<(), String> {
-        Self::range_cell_count(range)?;
+        let band = Self::band_of(range);
+        if band == Band::Cells {
+            Self::range_cell_count(range)?;
+        } else if clear_formats {
+            // The formats given to the whole band go with it.
+            let sheet = range.sheet;
+            self.templates.retain(|scope, _| match *scope {
+                FormatScope::Sheet(held) => held != sheet || band != Band::Whole,
+                FormatScope::Column(held, column) => {
+                    held != sheet || !(band == Band::Whole || (band == Band::Columns && (range.start_column..=range.end_column).contains(&column)))
+                }
+                FormatScope::Row(held, row) => {
+                    held != sheet || !(band == Band::Whole || (band == Band::Rows && (range.start_row..=range.end_row).contains(&row)))
+                }
+            });
+        }
         // Measured: clearing one cell of an array is 1004, clearing the whole
         // of it goes through, and clearing one cell's FORMATS goes through.
         if clear_contents {
@@ -11935,7 +12215,16 @@ impl<'a> WorkbookHost<'a> {
 
     fn auto_fit_columns(&mut self, range: CellRange) -> Result<Value, String> {
         const FLOOR: f64 = 5.88;
-        for column in range.start_column..=range.end_column {
+        // `Cells.EntireColumn.AutoFit` fits every column there is; only the
+        // ones with something in them can change.
+        let last_used = self.workbook.sheets[range.sheet]
+            .rows
+            .iter()
+            .flat_map(|row| row.cells.iter().map(|cell| cell.col))
+            .max()
+            .unwrap_or(0);
+        let end_column = range.end_column.min(last_used.max(range.start_column));
+        for column in range.start_column..=end_column {
             let mut widest = 0usize;
             let rows: Vec<u32> = self.workbook.sheets[range.sheet]
                 .rows
@@ -13631,6 +13920,20 @@ impl Host for WorkbookHost<'_> {
             if let Some(part) = self.drawing_part(receiver) {
                 return self.drawing_call(part, name, args);
             }
+            if self.is_workbooks(receiver) {
+                return match name.to_ascii_lowercase().as_str() {
+                    "item" => match args {
+                        [index] => self.workbook_item(index).map(Some),
+                        _ => Err("Workbooks.Item takes one index".to_string()),
+                    },
+                    "count" => Ok(Some(Value::Integer(1))),
+                    "add" | "open" | "opentext" => Err(host_error(
+                        1004,
+                        "the browser has one workbook open and cannot open another",
+                    )),
+                    _ => Ok(None),
+                };
+            }
             // EVERY Excel object can be asked for the Application, and it
             // always answers the same one. Measured: `Range("A1").Application`,
             // `ActiveSheet.Application` and `ActiveWorkbook.Application` are
@@ -14369,9 +14672,11 @@ impl Host for WorkbookHost<'_> {
                     self.clear_comments(range);
                     let ids = self.links_in(HyperlinkScope::Range(range));
                     self.delete_links(&ids, true)?;
-                    for address in range.addresses() {
-                        self.validations.remove(&address);
-                    }
+                    self.validations.retain(|held, _| {
+                        held.sheet != range.sheet
+                            || !(range.start_row..=range.end_row).contains(&held.row)
+                            || !(range.start_column..=range.end_column).contains(&held.column)
+                    });
                     return Ok(Some(Value::Boolean(true)));
                 }
                 if name.eq_ignore_ascii_case("autofilter") {
@@ -14474,6 +14779,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("thisworkbook") || name.eq_ignore_ascii_case("activeworkbook")
         {
             return Ok(Some(self.object(HostObject::Workbook)));
+        }
+        if name.eq_ignore_ascii_case("workbooks") {
+            return self.workbooks_member(args).map(Some);
         }
         if name.eq_ignore_ascii_case("application") {
             return Ok(Some(self.object(HostObject::Application)));
@@ -14727,6 +15035,13 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(sheet) = self.tab_sheet(receiver) {
             return Ok(self.tab_member(sheet, name));
+        }
+        if self.is_workbooks(receiver) {
+            return Ok(match name.to_ascii_lowercase().as_str() {
+                "count" => Some(Value::Integer(1)),
+                "parent" | "application" => Some(self.object(HostObject::Application)),
+                _ => None,
+            });
         }
         if let Some(part) = self.drawing_part(receiver) {
             return self.drawing_get(part, name);
@@ -15230,6 +15545,9 @@ impl Host for WorkbookHost<'_> {
                 || name.eq_ignore_ascii_case("thisworkbook")
             {
                 return Ok(Some(self.object(HostObject::Workbook)));
+            }
+            if name.eq_ignore_ascii_case("workbooks") {
+                return Ok(Some(self.object(HostObject::Workbooks)));
             }
             if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
                 return Ok(Some(self.object(HostObject::Worksheets)));
@@ -16178,7 +16496,7 @@ impl Host for WorkbookHost<'_> {
                 };
                 self.set_range_style(range, |_, style| style.underline = underline)?;
                 self.redress_runs(range, |dress| dress.underline = underline);
-                for at in range.addresses() {
+                for at in self.touched(range) {
                     match styled {
                         Some(rule) => {
                             self.underlines.insert(at, rule);
@@ -16277,13 +16595,13 @@ impl Host for WorkbookHost<'_> {
                     _ => return Err("Interior.Pattern takes a pattern by number".to_string()),
                 };
                 let kind = pattern_kind(asked)?;
-                Self::range_cell_count(range)?;
+                Self::sized(range)?;
                 match kind {
                     // xlNone takes the fill away with the pattern: measured,
                     // the cell's Color is white and its ColorIndex xlNone after.
                     0 => {
                         self.set_range_style(range, |_, style| style.bg_color = None)?;
-                        for at in range.addresses() {
+                        for at in self.touched(range) {
                             self.hatchings.remove(&at);
                         }
                     }
@@ -16292,7 +16610,7 @@ impl Host for WorkbookHost<'_> {
                     // white, ColorIndex xlAutomatic -- which cannot be told
                     // from the paper.
                     1 => {
-                        for at in range.addresses() {
+                        for at in self.touched(range) {
                             let filled = self
                                 .cell_here(at.sheet, at.row, at.column)
                                 .is_some_and(|cell| cell.style.bg_color.is_some());
@@ -16307,7 +16625,7 @@ impl Host for WorkbookHost<'_> {
                     // A hatching keeps whatever fill and pattern colour the
                     // cell had: measured, red then gray50 reads Color 255.
                     kind => {
-                        for at in range.addresses() {
+                        for at in self.touched(range) {
                             let colour = self.hatchings.get(&at).and_then(|held| held.colour);
                             self.hatchings.insert(at, Hatching { kind, colour });
                         }
@@ -16413,7 +16731,7 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             };
             self.guard_formats(range.sheet, "changing Locked")?;
-            for address in range.addresses() {
+            for address in self.touched(range) {
                 if locked {
                     self.unlocked.remove(&address);
                 } else {
@@ -16457,7 +16775,7 @@ impl Host for WorkbookHost<'_> {
                 _ => return Err(host_error(1004, "Range.Orientation takes -90 to 90")),
             };
             self.set_range_style(range, |_, style| style.stacked_text = turn.is_none())?;
-            for at in range.addresses() {
+            for at in self.touched(range) {
                 match turn {
                     Some(0) | None => {
                         self.rotations.remove(&at);
@@ -16473,8 +16791,8 @@ impl Host for WorkbookHost<'_> {
             let Some(indented) = style_face_boolean(&value, "Range.AddIndent")? else {
                 return Ok(true);
             };
-            Self::range_cell_count(range)?;
-            for at in range.addresses() {
+            Self::sized(range)?;
+            for at in self.touched(range) {
                 if indented {
                     self.indented.insert(at);
                 } else {
@@ -17771,12 +18089,11 @@ fn shown_as(format: Option<&str>) -> ShownAs {
 
 fn shown_text(value: &Value, format: Option<&str>) -> String {
     match value {
-        Value::Integer(number) => oxicells_core::format_number(
-            *number as f64,
-            format.unwrap_or("General"),
-        ),
-        Value::Double(number) if number.is_finite() => {
-            oxicells_core::format_number(*number, format.unwrap_or("General"))
+        // Every numeric kind takes the format -- a Date among them:
+        // measured, `WorksheetFunction.Text(DateSerial(2024, 1, 5),
+        // "yyyy/mm/dd")` is 2024/01/05.
+        value if any_number(value).is_some() => {
+            oxicells_core::format_number(any_number(value).unwrap_or_default(), format.unwrap_or("General"))
         }
         Value::Empty | Value::Missing => String::new(),
         value => find_value_text(value),
@@ -18115,6 +18432,9 @@ fn find_text_matches(
 ) -> bool {
     let candidate = compared_chars(candidate, match_case, match_byte);
     let needle = compared_chars(needle, match_case, match_byte);
+    if needle.iter().any(|c| matches!(c, '*' | '?' | '~')) {
+        return wildcard_span(&candidate, &needle, whole).is_some();
+    }
     if whole {
         return candidate == needle;
     }
@@ -18122,6 +18442,55 @@ fn find_text_matches(
         return true;
     }
     candidate.windows(needle.len()).any(|held| held == needle)
+}
+
+/// Where a wildcard needle -- `*` a run, `?` one character, `~` escaping
+/// the next -- first matches in the candidate, as (start, length); the run
+/// is greedy. `whole` asks the match to cover the candidate entirely.
+/// Measured: `Replace "ab*", "z"` turns `abc` and `abd` into `z`.
+fn wildcard_span(candidate: &[char], needle: &[char], whole: bool) -> Option<(usize, usize)> {
+    let mut tokens: Vec<WildcardToken> = Vec::new();
+    let mut at = 0;
+    while at < needle.len() {
+        match needle[at] {
+            '~' => {
+                if let Some(escaped) = needle.get(at + 1) {
+                    tokens.push(WildcardToken::Literal(*escaped));
+                }
+                at += 2;
+                continue;
+            }
+            '*' => tokens.push(WildcardToken::AnyRun),
+            '?' => tokens.push(WildcardToken::AnyCharacter),
+            c => tokens.push(WildcardToken::Literal(c)),
+        }
+        at += 1;
+    }
+    fn reach(candidate: &[char], from: usize, tokens: &[WildcardToken], whole: bool) -> Option<usize> {
+        match tokens.first() {
+            None => {
+                if whole && from != candidate.len() {
+                    None
+                } else {
+                    Some(from)
+                }
+            }
+            Some(WildcardToken::AnyRun) => {
+                // Greedy: the longest run that lets the rest match.
+                (from..=candidate.len()).rev().find_map(|stop| reach(candidate, stop, &tokens[1..], whole))
+            }
+            Some(WildcardToken::AnyCharacter) => {
+                (from < candidate.len()).then(|| reach(candidate, from + 1, &tokens[1..], whole)).flatten()
+            }
+            Some(WildcardToken::Literal(c)) => {
+                (candidate.get(from) == Some(c)).then(|| reach(candidate, from + 1, &tokens[1..], whole)).flatten()
+            }
+        }
+    }
+    if whole {
+        return reach(candidate, 0, &tokens, true).map(|end| (0, end));
+    }
+    (0..=candidate.len()).find_map(|start| reach(candidate, start, &tokens, false).map(|end| (start, end - start)))
 }
 
 fn replace_matching_text(
@@ -18147,6 +18516,27 @@ fn replace_matching_text(
     let held: Vec<char> = candidate.chars().collect();
     let looking = compared_chars(candidate, match_case, match_byte);
     let needle = compared_chars(needle, match_case, match_byte);
+    if needle.iter().any(|c| matches!(c, '*' | '?' | '~')) {
+        // Each match, left to right, gives way to the replacement.
+        let mut result = String::with_capacity(candidate.len());
+        let mut at = 0;
+        let mut replaced_any = false;
+        while at <= looking.len() {
+            match wildcard_span(&looking[at..], &needle, false) {
+                Some((start, length)) if length > 0 || start < looking.len() - at => {
+                    result.extend(held[at..at + start].iter());
+                    result.push_str(replacement);
+                    replaced_any = true;
+                    at += start + length.max(1);
+                }
+                _ => {
+                    result.extend(held[at..].iter());
+                    break;
+                }
+            }
+        }
+        return replaced_any.then_some(result);
+    }
     let mut result = String::with_capacity(candidate.len());
     let mut at = 0;
     let mut replaced_any = false;
@@ -25497,6 +25887,76 @@ mod tests {
         );
         // What was drawn reached the sheet.
         assert!(!workbook.sheets[0].drawings.is_empty());
+    }
+
+    /// The eighth discovery batch (flows8, 2026-09-05; the case agrees in
+    /// the harness but for the width AutoFit guesses, `Text` of a cell too
+    /// narrow for its date, and the two things a browser has not got --
+    /// a second workbook and command bars). Formats given to a whole sheet,
+    /// column or row reach the cells that exist and wait for the rest.
+    #[test]
+    fn vba_dresses_whole_sheets_columns_and_rows_and_answers_the_eighth_batch() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim v As Variant, c As Object\n\
+               Application.DisplayAlerts = False\n\
+               Range(\"A1\").Value = 1: Range(\"A1\").Font.Bold = True: ActiveSheet.Cells.Clear\n\
+               Debug.Print IsEmpty(Range(\"A1\").Value); Range(\"A1\").Font.Bold; ActiveSheet.UsedRange.Address(0, 0)\n\
+               Cells.Font.Name = \"Meiryo\": Cells.Font.Size = 10\n\
+               Debug.Print Range(\"Z99\").Font.Name; Range(\"Z99\").Font.Size; Cells.Font.Size\n\
+               Columns(\"C\").NumberFormat = \"0.00\": Range(\"C5\").Value = 1\n\
+               Debug.Print Range(\"C5\").Text; Range(\"C9999\").NumberFormat; Columns(\"C\").NumberFormat; Columns(\"D\").NumberFormat\n\
+               Rows(1).Font.Bold = True: Range(\"E1\").Value = \"h\"\n\
+               Debug.Print Range(\"E1\").Font.Bold; Range(\"XFD1\").Font.Bold; Range(\"E2\").Font.Bold\n\
+               Columns(\"C\").ClearFormats\n\
+               Debug.Print Range(\"C9999\").NumberFormat; Range(\"C5\").NumberFormat\n\
+               Range(\"F1\").Value = \"f\": Range(\"G1\").Value = \"g\": Columns(\"F:F\").Delete\n\
+               Range(\"A3\").Value = \"r3\": Rows(\"1:2\").Insert\n\
+               Debug.Print Range(\"F3\").Value; Range(\"A5\").Value; IsEmpty(Range(\"A3\").Value)\n\
+               Range(\"I1\").Value = DateSerial(2024, 3, 5)\n\
+               Debug.Print Range(\"I1\").NumberFormat; Range(\"I1\").Text; TypeName(Range(\"I1\").Value)\n\
+               Debug.Print Range(Cells(1, 1), Cells(3, 3)).Address(0, 0); ActiveSheet.Range(Range(\"A1\"), Range(\"B2\")).Address(0, 0)\n\
+               Range(\"Q1\").Value = \"abc\": Range(\"Q2\").Value = \"abd\": Range(\"Q3\").Value = \"xaby\": Range(\"Q1:Q3\").Replace \"ab*\", \"z\"\n\
+               Debug.Print Range(\"Q1\").Value; Range(\"Q2\").Value; Range(\"Q3\").Value\n\
+               Worksheets.Add After:=Worksheets(1)\n\
+               Sheets(Array(\"Sheet1\", \"Sheet2\")).Select\n\
+               Debug.Print ActiveSheet.Name; Workbooks.Count; Workbooks(1).Name; TypeName(Workbooks(1))\n\
+               Debug.Print WorksheetFunction.Text(DateSerial(2024, 1, 5), \"yyyy/mm/dd\")\n\
+               On Error Resume Next\n\
+               Err.Raise vbObjectError + 513, \"src\", \"desc\"\n\
+               Debug.Print Err.Number; Err.Source; Err.Description\n\
+               Err.Clear\n\
+               Set c = Workbooks.Add\n\
+               Debug.Print Err.Number\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                "True\tFalse\tA1".to_string(),
+                "Meiryo\t10\t10".to_string(),
+                "1.00\t0.00\t0.00\tGeneral".to_string(),
+                "True\tTrue\tFalse".to_string(),
+                "General\tGeneral".to_string(),
+                "g\tr3\tTrue".to_string(),
+                "m/d/yyyy\t3/5/2024\tDate".to_string(),
+                "A1:C3\tA1:B2".to_string(),
+                // A wildcard match gives way to the replacement, the rest
+                // of the cell stays.
+                "z\tz\txz".to_string(),
+                "Sheet1\t1\tBook1\tWorkbook".to_string(),
+                "2024/01/05".to_string(),
+                "-2147220991\tsrc\tdesc".to_string(),
+                "1004".to_string(),
+            ]
+        );
     }
 
     #[test]

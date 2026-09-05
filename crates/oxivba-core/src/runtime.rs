@@ -8208,6 +8208,9 @@ fn builtin_constant(name: &str) -> Option<Value> {
         "vbusedefault" => Value::Integer(-2),
         "vbtrue" => Value::Integer(-1),
         "vbfalse" => Value::Integer(0),
+        // The base a macro's own error numbers are counted from: measured,
+        // `Err.Raise vbObjectError + 513` is -2147220991.
+        "vbobjecterror" => Value::Integer(-2_147_221_504),
         "vbcrlf" | "vbnewline" => Value::String("\r\n".to_string()),
         "vbcr" => Value::String("\r".to_string()),
         "vblf" => Value::String("\n".to_string()),
