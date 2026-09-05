@@ -468,7 +468,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
     // because the misses come back as errors and ISNUMBER calls them false.
     let error_transparent = matches!(
         name,
-        "IFERROR" | "IFNA" | "IF" | "IFS" | "SWITCH"
+        "IFERROR" | "IFNA" | "IF" | "IFS" | "SWITCH" | "TYPE" | "ERROR.TYPE"
             | "ISERROR" | "ISNA" | "ISERR" | "ISNUMBER" | "ISTEXT"
             | "ISBLANK" | "ISLOGICAL" | "ISREF"
         // The conditional sums look at one row at a time, so an error in a
@@ -526,6 +526,46 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::DivZero);
             }
             Ok(Value::Number(v.iter().sum::<f64>() / v.len() as f64))
+        }
+        // Like AVERAGE, but text counts as zero and logicals as 0/1, in a
+        // range as well as an argument; only truly empty cells are skipped.
+        "AVERAGEA" => {
+            let mut sum = 0.0;
+            let mut count = 0u64;
+            for value in args.iter().flat_map(|a| a.flatten()) {
+                match value {
+                    Value::Error(e) => return Err(e),
+                    Value::Number(n) => {
+                        sum += n;
+                        count += 1;
+                    }
+                    Value::Logical(b) => {
+                        sum += f64::from(b);
+                        count += 1;
+                    }
+                    Value::Text(_) => count += 1,
+                    Value::Blank => {}
+                }
+            }
+            if count == 0 {
+                return Err(ExcelError::DivZero);
+            }
+            Ok(Value::Number(sum / count as f64))
+        }
+        // The nth root of the product; every number must be positive.
+        "GEOMEAN" => {
+            let numbers = numeric_operands(args)?;
+            if numbers.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            let mut product = 1.0;
+            for n in &numbers {
+                if *n <= 0.0 {
+                    return Err(ExcelError::Num);
+                }
+                product *= n;
+            }
+            Ok(Value::Number(product.powf(1.0 / numbers.len() as f64)))
         }
         // MIN/MAX over nothing is 0 in Excel, not an error.
         "MIN" => {
@@ -629,6 +669,103 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::DivZero);
             }
             Ok(Value::Number((n / d).trunc()))
+        }
+        // Truncate toward zero at a number of decimal places (0 by default):
+        // Trunc(3.78)=3, Trunc(-3.78,1)=-3.7.
+        "TRUNC" => {
+            let n = num(args.first().ok_or(ExcelError::Value)?)?;
+            let digits = match args.get(1) {
+                Some(a) => num(a)? as i32,
+                None => 0,
+            };
+            let factor = 10f64.powi(digits);
+            Ok(Value::Number((n * factor).trunc() / factor))
+        }
+        "SIGN" => {
+            let n = num(args.first().ok_or(ExcelError::Value)?)?;
+            Ok(Value::Number(if n > 0.0 {
+                1.0
+            } else if n < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }))
+        }
+        "DEGREES" => Ok(Value::Number(one(args)?.to_degrees())),
+        "RADIANS" => Ok(Value::Number(one(args)?.to_radians())),
+        // COMBIN and PERMUT truncate their arguments; both need 0 <= k <= n.
+        "COMBIN" => Ok(Value::Number(combin(
+            num(args.first().ok_or(ExcelError::Value)?)?,
+            num(args.get(1).ok_or(ExcelError::Value)?)?,
+        )?)),
+        "PERMUT" => Ok(Value::Number(permut(
+            num(args.first().ok_or(ExcelError::Value)?)?,
+            num(args.get(1).ok_or(ExcelError::Value)?)?,
+        )?)),
+        "FACT" => Ok(Value::Number(factorial(one(args)?)?)),
+        "FACTDOUBLE" => Ok(Value::Number(factdouble(one(args)?)?)),
+        // Read a string of digits in a base, and write a number in one.
+        "DECIMAL" => {
+            expect(args, 2)?;
+            let digits = text(&args[0])?;
+            let radix = num(&args[1])?.trunc();
+            if !(2.0..=36.0).contains(&radix) {
+                return Err(ExcelError::Num);
+            }
+            let radix = radix as u32;
+            let mut acc: i64 = 0;
+            for ch in digits.trim().chars() {
+                let d = ch.to_digit(radix).ok_or(ExcelError::Num)?;
+                acc = acc
+                    .checked_mul(radix as i64)
+                    .and_then(|a| a.checked_add(d as i64))
+                    .ok_or(ExcelError::Num)?;
+            }
+            Ok(Value::Number(acc as f64))
+        }
+        "BASE" => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(ExcelError::Value);
+            }
+            let value = num(&args[0])?.trunc();
+            let radix = num(&args[1])?.trunc();
+            let min_len = match args.get(2) {
+                Some(a) => num(a)?.trunc().max(0.0) as usize,
+                None => 0,
+            };
+            if value < 0.0 || !(2.0..=36.0).contains(&radix) {
+                return Err(ExcelError::Num);
+            }
+            let radix = radix as u64;
+            let mut digits = Vec::new();
+            let mut n = value as u64;
+            if n == 0 {
+                digits.push(b'0');
+            }
+            while n > 0 {
+                let d = (n % radix) as u8;
+                digits.push(if d < 10 { b'0' + d } else { b'A' + d - 10 });
+                n /= radix;
+            }
+            while digits.len() < min_len {
+                digits.push(b'0');
+            }
+            digits.reverse();
+            Ok(Value::text(String::from_utf8(digits).unwrap_or_default()))
+        }
+        // Bitwise, on non-negative integers below 2^48.
+        "BITAND" | "BITOR" => {
+            expect(args, 2)?;
+            let a = num(&args[0])?.trunc();
+            let b = num(&args[1])?.trunc();
+            let limit = 281_474_976_710_655.0;
+            if a < 0.0 || b < 0.0 || a > limit || b > limit {
+                return Err(ExcelError::Num);
+            }
+            let (a, b) = (a as u64, b as u64);
+            Ok(Value::Number(
+                (if name == "BITAND" { a & b } else { a | b }) as f64,
+            ))
         }
         "ROUND" | "ROUNDUP" | "ROUNDDOWN" => {
             let n = num(&args.first().ok_or(ExcelError::Value)?.clone())?;
@@ -741,6 +878,43 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             Some(e) if e != ExcelError::NA
         ))),
         "ISNA" => Ok(Value::Logical(one_value(args).err() == Some(ExcelError::NA))),
+        // ODD/EVEN test the truncated whole number.
+        "ISODD" => Ok(Value::Logical(one(args)?.trunc() as i64 % 2 != 0)),
+        "ISEVEN" => Ok(Value::Logical(one(args)?.trunc() as i64 % 2 == 0)),
+        // N turns a value into a number: a number stays, a logical is 0/1, a
+        // date is its serial (already a number here), and text is 0. An error
+        // arrives already handed back by the error check above.
+        "N" => Ok(match one_value(args) {
+            Value::Number(n) => Value::Number(n),
+            Value::Logical(b) => Value::Number(f64::from(b)),
+            _ => Value::Number(0.0),
+        }),
+        // 1 number, 2 text, 4 logical, 16 error, 64 an array of more than one.
+        "TYPE" => {
+            let arg = one_arg(args)?;
+            Ok(Value::Number(match arg {
+                Arg::Range(block) if block.cells.len() > 1 => 64.0,
+                _ => match arg.scalar() {
+                    Value::Text(_) => 2.0,
+                    Value::Logical(_) => 4.0,
+                    Value::Error(_) => 16.0,
+                    _ => 1.0,
+                },
+            }))
+        }
+        // The number Excel gives each error kind, else #N/A.
+        "ERROR.TYPE" => match one_value(args) {
+            Value::Error(e) => Ok(Value::Number(match e {
+                ExcelError::Null => 1.0,
+                ExcelError::DivZero => 2.0,
+                ExcelError::Value => 3.0,
+                ExcelError::Ref => 4.0,
+                ExcelError::Name => 5.0,
+                ExcelError::Num => 6.0,
+                ExcelError::NA => 7.0,
+            })),
+            _ => Err(ExcelError::NA),
+        },
 
         // ---- text --------------------------------------------------------
         "LEN" => Ok(Value::Number(utf16(&text(one_arg(args)?)?).len() as f64)),
@@ -1368,6 +1542,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 ((serial - first + opened) / 7 + 1) as f64,
             ))
         }
+        "ISOWEEKNUM" => weeknum_iso(serial(&args[0])?),
 
         "VLOOKUP" | "HLOOKUP" => {
             if args.len() < 3 {
@@ -1970,6 +2145,71 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
         _ => Err(ExcelError::Name),
     }
+}
+
+/// n!, refusing a negative and overflowing to #NUM!.
+fn factorial(n: f64) -> Result<f64, ExcelError> {
+    if n < 0.0 {
+        return Err(ExcelError::Num);
+    }
+    let mut acc = 1.0f64;
+    for i in 2..=(n.trunc() as u64) {
+        acc *= i as f64;
+        if !acc.is_finite() {
+            return Err(ExcelError::Num);
+        }
+    }
+    Ok(acc)
+}
+
+/// n!!: the product going down by twos. FactDouble(7)=105, and 0 and -1 are 1.
+fn factdouble(n: f64) -> Result<f64, ExcelError> {
+    let mut i = n.trunc() as i64;
+    if i < -1 {
+        return Err(ExcelError::Num);
+    }
+    let mut acc = 1.0f64;
+    while i > 1 {
+        acc *= i as f64;
+        if !acc.is_finite() {
+            return Err(ExcelError::Num);
+        }
+        i -= 2;
+    }
+    Ok(acc)
+}
+
+/// n choose k, built up multiplicatively so it stays exact for the sizes that
+/// fit; #NUM! unless 0 <= k <= n.
+fn combin(n: f64, k: f64) -> Result<f64, ExcelError> {
+    let (n, k) = (n.trunc(), k.trunc());
+    if n < 0.0 || k < 0.0 || k > n {
+        return Err(ExcelError::Num);
+    }
+    let (n, k) = (n as u64, k as u64);
+    let k = k.min(n - k);
+    let mut acc = 1.0f64;
+    for i in 0..k {
+        acc = acc * (n - i) as f64 / (i + 1) as f64;
+    }
+    Ok(acc.round())
+}
+
+/// The number of ordered arrangements, n!/(n-k)!.
+fn permut(n: f64, k: f64) -> Result<f64, ExcelError> {
+    let (n, k) = (n.trunc(), k.trunc());
+    if n < 0.0 || k < 0.0 || k > n {
+        return Err(ExcelError::Num);
+    }
+    let (n, k) = (n as u64, k as u64);
+    let mut acc = 1.0f64;
+    for i in 0..k {
+        acc *= (n - i) as f64;
+        if !acc.is_finite() {
+            return Err(ExcelError::Num);
+        }
+    }
+    Ok(acc)
 }
 
 /// The greatest common divisor, for GCD/LCM.
@@ -2860,6 +3100,69 @@ mod tests {
 
     fn l(value: bool) -> Arg {
         Arg::Value(Value::Logical(value))
+    }
+
+    /// The math and information functions added 2026-09-05 (flows13), measured
+    /// against Excel.
+    #[test]
+    fn the_flows13_math_and_info_functions_agree_with_excel() {
+        assert_eq!(call("TRUNC", &[v(3.78)]), Value::Number(3.0));
+        assert_eq!(call("TRUNC", &[v(-3.78), v(1.0)]), Value::Number(-3.7));
+        assert_eq!(call("SIGN", &[v(-5.0)]), Value::Number(-1.0));
+        assert_eq!(call("SIGN", &[v(0.0)]), Value::Number(0.0));
+        assert_eq!(call("SIGN", &[v(7.0)]), Value::Number(1.0));
+        assert_eq!(call("COMBIN", &[v(10.0), v(3.0)]), Value::Number(120.0));
+        assert_eq!(call("PERMUT", &[v(10.0), v(3.0)]), Value::Number(720.0));
+        assert_eq!(call("FACT", &[v(6.0)]), Value::Number(720.0));
+        assert_eq!(call("FACTDOUBLE", &[v(7.0)]), Value::Number(105.0));
+        assert_eq!(call("FACTDOUBLE", &[v(0.0)]), Value::Number(1.0));
+        assert_eq!(call("FACT", &[v(-1.0)]), Value::Error(ExcelError::Num));
+        match call("DEGREES", &[v(std::f64::consts::PI)]) {
+            Value::Number(x) => assert!((x - 180.0).abs() < 1e-9),
+            other => panic!("DEGREES gave {other:?}"),
+        }
+        match call("RADIANS", &[v(180.0)]) {
+            Value::Number(x) => assert!((x - std::f64::consts::PI).abs() < 1e-9),
+            other => panic!("RADIANS gave {other:?}"),
+        }
+        assert_eq!(call("ISODD", &[v(7.0)]), Value::Logical(true));
+        assert_eq!(call("ISEVEN", &[v(7.0)]), Value::Logical(false));
+        assert_eq!(call("N", &[v(42.0)]), Value::Number(42.0));
+        assert_eq!(call("N", &[t("x")]), Value::Number(0.0));
+        assert_eq!(call("N", &[l(true)]), Value::Number(1.0));
+        assert_eq!(call("TYPE", &[v(5.0)]), Value::Number(1.0));
+        assert_eq!(call("TYPE", &[t("a")]), Value::Number(2.0));
+        assert_eq!(call("TYPE", &[l(true)]), Value::Number(4.0));
+        assert_eq!(
+            call("TYPE", &[Arg::Value(Value::Error(ExcelError::NA))]),
+            Value::Number(16.0)
+        );
+        assert_eq!(
+            call("TYPE", &[range(&[n(1.0), n(2.0), n(3.0)], 1)]),
+            Value::Number(64.0)
+        );
+        assert_eq!(
+            call("ERROR.TYPE", &[Arg::Value(Value::Error(ExcelError::DivZero))]),
+            Value::Number(2.0)
+        );
+        assert_eq!(
+            call("ERROR.TYPE", &[Arg::Value(Value::Error(ExcelError::NA))]),
+            Value::Number(7.0)
+        );
+        assert_eq!(call("ERROR.TYPE", &[v(5.0)]), Value::Error(ExcelError::NA));
+        assert_eq!(call("DECIMAL", &[t("FF"), v(16.0)]), Value::Number(255.0));
+        assert_eq!(call("BASE", &[v(255.0), v(16.0)]), Value::text("FF"));
+        assert_eq!(call("BASE", &[v(5.0), v(2.0), v(8.0)]), Value::text("00000101"));
+        assert_eq!(call("BITAND", &[v(12.0), v(10.0)]), Value::Number(8.0));
+        assert_eq!(call("BITOR", &[v(12.0), v(10.0)]), Value::Number(14.0));
+        let data = range(&[n(3.0), n(1.0), n(4.0), n(1.0), n(5.0), n(9.0), n(2.0), n(6.0)], 1);
+        assert_eq!(call("AVERAGEA", &[data]), Value::Number(3.875));
+        match call("GEOMEAN", &[v(3.0), v(1.0), v(4.0), v(1.0)]) {
+            Value::Number(x) => assert!((x - 1.861209).abs() < 1e-4),
+            other => panic!("GEOMEAN gave {other:?}"),
+        }
+        let jan1 = Arg::Value(n(datetime::serial_from_date(2024, 1, 1).unwrap() as f64));
+        assert_eq!(call("ISOWEEKNUM", &[jan1]), Value::Number(1.0));
     }
 
     fn n(value: f64) -> Value {
