@@ -2669,6 +2669,13 @@ fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)>
     None
 }
 
+/// S-MARKFALL: a bullet the marker face lacks falls to Cambria Math, then
+/// Segoe UI Symbol, unless this is set, which restores the substitute's
+/// notdef.
+fn markfall_on() -> bool {
+    std::env::var("OXI_MARKFALL_DISABLE").is_err()
+}
+
 /// S-SKIPWHOLE: a typeface's embedded parts are skipped only when the machine
 /// serves EVERY slot the deck filed for it; setting this restores the per-slot
 /// skip, which can leave a family half cloud, half embedded.
@@ -5639,13 +5646,39 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         m.text, m.x_pt, m.align_off, m.baseline, m.fs, m.font, color.as_deref()
                                     );
                                 }
+                                // S-MARKFALL: a bullet the marker face cannot
+                                // draw falls to the FIRST of Times New Roman,
+                                // Cambria Math, Segoe UI Symbol that has the
+                                // glyph -- the partition PowerPoint's own
+                                // exports draw: blind 21's white bullets in
+                                // Times (which HAS them), d54/d42/d16/d35's
+                                // circled and diamond marks in Cambria Math
+                                // (Times lacks every one), d19's cross, d04's
+                                // snowflake and d15's box-drawing dash in
+                                // Segoe UI Symbol (Cambria Math lacks exactly
+                                // those). Without it the bullet is a
+                                // substitute face's notdef bar on every list
+                                // slide of the deck.
+                                let mut mark_face = m.font.as_str();
+                                if markfall_on()
+                                    && !font_has_all_glyphs(mark_face, false, false, &m.text)
+                                {
+                                    for cand in
+                                        ["Times New Roman", "Cambria Math", "Segoe UI Symbol"]
+                                    {
+                                        if font_has_all_glyphs(cand, false, false, &m.text) {
+                                            mark_face = cand;
+                                            break;
+                                        }
+                                    }
+                                }
                                 draw_text_baseline(
                                     mem_dc,
                                     marker_x,
                                     m.baseline,
                                     &m.text,
                                     m.fs,
-                                    &m.font,
+                                    mark_face,
                                     color.as_deref(),
                                     scale,
                                 );
