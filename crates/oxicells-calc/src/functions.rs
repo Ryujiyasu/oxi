@@ -1798,6 +1798,259 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             fin_irr(&values, guess)
         }
 
+        // ---- more lookup / statistics ------------------------------------
+        // XMATCH: exact by default (0), or the next smaller (-1) / larger (1),
+        // or a wildcard (2); searched forward (1) or backward (-1). Returns
+        // the 1-based position.
+        "XMATCH" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let key = args[0].scalar();
+            if let Some(why) = key.err() {
+                return Err(why);
+            }
+            let hay = args[1].flatten();
+            let match_mode = match args.get(2) {
+                Some(a) => num(a)? as i32,
+                None => 0,
+            };
+            let search_mode = match args.get(3) {
+                Some(a) => num(a)? as i32,
+                None => 1,
+            };
+            let order: Vec<usize> = if search_mode < 0 {
+                (0..hay.len()).rev().collect()
+            } else {
+                (0..hay.len()).collect()
+            };
+            let found = match match_mode {
+                0 => order
+                    .into_iter()
+                    .find(|&i| compare(&hay[i], &key) == Ok(Ordering::Equal)),
+                2 => {
+                    let pattern = text(&args[0])?;
+                    order.into_iter().find(|&i| match &hay[i] {
+                        Value::Text(s) => wildcard_match(s, &pattern),
+                        other => compare(other, &key) == Ok(Ordering::Equal),
+                    })
+                }
+                -1 => xmatch_nearest(&hay, &key, &order, true),
+                1 => xmatch_nearest(&hay, &key, &order, false),
+                _ => return Err(ExcelError::Value),
+            };
+            found
+                .map(|i| Value::Number((i + 1) as f64))
+                .ok_or(ExcelError::NA)
+        }
+        // Build an A1 or R1C1 reference string; abs_num 1..4 fixes row/column.
+        "ADDRESS" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let row = num(&args[0])? as i64;
+            let col = num(&args[1])? as i64;
+            if row < 1 || col < 1 {
+                return Err(ExcelError::Value);
+            }
+            let abs = match args.get(2) {
+                Some(a) => num(a)? as i64,
+                None => 1,
+            };
+            let a1 = match args.get(3) {
+                Some(a) => a.scalar().to_logical()?,
+                None => true,
+            };
+            let core = if a1 {
+                let letters = column_letters(col as u64);
+                match abs {
+                    1 => format!("${letters}${row}"),
+                    2 => format!("{letters}${row}"),
+                    3 => format!("${letters}{row}"),
+                    4 => format!("{letters}{row}"),
+                    _ => return Err(ExcelError::Value),
+                }
+            } else {
+                match abs {
+                    1 => format!("R{row}C{col}"),
+                    2 => format!("R{row}C[{col}]"),
+                    3 => format!("R[{row}]C{col}"),
+                    4 => format!("R[{row}]C[{col}]"),
+                    _ => return Err(ExcelError::Value),
+                }
+            };
+            let result = match args.get(4) {
+                Some(a) => {
+                    let sheet = text(a)?;
+                    if sheet.is_empty() {
+                        core
+                    } else if sheet.chars().any(|c| !c.is_alphanumeric() && c != '_')
+                        || sheet.chars().next().is_some_and(|c| c.is_ascii_digit())
+                    {
+                        format!("'{}'!{core}", sheet.replace('\'', "''"))
+                    } else {
+                        format!("{sheet}!{core}")
+                    }
+                }
+                None => core,
+            };
+            Ok(Value::text(result))
+        }
+        // Paired-array sums.
+        "SUMXMY2" | "SUMX2MY2" | "SUMX2PY2" => {
+            expect(args, 2)?;
+            let xs = args[0].flatten();
+            let ys = args[1].flatten();
+            if let Some(e) = first_error(&args[0..2]) {
+                return Err(e);
+            }
+            if xs.len() != ys.len() {
+                return Err(ExcelError::NA);
+            }
+            let mut sum = 0.0;
+            for (x, y) in xs.iter().zip(&ys) {
+                if let (Value::Number(a), Value::Number(b)) = (x, y) {
+                    sum += match name {
+                        "SUMXMY2" => (a - b) * (a - b),
+                        "SUMX2MY2" => a * a - b * b,
+                        _ => a * a + b * b,
+                    };
+                }
+            }
+            Ok(Value::Number(sum))
+        }
+        // Like RANK, but tied numbers share the average of the places they fill.
+        "RANK.AVG" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let wanted = num(&args[0])?;
+            let numbers: Vec<f64> = args[1]
+                .flatten()
+                .iter()
+                .filter_map(|one| match one {
+                    Value::Number(n) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            if !numbers.contains(&wanted) {
+                return Err(ExcelError::NA);
+            }
+            let up = match args.get(2) {
+                Some(one) => num(one)? != 0.0,
+                None => false,
+            };
+            let ahead = numbers
+                .iter()
+                .filter(|one| if up { **one < wanted } else { **one > wanted })
+                .count();
+            let ties = numbers.iter().filter(|one| **one == wanted).count();
+            Ok(Value::Number(ahead as f64 + 1.0 + (ties as f64 - 1.0) / 2.0))
+        }
+        // Mean absolute deviation, and the sum of squared deviations.
+        "AVEDEV" | "DEVSQ" => {
+            let numbers = numeric_operands(args)?;
+            if numbers.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            let mean = numbers.iter().sum::<f64>() / numbers.len() as f64;
+            if name == "AVEDEV" {
+                let total: f64 = numbers.iter().map(|n| (n - mean).abs()).sum();
+                Ok(Value::Number(total / numbers.len() as f64))
+            } else {
+                Ok(Value::Number(numbers.iter().map(|n| (n - mean) * (n - mean)).sum()))
+            }
+        }
+        // (a+b+...)! / (a! b! ...), on the truncated arguments.
+        "MULTINOMIAL" => {
+            let numbers = numeric_operands(args)?;
+            let mut sum = 0.0;
+            let mut denominator = 1.0;
+            for n in &numbers {
+                if *n < 0.0 {
+                    return Err(ExcelError::Num);
+                }
+                let whole = n.trunc();
+                sum += whole;
+                denominator *= factorial(whole)?;
+            }
+            Ok(Value::Number(factorial(sum)? / denominator))
+        }
+        // Where a value falls in a set, 0..1, truncated to some significant
+        // digits (3 by default).
+        "PERCENTRANK" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let mut numbers: Vec<f64> = args[0]
+                .flatten()
+                .iter()
+                .filter_map(|one| match one {
+                    Value::Number(n) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            if numbers.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let x = num(&args[1])?;
+            if x < numbers[0] || x > numbers[numbers.len() - 1] {
+                return Err(ExcelError::NA);
+            }
+            let significance = match args.get(2) {
+                Some(a) => num(a)? as i32,
+                None => 3,
+            };
+            if significance < 1 {
+                return Err(ExcelError::Num);
+            }
+            let n = numbers.len();
+            let rank = if n == 1 {
+                1.0
+            } else {
+                let mut position = None;
+                for i in 0..n - 1 {
+                    if (numbers[i] - x).abs() < f64::EPSILON {
+                        position = Some(i as f64);
+                        break;
+                    }
+                    if numbers[i] < x && x < numbers[i + 1] {
+                        position = Some(i as f64 + (x - numbers[i]) / (numbers[i + 1] - numbers[i]));
+                        break;
+                    }
+                }
+                let position = position.unwrap_or((n - 1) as f64);
+                position / (n as f64 - 1.0)
+            };
+            Ok(Value::Number(truncate_significant(rank, significance)))
+        }
+        // The mean after trimming a fraction from both ends (rounded down to a
+        // whole pair excluded).
+        "TRIMMEAN" => {
+            expect(args, 2)?;
+            let percent = num(&args[1])?;
+            if !(0.0..1.0).contains(&percent) {
+                return Err(ExcelError::Num);
+            }
+            let mut numbers: Vec<f64> = args[0]
+                .flatten()
+                .iter()
+                .filter_map(|one| match one {
+                    Value::Number(n) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            if numbers.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let excluded = ((numbers.len() as f64 * percent).floor() as usize / 2) * 2;
+            let each = excluded / 2;
+            let kept = &numbers[each..numbers.len() - each];
+            Ok(Value::Number(kept.iter().sum::<f64>() / kept.len() as f64))
+        }
+
         "VLOOKUP" | "HLOOKUP" => {
             if args.len() < 3 {
                 return Err(ExcelError::Value);
@@ -2663,6 +2916,64 @@ fn fin_db(cost: f64, salvage: f64, life: f64, period: f64, month: f64) -> Result
         total += dep;
     }
     fin_finite(answer)
+}
+
+fn column_letters(mut col: u64) -> String {
+    let mut letters = Vec::new();
+    while col > 0 {
+        col -= 1;
+        letters.push(b'A' + (col % 26) as u8);
+        col /= 26;
+    }
+    letters.reverse();
+    String::from_utf8(letters).unwrap_or_default()
+}
+
+/// For XMATCH -1/1: the position of an exact match, or of the nearest value
+/// below (`smaller`) or above the key.
+fn xmatch_nearest(hay: &[Value], key: &Value, order: &[usize], smaller: bool) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for &i in order {
+        match compare(&hay[i], key) {
+            Ok(Ordering::Equal) => return Some(i),
+            Ok(side) => {
+                let candidate = if smaller {
+                    side == Ordering::Less
+                } else {
+                    side == Ordering::Greater
+                };
+                if candidate {
+                    let better = match best {
+                        None => true,
+                        Some(b) => {
+                            let against = compare(&hay[i], &hay[b]);
+                            if smaller {
+                                against == Ok(Ordering::Greater)
+                            } else {
+                                against == Ok(Ordering::Less)
+                            }
+                        }
+                    };
+                    if better {
+                        best = Some(i);
+                    }
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+    best
+}
+
+/// Truncate (not round) to a number of significant digits, as PERCENTRANK does.
+fn truncate_significant(value: f64, digits: i32) -> f64 {
+    if value == 0.0 {
+        return 0.0;
+    }
+    let magnitude = value.abs().log10().floor() as i32;
+    let places = digits - 1 - magnitude;
+    let factor = 10f64.powi(places);
+    (value * factor).trunc() / factor
 }
 
 /// n!, refusing a negative and overflowing to #NUM!.
@@ -3750,6 +4061,47 @@ mod tests {
 
     fn l(value: bool) -> Arg {
         Arg::Value(Value::Logical(value))
+    }
+
+    /// The lookup, reference and statistics functions added 2026-09-05
+    /// (flows14), measured against Excel.
+    #[test]
+    fn the_flows14_lookup_and_stat_functions_agree_with_excel() {
+        // XMATCH over a sorted list, exact and the two approximate modes.
+        let sorted = range(&[n(10.0), n(20.0), n(30.0), n(40.0), n(50.0)], 1);
+        assert_eq!(call("XMATCH", &[v(30.0), sorted.clone()]), Value::Number(3.0));
+        assert_eq!(call("XMATCH", &[v(35.0), sorted.clone(), v(-1.0)]), Value::Number(3.0));
+        assert_eq!(call("XMATCH", &[v(35.0), sorted.clone(), v(1.0)]), Value::Number(4.0));
+        assert_eq!(call("XMATCH", &[v(20.0), sorted.clone(), v(0.0), v(-1.0)]), Value::Number(2.0));
+        assert_eq!(call("XMATCH", &[v(35.0), sorted]), Value::Error(ExcelError::NA));
+        // ADDRESS in its four absolute forms, R1C1, with a sheet, and a wide column.
+        assert_eq!(call("ADDRESS", &[v(3.0), v(2.0)]), Value::text("$B$3"));
+        assert_eq!(call("ADDRESS", &[v(3.0), v(2.0), v(2.0)]), Value::text("B$3"));
+        assert_eq!(call("ADDRESS", &[v(3.0), v(2.0), v(3.0)]), Value::text("$B3"));
+        assert_eq!(call("ADDRESS", &[v(3.0), v(2.0), v(4.0)]), Value::text("B3"));
+        assert_eq!(call("ADDRESS", &[v(3.0), v(2.0), v(1.0), l(false)]), Value::text("R3C2"));
+        assert_eq!(
+            call("ADDRESS", &[v(3.0), v(2.0), v(1.0), l(true), t("Sheet1")]),
+            Value::text("Sheet1!$B$3")
+        );
+        assert_eq!(call("ADDRESS", &[v(1.0), v(27.0)]), Value::text("$AA$1"));
+        // Paired-array sums.
+        let xs = range(&[n(3.0), n(1.0), n(4.0)], 1);
+        let ys = range(&[n(100.0), n(200.0), n(300.0)], 1);
+        assert_eq!(call("SUMXMY2", &[xs.clone(), ys.clone()]), Value::Number(136626.0));
+        assert_eq!(call("SUMX2MY2", &[xs.clone(), ys.clone()]), Value::Number(-139974.0));
+        assert_eq!(call("SUMX2PY2", &[xs, ys]), Value::Number(140026.0));
+        // RANK.AVG averages tied places.
+        let data = range(&[n(3.0), n(1.0), n(4.0), n(1.0), n(5.0), n(9.0), n(2.0), n(6.0)], 1);
+        assert_eq!(call("RANK.AVG", &[v(1.0), data.clone()]), Value::Number(7.5));
+        // Deviations.
+        let four = range(&[n(3.0), n(1.0), n(4.0), n(1.0)], 1);
+        assert_eq!(call("AVEDEV", &[four.clone()]), Value::Number(1.25));
+        assert_eq!(call("DEVSQ", &[four]), Value::Number(6.75));
+        assert_eq!(call("MULTINOMIAL", &[v(2.0), v(3.0), v(4.0)]), Value::Number(1260.0));
+        // PERCENTRANK truncated to three significant digits, and TRIMMEAN.
+        assert_eq!(call("PERCENTRANK", &[data.clone(), v(4.0)]), Value::Number(0.571));
+        assert_eq!(call("TRIMMEAN", &[data, v(0.25)]), Value::Number(3.5));
     }
 
     /// The financial functions added 2026-09-05 (flows14), measured against
