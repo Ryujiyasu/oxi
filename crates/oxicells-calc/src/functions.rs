@@ -1310,6 +1310,66 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
         }
 
+        // ---- the normal distribution -------------------------------------
+        "NORM.DIST" | "NORMDIST" => {
+            expect(args, 4)?;
+            let sd = num(&args[2])?;
+            if sd <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let z = (num(&args[0])? - num(&args[1])?) / sd;
+            let cumulative = args[3].scalar().to_logical()?;
+            Ok(Value::Number(if cumulative {
+                norm_cdf(z)
+            } else {
+                norm_pdf(z) / sd
+            }))
+        }
+        "NORM.S.DIST" => {
+            expect(args, 2)?;
+            let z = num(&args[0])?;
+            let cumulative = args[1].scalar().to_logical()?;
+            Ok(Value::Number(if cumulative { norm_cdf(z) } else { norm_pdf(z) }))
+        }
+        // The legacy one-argument form is always cumulative.
+        "NORMSDIST" => Ok(Value::Number(norm_cdf(one(args)?))),
+        "NORM.INV" | "NORMINV" => {
+            expect(args, 3)?;
+            let p = num(&args[0])?;
+            let sd = num(&args[2])?;
+            if sd <= 0.0 || p <= 0.0 || p >= 1.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(num(&args[1])? + sd * norm_s_inv(p)))
+        }
+        "NORM.S.INV" | "NORMSINV" => {
+            let p = one(args)?;
+            if p <= 0.0 || p >= 1.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(norm_s_inv(p)))
+        }
+        "STANDARDIZE" => {
+            expect(args, 3)?;
+            let sd = num(&args[2])?;
+            if sd <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number((num(&args[0])? - num(&args[1])?) / sd))
+        }
+        "GAUSS" => Ok(Value::Number(norm_cdf(one(args)?) - 0.5)),
+        "PHI" => Ok(Value::Number(norm_pdf(one(args)?))),
+        "CONFIDENCE.NORM" | "CONFIDENCE" => {
+            expect(args, 3)?;
+            let alpha = num(&args[0])?;
+            let sd = num(&args[1])?;
+            let size = num(&args[2])?.trunc();
+            if alpha <= 0.0 || alpha >= 1.0 || sd <= 0.0 || size < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(norm_s_inv(1.0 - alpha / 2.0) * sd / size.sqrt()))
+        }
+
         // Multiply the arrays together elementwise and add up the lot. Text and
         // blanks count as nothing rather than spoiling the sum, which is what
         // makes `SUMPRODUCT((A=x)*(B=y), C)` work at all — the comparisons come
@@ -3090,6 +3150,84 @@ fn truncate_significant(value: f64, digits: i32) -> f64 {
     (value * factor).trunc() / factor
 }
 
+/// The standard normal density.
+fn norm_pdf(x: f64) -> f64 {
+    (-0.5 * x * x).exp() / (2.0 * std::f64::consts::PI).sqrt()
+}
+
+/// The standard normal cumulative distribution, by West's (2004) rational
+/// approximation -- accurate to about 1e-16, which is what Excel's eight
+/// printed digits need even out in the tails.
+fn norm_cdf(x: f64) -> f64 {
+    let z = x.abs();
+    if z > 37.0 {
+        return if x > 0.0 { 1.0 } else { 0.0 };
+    }
+    let e = (-0.5 * z * z).exp();
+    let tail = if z < 7.071_067_811_865_47 {
+        let n = (((((3.526_249_659_989_11e-2 * z + 0.700_383_064_443_688) * z
+            + 6.373_962_203_531_65) * z
+            + 33.912_866_078_383) * z
+            + 112.079_291_497_871) * z
+            + 221.213_596_169_931) * z
+            + 220.206_867_912_376;
+        let d = ((((((8.838_834_764_831_84e-2 * z + 1.755_667_163_182_64) * z
+            + 16.064_177_579_207) * z
+            + 86.780_732_202_946_1) * z
+            + 296.564_248_779_674) * z
+            + 637.333_633_378_831) * z
+            + 793.826_512_519_948) * z
+            + 440.413_735_824_752;
+        e * n / d
+    } else {
+        let f = z + 1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 0.65))));
+        e / (2.506_628_274_631_000_2 * f)
+    };
+    if x <= 0.0 { tail } else { 1.0 - tail }
+}
+
+/// The inverse standard normal, by Acklam's rational approximation with one
+/// Halley step against `norm_cdf`, which brings it to full double precision.
+fn norm_s_inv(p: f64) -> f64 {
+    const A: [f64; 6] = [
+        -3.969_683_028_665_376e1, 2.209_460_984_245_205e2, -2.759_285_104_469_687e2,
+        1.383_577_518_672_69e2, -3.066_479_806_614_716e1, 2.506_628_277_459_239e0,
+    ];
+    const B: [f64; 5] = [
+        -5.447_609_879_822_406e1, 1.615_858_368_580_409e2, -1.556_989_798_598_866e2,
+        6.680_131_188_771_972e1, -1.328_068_155_288_572e1,
+    ];
+    const C: [f64; 6] = [
+        -7.784_894_002_430_293e-3, -3.223_964_580_411_365e-1, -2.400_758_277_161_838e0,
+        -2.549_732_539_343_734e0, 4.374_664_141_464_968e0, 2.938_163_982_698_783e0,
+    ];
+    const D: [f64; 4] = [
+        7.784_695_709_041_462e-3, 3.224_671_290_700_398e-1, 2.445_134_137_142_996e0,
+        3.754_408_661_907_416e0,
+    ];
+    let plow = 0.024_25;
+    let phigh = 1.0 - plow;
+    let mut x = if p < plow {
+        let q = (-2.0 * p.ln()).sqrt();
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    } else if p <= phigh {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    } else {
+        let q = (-2.0 * (1.0 - p).ln()).sqrt();
+        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    };
+    // One Halley step: x -= (cdf(x)-p) / phi(x) corrected for curvature.
+    let error = norm_cdf(x) - p;
+    let u = error / norm_pdf(x);
+    x -= u / (1.0 + x * u / 2.0);
+    x
+}
+
 /// n!, refusing a negative and overflowing to #NUM!.
 fn factorial(n: f64) -> Result<f64, ExcelError> {
     if n < 0.0 {
@@ -4175,6 +4313,38 @@ mod tests {
 
     fn l(value: bool) -> Arg {
         Arg::Value(Value::Logical(value))
+    }
+
+    /// The normal-distribution family added 2026-09-05, measured against Excel
+    /// to eight decimals (the CDF/inverse kernels must hold in the tails too).
+    #[test]
+    fn the_normal_distribution_agrees_with_excel() {
+        let near = |value: Value, want: f64| match value {
+            Value::Number(x) => assert!((x - want).abs() < 5e-8, "got {x}, want {want}"),
+            other => panic!("expected a number, got {other:?}"),
+        };
+        near(call("NORM.S.DIST", &[v(1.0), l(true)]), 0.84134475);
+        near(call("NORM.S.DIST", &[v(1.0), l(false)]), 0.24197072);
+        near(call("NORM.S.DIST", &[v(-2.5), l(true)]), 0.00620967);
+        near(call("NORM.DIST", &[v(8.0), v(10.0), v(2.0), l(true)]), 0.15865525);
+        near(call("NORM.DIST", &[v(8.0), v(10.0), v(2.0), l(false)]), 0.12098536);
+        near(call("NORM.S.INV", &[v(0.975)]), 1.95996398);
+        near(call("NORM.S.INV", &[v(0.001)]), -3.09023231);
+        near(call("NORM.S.INV", &[v(0.5)]), 0.0);
+        near(call("NORM.INV", &[v(0.95), v(100.0), v(15.0)]), 124.6728044);
+        near(call("STANDARDIZE", &[v(85.0), v(100.0), v(15.0)]), -1.0);
+        near(call("GAUSS", &[v(1.0)]), 0.34134475);
+        near(call("PHI", &[v(1.0)]), 0.24197072);
+        near(call("NORMSDIST", &[v(1.0)]), 0.84134475);
+        near(call("NORMINV", &[v(0.95), v(100.0), v(15.0)]), 124.6728044);
+        near(call("NORMSINV", &[v(0.975)]), 1.95996398);
+        near(call("CONFIDENCE.NORM", &[v(0.05), v(2.5), v(50.0)]), 0.69295191);
+        // Bad standard deviation or probability is #NUM!.
+        assert_eq!(
+            call("NORM.DIST", &[v(1.0), v(0.0), v(-1.0), l(true)]),
+            Value::Error(ExcelError::Num)
+        );
+        assert_eq!(call("NORM.S.INV", &[v(0.0)]), Value::Error(ExcelError::Num));
     }
 
     /// The conditional and A-suffix aggregates added 2026-09-05 (flows15),
