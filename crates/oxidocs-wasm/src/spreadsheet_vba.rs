@@ -1808,6 +1808,11 @@ struct WorkbookHost<'a> {
     next_shape_id: u64,
     /// The shape a `Copy` set aside for `Worksheet.Paste`.
     shape_clipboard: Option<u64>,
+    /// The shapes a macro has selected, if any -- `Selection` is then a
+    /// ShapeRange, not the cells.
+    shape_selection: Vec<u64>,
+    /// The id lists handed out as ShapeRanges.
+    shape_ranges: Vec<Vec<u64>>,
     /// The turn of every cell written at an angle, in degrees from -90 to
     /// 90. The IR keeps only the stacked kind, which is 771 of the 774
     /// rotations in the conformance corpus; the angles are kept here for
@@ -1933,6 +1938,8 @@ impl<'a> WorkbookHost<'a> {
             shape_counters: std::collections::HashMap::new(),
             next_shape_id: 1,
             shape_clipboard: None,
+            shape_selection: Vec::new(),
+            shape_ranges: Vec::new(),
             rotations: std::collections::HashMap::new(),
             underlines: std::collections::HashMap::new(),
             hatchings: std::collections::HashMap::new(),
@@ -7827,6 +7834,7 @@ impl<'a> WorkbookHost<'a> {
     /// A8:B9 selected on Sheet1, adding a sheet and coming back finds A8:B9
     /// selected still.
     fn activate_sheet(&mut self, sheet: usize) {
+        self.shape_selection.clear();
         if sheet == self.active_sheet && self.selection.sheet == sheet {
             return;
         }
@@ -14463,12 +14471,13 @@ impl Host for WorkbookHost<'_> {
                 if !args.is_empty() {
                     return Err(format!("Application.{name} does not accept arguments"));
                 }
-                let range = if name.eq_ignore_ascii_case("activecell") {
-                    CellRange::single(self.active_cell)
-                } else {
-                    self.selection
-                };
-                return Ok(Some(self.object(HostObject::Range(range))));
+                if name.eq_ignore_ascii_case("selection") {
+                    return Ok(Some(self.selection_object()));
+                }
+                return Ok(Some(self.object(HostObject::Range(CellRange::single(self.active_cell)))));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("activechart") {
+                return self.active_chart_object().map(Some);
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("calculate") {
                 self.recalculate();
@@ -14522,6 +14531,7 @@ impl Host for WorkbookHost<'_> {
                     _ => return Err("Application.Goto takes a Range object".to_string()),
                 };
                 self.activate_sheet(range.sheet);
+                self.shape_selection.clear();
                 self.selection = range;
                 self.active_cell = range.first();
                 return Ok(Some(Value::Empty));
@@ -14724,6 +14734,7 @@ impl Host for WorkbookHost<'_> {
                     if range.sheet != self.active_sheet {
                         return Err("Range.Select requires its worksheet to be active".to_string());
                     }
+                    self.shape_selection.clear();
                     self.selection = range;
                     self.active_cell = range.first();
                     // True, like the other members that DO something: asked of
@@ -14975,12 +14986,13 @@ impl Host for WorkbookHost<'_> {
             if !args.is_empty() {
                 return Err(format!("{name} does not accept arguments"));
             }
-            let range = if name.eq_ignore_ascii_case("activecell") {
-                CellRange::single(self.active_cell)
-            } else {
-                self.selection
-            };
-            return Ok(Some(self.object(HostObject::Range(range))));
+            if name.eq_ignore_ascii_case("selection") {
+                return Ok(Some(self.selection_object()));
+            }
+            return Ok(Some(self.object(HostObject::Range(CellRange::single(self.active_cell)))));
+        }
+        if name.eq_ignore_ascii_case("activechart") {
+            return self.active_chart_object().map(Some);
         }
         if name.eq_ignore_ascii_case("debug") {
             if !args.is_empty() {
@@ -15179,6 +15191,8 @@ impl Host for WorkbookHost<'_> {
             Some(&["Key", "SortOn", "Order", "CustomOrder", "DataOption"][..])
         } else if name.eq_ignore_ascii_case("setrange") {
             Some(&["Range"][..])
+        } else if name.eq_ignore_ascii_case("goto") {
+            Some(&["Reference", "Scroll"][..])
         } else if name.eq_ignore_ascii_case("borderaround") {
             Some(&["LineStyle", "Weight", "ColorIndex", "Color", "ThemeColor"][..])
         } else if name.eq_ignore_ascii_case("subtotal") {
@@ -15817,7 +15831,13 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("names") {
                 return Ok(Some(self.object(HostObject::Names)));
             }
-            if name.eq_ignore_ascii_case("selection") || name.eq_ignore_ascii_case("activecell") {
+            if name.eq_ignore_ascii_case("selection") {
+                return Ok(Some(self.selection_object()));
+            }
+            if name.eq_ignore_ascii_case("activechart") {
+                return self.active_chart_object().map(Some);
+            }
+            if name.eq_ignore_ascii_case("activecell") {
                 let range = if name.eq_ignore_ascii_case("activecell") {
                     CellRange::single(self.active_cell)
                 } else {
@@ -26466,6 +26486,47 @@ mod tests {
                 "65535	1	0".to_string(),
                 "14	False	2	2".to_string(),
                 "4	B2".to_string(),
+            ]
+        );
+    }
+
+    /// A shape or chart selected into `Selection.ShapeRange`, `ActiveChart`,
+    /// and `Shapes.Range` -- the recorder's way of touching a drawing
+    /// (shapes.vba / flows9, 2026-09-05).
+    #[test]
+    fn vba_selects_shapes_and_reaches_the_active_chart() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = \"k\": Range(\"A2\").Value = 1: Range(\"A3\").Value = 2
+               ActiveSheet.Shapes.AddShape(1, 10, 10, 50, 30).Select
+               Selection.ShapeRange.Fill.ForeColor.RGB = 255
+               Debug.Print ActiveSheet.Shapes(1).Fill.ForeColor.RGB; TypeName(Selection)
+               ActiveSheet.Shapes.Range(Array(\"Rectangle 1\")).Select
+               Selection.Name = \"Box\"
+               Debug.Print ActiveSheet.Shapes(1).Name
+               ActiveSheet.Shapes.AddChart2(201, xlColumnClustered).Select
+               ActiveChart.SetSourceData Source:=Range(\"A1:A3\")
+               Debug.Print ActiveChart.ChartType; TypeName(ActiveChart); ActiveSheet.ChartObjects.Count
+               Range(\"A1\").Select
+               Debug.Print TypeName(Selection)
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec![
+                "255	ShapeRange".to_string(),
+                "Box".to_string(),
+                "51	Chart	1".to_string(),
+                // Selecting cells drops the shapes -- Selection is a Range.
+                "Range".to_string(),
             ]
         );
     }

@@ -11,6 +11,45 @@ use super::*;
 const NO_SUCH_SHAPE: i64 = -2_147_024_809;
 
 impl<'a> WorkbookHost<'a> {
+    /// What `Selection` is: a ShapeRange when a macro has selected shapes,
+    /// otherwise the cells.
+    pub(super) fn selection_object(&mut self) -> Value {
+        let live: Vec<u64> = self.shape_selection.iter().copied().filter(|id| self.shape(*id).is_ok()).collect();
+        if live.is_empty() {
+            return self.object(HostObject::Range(self.selection));
+        }
+        self.shape_range_object(live)
+    }
+
+    fn shape_range_object(&mut self, ids: Vec<u64>) -> Value {
+        let index = self.shape_ranges.len();
+        self.shape_ranges.push(ids);
+        self.part(DrawingPart::ShapeRange(index))
+    }
+
+    fn shape_range_ids(&self, index: usize) -> Vec<u64> {
+        self.shape_ranges.get(index).cloned().unwrap_or_default()
+    }
+
+    /// `ActiveChart`: the chart of the selected shape when it holds one, or
+    /// the sheet's one chart when only one is there. Measured: after
+    /// `AddChart2(...).Select`, ActiveChart is that chart. None -> 91.
+    pub(super) fn active_chart_object(&mut self) -> Result<Value, String> {
+        let selected: Option<u64> = self
+            .shape_selection
+            .iter()
+            .copied()
+            .find(|id| matches!(self.shape(*id).map(|s| s.kind.clone()), Ok(ShapeKind::Chart(_))));
+        let chart = selected.or_else(|| {
+            let charts = self.charts_on(self.active_sheet);
+            (charts.len() == 1).then(|| charts[0])
+        });
+        match chart {
+            Some(id) => Ok(self.part(DrawingPart::Chart(id))),
+            None => Err(host_error(91, "there is no active chart")),
+        }
+    }
+
     pub(super) fn drawing_part(&self, object: &ObjectRef) -> Option<DrawingPart> {
         match self.objects.get(object.handle as usize) {
             Some(HostObject::Drawing(part)) => Some(*part),
@@ -680,6 +719,17 @@ impl<'a> WorkbookHost<'a> {
                 "text" => Some(Value::String(self.shape(id)?.text())),
                 _ => None,
             }),
+            DrawingPart::ShapeRange(index) => {
+                let ids = self.shape_range_ids(index);
+                match lower.as_str() {
+                    "count" => Ok(Some(Value::Integer(ids.len() as i64))),
+                    "shaperange" => Ok(Some(self.part(part))),
+                    _ => match ids.first() {
+                        Some(id) => self.drawing_get(DrawingPart::Shape(*id), name),
+                        None => Ok(None),
+                    },
+                }
+            }
         }
     }
 
@@ -1294,6 +1344,16 @@ impl<'a> WorkbookHost<'a> {
                 Ok(false)
             }
             DrawingPart::Paragraphs(_) => Ok(false),
+            DrawingPart::ShapeRange(index) => {
+                let ids = self.shape_range_ids(index);
+                let mut any = false;
+                for id in ids {
+                    if self.drawing_set(DrawingPart::Shape(id), name, value.clone())? {
+                        any = true;
+                    }
+                }
+                Ok(any)
+            }
             DrawingPart::Shapes(_) | DrawingPart::ChartObjects(_) | DrawingPart::SeriesCollection(_) | DrawingPart::Points(..) | DrawingPart::Axes(_) => Ok(false),
         }
     }
@@ -1329,7 +1389,23 @@ impl<'a> WorkbookHost<'a> {
                     Ok(Some(self.part(DrawingPart::Shape(id))))
                 }
                 "addpicture" => Err(host_error(1004, "the browser cannot read a picture from a path")),
-                "selectall" => Ok(Some(Value::Empty)),
+                "range" => {
+                    let listed = self.shapes_on(sheet);
+                    let names: Vec<Value> = match args.first() {
+                        Some(Value::Array(listed)) => listed.values.clone(),
+                        Some(one) => vec![one.clone()],
+                        None => return Err(host_error(1004, "Shapes.Range takes a name or an array of names")),
+                    };
+                    let mut ids = Vec::new();
+                    for name in &names {
+                        ids.push(self.pick_shape(&listed, name)?);
+                    }
+                    Ok(Some(self.shape_range_object(ids)))
+                }
+                "selectall" => {
+                    self.shape_selection = self.shapes_on(sheet);
+                    Ok(Some(Value::Empty))
+                }
                 "count" => Ok(Some(Value::Integer(self.shapes_on(sheet).len() as i64))),
                 _ => Ok(None),
             },
@@ -1373,7 +1449,10 @@ impl<'a> WorkbookHost<'a> {
                     self.shape_clipboard = Some(id);
                     Ok(Some(Value::Boolean(true)))
                 }
-                "select" | "activate" => Ok(Some(Value::Boolean(true))),
+                "select" | "activate" => {
+                    self.shape_selection = vec![id];
+                    Ok(Some(Value::Boolean(true)))
+                }
                 "zorder" => Ok(Some(Value::Empty)),
                 "incrementleft" | "incrementtop" | "incrementrotation" => {
                     let by = args.first().and_then(any_number).unwrap_or(0.0);
@@ -1594,6 +1673,35 @@ impl<'a> WorkbookHost<'a> {
                 "characters" => Ok(Some(self.part(DrawingPart::AxisTitle(id, which)))),
                 _ => Ok(None),
             },
+            DrawingPart::ShapeRange(index) => {
+                let ids = self.shape_range_ids(index);
+                match lower.as_str() {
+                    "select" => {
+                        self.shape_selection = ids;
+                        Ok(Some(Value::Boolean(true)))
+                    }
+                    "item" | "_default" => {
+                        let at = args.first().and_then(any_whole_number).unwrap_or(1).max(1) as usize;
+                        ids.get(at - 1)
+                            .map(|id| Ok(Some(self.part(DrawingPart::Shape(*id)))))
+                            .unwrap_or_else(|| Err(host_error(1004, "there is no such shape")))
+                    }
+                    "count" => Ok(Some(Value::Integer(ids.len() as i64))),
+                    "shaperange" => Ok(Some(self.part(part))),
+                    "delete" => {
+                        for id in ids {
+                            self.delete_shape(id)?;
+                        }
+                        self.shape_selection.clear();
+                        Ok(Some(Value::Empty))
+                    }
+                    "group" => Ok(ids.first().map(|id| self.part(DrawingPart::Shape(*id)))),
+                    _ => match ids.first() {
+                        Some(id) => self.drawing_call(DrawingPart::Shape(*id), name, args),
+                        None => Ok(None),
+                    },
+                }
+            }
             DrawingPart::Legend(_) | DrawingPart::DataLabels(..) | DrawingPart::ChartArea(_) | DrawingPart::PlotArea(_) => match lower.as_str() {
                 "select" | "delete" | "clearformats" => Ok(Some(Value::Empty)),
                 _ => Ok(None),

@@ -188,6 +188,9 @@ pub(super) enum DrawingPart {
     PlotArea(u64),
     Adjustments(u64),
     Paragraphs(u64),
+    /// `Selection.ShapeRange` / `Shapes.Range(Array(...))`: several shapes
+    /// held as one, by their place in the host's `shape_ranges`.
+    ShapeRange(usize),
 }
 
 impl DrawingPart {
@@ -223,6 +226,7 @@ impl DrawingPart {
             DrawingPart::PlotArea(_) => "PlotArea",
             DrawingPart::Adjustments(_) => "Adjustments",
             DrawingPart::Paragraphs(_) => "TextRange2",
+            DrawingPart::ShapeRange(_) => "ShapeRange",
         }
     }
 
