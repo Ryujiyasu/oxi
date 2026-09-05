@@ -447,10 +447,33 @@ impl OoxmlParser {
                     last.grid_char_space_raw = section.properties.grid_char_space_raw;
                     last.grid_line_pitch = section.properties.grid_line_pitch;
                 }
+                // S1325 (2026-09-05, opt-out OXI_S1325_DISABLE): the incoming
+                // section's floats were anchored by ITS block index (parse_body
+                // numbers `current_blocks` per section), so once its blocks are
+                // appended after `last`'s they must be re-based, or every float
+                // of every merged section resolves against the FIRST section's
+                // blocks. reports__167853 (JA blindB50, 13 continuous sections):
+                // all 13 title banners (wps roundRect + txbx, anchor block 1 of
+                // their own section) landed on page 3 at y 74/94 and every
+                // section heading rendered as blank space.
+                let s1325_base = if std::env::var("OXI_S1325_DISABLE").is_err() {
+                    last.blocks.len()
+                } else {
+                    0
+                };
                 last.blocks.extend(section.blocks);
-                last.floating_images.extend(section.floating_images);
-                last.text_boxes.extend(section.text_boxes);
-                last.shapes.extend(section.shapes);
+                last.floating_images.extend(section.floating_images.into_iter().map(|mut img| {
+                    img.anchor_block_index += s1325_base;
+                    img
+                }));
+                last.text_boxes.extend(section.text_boxes.into_iter().map(|mut tb| {
+                    tb.anchor_block_index += s1325_base;
+                    tb
+                }));
+                last.shapes.extend(section.shapes.into_iter().map(|mut sh| {
+                    sh.anchor_block_index += s1325_base;
+                    sh
+                }));
                 last.footnotes.extend(footnotes_list);
                 last.endnotes.extend(endnotes_list);
             } else {
