@@ -19799,7 +19799,62 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let s790_widow_split = line_idx > 1
                 && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S790_DISABLE").is_err();
-            if widow_orphan_break && s790_widow_split {
+            // S1323 (2026-09-05, default ON, opt-out OXI_S1323_DISABLE): a
+            // widow/orphan break inside a multi-column section goes to the
+            // NEXT COLUMN, the way the natural overflow (S637) and an explicit
+            // column break (S733) already do -- Word treats the column as the
+            // page for widow/orphan control. Both arms pushed a whole PAGE:
+            // reports__167853 p28 (2-col continuous section, 42 lines, room
+            // for 45): the 4-line `widowControl` paragraph after ●自立支援事業
+            // hit the widow arm at line 2 with column 1 still empty, the
+            // whole-move opened page 29, its two laid lines kept their
+            // page-28 y and the S750 balance then sorted them to the END of
+            // column 1 (the p29 picture). Word keeps the section on p28
+            // (W29 / O30 -> O29).
+            let s1323_col_advance = widow_orphan_break
+                && num_columns > 1
+                && cur_col + 1 < num_columns
+                && std::env::var("OXI_S637_DISABLE").is_err()
+                && std::env::var("OXI_S1323_DISABLE").is_err();
+            if s1323_col_advance {
+                let old_x = start_x;
+                cur_col += 1;
+                start_x = col_x_positions[cur_col];
+                let col_top = if pages.len() > s749_pages_at_entry {
+                    page_top
+                } else {
+                    col_band_top
+                };
+                if std::env::var("OXI_DBG_COL").is_ok() {
+                    eprintln!(
+                        "[COL] S1323 widow/orphan col {}->{} line_idx={} split={} cursor_y={:.1} col_top={:.1}",
+                        cur_col - 1, cur_col, line_idx, s790_widow_split, cursor.cursor_y, col_top
+                    );
+                }
+                if s790_widow_split || elements.is_empty() {
+                    // Split (or nothing laid yet): the laid lines stay in the
+                    // old column; this line starts the new one.
+                    cursor.set(col_top);
+                } else {
+                    // Whole-move: carry the laid lines to the new column's top,
+                    // keeping their stack (S770's shape, per column).
+                    let laid_h: f32 = line_heights.iter().take(line_idx).sum();
+                    let shift = col_top - (cursor.cursor_y - laid_h);
+                    let dx = start_x - old_x;
+                    for e in elements.iter_mut() {
+                        e.x += dx;
+                        e.y += shift;
+                        if let LayoutContent::TableBorder { x1, x2, y1, y2, .. } = &mut e.content {
+                            *x1 += dx;
+                            *x2 += dx;
+                            *y1 += shift;
+                            *y2 += shift;
+                        }
+                    }
+                    cursor.set(col_top + laid_h);
+                }
+                s842_apply(cursor);
+            } else if widow_orphan_break && s790_widow_split {
                 // Same shape as the natural mid-paragraph break: keep the laid
                 // lines on this page, continue on the fresh one.
                 current_elements.extend(std::mem::take(&mut elements));
