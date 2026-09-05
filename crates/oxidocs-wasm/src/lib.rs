@@ -828,12 +828,23 @@ struct JsRunFormat {
     color: Option<String>,
 }
 
+/// One shape's new position and size, from JavaScript, in POINTS.
+#[derive(Deserialize)]
+struct JsShapeGeom {
+    slide_index: usize,
+    shape_index: usize,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
 /// Edit a .pptx and break paragraphs in it, returning the modified bytes.
 ///
 /// `edits` replaces run text; `splits` cuts a paragraph in two at a character
 /// offset, which is what Enter means. Both are applied to the same save, and
 /// the text edit lands first so a split counts the characters the file will
-/// actually carry.
+/// actually carry. `geoms` moves and sizes top-level shapes.
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn edit_pptx_with_splits(
@@ -842,6 +853,7 @@ pub fn edit_pptx_with_splits(
     splits: JsValue,
     merges: JsValue,
     formats: JsValue,
+    geoms: JsValue,
 ) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsSlideTextEdit> = if edits.is_undefined() || edits.is_null() {
         Vec::new()
@@ -894,6 +906,23 @@ pub fn edit_pptx_with_splits(
                 underline: f.underline,
                 font_size: f.font_size,
                 color: f.color,
+            },
+        );
+    }
+    let js_geoms: Vec<JsShapeGeom> = if geoms.is_undefined() || geoms.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(geoms).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    for g in js_geoms {
+        editor.set_shape_geometry(
+            g.slide_index,
+            g.shape_index,
+            oxislides_core::editor::ShapeGeometry {
+                x: g.x,
+                y: g.y,
+                width: g.width,
+                height: g.height,
             },
         );
     }

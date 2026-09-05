@@ -2975,6 +2975,7 @@ fn parse_slide(
 
                         shapes.push(Shape {
                             sp_index: this_sp_index,
+                            top_level: grp_stack.is_empty(),
                             x: use_x,
                             y: use_y,
                             width: use_w,
@@ -3165,6 +3166,7 @@ fn parse_slide(
                             // A graphicFrame is not one of the elements the
                             // editor counts, so it has no index in its numbering.
                             sp_index: None,
+                            top_level: true,
                             wrap_text: true,
                             spc_first_last_para: false,
                             text_warp: None,
@@ -3997,6 +3999,10 @@ fn parse_inherited_shapes(
                                         (ln_color.clone(), ln_width)
                                     };
                                     out.push(Shape {
+                                        // Inherited (layout/master) shapes are
+                                        // drawn but not editable; top-level is
+                                        // the harmless default for a non-target.
+                                        top_level: true,
                                         // This builder has no view of the
                                         // document-order count, so it declines
                                         // to name one rather than guess.

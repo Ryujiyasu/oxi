@@ -68,6 +68,17 @@ pub struct RunFormat {
     pub color: Option<String>,
 }
 
+/// Where a shape sits and how big it is, in POINTS. The file counts EMU
+/// (1pt = 12700 EMU), which the writer converts. Only top-level shapes should
+/// be moved this way -- a group child's coordinates are in its group's space.
+#[derive(Debug, Clone, Copy)]
+pub struct ShapeGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// Round-trip pptx editor.
 pub struct PptxEditor {
     original_data: Vec<u8>,
@@ -80,6 +91,8 @@ pub struct PptxEditor {
     merges: HashMap<usize, std::collections::HashSet<(usize, usize)>>,
     /// (slide_idx) -> { (shape, para, run) -> what to change about its look }
     formats: HashMap<usize, HashMap<(usize, usize, usize), RunFormat>>,
+    /// (slide_idx) -> { shape -> where and how big it should be }
+    geoms: HashMap<usize, HashMap<usize, ShapeGeometry>>,
 }
 
 impl PptxEditor {
@@ -92,6 +105,7 @@ impl PptxEditor {
             splits: HashMap::new(),
             merges: HashMap::new(),
             formats: HashMap::new(),
+            geoms: HashMap::new(),
         })
     }
 
@@ -178,6 +192,15 @@ impl PptxEditor {
             .insert((shape_index, paragraph_index, run_index), format);
     }
 
+    /// Move and size one top-level shape. `shape_index` is the editor's own
+    /// `sp`/`pic` count (the IR's `sp_index`).
+    pub fn set_shape_geometry(&mut self, slide_index: usize, shape_index: usize, geom: ShapeGeometry) {
+        self.geoms
+            .entry(slide_index)
+            .or_default()
+            .insert(shape_index, geom);
+    }
+
     pub fn addressable_runs(&self) -> Result<Vec<Vec<Vec<Vec<String>>>>, PptxError> {
         let paths = self.resolve_slide_paths()?;
         let mut archive = OoxmlArchive::new(&self.original_data)?;
@@ -202,7 +225,11 @@ impl PptxEditor {
     }
 
     pub fn has_edits(&self) -> bool {
-        if !self.splits.is_empty() || !self.merges.is_empty() || !self.formats.is_empty() {
+        if !self.splits.is_empty()
+            || !self.merges.is_empty()
+            || !self.formats.is_empty()
+            || !self.geoms.is_empty()
+        {
             return true;
         }
         !self.edits.is_empty()
@@ -213,6 +240,7 @@ impl PptxEditor {
             && self.splits.is_empty()
             && self.merges.is_empty()
             && self.formats.is_empty()
+            && self.geoms.is_empty()
         {
             return Ok(self.original_data.clone());
         }
@@ -248,11 +276,18 @@ impl PptxEditor {
                 path_formats.insert(path.clone(), formats);
             }
         }
+        let mut path_geoms: HashMap<String, &HashMap<usize, ShapeGeometry>> = HashMap::new();
+        for (si, geoms) in &self.geoms {
+            if let Some(path) = slide_paths.get(*si) {
+                path_geoms.insert(path.clone(), geoms);
+            }
+        }
         let no_formats: HashMap<(usize, usize, usize), RunFormat> = HashMap::new();
         let no_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
         let no_splits: HashMap<(usize, usize), usize> = HashMap::new();
         let no_merges: std::collections::HashSet<(usize, usize)> =
             std::collections::HashSet::new();
+        let no_geoms: HashMap<usize, ShapeGeometry> = HashMap::new();
 
         let cursor = Cursor::new(&self.original_data);
         let mut archive =
@@ -277,17 +312,19 @@ impl PptxEditor {
                     || path_splits.contains_key(&name)
                     || path_merges.contains_key(&name)
                     || path_formats.contains_key(&name)
+                    || path_geoms.contains_key(&name)
                 {
                     let slide_edits = path_edits.get(&name).copied().unwrap_or(&no_edits);
                     let slide_splits = path_splits.get(&name).copied().unwrap_or(&no_splits);
                     let slide_merges = path_merges.get(&name).copied().unwrap_or(&no_merges);
                     let slide_formats = path_formats.get(&name).copied().unwrap_or(&no_formats);
+                    let slide_geoms = path_geoms.get(&name).copied().unwrap_or(&no_geoms);
                     let mut xml = String::new();
                     entry
                         .read_to_string(&mut xml)
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
                     let patched = patch_slide_xml(
-                        &xml, slide_edits, slide_splits, slide_merges, slide_formats,
+                        &xml, slide_edits, slide_splits, slide_merges, slide_formats, slide_geoms,
                     )?;
                     writer
                         .write_all(patched.as_bytes())
@@ -627,6 +664,55 @@ fn apply_format(tag: &BytesStart<'_>, format: &RunFormat) -> BytesStart<'static>
     out
 }
 
+/// Points to EMU, the unit the file stores geometry in.
+fn pt_to_emu(pt: f32) -> i64 {
+    (f64::from(pt) * 12700.0).round() as i64
+}
+
+/// Emit a fresh `<a:xfrm><a:off/><a:ext/></a:xfrm>` for a shape that carried
+/// none. A shape without its own transform inherits it, so it has no rotation
+/// or flip to preserve here.
+fn emit_xfrm(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    buffer: &mut Option<(usize, Vec<Event<'static>>)>,
+    g: ShapeGeometry,
+) -> Result<(), PptxError> {
+    emit(writer, buffer, Event::Start(BytesStart::new("a:xfrm")))?;
+    let mut off = BytesStart::new("a:off");
+    off.push_attribute(("x", pt_to_emu(g.x).to_string().as_str()));
+    off.push_attribute(("y", pt_to_emu(g.y).to_string().as_str()));
+    emit(writer, buffer, Event::Empty(off))?;
+    let mut ext = BytesStart::new("a:ext");
+    ext.push_attribute(("cx", pt_to_emu(g.width).max(0).to_string().as_str()));
+    ext.push_attribute(("cy", pt_to_emu(g.height).max(0).to_string().as_str()));
+    emit(writer, buffer, Event::Empty(ext))?;
+    emit(writer, buffer, Event::End(BytesEnd::new("a:xfrm")))?;
+    Ok(())
+}
+
+/// Rewrite an `a:off` / `a:ext` tag's coordinates to `g`, keeping any other
+/// attributes (there are none of note, but this stays uniform with the rest).
+fn geom_tag(tag: &BytesStart<'_>, g: ShapeGeometry, is_off: bool) -> BytesStart<'static> {
+    let name = String::from_utf8_lossy(tag.name().as_ref()).into_owned();
+    let mut out = BytesStart::new(name);
+    let (ka, kb) = if is_off { ("x", "y") } else { ("cx", "cy") };
+    for attr in tag.attributes().flatten() {
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        if key == ka || key == kb {
+            continue;
+        }
+        out.push_attribute((key.as_str(), attr.unescape_value().unwrap_or_default().as_ref()));
+    }
+    if is_off {
+        out.push_attribute((ka, pt_to_emu(g.x).to_string().as_str()));
+        out.push_attribute((kb, pt_to_emu(g.y).to_string().as_str()));
+    } else {
+        out.push_attribute((ka, pt_to_emu(g.width).max(0).to_string().as_str()));
+        out.push_attribute((kb, pt_to_emu(g.height).max(0).to_string().as_str()));
+    }
+    out
+}
+
 /// Route one event to the split buffer when a paragraph is being cut, else
 /// straight to the writer -- the pattern this function repeats inline.
 fn emit(
@@ -691,6 +777,7 @@ fn patch_slide_xml(
     splits: &HashMap<(usize, usize), usize>,
     merges: &std::collections::HashSet<(usize, usize)>,
     formats: &HashMap<(usize, usize, usize), RunFormat>,
+    geoms: &HashMap<usize, ShapeGeometry>,
 ) -> Result<String, PptxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -734,6 +821,16 @@ fn patch_slide_xml(
     // one (e.g. an `a:ln`, whose own `a:solidFill` is the OUTLINE colour and
     // must not be mistaken for the text fill).
     let mut fmt_depth: usize = 0;
+    // Moving/sizing the current shape. `geom_shape` is set while inside the
+    // target `p:sp`/`p:pic`; `in_geom_sppr` while inside its `p:spPr`;
+    // `pending_xfrm` holds the geometry until an existing `a:xfrm` is found to
+    // rewrite (keeping its rot/flip) or the first non-xfrm child forces a fresh
+    // one to be injected in schema position (xfrm is spPr's first child);
+    // `in_geom_xfrm` while rewriting that transform's `a:off`/`a:ext`.
+    let mut geom_shape: Option<ShapeGeometry> = None;
+    let mut in_geom_sppr = false;
+    let mut pending_xfrm: Option<ShapeGeometry> = None;
+    let mut in_geom_xfrm = false;
 
     loop {
         match reader.read_event().map_err(PptxError::Xml)? {
@@ -788,6 +885,51 @@ fn patch_slide_xml(
             Event::Text(ref e) if in_fmt_rpr => {
                 emit(&mut writer, &mut buffer, Event::Text(e.clone().into_owned()))?;
             }
+            // --- moving/sizing a shape: its `p:spPr` transform ---
+            // The first child of the target spPr decides how the transform is
+            // written: an existing `a:xfrm` is rewritten in place (its rot/flip
+            // kept); anything else means the shape has none, so a fresh one is
+            // injected before it -- the correct first-child position.
+            Event::Start(ref e) if in_geom_sppr && pending_xfrm.is_some() => {
+                if local_name(e.name().as_ref()) == "xfrm" {
+                    pending_xfrm = None;
+                    in_geom_xfrm = true;
+                    emit(&mut writer, &mut buffer, Event::Start(e.clone().into_owned()))?;
+                } else {
+                    let g = pending_xfrm.take().expect("just checked");
+                    emit_xfrm(&mut writer, &mut buffer, g)?;
+                    emit(&mut writer, &mut buffer, Event::Start(e.clone().into_owned()))?;
+                }
+            }
+            Event::Empty(ref e) if in_geom_sppr && pending_xfrm.is_some() => {
+                let g = pending_xfrm.take().expect("just checked");
+                // A self-closing `<a:xfrm/>` is replaced; any other first child
+                // gets a fresh transform injected before it.
+                emit_xfrm(&mut writer, &mut buffer, g)?;
+                if local_name(e.name().as_ref()) != "xfrm" {
+                    emit(&mut writer, &mut buffer, Event::Empty(e.clone().into_owned()))?;
+                }
+            }
+            Event::Empty(ref e) if in_geom_xfrm && local_name(e.name().as_ref()) == "off" => {
+                let g = geom_shape.expect("geom active");
+                emit(&mut writer, &mut buffer, Event::Empty(geom_tag(e, g, true)))?;
+            }
+            Event::Empty(ref e) if in_geom_xfrm && local_name(e.name().as_ref()) == "ext" => {
+                let g = geom_shape.expect("geom active");
+                emit(&mut writer, &mut buffer, Event::Empty(geom_tag(e, g, false)))?;
+            }
+            Event::End(ref e) if in_geom_xfrm && local_name(e.name().as_ref()) == "xfrm" => {
+                in_geom_xfrm = false;
+                emit(&mut writer, &mut buffer, Event::End(e.clone().into_owned()))?;
+            }
+            Event::End(ref e) if in_geom_sppr && local_name(e.name().as_ref()) == "spPr" => {
+                // An empty spPr with no children still gets its transform.
+                if let Some(g) = pending_xfrm.take() {
+                    emit_xfrm(&mut writer, &mut buffer, g)?;
+                }
+                in_geom_sppr = false;
+                emit(&mut writer, &mut buffer, Event::End(e.clone().into_owned()))?;
+            }
             Event::Start(ref e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
@@ -798,6 +940,16 @@ fn patch_slide_xml(
                     "sp" | "pic" if in_sp_tree => {
                         in_shape = true;
                         para_idx = 0;
+                        geom_shape = geoms.get(&shape_idx).copied();
+                    }
+                    "spPr" if geom_shape.is_some() => {
+                        // The shape's own properties: its transform is written
+                        // through the geom arms above. Write the opening tag and
+                        // arm them.
+                        in_geom_sppr = true;
+                        pending_xfrm = geom_shape;
+                        emit(&mut writer, &mut buffer, Event::Start(e.clone().into_owned()))?;
+                        continue;
                     }
                     "p" if in_shape => {
                         in_paragraph = true;
@@ -888,6 +1040,9 @@ fn patch_slide_xml(
                     "sp" | "pic" if in_shape => {
                         in_shape = false;
                         shape_idx += 1;
+                        geom_shape = None;
+                        in_geom_sppr = false;
+                        pending_xfrm = None;
                     }
                     "p" if in_paragraph => {
                         in_paragraph = false;
@@ -1067,6 +1222,25 @@ mod tests {
             panic!("Expected TextBox");
         }
     }
+
+    #[test]
+    fn test_editor_move_shape() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.pptx");
+        let mut editor = PptxEditor::new(data).expect("should open");
+        // The first addressable shape.
+        let idx = editor.presentation().slides[0].shapes[0]
+            .sp_index
+            .expect("shape 0 is addressable");
+        editor.set_shape_geometry(0, idx, ShapeGeometry { x: 100.0, y: 60.0, width: 300.0, height: 120.0 });
+        let saved = editor.save().expect("should save");
+        let pres = parse_pptx(&saved).expect("should parse");
+        let sh = pres.slides[0].shapes.iter().find(|s| s.sp_index == Some(idx)).expect("shape kept");
+        // Points survive the EMU round-trip to within the rounding.
+        assert!((sh.x - 100.0).abs() < 0.1, "x = {}", sh.x);
+        assert!((sh.y - 60.0).abs() < 0.1, "y = {}", sh.y);
+        assert!((sh.width - 300.0).abs() < 0.1, "w = {}", sh.width);
+        assert!((sh.height - 120.0).abs() < 0.1, "h = {}", sh.height);
+    }
 }
 
 #[cfg(test)]
@@ -1087,7 +1261,7 @@ mod split_tests {
     fn split_at(at: usize) -> String {
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), at);
-        patch_slide_xml(SLIDE, &HashMap::new(), &splits, &HashSet::new(), &HashMap::new()).expect("patch")
+        patch_slide_xml(SLIDE, &HashMap::new(), &splits, &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch")
     }
 
     fn paragraphs(xml: &str) -> Vec<String> {
@@ -1175,7 +1349,7 @@ mod split_tests {
         edits.insert((0usize, 0usize, 0usize), "Goodbye now".to_string());
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), 7);
-        let out = patch_slide_xml(SLIDE, &edits, &splits, &HashSet::new(), &HashMap::new()).expect("patch");
+        let out = patch_slide_xml(SLIDE, &edits, &splits, &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch");
         let ps = paragraphs(&out);
         assert_eq!(texts(&ps[0]), "Goodbye");
         assert_eq!(texts(&ps[1]), " now");
@@ -1183,7 +1357,7 @@ mod split_tests {
 
     #[test]
     fn a_slide_with_no_split_is_left_alone() {
-        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new()).expect("patch");
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch");
         assert_eq!(paragraphs(&out).len(), 2);
     }
 }
@@ -1206,7 +1380,7 @@ mod merge_tests {
     fn merge(which: usize) -> String {
         let mut m = HashSet::new();
         m.insert((0usize, which));
-        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &m, &HashMap::new()).expect("patch")
+        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &m, &HashMap::new(), &HashMap::new()).expect("patch")
     }
 
     fn paragraphs(xml: &str) -> Vec<String> {
@@ -1269,7 +1443,7 @@ mod merge_tests {
 
     #[test]
     fn a_slide_with_no_join_is_left_alone() {
-        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new())
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new(), &HashMap::new())
             .expect("patch");
         assert_eq!(paragraphs(&out).len(), 3);
     }
@@ -1291,7 +1465,7 @@ mod format_tests {
     fn format(run: usize, f: RunFormat) -> String {
         let mut m = HashMap::new();
         m.insert((0usize, 0usize, run), f);
-        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m)
+        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m, &HashMap::new())
             .expect("patch")
     }
 
@@ -1366,7 +1540,7 @@ mod format_tests {
         );
         let mut m = HashMap::new();
         m.insert((0usize, 0usize, 0usize), RunFormat { bold: Some(true), ..Default::default() });
-        let out = patch_slide_xml(OPEN, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m)
+        let out = patch_slide_xml(OPEN, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m, &HashMap::new())
             .expect("patch");
         assert_eq!(out.matches("<a:rPr").count(), 1, "exactly one rPr: {out}");
         assert!(out.contains(r#"b="1""#), "{out}");
@@ -1383,7 +1557,7 @@ mod format_tests {
     #[test]
     fn a_slide_with_no_format_change_is_left_alone() {
         let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(),
-                                  &HashSet::new(), &HashMap::new()).expect("patch");
+                                  &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch");
         assert!(out.contains(r#"<a:rPr sz="1800" lang="en"/>"#), "{out}");
     }
 }

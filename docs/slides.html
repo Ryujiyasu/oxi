@@ -134,6 +134,14 @@ body.editing .slide-shape span[contenteditable]:empty { display: inline-block;
 .fmtbar .fmthint { color: #9ca3af; font-size: 12px }
 .fmtbar button:disabled, .fmtbar input:disabled { opacity: .45; cursor: default }
 
+/* ---- move / resize a shape while editing ---- */
+body.editing .slide-shape.movable { cursor: move }
+body.editing .slide-shape.sel { outline: 2px solid var(--accent); outline-offset: 0 }
+.rz-handle { position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px;
+             background: #fff; border: 2px solid var(--accent); border-radius: 3px;
+             cursor: nwse-resize; z-index: 5 }
+body.dragging, body.dragging * { cursor: inherit !important; user-select: none }
+
 /* ---- presenting ---- */
 #btnPresent { font-weight: 600 }
 body.presenting { overflow: hidden; background: #000 }
@@ -532,6 +540,10 @@ const edits = new Map();
 // the unit the file and the IR share, so a style lands on every run the
 // selection touches rather than splitting one.
 const runFmt = new Map();
+// Per-shape move/resize, keyed `slideIndex/sp_index` -> {x,y,width,height} in
+// points. Its own list to the engine (`geoms`), applied only to top-level
+// shapes -- a group child's coordinates are in its group's space.
+const geomEdits = new Map();
 
 function slideIndexOf(slide) {
   return pres ? pres.slides.indexOf(slide) : 0;
@@ -558,7 +570,44 @@ function harvest() {
 
 function markDirty() {
   const n = document.getElementById('docName');
-  n.classList.toggle('dirty', edits.size > 0 || runFmt.size > 0);
+  n.classList.toggle('dirty', edits.size > 0 || runFmt.size > 0 || geomEdits.size > 0);
+}
+
+// Every pending change, in the shapes the engine takes. Split and merge save
+// through the same call, so pressing Enter or Backspace flushes text, look and
+// position together rather than dropping whatever has not been saved yet.
+function collectPending() {
+  const list = [];
+  for (const [key, text] of edits) {
+    const [si, sh, pi, ri] = key.split('/').map(Number);
+    list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
+                run_index: ri, new_text: text });
+  }
+  const formats = [];
+  for (const [key, f] of runFmt) {
+    const [si, sh, pi, ri] = key.split('/').map(Number);
+    const entry = { slide_index: si, shape_index: sh, paragraph_index: pi, run_index: ri };
+    if (f.bold !== undefined) entry.bold = f.bold;
+    if (f.italic !== undefined) entry.italic = f.italic;
+    if (f.underline !== undefined) entry.underline = f.underline;
+    if (f.size !== undefined) entry.font_size = f.size;
+    if (f.color !== undefined) entry.color = f.color;
+    formats.push(entry);
+  }
+  const geoms = [];
+  for (const [key, g] of geomEdits) {
+    const [si, sp] = key.split('/').map(Number);
+    geoms.push({ slide_index: si, shape_index: sp,
+                 x: g.x, y: g.y, width: g.width, height: g.height });
+  }
+  return { list, formats, geoms };
+}
+function clearPending() {
+  edits.clear();
+  runFmt.clear();
+  geomEdits.clear();
+  clearSelection();
+  markDirty();
 }
 
 function buildSlide(container, slide, scale, interactive) {
@@ -566,10 +615,24 @@ function buildSlide(container, slide, scale, interactive) {
     shape.__i = __i;
     const div = document.createElement('div');
     div.className = 'slide-shape';
-    div.style.left = (shape.x * scale) + 'px';
-    div.style.top = (shape.y * scale) + 'px';
-    div.style.width = (shape.width * scale) + 'px';
-    div.style.height = (shape.height * scale) + 'px';
+    // The shape's box, with any in-page move/resize on top (geomEdits, keyed
+    // like the run maps by slide and the shape's own sp_index).
+    const gkey = (shape.sp_index !== undefined && shape.sp_index !== null)
+      ? (slideIndexOf(slide) + '/' + shape.sp_index) : null;
+    const g = gkey && geomEdits.get(gkey);
+    const gx = g ? g.x : shape.x, gy = g ? g.y : shape.y;
+    const gw = g ? g.width : shape.width, gh = g ? g.height : shape.height;
+    div.style.left = (gx * scale) + 'px';
+    div.style.top = (gy * scale) + 'px';
+    div.style.width = (gw * scale) + 'px';
+    div.style.height = (gh * scale) + 'px';
+    // A top-level, editor-addressable shape can be moved while editing.
+    if (editing && interactive && gkey && shape.top_level !== false) {
+      div.dataset.geokey = gkey;
+      div.dataset.gx = gx; div.dataset.gy = gy;
+      div.dataset.gw = gw; div.dataset.gh = gh;
+      div.classList.add('movable');
+    }
 
     if (shape.gradient) {
       div.style.backgroundImage = gradientCss(shape.gradient);
@@ -688,6 +751,7 @@ const canvas = document.getElementById('canvas');
 const rail = document.getElementById('rail');
 
 function render() {
+  selectedDiv = null;           // the shape divs are about to be recreated
   canvas.innerHTML = '';
   rail.innerHTML = '';
   rail.style.display = 'block';
@@ -814,6 +878,8 @@ async function open(name, data, opts) {
     bytes = data;
     edits.clear();
     runFmt.clear();
+    geomEdits.clear();
+    clearSelection();
     markDirty();
     pres = parse_presentation(data);
     current = (opts && opts.at) || 0;
@@ -1090,6 +1156,80 @@ document.getElementById('fmtColor').addEventListener('input', e => {
 });
 document.addEventListener('selectionchange', () => { if (editing) syncFmtBar(); });
 
+/* ---- move / resize a shape --------------------------------------------------
+   A top-level shape is dragged by its body (clicking its text still places the
+   caret) and resized by the corner handle. The new box is remembered per shape
+   in `geomEdits`; Save hands it to the engine, which rewrites the shape's
+   `a:off`/`a:ext` while keeping any rotation or flip. */
+let selectedDiv = null;
+function clearSelection() {
+  if (selectedDiv) {
+    selectedDiv.classList.remove('sel');
+    const h = selectedDiv.querySelector(':scope > .rz-handle');
+    if (h) h.remove();
+    selectedDiv = null;
+  }
+}
+function selectShape(div) {
+  if (selectedDiv === div) return;
+  clearSelection();
+  selectedDiv = div;
+  div.classList.add('sel');
+  const h = document.createElement('div');
+  h.className = 'rz-handle';
+  div.appendChild(h);
+}
+function commitGeom(div) {
+  geomEdits.set(div.dataset.geokey, {
+    x: +div.dataset.gx, y: +div.dataset.gy,
+    width: +div.dataset.gw, height: +div.dataset.gh,
+  });
+  markDirty();
+}
+function dragLoop(startX, startY, onMove) {
+  document.body.classList.add('dragging');
+  function mv(ev) { onMove((ev.clientX - startX) / currentScale, (ev.clientY - startY) / currentScale); }
+  function up() {
+    document.removeEventListener('mousemove', mv);
+    document.removeEventListener('mouseup', up);
+    document.body.classList.remove('dragging');
+    if (selectedDiv) commitGeom(selectedDiv);
+  }
+  document.addEventListener('mousemove', mv);
+  document.addEventListener('mouseup', up);
+}
+canvas.addEventListener('mousedown', e => {
+  if (!editing) return;
+  const handle = e.target.closest('.rz-handle');
+  if (handle) {
+    const div = handle.parentElement;
+    selectShape(div);
+    const gw0 = +div.dataset.gw, gh0 = +div.dataset.gh;
+    e.preventDefault();
+    dragLoop(e.clientX, e.clientY, (dx, dy) => {
+      const nw = Math.max(5, gw0 + dx), nh = Math.max(5, gh0 + dy);
+      div.style.width = (nw * currentScale) + 'px';
+      div.style.height = (nh * currentScale) + 'px';
+      div.dataset.gw = nw; div.dataset.gh = nh;
+    });
+    return;
+  }
+  const div = e.target.closest('.slide-shape.movable');
+  if (!div) { clearSelection(); return; }
+  // A click on the shape's own text places the caret; only a click on the
+  // shape body (background, image, padding) begins a move.
+  if (e.target.closest('[contenteditable]')) { selectShape(div); return; }
+  selectShape(div);
+  const gx0 = +div.dataset.gx, gy0 = +div.dataset.gy;
+  e.preventDefault();
+  dragLoop(e.clientX, e.clientY, (dx, dy) => {
+    const nx = gx0 + dx, ny = gy0 + dy;
+    div.style.left = (nx * currentScale) + 'px';
+    div.style.top = (ny * currentScale) + 'px';
+    div.dataset.gx = nx; div.dataset.gy = ny;
+  });
+});
+
 // One listener on the canvas, so a re-render never leaves a run unwired.
 document.getElementById('canvas').addEventListener('input', () => harvest());
 document.getElementById('canvas').addEventListener('keyup', () => { if (editing) harvest(); });
@@ -1144,18 +1284,11 @@ function splitHere() {
   const where = caretOffsetInParagraph();
   if (!where) return;
   harvest();
-  const list = [];
-  for (const [key, text] of edits) {
-    const [si, sh, pi, ri] = key.split('/').map(Number);
-    list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
-                run_index: ri, new_text: text });
-  }
+  const { list, formats, geoms } = collectPending();
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [where], [], []);
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [where], [], formats, geoms);
     bytes = out;
-    edits.clear();
-    runFmt.clear();
-    markDirty();
+    clearPending();
     pres = parse_presentation(new Uint8Array(bytes));
     render();
     keepDeck(document.getElementById('docName').textContent, bytes);
@@ -1216,20 +1349,13 @@ function mergeHere() {
   for (const s of document.querySelectorAll('#canvas span[data-key^="' + prevPrefix + '"]')) {
     seam += Array.from(s.textContent).length;
   }
-  const list = [];
-  for (const [key, text] of edits) {
-    const [si, sh, pi, ri] = key.split('/').map(Number);
-    list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
-                run_index: ri, new_text: text });
-  }
+  const { list, formats, geoms } = collectPending();
   try {
     const merge = { slide_index: where.slide_index, shape_index: where.shape_index,
                     paragraph_index: where.paragraph_index };
-    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [merge], []);
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [merge], formats, geoms);
     bytes = out;
-    edits.clear();
-    runFmt.clear();
-    markDirty();
+    clearPending();
     pres = parse_presentation(new Uint8Array(bytes));
     render();
     keepDeck(document.getElementById('docName').textContent, bytes);
@@ -1249,28 +1375,10 @@ document.getElementById('canvas').addEventListener('paste', e => {
 
 document.getElementById('btnSave').onclick = async () => {
   harvest();
-  if (!edits.size && !runFmt.size) { say(t('noEdits')); return; }
-  const list = [];
-  for (const [key, text] of edits) {
-    const [si, sh, pi, ri] = key.split('/').map(Number);
-    list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
-                run_index: ri, new_text: text });
-  }
-  // Each recoloured / re-weighted run as a `formats` entry. Only the fields
-  // the person changed are sent, so the rest of the run's look is left alone.
-  const formats = [];
-  for (const [key, f] of runFmt) {
-    const [si, sh, pi, ri] = key.split('/').map(Number);
-    const entry = { slide_index: si, shape_index: sh, paragraph_index: pi, run_index: ri };
-    if (f.bold !== undefined) entry.bold = f.bold;
-    if (f.italic !== undefined) entry.italic = f.italic;
-    if (f.underline !== undefined) entry.underline = f.underline;
-    if (f.size !== undefined) entry.font_size = f.size;
-    if (f.color !== undefined) entry.color = f.color;
-    formats.push(entry);
-  }
+  if (!edits.size && !runFmt.size && !geomEdits.size) { say(t('noEdits')); return; }
+  const { list, formats, geoms } = collectPending();
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], formats);
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], formats, geoms);
     const name = (document.getElementById('docName').textContent || 'slides')
       .replace(/\.pptx$/i, '') + '-edited.pptx';
     const url = URL.createObjectURL(new Blob([out], {
@@ -1282,9 +1390,7 @@ document.getElementById('btnSave').onclick = async () => {
     // The page now shows what the saved file holds, so further edits stack on
     // top of it rather than being applied twice.
     bytes = out;
-    edits.clear();
-    runFmt.clear();
-    markDirty();
+    clearPending();
     pres = parse_presentation(new Uint8Array(bytes));
     render();
     keepDeck(document.getElementById('docName').textContent, bytes);
@@ -1306,6 +1412,8 @@ document.getElementById('btnClose').onclick = async () => {
   editing = false;
   edits.clear();
   runFmt.clear();
+  geomEdits.clear();
+  clearSelection();
   document.body.classList.remove('editing');
   markDirty();
   document.getElementById('canvas').innerHTML = '';

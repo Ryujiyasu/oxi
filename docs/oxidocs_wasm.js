@@ -214,18 +214,19 @@ export function edit_pptx(data, edits) {
  * `edits` replaces run text; `splits` cuts a paragraph in two at a character
  * offset, which is what Enter means. Both are applied to the same save, and
  * the text edit lands first so a split counts the characters the file will
- * actually carry.
+ * actually carry. `geoms` moves and sizes top-level shapes.
  * @param {Uint8Array} data
  * @param {any} edits
  * @param {any} splits
  * @param {any} merges
  * @param {any} formats
+ * @param {any} geoms
  * @returns {Uint8Array}
  */
-export function edit_pptx_with_splits(data, edits, splits, merges, formats) {
+export function edit_pptx_with_splits(data, edits, splits, merges, formats, geoms) {
     const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.edit_pptx_with_splits(ptr0, len0, edits, splits, merges, formats);
+    const ret = wasm.edit_pptx_with_splits(ptr0, len0, edits, splits, merges, formats, geoms);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }

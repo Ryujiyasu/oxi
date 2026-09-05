@@ -457,6 +457,12 @@ pub struct Shape {
     /// connector -- so a caller can leave it alone rather than guess.
     #[serde(default)]
     pub sp_index: Option<usize>,
+    /// True when the shape is a direct child of the slide's `p:spTree`, not
+    /// nested in a `p:grpSp`. A group child's `a:off`/`a:ext` are in the
+    /// group's child space, so a geometry edit that wrote absolute slide
+    /// coordinates would misplace it -- an editor moves only top-level shapes.
+    #[serde(default = "default_true")]
+    pub top_level: bool,
     /// `a:gradFill` on the shape itself. The dev corpus has 302 of these on
     /// 35 slides in 4 decks, plus 60 more on layout shapes -- d24's title
     /// slide is built entirely out of them, which is why it renders as a flat
