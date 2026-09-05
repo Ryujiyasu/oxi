@@ -1100,6 +1100,19 @@ document.getElementById('canvas').addEventListener('keydown', e => {
     splitHere();
     return;
   }
+  if (e.key === 'Backspace') {
+    // Only the collapsed-caret-at-paragraph-start case is structural; every
+    // other Backspace deletes a character and rides the normal input path.
+    const sel = window.getSelection();
+    if (sel && sel.isCollapsed) {
+      const where = caretOffsetInParagraph();
+      if (where && where.at_char === 0 && where.paragraph_index > 0) {
+        e.preventDefault();
+        mergeHere();
+        return;
+      }
+    }
+  }
   e.stopPropagation();                       // arrows move the caret, not the deck
 });
 
@@ -1162,6 +1175,70 @@ function splitHere() {
   } catch (err) {
     say(t('saveFailed') + err.message, true);
   }
+}
+
+/* Backspace at the very start of a paragraph joins it onto the one before --
+   the inverse of Enter, and like Enter a change to the FILE's structure. The
+   engine's `merge_paragraph` does it; the caret is then placed at the seam,
+   which is the end of the text the previous paragraph held. */
+function placeCaretInParagraph(si, sh, pi, offset) {
+  const prefix = si + '/' + sh + '/' + pi + '/';
+  const spans = [...document.querySelectorAll('#canvas span[data-key^="' + prefix + '"]')];
+  if (!spans.length) return;
+  let remaining = offset;
+  for (const s of spans) {
+    const chars = Array.from(s.textContent);
+    if (remaining <= chars.length) {
+      const node = s.firstChild || s;
+      const u16 = chars.slice(0, remaining).join('').length;   // chars -> UTF-16
+      const r = document.createRange();
+      if (node.nodeType === 3) r.setStart(node, u16);
+      else r.setStart(s, 0);
+      r.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      s.focus();
+      return;
+    }
+    remaining -= chars.length;
+  }
+}
+
+function mergeHere() {
+  const where = caretOffsetInParagraph();
+  if (!where || where.at_char !== 0 || where.paragraph_index === 0) return false;
+  harvest();
+  // The seam sits at the end of the previous paragraph's current text.
+  const prevPrefix = where.slide_index + '/' + where.shape_index + '/'
+    + (where.paragraph_index - 1) + '/';
+  let seam = 0;
+  for (const s of document.querySelectorAll('#canvas span[data-key^="' + prevPrefix + '"]')) {
+    seam += Array.from(s.textContent).length;
+  }
+  const list = [];
+  for (const [key, text] of edits) {
+    const [si, sh, pi, ri] = key.split('/').map(Number);
+    list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
+                run_index: ri, new_text: text });
+  }
+  try {
+    const merge = { slide_index: where.slide_index, shape_index: where.shape_index,
+                    paragraph_index: where.paragraph_index };
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [merge], []);
+    bytes = out;
+    edits.clear();
+    runFmt.clear();
+    markDirty();
+    pres = parse_presentation(new Uint8Array(bytes));
+    render();
+    keepDeck(document.getElementById('docName').textContent, bytes);
+    placeCaretInParagraph(where.slide_index, where.shape_index,
+                          where.paragraph_index - 1, seam);
+  } catch (err) {
+    say(t('saveFailed') + err.message, true);
+  }
+  return true;
 }
 document.getElementById('canvas').addEventListener('paste', e => {
   if (!editing) return;
