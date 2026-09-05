@@ -413,6 +413,11 @@ unsafe fn render_page_elements(
                 let snap_x = if std::env::var("OXI_S546_XSNAP").is_ok() {
                     (el.x / 0.75).round() * 0.75
                 } else { el.x };
+                // S1327: a no-fill run paints nothing (Word's transparent
+                // Text Fill); it already took its advance.
+                if effects.no_fill && std::env::var("OXI_S1327_DISABLE").is_err() {
+                    continue;
+                }
                 render_text(
                     rt, dwrite_factory,
                     snap_x, glyph_top_y, el.width, el.height,

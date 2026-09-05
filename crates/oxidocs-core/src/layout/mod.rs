@@ -1888,6 +1888,8 @@ pub struct TextEffects {
     pub emboss: bool,
     pub imprint: bool,
     pub outline: bool,
+    /// S1327: w14:textFill noFill -- renderers paint nothing for the run.
+    pub no_fill: bool,
 }
 
 #[derive(Clone)]
@@ -4794,6 +4796,7 @@ cells={} pitch={:.2} text={:?}",
                     emboss: style.emboss,
                     imprint: style.imprint,
                     outline: style.outline,
+                    no_fill: style.no_fill,
                 },
             },
         );
@@ -13355,6 +13358,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // Word PDF omits runs without color attribute inside colored TextBoxes —
                     // these are overflow text that would be black-on-dark and shouldn't be visible.
                     // Only apply to dark fills (not white/light backgrounds where black text is normal).
+                    // S1326: the AUTOMATIC text colour flips to white below luma 59/255.
+                    let s1326_auto_white = text_box.fill.as_ref().map_or(false, |f| {
+                        let hex = f.trim_start_matches('#');
+                        if hex.len() >= 6 {
+                            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255) as f32;
+                            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255) as f32;
+                            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255) as f32;
+                            0.299 * r + 0.587 * g + 0.114 * b < 59.0
+                        } else {
+                            false
+                        }
+                    });
                     let has_dark_fill = text_box.fill.as_ref().map_or(false, |f| {
                         let hex = f.trim_start_matches('#');
                         if hex.len() >= 6 {
@@ -13448,7 +13463,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // glyphs that would otherwise be black-on-dark. Verified on 1ec1
                         // P2 heading box (4472C4 fill, runs 8-9 have no color attribute and
                         // are not visible in Word's rendering despite line layout including them).
-                        if has_dark_fill {
+                        // S1326 (2026-09-05, default ON, opt-out OXI_S1326_DISABLE):
+                        // Word does NOT drop such runs. DERIVED (_pb_txbxfill_gen.py,
+                        // 32 arms, Word PDF span colours): a run with no w:color takes
+                        // the shape style's fontRef colour when there is one (lt1 ->
+                        // white on any fill), else the AUTOMATIC colour, which flips
+                        // to white only when the fill's Rec.601 luma is below 59/255
+                        // (3A3A3A / C00000 white; 3C3C3C / C80000 / 404040 / 4472C4 /
+                        // 969696 / FF0000 black). reports__167853's thirteen 969696
+                        // banners lost every title under the old r+g+b < 600 drop.
+                        if std::env::var("OXI_S1326_DISABLE").is_err() {
+                            if let LayoutContent::Text { ref mut color, .. } = pe.content {
+                                if color.is_none() {
+                                    if let Some(c) = text_box.font_ref_color.as_ref() {
+                                        *color = Some(c.trim_start_matches('#').to_string());
+                                    } else if s1326_auto_white {
+                                        *color = Some("FFFFFF".to_string());
+                                    }
+                                }
+                            }
+                        } else if has_dark_fill {
                             if let LayoutContent::Text { ref color, .. } = pe.content {
                                 if color.is_none() {
                                     return false;
@@ -21583,6 +21617,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             emboss: frag.style.emboss,
                             imprint: frag.style.imprint,
                             outline: frag.style.outline,
+                            no_fill: frag.style.no_fill,
                         },
                     },
                 );
@@ -34459,6 +34494,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         emboss: first_run_style.emboss,
                                                         imprint: first_run_style.imprint,
                                                         outline: first_run_style.outline,
+                                                        no_fill: first_run_style.no_fill,
                                                     },
                                                 },
                                             );
@@ -34525,6 +34561,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 emboss: first_run_style.emboss,
                                                 imprint: first_run_style.imprint,
                                                 outline: first_run_style.outline,
+                                                no_fill: first_run_style.no_fill,
                                             },
                                         },
                                     );

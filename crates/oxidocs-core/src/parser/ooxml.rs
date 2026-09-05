@@ -6022,6 +6022,8 @@ fn parse_drawing(
     // Shape properties
     let mut shape_type: Option<String> = None;
     let mut shape_fill: Option<String> = None;
+    // S1326: wps:style/a:fontRef colour (the box text's default colour).
+    let mut font_ref_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
     let mut stroke_width: Option<f32> = None;
     let mut shape_text_blocks: Vec<Block> = Vec::new();
@@ -6630,6 +6632,7 @@ fn parse_drawing(
                         let mut fill_ref_idx: i32 = -1;
                         let mut in_ln_ref = false;
                         let mut ln_ref_idx: i32 = -1;
+                        let mut in_font_ref = false;
                         loop {
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
@@ -6649,6 +6652,9 @@ fn parse_drawing(
                                                     }
                                                 }
                                             }
+                                        }
+                                        "fontRef" => {
+                                            in_font_ref = true;
                                         }
                                         "lnRef" => {
                                             in_ln_ref = true;
@@ -6671,7 +6677,10 @@ fn parse_drawing(
                                                 if local_name(attr.key.as_ref()) == "val" {
                                                     let c = String::from_utf8_lossy(&attr.value)
                                                         .to_string();
-                                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                                    if in_font_ref {
+                                                    font_ref_color = Some(c.clone());
+                                                }
+                                                if let Some(wsp) = s839_wsp.as_mut() {
                                                         if in_fill_ref {
                                                             wsp.fillref.1 = Some(c.clone());
                                                         }
@@ -6687,6 +6696,15 @@ fn parse_drawing(
                                                 if local_name(attr.key.as_ref()) == "val" {
                                                     let val = String::from_utf8_lossy(&attr.value)
                                                         .to_string();
+                                                    // S1326: theme-less packages still mean
+                                                    // lt1/bg1 = white, dk1/tx1 = black.
+                                                    if in_font_ref && ctx.theme.resolve(&val).is_none() {
+                                                        font_ref_color = match val.as_str() {
+                                                            "lt1" | "bg1" => Some("FFFFFF".to_string()),
+                                                            "dk1" | "tx1" => Some("000000".to_string()),
+                                                            _ => None,
+                                                        };
+                                                    }
                                                     if let Some(resolved) = ctx.theme.resolve(&val)
                                                     {
                                                         let color = parse_color_modifiers(
@@ -6694,6 +6712,9 @@ fn parse_drawing(
                                                             resolved,
                                                             "schemeClr",
                                                         );
+                                                        if in_font_ref {
+                                                            font_ref_color = Some(color.clone());
+                                                        }
                                                         if let Some(wsp) = s839_wsp.as_mut() {
                                                             if in_fill_ref {
                                                                 wsp.fillref.1 = Some(color.clone());
@@ -6714,8 +6735,14 @@ fn parse_drawing(
                                                         {
                                                             stroke_color = Some(color);
                                                         }
+                                                        // parse_color_modifiers consumed this
+                                                        // element's End; only then does the depth
+                                                        // drop here. Unresolved (theme-less) scheme
+                                                        // colours still deliver their End event, and
+                                                        // decrementing for both closed the style loop
+                                                        // one element early (S1326 probe).
+                                                        style_depth -= 1;
                                                     }
-                                                    style_depth -= 1;
                                                 }
                                             }
                                         }
@@ -6729,6 +6756,19 @@ fn parse_drawing(
                                             if local_name(attr.key.as_ref()) == "val" {
                                                 let val = String::from_utf8_lossy(&attr.value)
                                                     .to_string();
+                                                if in_font_ref {
+                                                    // S1326: a theme-less package still
+                                                    // means lt1/bg1 = white, dk1/tx1 = black.
+                                                    font_ref_color = ctx
+                                                        .theme
+                                                        .resolve(&val)
+                                                        .cloned()
+                                                        .or_else(|| match val.as_str() {
+                                                            "lt1" | "bg1" => Some("FFFFFF".to_string()),
+                                                            "dk1" | "tx1" => Some("000000".to_string()),
+                                                            _ => None,
+                                                        });
+                                                }
                                                 if let Some(resolved) = ctx.theme.resolve(&val) {
                                                     if let Some(wsp) = s839_wsp.as_mut() {
                                                         if in_fill_ref {
@@ -6759,6 +6799,9 @@ fn parse_drawing(
                                             if local_name(attr.key.as_ref()) == "val" {
                                                 let c = String::from_utf8_lossy(&attr.value)
                                                     .to_string();
+                                                if in_font_ref {
+                                                    font_ref_color = Some(c.clone());
+                                                }
                                                 if let Some(wsp) = s839_wsp.as_mut() {
                                                     if in_fill_ref {
                                                         wsp.fillref.1 = Some(c.clone());
@@ -6776,6 +6819,7 @@ fn parse_drawing(
                                     if style_depth == 1 {
                                         in_fill_ref = false;
                                         in_ln_ref = false;
+                                        in_font_ref = false;
                                     }
                                     if style_depth == 0 {
                                         break;
@@ -7485,9 +7529,14 @@ fn parse_drawing(
     let s839_attach = !s839_vector_shapes.is_empty()
         && shape_text_blocks.is_empty()
         && std::env::var("OXI_S839_DISABLE").is_err();
+    if std::env::var("OXI_DEBUG_TB").is_ok() {
+        eprintln!("[TBPARSE] font_ref={:?} fill={:?} blocks={} outline={} visual={}",
+            font_ref_color, shape_fill, shape_text_blocks.len(), is_outline_shape, has_visual);
+    }
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
             blocks: shape_text_blocks,
+            font_ref_color: font_ref_color.clone(),
             width,
             height,
             position: tb_position,
@@ -8276,6 +8325,7 @@ fn parse_vml_pict(
     if s746_inline_txbx {
         let text_box = Some(TextBox {
             blocks: text_blocks,
+            font_ref_color: None,
             width,
             height,
             position: Some(FloatingPosition {
@@ -8766,6 +8816,8 @@ fn parse_run_properties(
 ) -> Result<(RunStyle, Option<PropertyChange>), ParseError> {
     let mut style = RunStyle::default();
     let mut depth = 0;
+    // S1327: inside <w14:textFill> (its <w14:noFill/> makes the run invisible).
+    let mut in_text_fill = false;
     let mut rstyle_id: Option<String> = None;
     let mut rpr_change: Option<PropertyChange> = None;
 
@@ -8773,6 +8825,9 @@ fn parse_run_properties(
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "textFill" {
+                    in_text_fill = true;
+                }
                 // rPrChange carries a full prior <w:rPr> body. If we fell through
                 // to the normal handlers, every prior property (bold, italic,
                 // color, font) would silently merge into the *current* style.
@@ -9102,6 +9157,15 @@ fn parse_run_properties(
                     "rtl" => {
                         style.rtl = true;
                     }
+                    // S1327: <w14:textFill><w14:noFill/></w14:textFill> = a run whose
+                    // glyphs have no fill. Word paints nothing for it (1ec1's heading
+                    // boxes duplicate their title this way); the advance stays. Only
+                    // under textFill -- textOutline carries its own noFill.
+                    "noFill" => {
+                        if in_text_fill {
+                            style.no_fill = true;
+                        }
+                    }
                     "vanish" => {
                         style.vanish = true;
                     }
@@ -9209,6 +9273,9 @@ fn parse_run_properties(
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "textFill" {
+                    in_text_fill = false;
+                }
                 if local == "rPr" && depth == 0 {
                     break;
                 }

@@ -527,6 +527,12 @@ pub struct RunStyle {
     /// Text imprint/engrave effect (w:imprint)
     #[serde(default)]
     pub imprint: bool,
+    /// S1327: `w14:textFill/w14:noFill` -- the glyphs have NO fill and are not
+    /// painted (they still take their advance). Word 2010+ writes this for
+    /// text made transparent through the Text Fill effect; 1ec1's heading
+    /// boxes carry duplicated runs this way.
+    #[serde(default)]
+    pub no_fill: bool,
     /// Complex script font size in points (w:szCs, half-points / 2)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_cs: Option<f32>,
@@ -659,6 +665,7 @@ impl Default for RunStyle {
             shadow: false,
             emboss: false,
             imprint: false,
+            no_fill: false,
             font_size_cs: None,
             bold_cs: false,
             italic_cs: false,
@@ -961,6 +968,10 @@ pub struct TextBox {
     /// Background color (hex)
     #[serde(default)]
     pub fill: Option<String>,
+    /// S1326: the shape style's `a:fontRef` colour (wps:style), hex without '#'.
+    /// Text without its own w:color takes this colour inside the box.
+    #[serde(default)]
+    pub font_ref_color: Option<String>,
     /// Index of the anchor block (paragraph) in page.blocks
     #[serde(default)]
     pub anchor_block_index: usize,
