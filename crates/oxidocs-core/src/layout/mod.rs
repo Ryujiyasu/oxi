@@ -1749,6 +1749,12 @@ struct VertParaRecipe {
 struct VertColumn {
     recipe: usize,
     text: String,
+    /// S1329: (run index, chars) segments of `text`, in order; empty for a
+    /// blank column. Each segment is placed with its own run's size/style.
+    segs: Vec<(usize, String)>,
+    /// S1331: where the column's first character starts, measured down from
+    /// the band top (the paragraph's indent turned on its side).
+    top: f32,
     pitch: f32,
     /// An empty paragraph: reserves its width, draws nothing.
     blank: bool,
@@ -4665,6 +4671,8 @@ cells={} pitch={:.2} text={:?}",
                 cols.push(VertColumn {
                     recipe,
                     text: String::new(),
+                    segs: Vec::new(),
+                    top: 0.0,
                     pitch,
                     blank: true,
                     hard_break,
@@ -4672,6 +4680,22 @@ cells={} pitch={:.2} text={:?}",
                 continue;
             }
 
+            // S1329 (2026-09-05, HELD OPT-IN `OXI_S1329=1`; see the archive: the
+            // capacity model is right but without vertical punctuation compression
+            // the JA gate reads worse on 0828836/047ff775): each
+            // character advances by ITS OWN run's size, not the paragraph's
+            // first run. educational__0828836 (tbRl): a paragraph is the
+            // 10.5pt bold original followed, in the same paragraph, by its 9pt
+            // gloss; Word's PDF walks the gloss at 9.0pt per char (47-49 per
+            // 425pt column) and the original at 10.5 (38-43), Oxi walked both
+            // at 10.5 (40) and drew the gloss at 10.5 -- one column too many
+            // per gloss and the page's last paragraph pushed over.
+            let s1329_on = std::env::var("OXI_S1329").ok().as_deref() == Some("1");
+            let run_fs: Vec<f32> = para
+                .runs
+                .iter()
+                .map(|run| self.resolve_font_size(&run.style, &para.style))
+                .collect();
             // Which run each character came from, so a finished column can name
             // the runs that decide its width.
             let char_run: Vec<usize> = para
@@ -4680,33 +4704,72 @@ cells={} pitch={:.2} text={:?}",
                 .enumerate()
                 .flat_map(|(i, r)| r.text.chars().map(move |_| i))
                 .collect();
+            // S1331 (2026-09-05, HELD OPT-IN `OXI_S1331=1`, paired with S1329): the
+            // paragraph's indents turned on their side -- its FIRST column
+            // starts `left + firstLine` down the band, every other column
+            // `left` down (a hanging indent is a negative firstLine, exactly
+            // the horizontal convention). educational__0828836 p7: the ruby
+            // paragraph (firstLineChars=100) begins at 105.0 where its
+            // neighbours begin at 94.5 (Word PDF glyph origins), so it holds
+            // 38 chars + the indent; Oxi began at the band top and held 40,
+            // which pulled the next gloss's first two characters up a column.
+            let s1331_on = std::env::var("OXI_S1331").ok().as_deref() == Some("1");
+            let s1331_left = if s1331_on {
+                para.style
+                    .indent_left
+                    .or_else(|| para.style.indent_left_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio)))
+                    .unwrap_or(0.0)
+                    .max(0.0)
+            } else {
+                0.0
+            };
+            let s1331_first = if s1331_on {
+                para.style
+                    .indent_first_line
+                    .or_else(|| para.style.indent_first_line_chars.map(|c| Self::s1214_chars_pt(c, para, true, page.grid_char_pitch, page.grid_char_cw_ratio)))
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
             let mut buf: Vec<char> = Vec::new();
-            let mut cur_y = 0.0f32;
+            let mut segs: Vec<(usize, String)> = Vec::new();
+            let mut cur_y = (s1331_left + s1331_first).max(0.0);
+            let mut col_top = cur_y;
             let mut first = true;
             let (mut lo, mut hi) = (0usize, 0usize);
             for (ci, ch) in para_text.chars().enumerate() {
-                if cur_y + char_adv > band_h + 0.01 && !buf.is_empty() {
+                let adv = if s1329_on { run_fs[char_run[ci]] } else { char_adv };
+                if cur_y + adv > band_h + 0.01 && !buf.is_empty() {
                     cols.push(VertColumn {
                         recipe,
                         text: buf.drain(..).collect(),
+                        segs: std::mem::take(&mut segs),
+                        top: col_top,
                         pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                         blank: false,
                         hard_break: hard_break && first,
                     });
                     first = false;
-                    cur_y = 0.0;
+                    cur_y = s1331_left;
+                    col_top = cur_y;
                 }
                 if buf.is_empty() {
                     lo = char_run[ci];
                 }
                 hi = char_run[ci];
                 buf.push(ch);
-                cur_y += char_adv;
+                match segs.last_mut() {
+                    Some((r, t)) if *r == char_run[ci] => t.push(ch),
+                    _ => segs.push((char_run[ci], ch.to_string())),
+                }
+                cur_y += adv;
             }
             if !buf.is_empty() {
                 cols.push(VertColumn {
                     recipe,
                     text: buf.drain(..).collect(),
+                    segs: std::mem::take(&mut segs),
+                    top: col_top,
                     pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                     blank: false,
                     hard_break: hard_break && first,
@@ -4727,28 +4790,67 @@ cells={} pitch={:.2} text={:?}",
         col: &VertColumn,
         x: f32,
         y: f32,
-    ) -> Option<LayoutElement> {
+    ) -> Vec<LayoutElement> {
         if col.blank {
-            return None;
+            return Vec::new();
         }
-        let para_style = match &page.blocks[recipe.block_idx] {
-            Block::Paragraph(p) => p.style.clone(),
-            _ => Default::default(),
+        let para = match &page.blocks[recipe.block_idx] {
+            Block::Paragraph(p) => Some(p),
+            _ => None,
         };
-        let n = col.text.chars().count() as f32;
-        Some(self.vertical_line_element(
-            col.text.clone(),
-            x,
-            y,
-            col.pitch,
-            n * recipe.char_adv,
-            recipe.fs,
-            recipe.char_adv - recipe.fs,
-            &recipe.font_family,
-            &recipe.style,
-            &para_style,
-            recipe.block_idx,
-        ))
+        let para_style = para.map(|p| p.style.clone()).unwrap_or_default();
+        // S1329: a column of several runs is several stacked elements, each
+        // advancing its own size (a single-run column is the one element it
+        // always was).
+        // Any column with segments takes each segment's own run size; the
+        // legacy path (paragraph-first-run size) stays for the opt-out and
+        // for columns that carry no segments.
+        let multi = std::env::var("OXI_S1329").ok().as_deref() == Some("1")
+            && !col.segs.is_empty()
+            && para.is_some();
+        let y = y + col.top;
+        if !multi {
+            let n = col.text.chars().count() as f32;
+            return vec![self.vertical_line_element(
+                col.text.clone(),
+                x,
+                y,
+                col.pitch,
+                n * recipe.char_adv,
+                recipe.fs,
+                recipe.char_adv - recipe.fs,
+                &recipe.font_family,
+                &recipe.style,
+                &para_style,
+                recipe.block_idx,
+            )];
+        }
+        let para = para.unwrap();
+        let mut out = Vec::new();
+        let mut cy = y;
+        for (ri, text) in &col.segs {
+            let run = &para.runs[*ri];
+            let fs = self.resolve_font_size(&run.style, &para.style);
+            let fam = self
+                .resolve_font_family_for_text(text, &run.style, &para.style)
+                .map(|s| s.to_string());
+            let n = text.chars().count() as f32;
+            out.push(self.vertical_line_element(
+                text.clone(),
+                x,
+                cy,
+                col.pitch,
+                n * fs,
+                fs,
+                0.0,
+                &fam,
+                &run.style,
+                &para_style,
+                recipe.block_idx,
+            ));
+            cy += n * fs;
+        }
+        out
     }
 
     /// Build one vertical-line Text element (is_vertical=true). The renderer

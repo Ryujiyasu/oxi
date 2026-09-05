@@ -192,6 +192,10 @@ impl FontMetrics {
     }
 
     pub fn char_width_em(&self, c: char) -> f32 {
+        // S1330: a zero-width format character advances nothing (Word).
+        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+            return 0.0;
+        }
         self.char_widths
             .get(&c)
             .copied()
@@ -241,6 +245,16 @@ impl FontMetrics {
     /// use even-pixel rounding: ceil_even(ppem). GDI-measured 2026-03-29.
     /// This matters at small font sizes (7-10pt) where ppem is odd.
     pub fn char_width_pt(&self, c: char, font_size: f32) -> f32 {
+        // S1330 (2026-09-05, default ON, opt-out OXI_S1330_DISABLE): U+200B
+        // ZERO WIDTH SPACE and its kin take NO advance and draw nothing --
+        // educational__08709ff2's TOC rows carry a trailing U+200B in an
+        // MS Mincho run; the 0.5em fallback (9pt at 18pt) wrapped it onto
+        // a line of its own (line=576 exact) and cost the page a row.
+        // Word keeps every such row on one line (PDF: 19 rows, none
+        // ending in a lone mark).
+        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+            return 0.0;
+        }
         let _ppem = (font_size * 96.0 / 72.0).round();
         let advance_em = self.char_width_em(c);
 
@@ -1392,6 +1406,10 @@ impl FontMetricsRegistry {
         font_size: f32,
         metrics: &FontMetrics,
     ) -> f32 {
+        // S1330: zero-width format characters advance nothing on every path.
+        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+            return 0.0;
+        }
         // S888/S892: see char_width_pt_with_gdi_map — U+2011 = the hyphen
         // glyph, U+00A0 = the space advance.
         let c = if c == '\u{2011}'
@@ -1526,6 +1544,10 @@ impl FontMetricsRegistry {
         metrics: &FontMetrics,
         gdi_map: Option<&HashMap<u32, u32>>,
     ) -> f32 {
+        // S1330: zero-width format characters advance nothing on every path.
+        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+            return 0.0;
+        }
         // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen mapping)
         // renders with the ordinary hyphen glyph in Word (same advance).
         // The metric tables lack U+2011 AND is_cjk_or_symbol covers
@@ -2017,6 +2039,11 @@ pub fn font_supports_hwid(family: &str) -> bool {
 /// Half-width katakana: U+FF65..U+FF9F (ｦ, ｧ, ｨ, ... ﾝ, ﾞ, ﾟ)
 fn is_halfwidth_katakana(ch: char) -> bool {
     matches!(ch as u32, 0xFF65..=0xFF9F)
+}
+
+/// S1330: Unicode format characters that occupy no advance and leave no ink.
+pub fn is_zero_width_char(c: char) -> bool {
+    matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
 }
 
 pub fn is_fullwidth(ch: char) -> bool {

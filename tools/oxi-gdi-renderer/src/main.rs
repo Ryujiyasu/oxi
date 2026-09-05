@@ -338,6 +338,12 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             // off ≈ 1px at this scale; extra TextOutW passes recolour
                             // via SetTextColor, restored to `rgb` afterward.
                             let off = (scale.max(1.0)).round() as i32;
+                            // S1330: zero-width format characters leave no ink.
+                            if text.chars().all(oxidocs_core::font::is_zero_width_char)
+                                && std::env::var("OXI_S1330_DISABLE").is_err()
+                            {
+                                continue;
+                            }
                             // S1327: a no-fill run paints nothing (Word's
                             // transparent Text Fill); it already took its advance.
                             if effects.no_fill && std::env::var("OXI_S1327_DISABLE").is_err() {
