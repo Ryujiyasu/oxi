@@ -29645,6 +29645,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // lookup at the rounding site.
         let mut hhea_natural_family: String = String::new();
         let mut hhea_natural_size: f32 = 0.0;
+        // S1322 (2026-09-05): the win-box natural (usWinAscent+usWinDescent) of the
+        // same run that set `hhea_natural_max`, for the CJK 83/64 arm below.
+        let mut s1322_win_natural: f32 = 0.0;
 
         // adjustLineHeightInTable=true: use standard height without CJK 83/64
         let use_standard = in_table_cell && self.adjust_line_height_in_table;
@@ -29725,6 +29728,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             hhea_natural_max = metrics.natural_line_height_hhea(font_size);
             hhea_natural_family = metrics.family.clone();
             hhea_natural_size = font_size;
+            s1322_win_natural = (metrics.win_ascent + metrics.win_descent) * font_size;
             if use_standard {
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
@@ -29933,6 +29937,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     hhea_natural_max = nat;
                     hhea_natural_family = metrics.family.clone();
                     hhea_natural_size = font_size;
+                    s1322_win_natural = (metrics.win_ascent + metrics.win_descent) * font_size;
                 }
             }
         }
@@ -30153,9 +30158,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // uses; only the rounding was wrong. These are exactly the
                     // paragraphs that move when a CJK face finally gets real metrics
                     // (educational__0214ac95's four spacing-bearing body lines).
+                    // S1322 (2026-09-05, opt-out OXI_S1322_DISABLE): the CJK
+                    // natural is the WIN box x 83/64 (GDI tmHeight), not the hhea
+                    // box. S1145 could not tell them apart on MS Mincho (hhea ==
+                    // win); 游ゴシック / 游明朝 carry hhea 1.602 (lineGap 0.5) over
+                    // win 1.287. Word (Info6, `%TEMP%/fontsub/yu.docx`, `line=0
+                    // atLeast`, 游ゴシック 10.5/12/14/16pt): 17.25 / 20.25 / 23.25 /
+                    // 27.0 = win x 83/64 (17.53 / 20.03 / 23.37 / 26.71) rounded to
+                    // Info6's 0.75; hhea x 83/64 would be 21.8 / 24.9 / 29.1 / 33.2.
+                    // educational__0214ac95: three 14pt empties (AR P丸ゴシック体E,
+                    // which Word substitutes with 游ゴシック) drifted +5.5 each.
                     if hhea_natural_max > 0.0 && std::env::var("OXI_S1145_DISABLE").is_err() {
                         return if dominant_cjk_83_64 {
-                            hhea_natural_max * (83.0 / 64.0)
+                            if s1322_win_natural > 0.0
+                                && std::env::var("OXI_S1322_DISABLE").is_err()
+                            {
+                                s1322_win_natural * (83.0 / 64.0)
+                            } else {
+                                hhea_natural_max * (83.0 / 64.0)
+                            }
                         } else {
                             hhea_natural_max
                         };
