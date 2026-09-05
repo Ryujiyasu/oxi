@@ -19888,8 +19888,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // a CJK 83/64 last line (natural ≈ 1.297·em) is pushed where ink (= em)
             // would wrongly fit it. (Using ink here over-compacted test_line_heights
             // to 5 pages, losing Word's page 6 — the −0.985 in the first A/B.)
+            // S1332 (2026-09-05, default ON, opt-out OXI_S1332_DISABLE): under an
+            // EXACT line rule the look-ahead height IS the exact box. DERIVED
+            // (_pb_exactorphan_gen.py, COM Information(3/6), 2-line paragraph,
+            // exact 28.8, widowControl, band bottom 756.9): start 698.25 keeps
+            // both lines (698.25 + 57.6 = 755.85), start 700.25 / 702.25 / 704.25
+            // / 706.25 push the whole paragraph although start + 28.8 + the
+            // natural 23.4 (BIZ UDPGothic 18) or 13.6 (MS Mincho 10.5 in the same
+            // box) would fit -- so the S608 natural rule (derived on x2.0
+            // multiples, where the leading is the multiplier's) does not reach
+            // exact lines. technical__898a80 p11: 「②画面上では…」 at 704.3 is
+            // Word's p12 (today's truth), Oxi kept line 0 on p11.
+            let s1332_exact = para.style.line_spacing_rule.as_deref() == Some("exact")
+                && std::env::var("OXI_S1332_DISABLE").is_err();
             let last_line_fit_h = |idx: usize| -> f32 {
                 let full = line_heights.get(idx).copied().unwrap_or(0.0);
+                if s1332_exact {
+                    return full;
+                }
                 if no_type_multiple_ink {
                     // S1079: natural (unmultiplied) line, not the ink box.
                     let src = if s1079_natural {
@@ -25834,14 +25850,50 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 //      either side.
                 // Verified via jfmb (no explicit eastAsia, space=natural ~3.5pt) vs
                 // runtime-saved equivalent (explicit eastAsia, space=6.0pt at 12pt).
-                if ch == ' ' && style.has_explicit_east_asia {
+                // S1333 (2026-09-05, default ON, opt-out OXI_S1333_DISABLE): the
+                // document-level `balanceSingleByteDoubleByteWidth` is the other
+                // trigger of the same half-em space -- DERIVED (_pb_spacewidth_gen.py,
+                // 6 faces x flag x compat 11/15, runs WITHOUT an rFonts of their own,
+                // Word PDF @18pt): flag off = the face's space (BIZ UDPGothic 6.0,
+                // MS PGothic 5.5, Meiryo 6.1, Yu Gothic 5.2, Century 5.0); flag on =
+                // 9.0 for every space touching a full-width character, the face's
+                // value between Latin characters, letters and digits untouched.
+                // The jfmb-vs-resaved pair above differed in this flag as well
+                // (Word writes it into every document it saves). educational__
+                // 08709ff2 p11: runs carry ascii/hAnsi/cs but no eastAsia, so the
+                // rule above never fired and 「国土交通省 国土地理院 応用地理部
+                // 地理情報処理課」 (+6pt over two spaces in Word) fit on one line.
+                let s1333_balance = self.balance_single_byte_double_byte_width
+                    && std::env::var("OXI_S1333_DISABLE").is_err();
+                if ch == ' ' && (style.has_explicit_east_asia || s1333_balance) {
+                    // S1333: the neighbour may sit in the ADJACENT fragment -- Word
+                    // writes each such space as a run of its own (08709ff2: 「国土交通省
+                    // 国土地理院」「 」「応用地理部」), so a same-fragment look-up
+                    // sees no neighbour at all. Balance-triggered only, so the
+                    // explicit-eastAsia rule above keeps its calibrated reach.
                     let prev_is_cjk = chars_vec
                         .get(char_index.wrapping_sub(1))
                         .copied()
+                        .or_else(|| {
+                            if char_index == 0 && s1333_balance {
+                                fragments
+                                    .get(frag_outer_idx.wrapping_sub(1))
+                                    .and_then(|f| f.0.chars().last())
+                            } else {
+                                None
+                            }
+                        })
                         .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
                     let next_is_cjk = chars_vec
                         .get(char_index + 1)
                         .copied()
+                        .or_else(|| {
+                            if char_index + 1 == chars_vec.len() && s1333_balance {
+                                fragments.get(frag_outer_idx + 1).and_then(|f| f.0.chars().next())
+                            } else {
+                                None
+                            }
+                        })
                         .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
                     if prev_is_cjk || next_is_cjk {
                         char_width = font_size / 2.0;
