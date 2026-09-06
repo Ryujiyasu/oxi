@@ -2167,6 +2167,12 @@ pub struct LayoutEngine {
     /// the real document default; absent = the S636 compromise 11.0/10.0 whose
     /// value Word does not share -- floor excluded there).
     doc_default_sz_declared: bool,
+    /// S1318 v4: the grid-cell floor's slack (true content width minus the
+    /// floored width) for the paragraph being broken; the at-default regime
+    /// fits its compressed lines against the TRUE edge (Word's p4
+    /// 「…（障害者総合支援法）」とされた。」 ends at 235.3 of 235.65, past the
+    /// 230.0 floor of 20 cells).
+    s1318_floor_slack: std::cell::Cell<f32>,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
     /// docDefaults East-Asian language is CJK (ja/zh/ko) — drives S763c ambiguous
@@ -2593,6 +2599,7 @@ impl LayoutEngine {
             default_font_size: 11.0,
             doc_regime_fs: 11.0,
             doc_default_sz_declared: false,
+            s1318_floor_slack: std::cell::Cell::new(0.0),
             default_font_family: None,
             default_font_family_east_asia: None,
             doc_east_asia_lang_cjk: false,
@@ -2743,6 +2750,7 @@ impl LayoutEngine {
                 .as_ref()
                 .and_then(|r| r.font_size)
                 .is_some(),
+            s1318_floor_slack: std::cell::Cell::new(0.0),
             default_font_family,
             default_font_family_east_asia,
             doc_east_asia_lang_cjk,
@@ -25243,6 +25251,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // same docs (0b6f3b32 25->26 pages from +16 lines; 0ea3ec86 43->45).
             // Ships when that partner is identified (Ra: no ship on a negative
             // gate without the compensating error named).
+            // S1318 v3 (2026-09-06, default ON, opt-out OXI_S1318_DISABLE): the
+            // refusal is not absolute -- a normal character IS pulled in when
+            // the line overflows by at most HALF A CELL and has a mark to
+            // absorb it (the marks share the demand; a lone 、 gives up to its
+            // whole 0.5em aki, two marks 0.25 each). DERIVED with
+            // `_oikomi_census.py` on Word's own PDFs (every body line of three
+            // two-column compat-14 docs + the 06ee35d5 cell): 0ea3ec86 28/29
+            // grants + 493/493 refusals, 167853 6/7 + 351/351, 0b6f3b32 5/5 +
+            // 120/120 agree; the two "beyond" grants are lines that would
+            // otherwise end in an OPENING bracket (kinsoku forces the pull-in,
+            // every mark 0.5). A line-final 、。 or closing bracket keeps the v2
+            // cap-half + hang path. The v2 "refuse every normal character" left
+            // 0ea3ec86 at W43/O45 -- lines Word packs to 21 (e.g. p3 col1
+            // 「介します。（各…等は各」, demand 0.49 cell over 。 and ・) broke a
+            // character early, and every such line cascades.
+            // HELD OPT-IN again 2026-09-06 (`OXI_S1318=1`): the JA blind A/B of v3
+            // read 93/93, mean 0.9952 -> 0.9850 (0ea3ec86 W43/O45, 167853 W29/O30;
+            // 0b6f3b32 1.0 either way). The normal-character half-cell rule holds
+            // on every witness; what is still wrong is the LINE-FINAL unit (X + 、。):
+            // Word refuses 「お、」 with （）。 on the line (2.0 cells of marks) and
+            // 「事、」 with 、、, yet keeps 「た。」 by halving three brackets. The
+            // faithful-slice probe `_pb_kinsokufinal_gen.py` sweeps it.
             let s1318_v2 = std::env::var("OXI_S1318").ok().as_deref() == Some("1");
             let s1318_at_default_regime = s568_legacy_oikomi
                 && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
@@ -26146,6 +26176,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 font_size + char_space_pt
                             };
                             expected_w - char_width
+                        }
+                    } else if ratio > 0.0
+                        && pitch > 0.0
+                        && char_width > 0.0
+                        && ch.is_ascii_graphic()
+                        && (char_width - 0.5 * font_size).abs() < 0.06 * font_size
+                        && std::env::var("OXI_S1337_DISABLE").is_err()
+                        && (self.balance_single_byte_double_byte_width
+                            || std::env::var("OXI_S1337B").ok().as_deref() == Some("1"))
+                    {
+                        // S1337 (2026-09-06, default ON, opt-out OXI_S1337_DISABLE): on a
+                        // character grid a HALF-WIDTH character (digit, ASCII letter or
+                        // punctuation drawn at half an em) is not left at its natural
+                        // advance. With balanceSingleByteDoubleByteWidth it advances
+                        // HALF THE CELL: Word's PDF of reference__0ea3ec86 (ＭＳ 明朝 11pt)
+                        // puts every digit, ASCII paren and even the letters of FAX at
+                        // 5.76 in its charSpace-2048 sections (cell 11.52) and at 5.88 in
+                        // the 3194 sections (cell 11.76); reports__167853 (126 digits at
+                        // 5.76) and reference__0b6f3b32 (66) read the same. Without the
+                        // balance flag the character takes the WHOLE charSpace like a
+                        // full-width one (reference__0cf9c879, charSpace -2880: digits
+                        // 4.80 = 5.5 - 0.70; one witness -- opt-in OXI_S1337B=1).
+                        // The natural 5.5 packed 22 characters into p4's
+                        // 「25年４月から「障害者自立支援法」が「障害」 line (Word: 21).
+                        let default_fs = pitch / ratio;
+                        let char_space_pt = pitch - default_fs;
+                        if self.balance_single_byte_double_byte_width {
+                            let cell = if char_space_pt >= 0.0 {
+                                font_size * pitch / default_fs
+                            } else {
+                                font_size + char_space_pt
+                            };
+                            0.5 * cell - char_width
+                        } else {
+                            char_space_pt
                         }
                     } else {
                         0.0
@@ -27055,9 +27120,87 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // S1318 v2: in the at-default legacy regime only a line-final
                     // mark may spend the line's mark capacity; any other
                     // overflowing character is refused (plain width test).
-                    let s1318_refuse_here = s1318_v2
-                        && s1318_at_default_regime
-                        && !matches!(ch, '、' | '。' | '，' | '．');
+                    // S1318 v3: the cell is the grid pitch (char_width carries it
+                    // for a grid-pitched character) or the em without a grid.
+                    let s1318_half_cell_tw = pt_to_tw(0.5 * char_width.max(font_size));
+                    // S1318 v4 (2026-09-06): the at-default regime's pull-in, with the
+                    // line's OWN elective capacity (every mark half an em, a pair's
+                    // second member structural = free) instead of the S475 per-type
+                    // caps. DERIVED with the faithful-slice probe
+                    // `_pb_kinsokufinal_gen.py` (0ea3ec86's styles/settings, 2-column
+                    // charSpace 2048, 17 arms) plus the document's lines:
+                    //   normal X: pulled in iff the natural overflow is <= HALF a cell
+                    //     and the marks cover it (20 kana + 字 with 1 or 3 、 = 0.51:
+                    //     refused; 「介します。（各…等は各」 0.49 over 。+・: kept);
+                    //   unit X+mark: pulled in iff EITHER the whole unit fits INSIDE
+                    //     with at most ONE cell of elective compression, the final mark
+                    //     at its natural advance (「…受理する。診察の結果、」 ）+。 =
+                    //     1.0; 「…（障害者総合支援法）」とされた。」 （ + the pair), OR
+                    //     X fits at NATURAL width and the mark hangs (19 kana + 「字、」
+                    //     with no mark). Compression and hang are never combined: 20
+                    //     kana + 1-4 、 + 「字、」, （）+「字、」, （）。+「字、」 are all
+                    //     refused (the document's 「…がある。な|お、」, 「…などの家|事、」).
+                    let s1318_regime = s1318_v2 && s1318_at_default_regime;
+                    let s1318_is_mark = |c: char| {
+                        matches!(c, '、' | '。' | '，' | '．' | '・' | '：' | '；')
+                            || kinsoku::is_yakumono_opening(c)
+                            || kinsoku::is_yakumono_closing(c)
+                    };
+                    let s1318_cap_tw: i32 = if s1318_regime {
+                        let mut prev_mark = false;
+                        let mut n = 0;
+                        for c in current_line
+                            .fragments
+                            .iter()
+                            .flat_map(|f| f.text.chars())
+                            .chain(word.chars())
+                        {
+                            let m = s1318_is_mark(c);
+                            if m && !prev_mark {
+                                n += 1;
+                            }
+                            prev_mark = m;
+                        }
+                        n * pt_to_tw(0.5 * font_size)
+                    } else {
+                        0
+                    };
+                    let s1318_one_cell_tw = pt_to_tw(char_width.max(font_size));
+                    // the regime measures against the TRUE column edge, not the
+                    // S1211C whole-cell floor (see `s1318_floor_slack`)
+                    let s1318_avail_tw = if s1318_regime {
+                        available_tw + pt_to_tw(self.s1318_floor_slack.get().max(0.0))
+                    } else {
+                        available_tw
+                    };
+                    let s1318_natural_over_tw = current_width_tw + s1317_cw_tw - s1318_avail_tw;
+                    let s1318_next_mark = chars_vec.get(char_index + 1).map_or(false, |&nc| {
+                        matches!(nc, '、' | '。' | '，' | '．') || kinsoku::is_yakumono_closing(nc)
+                    });
+                    let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．')
+                        || kinsoku::is_yakumono_closing(ch);
+                    let s1318_prev_open = char_index > 0
+                        && chars_vec
+                            .get(char_index - 1)
+                            .map_or(false, |&pc| kinsoku::is_yakumono_opening(pc));
+                    let (s1318_force_fit, s1318_refuse_here) = if !s1318_regime || s1318_prev_open {
+                        (false, false)
+                    } else if s1318_ch_mark {
+                        // the mark itself: inside at its natural advance (no charSpace
+                        // after the line's last character) within the capacity, else
+                        // the S601 hang decides (natural fit of the text before it)
+                        let over = current_width_tw + pt_to_tw(font_size) - s1318_avail_tw;
+                        (over <= s1318_one_cell_tw.min(s1318_cap_tw), false)
+                    } else if s1318_next_mark {
+                        let unit_over = current_width_tw + s1317_cw_tw + pt_to_tw(font_size) - s1318_avail_tw;
+                        let inside = unit_over <= s1318_one_cell_tw.min(s1318_cap_tw);
+                        let natural = current_width_tw + s1317_cw_tw <= s1318_avail_tw;
+                        (inside || natural, !(inside || natural))
+                    } else {
+                        let over = s1318_natural_over_tw;
+                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw);
+                        (fit, !fit)
+                    };
                     let s475_break = s475_break && !s1318_refuse_here;
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
@@ -27141,6 +27284,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             } else {
                                 current_capw_tw
                             }) <= available_tw
+                            // S1318 v4: in the at-default regime the hang is granted
+                            // only when the text before the mark fits at NATURAL
+                            // width (compression and hang are never combined).
+                            && (!(s1318_v2 && s1318_at_default_regime)
+                                || current_width_tw <= s1318_avail_tw)
                         {
                             // S601 (2026-06-18, default ON, opt-out OXI_S601_DISABLE;
                             // char-budget wall): line-end 約物 ぶら下げ
@@ -27179,6 +27327,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         current_width_tw + s1317_cw_tw - available_tw
                     };
+                    // S1318 v4: a pull-in the regime granted is placed whatever the
+                    // S475 per-type caps say.
+                    let overflow_tw = if s1318_force_fit { overflow_tw.min(-1) } else { overflow_tw };
                     if std::env::var("OXI_DBG721").is_ok()
                         && text.contains("三六協定で定める時間数")
                     {
@@ -31215,6 +31366,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && content_width > pitch =>
             {
                 let out = (content_width / pitch).floor() * pitch;
+                self.s1318_floor_slack.set(content_width - out);
                 if std::env::var("OXI_DBG_FLOORW").is_ok() && (out - content_width).abs() > 0.01 {
                     let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
                     eprintln!("[FLOORW] cw={:.2} pitch={:.2} out={:.2} {:?}",
@@ -31222,7 +31374,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 }
                 out
             }
-            _ => content_width,
+            _ => {
+                self.s1318_floor_slack.set(0.0);
+                content_width
+            }
         }
     }
 
