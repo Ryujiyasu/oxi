@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod runtime;
+pub mod shape;
 pub mod math_constants;
 pub mod math_glyphs;
 pub mod math_substitute;
@@ -2041,6 +2042,15 @@ fn is_halfwidth_katakana(ch: char) -> bool {
     matches!(ch as u32, 0xFF65..=0xFF9F)
 }
 
+/// A character whose run must be SHAPED (not per-codepoint summed) to get its
+/// width right: the Devanagari block, where virama conjuncts and reordered /
+/// non-spacing matras make the sum diverge from the shaped advance by up to 2×.
+/// Kept to Devanagari for now — the block the India corpus exercises and the one
+/// derivation confirmed; sibling Indic/complex blocks can join once measured.
+pub fn is_complex_script(c: char) -> bool {
+    matches!(c as u32, 0x0900..=0x097F)
+}
+
 /// S1330: Unicode format characters that occupy no advance and leave no ink.
 pub fn is_zero_width_char(c: char) -> bool {
     matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
@@ -2105,6 +2115,111 @@ mod tests {
         // Calibri space should be ~0.226em (463/2048)
         let space_w = calibri.char_width_em(' ');
         assert!(space_w > 0.2 && space_w < 0.3, "space width: {}", space_w);
+    }
+
+    #[test]
+    #[ignore] // measurement probe: run with --ignored --nocapture on a machine with Nirmala UI
+    fn probe_devanagari_metrics() {
+        let reg = FontMetricsRegistry::load();
+        let fam = "Nirmala UI";
+        let m = reg.get(fam);
+        eprintln!("[DEVA] '{}' resolved to family='{}' upm={}", fam, m.family, m.units_per_em);
+        eprintln!(
+            "[DEVA] ascent={:.4} descent={:.4} gap={:.4} win_a={:.4} win_d={:.4} typo_a={:.4} typo_d={:.4} use_typo={}",
+            m.ascent, m.descent, m.line_gap, m.win_ascent, m.win_descent, m.typo_ascent, m.typo_descent, m.use_typo_metrics
+        );
+        let fs = 20.0f32;
+        // hhea line box and win line box at 20pt, plus the CJK-style 83/64 box
+        eprintln!(
+            "[DEVA] @20pt hhea_box={:.3} win_box={:.3} typo_box={:.3}",
+            (m.ascent + m.descent + m.line_gap) * fs,
+            (m.win_ascent + m.win_descent) * fs,
+            (m.typo_ascent + m.typo_descent + m.typo_line_gap) * fs
+        );
+        // Per-codepoint nominal advances (what layout sums).
+        let cps: &[(char, &str)] = &[
+            ('\u{0915}', "ka base"), ('\u{094D}', "virama"), ('\u{0937}', "ssa"),
+            ('\u{093F}', "i-matra pre"), ('\u{093E}', "aa-matra post"), ('\u{0940}', "ii-matra"),
+            ('\u{093C}', "nukta"), ('\u{0941}', "u-matra below"), ('\u{0942}', "uu below"),
+            ('\u{0902}', "anusvara"), ('\u{0901}', "candrabindu"), ('\u{0930}', "ra"),
+            ('\u{0924}', "ta"), ('\u{0930}', "ra2"), (' ', "space"), ('\u{0924}', "ta2"),
+        ];
+        let has = |c: char| m.char_widths.contains_key(&c);
+        for (c, name) in cps {
+            eprintln!(
+                "[DEVA] U+{:04X} {:<14} in_table={} width_pt={:.4}",
+                *c as u32, name, has(*c), reg.char_width_pt_with_fallback(*c, fs, m)
+            );
+        }
+        // Devanagari font line-box metrics (deriving Word's uniform ~1.685em).
+        for f in ["Mangal", "Nirmala UI"] {
+            let r = reg.get(f);
+            eprintln!(
+                "[DEVA-LH] {:<12} hhea={:.4} win={:.4} typo={:.4} (asc {:.4}/desc {:.4} win_a {:.4}/win_d {:.4})",
+                f,
+                r.ascent + r.descent + r.line_gap,
+                r.win_ascent + r.win_descent,
+                r.typo_ascent + r.typo_descent + r.typo_line_gap,
+                r.ascent, r.descent, r.win_ascent, r.win_descent
+            );
+        }
+        // Which faces do the REAL corpus fonts resolve to?
+        for f in ["Akshar", "Mangal", "Arial Unicode MS", "Kokila", "Utsaah", "Aparajita"] {
+            let r = reg.get(f);
+            let ka = reg.char_width_pt_with_fallback('\u{0915}', fs, r);
+            eprintln!("[DEVA] cs-font {:<16} -> family='{}' upm={} ka_width={:.3} has_ka={}",
+                f, r.family, r.units_per_em, ka, r.char_widths.contains_key(&'\u{0915}'));
+        }
+        // Whole-word Sigma of per-codepoint advances (Oxi layout width).
+        let words = ["\u{0915}\u{094D}\u{0937}", "\u{0915}\u{093F}",
+            "\u{0930}\u{093E}\u{0937}\u{094D}\u{091F}\u{094D}\u{0930}\u{0940}\u{092F}",
+            "\u{092D}\u{093E}\u{0930}\u{0924}", "\u{0938}\u{0930}\u{0915}\u{093E}\u{0930}"];
+        for w in words {
+            let sum: f32 = w.chars().map(|c| reg.char_width_pt_with_fallback(c, fs, m)).sum();
+            eprintln!("[DEVA] word {:?} nchars={} oxi_sum_width_pt={:.3}", w, w.chars().count(), sum);
+        }
+    }
+
+    #[test]
+    #[ignore] // prototype: confirm rustybuzz cluster advances match Word truth
+    fn probe_rustybuzz_devanagari() {
+        // Find Nirmala UI Regular in the .ttc and shape the test words.
+        let path = std::path::Path::new(r"C:\WINDOWS\Fonts\Nirmala.ttc");
+        let data = std::fs::read(path).expect("Nirmala.ttc");
+        let n = rustybuzz::ttf_parser::fonts_in_collection(&data).unwrap_or(1);
+        eprintln!("[RB] faces in collection: {}", n);
+        // pick the face whose family is exactly "Nirmala UI" (not Semilight)
+        let mut face_idx = 0u32;
+        for i in 0..n {
+            if let Ok(f) = rustybuzz::ttf_parser::Face::parse(&data, i) {
+                let name = f.names().into_iter().find(|nm| nm.name_id == 1)
+                    .and_then(|nm| nm.to_string()).unwrap_or_default();
+                eprintln!("[RB] face[{}] family={:?} upm={}", i, name, f.units_per_em());
+                if name == "Nirmala UI" { face_idx = i; }
+            }
+        }
+        let face = rustybuzz::Face::from_slice(&data, face_idx).expect("face");
+        let upm = face.units_per_em() as f32;
+        let fs = 20.0f32;
+        let shape_w = |s: &str| -> f32 {
+            let mut b = rustybuzz::UnicodeBuffer::new();
+            b.push_str(s);
+            let g = rustybuzz::shape(&face, &[], b);
+            let adv: i32 = g.glyph_positions().iter().map(|p| p.x_advance).sum();
+            adv as f32 / upm * fs
+        };
+        let cases: &[(&str, f32)] = &[
+            ("\u{0915}\u{094D}\u{0937}", 14.25),                 // kSa conjunct
+            ("\u{0915}\u{093F}", 22.5),                          // ki
+            ("\u{0930}\u{093E}\u{0937}\u{094D}\u{091F}\u{094D}\u{0930}\u{0940}\u{092F}", 44.25), // rashtriya
+            ("\u{092D}\u{093E}\u{0930}\u{0924}", 41.25),         // bharat
+            ("\u{0938}\u{0930}\u{0915}\u{093E}\u{0930}", 56.25), // sarkaar
+            ("\u{0915}\u{0915}\u{0915}\u{0915}", 69.0),          // 4x ka
+        ];
+        for (s, word_dx) in cases {
+            let w = shape_w(s);
+            eprintln!("[RB] {:?} rustybuzz={:.3}pt  word={:.3}pt  Δ={:+.3}", s, w, word_dx, w - word_dx);
+        }
     }
 
     #[test]

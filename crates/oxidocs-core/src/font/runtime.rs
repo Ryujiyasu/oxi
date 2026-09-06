@@ -258,6 +258,53 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Option<&'static FontMe
     found
 }
 
+/// The raw font bytes and the face index within them for `family`, if this
+/// machine has it. The shaper (rustybuzz) needs the file itself, not the parsed
+/// metrics `resolve` returns. Only the matching file is leaked; misses are
+/// cached so a repeated lookup is one directory walk per process.
+pub(crate) fn font_file_for(
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> Option<(&'static [u8], u32)> {
+    static FCACHE: OnceLock<RwLock<HashMap<(String, bool, bool), Option<(&'static [u8], u32)>>>> =
+        OnceLock::new();
+    let cache = FCACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    let key = (family.to_ascii_lowercase(), bold, italic);
+    if let Some(hit) = cache.read().ok().and_then(|c| c.get(&key).copied()) {
+        return hit;
+    }
+    let mut found: Option<(&'static [u8], u32)> = None;
+    'outer: for root in search_roots() {
+        for path in candidate_files(&root) {
+            let Ok(data) = std::fs::read(&path) else {
+                continue;
+            };
+            // Match without leaking: find the face index this file offers, if any.
+            let matched: Option<u32> = match skrifa::raw::FileRef::new(&data) {
+                Ok(skrifa::raw::FileRef::Font(f)) => {
+                    face_matches(&f, family, bold, italic).then_some(0)
+                }
+                Ok(skrifa::raw::FileRef::Collection(c)) => (0..c.len()).find(|&i| {
+                    c.get(i)
+                        .map(|f| face_matches(&f, family, bold, italic))
+                        .unwrap_or(false)
+                }),
+                Err(_) => None,
+            };
+            if let Some(idx) = matched {
+                let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
+                found = Some((leaked, idx));
+                break 'outer;
+            }
+        }
+    }
+    if let Ok(mut c) = cache.write() {
+        c.insert(key, found);
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     /// The resolver must never panic or invent a face: on a machine without the

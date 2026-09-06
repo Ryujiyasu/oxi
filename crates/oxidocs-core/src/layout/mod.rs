@@ -3563,6 +3563,30 @@ impl LayoutEngine {
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
     ) -> &FontMetrics {
+        // Devanagari line-height routing (opt-out OXI_DEVA_DISABLE). A run whose
+        // declared font is a Latin face Word cannot use for Devanagari (Akshar,
+        // Arial Unicode MS) falls back — for METRICS — not to Cambria (S1146,
+        // hhea 1.22em, the short Latin box) but to the Devanagari font's tall box.
+        // MEASURED in Word's own render of igrsup_md_v1/v9/v11: the Devanagari
+        // line is ~1.685em at 12pt regardless of the run's declared font, which is
+        // Mangal's hhea box (1.6797em) — NOT the Nirmala UI box (1.33em) Word
+        // draws the glyphs with. So the line height follows the cs font while the
+        // glyphs follow availability. Mangal resolves to real metrics here (system
+        // or Office cloud cache); Nirmala UI is the floor if it does not. Reached
+        // only for text with a complex-script char, so the frozen corpus is
+        // byte-identical by construction.
+        if std::env::var("OXI_DEVA_DISABLE").is_err()
+            && text.chars().any(crate::font::is_complex_script)
+        {
+            let mangal = self.registry.get("Mangal");
+            if mangal.char_widths.contains_key(&'\u{0915}') {
+                return mangal;
+            }
+            let nirmala = self.registry.get("Nirmala UI");
+            if nirmala.char_widths.contains_key(&'\u{0915}') {
+                return nirmala;
+            }
+        }
         let quote_latin = std::env::var("OXI_S763M_DISABLE").is_err();
         match self.resolve_font_family_for_text_g(text, run_style, para_style, quote_latin) {
             Some(family) => self.registry.get_with_style(
@@ -6899,7 +6923,7 @@ cells={} pitch={:.2} text={:?}",
                                 // against the row count's k=15). Row height is not line
                                 // count where rows are table cells; weight only rows that
                                 // are text lines before defaulting this.
-                                let k = if std::env::var("OXI_S1338").ok().as_deref() == Some("1") {
+                                let k = if std::env::var("OXI_S1338_DISABLE").is_err() {
                                     // a row's height runs from the previous row's y (the
                                     // band top for the first row of a column, so a
                                     // heading's space-before counts) to its own y
@@ -6913,7 +6937,14 @@ cells={} pitch={:.2} text={:?}",
                                                 (y - prev).max(pitch)
                                             };
                                             let h = if i == 0 { (col[1.min(col.len() - 1)] - col_band_top).max(h) } else { h };
-                                            lines.push(((h / pitch + 0.1).floor() as usize).max(1));
+                                            // a row more than 2.5 pitches tall is a table gap or
+                                            // an image, not lines (kyotei36spec): count it once
+                                            let l = if h <= 2.5 * pitch {
+                                                ((h / pitch + 0.1).floor() as usize).max(1)
+                                            } else {
+                                                1
+                                            };
+                                            lines.push(l);
                                             prev = y;
                                         }
                                     }
@@ -24255,6 +24286,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let preceded_by_open = current_line.fragments.last()
                             .and_then(|f| f.text.chars().last())
                             .map_or(false, kinsoku::is_line_end_prohibited);
+                        if std::env::var("OXI_DBGOPEN").is_ok() && (preceded_by_open || word.starts_with('3')) {
+                            eprintln!("[OPENWRAP] word={:?} nfrag={} last_frag={:?} cw={} ww={} avail={}",
+                                word, current_line.fragments.len(),
+                                current_line.fragments.last().map(|f| f.text.clone()),
+                                current_width_tw, word_width_tw, available_tw);
+                        }
                         // S745: wordWrap=0 — skip the whole-token wrap (1); the
                         // per-char opportunities recorded above make the segment
                         // loop below pack the line to the last fitting char.
@@ -25650,6 +25687,33 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .unwrap_or(1.5); // opening brackets
             let s472_demand = std::env::var("OXI_S472_DEMAND").is_ok() || s473_locomp;
             let chars_vec: Vec<char> = text.chars().collect();
+            // Complex-script (Devanagari) width: the per-codepoint sum this loop
+            // uses is wrong for virama conjuncts / reordered matras (MEASURED
+            // 2× too wide on क्ष; see font::shape). Shape the whole fragment once
+            // and use the cluster advances. The shaping font is the one Word AND
+            // DirectWrite actually draw with: the run's own family if it is
+            // installed and covers Devanagari, else Nirmala UI (Word's Devanagari
+            // fallback, confirmed by reading the fonts out of Word's own PDF for
+            // igrsup_md_v1/v9/v11). Entered ONLY when the fragment carries a
+            // complex-script char, so the frozen Latin/CJK corpus never reaches
+            // it (byte-identical by construction).
+            let deva_adv: Option<(Vec<f32>, Vec<bool>)> = if std::env::var("OXI_DEVA_DISABLE")
+                .is_err()
+                && chars_vec.iter().any(|&c| crate::font::is_complex_script(c))
+            {
+                let emit_fam = self
+                    .resolve_font_family_for_text(text, style, para_style)
+                    .map(|s| s.to_string());
+                let shape_fam = match emit_fam {
+                    Some(f) if crate::font::shape::family_covers(&f, '\u{0915}') => f,
+                    _ => "Nirmala UI".to_string(),
+                };
+                crate::font::shape::cluster_advances(
+                    &shape_fam, style.bold, style.italic, text, font_size,
+                )
+            } else {
+                None
+            };
             // Yakumono pair compression for line break width calculation.
             // Rule 1 (close+open ×0.5) is gated by yakumono_pair_enabled
             // (compress_punctuation OR hwid font); Rules 2-4 below use
@@ -25875,6 +25939,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 {
                     char_width = char_metrics.char_width_em(ch) * font_size;
                 }
+                // Complex-script cluster width: replace the per-codepoint value
+                // with the shaped cluster advance (0 on non-first cluster chars),
+                // BEFORE text_scale so w:w still applies. `deva_cont` marks a char
+                // that continues a cluster, so letter-spacing is added once per
+                // cluster (as Word does), not on every mark.
+                let deva_cont = if let Some((ref adv, ref cstart)) = deva_adv {
+                    char_width = adv[char_index];
+                    !cstart[char_index]
+                } else {
+                    false
+                };
                 if let Some(scale) = style.text_scale {
                     if (scale - 100.0).abs() > 0.01 {
                         char_width *= scale / 100.0;
@@ -25894,7 +25969,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // case (~0.66pt/space granted) whose enabling condition the synthetic
                 // lacks — the underived S799-shrink model (dedicated session; vary
                 // para line count / following content / numPr / cs magnitude).
-                char_width += cs;
+                char_width += if deva_cont { 0.0 } else { cs };
                 // §17.15.1.7 balanceSingleByteDoubleByteWidth (Session 56 Finding 3,
                 // COM-confirmed via V19/V25/V26/V27 minimal repros 2026-05-06):
                 // when this compat flag is set, character_spacing is applied TWICE
@@ -26336,6 +26411,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             } else {
                                 font_size + char_space_pt
                             };
+                            if std::env::var("OXI_DBG1337").is_ok() {
+                                eprintln!("[S1337] ch={:?} fs={:.2} pitch={:.3} ratio={:.4} default_fs={:.2} cs={:.3} cell={:.2} natural={:.2}",
+                                    ch, font_size, pitch, ratio, default_fs, char_space_pt, cell, char_width);
+                            }
                             0.5 * cell - char_width
                         } else {
                             char_space_pt
@@ -28146,6 +28225,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // both conditions are satisfied:
                         //   - first char of next line is NOT line-start-prohibited
                         //   - last char of current line is NOT line-end-prohibited
+                        if std::env::var("OXI_DBGWRAP").is_ok() && text.contains("区市は福祉事務所等") {
+                            let tail: Vec<String> = current_line.fragments.iter().rev().take(3).map(|f| f.text.clone()).collect();
+                            eprintln!("[WRAP-CJK] at ch={:?} tail={:?} nfrag={}", ch, tail, current_line.fragments.len());
+                        }
                         let mut popped: Vec<LineFragment> = Vec::new();
                         loop {
                             let last_of_curr = current_line
