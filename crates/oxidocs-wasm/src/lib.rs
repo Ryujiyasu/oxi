@@ -767,6 +767,38 @@ pub fn translate_formula(formula: &str, rows: i32, columns: i32) -> Result<Strin
         .map_err(|error| JsError::new(&error))
 }
 
+/// Rename a sheet across the whole workbook, so the live view stays right.
+///
+/// The sheet's own name changes, and every formula that named it is rewritten
+/// to the new name -- the same rewrite the save path does, done here too so a
+/// cross-sheet reference does not read as an error until the file is saved and
+/// reopened. Returns the updated workbook.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn rename_sheet(workbook: JsValue, index: usize, new_name: &str) -> Result<JsValue, JsError> {
+    let mut workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    let old = workbook
+        .sheets
+        .get(index)
+        .ok_or_else(|| JsError::new("no such sheet"))?
+        .name
+        .clone();
+    if old != new_name {
+        workbook.sheets[index].name = new_name.to_string();
+        for sheet in &mut workbook.sheets {
+            for row in &mut sheet.rows {
+                for cell in &mut row.cells {
+                    if let Some(formula) = cell.formula.as_mut() {
+                        *formula = oxicells_core::rename_sheet_in_formula(formula, &old, new_name);
+                    }
+                }
+            }
+        }
+    }
+    serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Renders a number the way a sheet shows it under `format`.
 ///
 /// The browser used to carry its own reading of number formats; this is the

@@ -178,6 +178,54 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
   padding-top: 6px;
   border-bottom-color: var(--bg);
 }
+/* The add-a-sheet plus sits flat beside the tabs, no folder shape. */
+.tabs button.addtab {
+  align-self: center;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  margin: 0 0 0 4px;
+  padding: 3px 9px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--dim);
+}
+.tabs button.addtab:hover { background: #DFE3E7; color: var(--txt); }
+/* The rename field replaces the tab's text in place. */
+.tabs input.tabedit {
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  outline: none;
+  min-width: 40px;
+}
+/* The right-click menu. */
+.tabmenu {
+  position: fixed;
+  z-index: 20;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .15);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+}
+.tabmenu button {
+  background: none;
+  border: none;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--txt);
+}
+.tabmenu button:hover { background: var(--accent-l); }
 
 #drop {
   position: absolute;
@@ -333,7 +381,7 @@ header #on { margin-right: 4px; }
 <script type="module">
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                edit_xlsx_from_workbook, recalculate_spreadsheet,
-               translate_formula, shift_band } from './oxidocs_wasm.js';
+               translate_formula, shift_band, rename_sheet } from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
 // draws and what the row heights are measured with cannot drift apart.
 import { explainRow, mayBreak } from './row-model.js';
@@ -1634,11 +1682,202 @@ function describe() {
       goTo(1, 0);
       markFrozen();
     };
+    // Double-click renames, as it does in Excel.
+    tab.ondblclick = (event) => {
+      event.stopPropagation();
+      startRename(tab, index, one.name);
+    };
+    // Right-click offers to insert, rename or delete.
+    tab.oncontextmenu = (event) => {
+      event.preventDefault();
+      showTabMenu(event.clientX, event.clientY, index);
+    };
     tabsBox.appendChild(tab);
   });
+  // A plus at the end adds a sheet, where Excel puts it.
+  const plus = document.createElement('button');
+  plus.textContent = '+';
+  plus.className = 'addtab';
+  plus.title = 'Add a sheet';
+  plus.onclick = addSheet;
+  tabsBox.appendChild(plus);
   // Redrawing the tabs empties the strip they live in, and the selection's
   // total lives at the far end of that same strip. Put it back.
   if (countBox) tabsBox.appendChild(countBox);
+}
+
+// ── Sheet tabs: add, rename, delete ─────────────────────────────────────────
+//
+// Each is a structural change: it rewrites the whole workbook rather than a
+// list of cell values, so `beyondValues` is set and the save crosses the whole
+// book. Every one is bracketed by `change` so a single undo puts it back.
+
+/// A sheet name not already taken: Sheet1, Sheet2, … past whatever is there.
+function nextSheetName() {
+  let n = book.sheets.length + 1;
+  let name;
+  do {
+    name = 'Sheet' + n;
+    n += 1;
+  } while (book.sheets.some((s) => s.name.toLowerCase() === name.toLowerCase()));
+  return name;
+}
+
+/// A fresh, empty sheet shaped like `model`, so the writer has every field it
+/// needs — but with no content, no id (the writer treats it as added) and no
+/// tab colour.
+function blankSheetLike(model) {
+  const fresh = structuredClone(model);
+  fresh.name = nextSheetName();
+  fresh.rows = [];
+  fresh.merge_cells = [];
+  fresh.tables = [];
+  fresh.drawings = [];
+  fresh.comments = [];
+  fresh.hidden_cols = [];
+  fresh.frozen_rows = 0;
+  fresh.frozen_cols = 0;
+  fresh.declared_range = null;
+  fresh.auto_filter = null;
+  delete fresh.tab_color;
+  delete fresh.origin_id;
+  return fresh;
+}
+
+function addSheet() {
+  if (!book) return;
+  change(() => {
+    const was = book;
+    book = { ...book, sheets: [...book.sheets, blankSheetLike(book.sheets[shown] || book.sheets[0])] };
+    step.books = [{ was, now: book }];
+  });
+  beyondValues = true;
+  shown = book.sheets.length - 1;
+  weighCalc();
+  describe();
+  draw();
+  goTo(1, 0);
+  markFrozen();
+}
+
+function deleteSheet(index) {
+  if (!book || book.sheets.length <= 1) {
+    sayCalc('A workbook must keep at least one sheet.');
+    return;
+  }
+  change(() => {
+    const was = book;
+    book = { ...book, sheets: book.sheets.filter((_, at) => at !== index) };
+    step.books = [{ was, now: book }];
+  });
+  beyondValues = true;
+  if (shown >= book.sheets.length) shown = book.sheets.length - 1;
+  weighCalc();
+  describe();
+  draw();
+  goTo(1, 0);
+  markFrozen();
+}
+
+function renameSheet(index, proposed) {
+  const trimmed = (proposed || '').trim();
+  const sheet = book && book.sheets[index];
+  if (!sheet || !trimmed || trimmed === sheet.name) return false;
+  if (trimmed.length > 31 || /[:\\/?*[\]]/.test(trimmed)) {
+    sayCalc('A sheet name cannot be over 31 characters or contain : \\ / ? * [ ]');
+    return false;
+  }
+  if (book.sheets.some((s, at) => at !== index && s.name.toLowerCase() === trimmed.toLowerCase())) {
+    sayCalc(`A sheet named "${trimmed}" already exists.`);
+    return false;
+  }
+  change(() => {
+    const was = book;
+    // rename_sheet rewrites the formulas that name it, so a cross-sheet
+    // reference keeps pointing at the same data in the live view too.
+    book = rename_sheet(book, index, trimmed);
+    step.books = [{ was, now: book }];
+  });
+  beyondValues = true;
+  weighCalc();
+  describe();
+  draw();
+  return true;
+}
+
+/// Turn a tab into a text field to rename it in place.
+function startRename(tab, index, current) {
+  const input = document.createElement('input');
+  input.className = 'tabedit';
+  input.value = current;
+  input.size = Math.max(4, current.length);
+  tab.textContent = '';
+  tab.appendChild(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit) {
+      renameSheet(index, input.value);
+    }
+    // Whether it took or not, redraw the strip so the field is gone.
+    describe();
+  };
+  input.onkeydown = (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      finish(false);
+    }
+  };
+  input.onblur = () => finish(true);
+}
+
+/// A small right-click menu for a tab.
+let tabMenu = null;
+function closeTabMenu() {
+  if (tabMenu) {
+    tabMenu.remove();
+    tabMenu = null;
+    document.removeEventListener('pointerdown', onAwayFromMenu, true);
+  }
+}
+function onAwayFromMenu(event) {
+  if (tabMenu && !tabMenu.contains(event.target)) closeTabMenu();
+}
+function showTabMenu(x, y, index) {
+  closeTabMenu();
+  tabMenu = document.createElement('div');
+  tabMenu.className = 'tabmenu';
+  const item = (label, run) => {
+    const button = document.createElement('button');
+    button.textContent = label;
+    button.onclick = () => {
+      closeTabMenu();
+      run();
+    };
+    tabMenu.appendChild(button);
+  };
+  item('Insert sheet', addSheet);
+  item('Rename', () => {
+    const tab = tabsBox.querySelectorAll('button')[index];
+    if (tab) startRename(tab, index, book.sheets[index].name);
+  });
+  item('Delete', () => deleteSheet(index));
+  tabMenu.style.left = x + 'px';
+  tabMenu.style.top = y + 'px';
+  document.body.appendChild(tabMenu);
+  // Keep it on screen if it would spill off the bottom.
+  const box = tabMenu.getBoundingClientRect();
+  if (box.bottom > window.innerHeight) {
+    tabMenu.style.top = Math.max(0, y - box.height) + 'px';
+  }
+  document.addEventListener('pointerdown', onAwayFromMenu, true);
 }
 
 function describeCell(address, cell) {
