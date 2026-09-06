@@ -36,6 +36,12 @@ for n in (1, 2, 3, 4):
     ARMS.append(("h800_n%d" % n, 800, 24, n))        # 18 + 40 = 58
 
 
+# tall-row arms: 5 body rows, row p carries 28pt of spacing after (t) or before (b)
+for pos in (0, 1, 2, 3, 4):
+    ARMS.append(("t%d_n5" % pos, None, 0, ("after", pos)))
+    ARMS.append(("b%d_n5" % pos, None, 0, ("before", pos)))
+
+
 def docx(label):
     return os.path.join(OUT, "colbalance_%s.docx" % label)
 
@@ -56,8 +62,14 @@ def gen():
         if hafter is not None:
             body += ('<w:p><w:pPr><w:spacing w:after="%d"/><w:rPr><w:sz w:val="%d"/></w:rPr></w:pPr>'
                      '<w:r><w:rPr><w:sz w:val="%d"/></w:rPr><w:t>見出し</w:t></w:r></w:p>' % (hafter, hsz, hsz))
-        for i in range(n):
-            body += "<w:p><w:r><w:t>本文%d行目</w:t></w:r></w:p>" % (i + 1)
+        if isinstance(n, tuple):
+            kind, pos = n
+            for i in range(5):
+                sp = '<w:pPr><w:spacing w:%s="560"/></w:pPr>' % kind if i == pos else ""
+                body += "<w:p>%s<w:r><w:t>本文%d行目</w:t></w:r></w:p>" % (sp, i + 1)
+        else:
+            for i in range(n):
+                body += "<w:p><w:r><w:t>本文%d行目</w:t></w:r></w:p>" % (i + 1)
         body += ('<w:p><w:pPr><w:sectPr><w:type w:val="continuous"/><w:pgSz w:w="11906" w:h="16838"/>'
                  '<w:pgMar w:top="1985" w:right="1701" w:bottom="1701" w:left="1701" w:header="851" w:footer="992"/>'
                  '<w:cols w:num="2" w:space="425"/><w:docGrid w:type="lines" w:linePitch="360"/></w:sectPr></w:pPr></w:p>')
