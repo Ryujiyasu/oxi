@@ -253,6 +253,13 @@ pub struct Page {
     /// {-1:10}). Parallel to `margin_runs`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grid_runs: Vec<(usize, Option<f32>)>,
+    /// S1336 (2026-09-06): per-section CHARACTER grid run -- (first block
+    /// index, raw w:charSpace) for every merged continuous section, parallel
+    /// to `grid_runs`. reference__0ea3ec86 alternates charSpace 3194 / 2048
+    /// between sections; the merged page kept the first one's pitch (11.5)
+    /// where Word advances the 3194 sections at 11.78.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grid_char_runs: Vec<(usize, Option<i32>)>,
     /// S732 (2026-07-03): how this section STARTS relative to the previous
     /// one — "evenPage"/"oddPage" force the section onto the next even/odd
     /// physical page, inserting a BLANK page when the parity mismatches

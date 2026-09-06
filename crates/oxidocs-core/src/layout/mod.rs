@@ -5839,6 +5839,50 @@ cells={} pitch={:.2} text={:?}",
             }
         };
         let mut s735_run_idx: usize = 0;
+        // S1336 (2026-09-06, HELD OPT-IN `OXI_S1336=1`; see the archive -- the
+        // per-section pitch is Word's, but alone it reads -0.0008 on 0ea3ec86 and
+        // 167853 because the mid-line 、） compression Oxi still applies at
+        // compat 14 (Word: none) was compensating): a merged
+        // continuous section whose w:charSpace differs from the page's first
+        // section lays its blocks out against a Page variant carrying ITS
+        // character pitch (raw pitch = default size + charSpace/4096, the S466
+        // convention; the default size is recovered from the page's own pitch).
+        // reference__0ea3ec86: sections alternate charSpace 3194 / 2048; Word
+        // walks the 3194 sections at 11.76-11.78 per character (PDF p18: 20
+        // characters per 235.6pt column line), Oxi at the first section's 11.5
+        // and packed 21-22 -- the five residual -1 paragraphs of that document.
+        let s1336_variants: Vec<(usize, Option<Page>)> = if std::env::var("OXI_S1336").ok().as_deref() == Some("1")
+            && std::env::var("OXI_S466_DISABLE").is_err()
+            && page.grid_char_runs.len() > 1
+        {
+            match page.grid_char_pitch {
+                Some(pitch) => {
+                    let cs_pt = |raw: Option<i32>| raw.map(|c| c as f32 / 4096.0).unwrap_or(0.0);
+                    let base_fs = pitch - cs_pt(page.grid_char_space_raw);
+                    page.grid_char_runs
+                        .iter()
+                        .map(|&(start, raw)| {
+                            if raw == page.grid_char_space_raw {
+                                (start, None)
+                            } else {
+                                let mut v = page.clone();
+                                let p = base_fs + cs_pt(raw);
+                                v.grid_char_pitch = Some(p);
+                                if base_fs > 0.0 {
+                                    v.grid_char_cw_ratio = Some(p / base_fs);
+                                }
+                                v.grid_char_space_raw = raw;
+                                (start, Some(v))
+                            }
+                        })
+                        .collect()
+                }
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let page_orig: &Page = page;
         let mut mult_cumul_raw: f32 = 0.0;
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
@@ -6344,6 +6388,13 @@ cells={} pitch={:.2} text={:?}",
                 }
                 grid_pitch = page.grid_runs[s735_run_idx].1;
             }
+            // S1336: this block's character grid (see the variants above).
+            let page: &Page = s1336_variants
+                .iter()
+                .rev()
+                .find(|(start, _)| block_idx >= *start)
+                .and_then(|(_, v)| v.as_ref())
+                .unwrap_or(page_orig);
             // S734: reserve the wrapTopAndBottom band ABOVE this anchor block.
             if let Some(&band_h) = s734_bands.get(&block_idx) {
                 let remaining = (start_y + content_height) - cursor.cursor_y;

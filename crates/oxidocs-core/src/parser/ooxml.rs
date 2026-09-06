@@ -413,6 +413,9 @@ impl OoxmlParser {
                 // S735: parallel per-section grid pitch run.
                 last.grid_runs
                     .push((last.blocks.len(), section.properties.grid_line_pitch));
+                // S1336: parallel per-section character-grid run.
+                last.grid_char_runs
+                    .push((last.blocks.len(), section.properties.grid_char_space_raw));
                 // S730: the paragraph that ENDED the previous section (it
                 // carries the in-body sectPr and is the last block merged so
                 // far) is a CONTINUOUS section-break mark — Word renders it
@@ -525,6 +528,7 @@ impl OoxmlParser {
                 )];
                 // S735: seed the grid-run list with the first section's pitch.
                 let grid_runs = vec![(0usize, section.properties.grid_line_pitch)];
+                let grid_char_runs = vec![(0usize, section.properties.grid_char_space_raw)];
                 pages.push(Page {
                     blocks: section.blocks,
                     size: section.properties.page_size,
@@ -561,6 +565,7 @@ impl OoxmlParser {
                     margin_runs,
                     vertical_runs,
                     grid_runs,
+                    grid_char_runs,
                     section_start_type: section.properties.section_type.clone(),
                     header_distance: section.properties.header_distance,
                     footer_distance: section.properties.footer_distance,
