@@ -474,9 +474,15 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "rFonts" {
+                    // S1341: ascii wins over hAnsi (see the ooxml.rs run parser).
+                    let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
+                    let mut s1341_ascii_seen = false;
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
-                        if key == "ascii" || key == "hAnsi" {
+                        if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                            if key == "ascii" {
+                                s1341_ascii_seen = true;
+                            }
                             rs.font_family =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                         } else if key == "asciiTheme" || key == "hAnsiTheme" {
@@ -741,9 +747,15 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
         // rFonts in parse_style_definition's rPr branch does NOT have ThemeColors
         // access — see the TODO there for that limitation.
         "rFonts" => {
+            // S1341: ascii wins over hAnsi (see the ooxml.rs run parser).
+            let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
+            let mut s1341_ascii_seen = false;
             for attr in e.attributes().flatten() {
                 let key = local_name(attr.key.as_ref());
-                if key == "ascii" || key == "hAnsi" {
+                if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                    if key == "ascii" {
+                        s1341_ascii_seen = true;
+                    }
                     rs.font_family =
                         Some(String::from_utf8_lossy(&attr.value).to_string());
                 } else if key == "asciiTheme" || key == "hAnsiTheme" {
@@ -1208,9 +1220,15 @@ fn parse_style_definition(
                         depth += 1;
                     }
                     "rFonts" if in_rpr => {
+                        // S1341: ascii wins over hAnsi (see the ooxml.rs run parser).
+                        let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
+                        let mut s1341_ascii_seen = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            if key == "ascii" || key == "hAnsi" {
+                            if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                                if key == "ascii" {
+                                    s1341_ascii_seen = true;
+                                }
                                 run_style.font_family =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                                 has_run_style = true;
@@ -1376,9 +1394,15 @@ fn parse_style_definition(
                             }
                         }
                         "rFonts" => {
+                            // S1341: ascii wins over hAnsi (see the ooxml.rs run parser).
+                            let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
+                            let mut s1341_ascii_seen = false;
                             for attr in e.attributes().flatten() {
                                 let key = local_name(attr.key.as_ref());
-                                if key == "ascii" || key == "hAnsi" {
+                                if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                                    if key == "ascii" {
+                                        s1341_ascii_seen = true;
+                                    }
                                     run_style.font_family =
                                         Some(String::from_utf8_lossy(&attr.value).to_string());
                                     has_run_style = true;

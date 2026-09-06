@@ -23963,6 +23963,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let s1027_on = std::env::var("OXI_S1027_DISABLE").is_err();
         macro_rules! wrap_and_seed {
             ($sty:expr) => {{
+                if std::env::var("OXI_DBGWRAP").is_ok() {
+                    let tail: Vec<String> = current_line.fragments.iter().rev().take(3).map(|f| f.text.clone()).collect();
+                    eprintln!("[WRAP-SEED] tail={:?} nfrag={} cw_tw={} lines={}", tail, current_line.fragments.len(), current_width_tw, lines.len());
+                }
                 let n_trail = if s1027_on && c14_active && c14_space_tw > 0 {
                     current_line
                         .fragments
@@ -23977,6 +23981,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let keep = current_line.fragments.len() - (n_trail - 1);
                     current_line.fragments.truncate(keep);
                 }
+                // S1342 (2026-09-06, default ON, opt-out OXI_S1342_DISABLE): 行末禁則 on
+                // EVERY word-path wrap -- a line may not end in an opening bracket.
+                // The OPENWRAP branch carried the bracket only on its own path;
+                // reference__0ea3ec86 p23 「…事務所等（|33･299㌻）」 and p8 「…項目（|16
+                // 項目）」 wrapped their digit tokens through another flush and left
+                // the 「（」 at the line end (Word: 「…事務所等」 / 「（33･299㌻）、…」).
+                let mut s1342_carried: Vec<LineFragment> = Vec::new();
+                if std::env::var("OXI_S1342_DISABLE").is_err() {
+                    while current_line.fragments.len() > 1
+                        && current_line
+                            .fragments
+                            .last()
+                            .and_then(|f| f.text.chars().last())
+                            .map_or(false, kinsoku::is_line_end_prohibited)
+                    {
+                        let f = current_line.fragments.pop().unwrap();
+                        current_width -= f.width;
+                        current_width_tw -= pt_to_tw(f.width);
+                        current_capw_tw -= pt_to_tw(f.width);
+                        s1342_carried.push(f);
+                    }
+                }
                 lines.push(std::mem::take(&mut current_line));
                 current_width = 0.0;
                 current_width_tw = 0;
@@ -23985,6 +24011,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 right_tab_slack_tw = 0;
                 center_tab_stop_tw = None;
                 compress_used = false;
+                for f in s1342_carried.into_iter().rev() {
+                    current_width += f.width;
+                    current_width_tw += pt_to_tw(f.width);
+                    current_capw_tw += pt_to_tw(f.width);
+                    current_line.fragments.push(f);
+                }
                 if n_trail >= 2 {
                     let sp_w = (c14_space_tw as f32) / 20.0;
                     let seed_tw = c14_space_tw * (n_trail as i32 - 1);
@@ -24619,6 +24651,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         word_width_tw
                     };
+                    if std::env::var("OXI_DBGWRAP").is_ok() && word.starts_with("33") {
+                        eprintln!("[FRAG-WORD] word={:?} ww={:.2} cw_tw={} avail={} nfrag={} lines={}", word, word_width, current_width_tw, available_tw, current_line.fragments.len(), lines.len());
+                    }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
                         width: word_width,
@@ -27368,7 +27403,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             }
                             prev_mark = m;
                         }
-                        n * pt_to_tw(0.5 * font_size)
+                        // each mark gives up half of its CELL (Word halves 「）」 to 5.76
+                        // on the 11.52 grid, not to 5.5): 「…項目(12項目）の計80項目の」
+                        // needs exactly half a cell from its one 「）」
+                        n * pt_to_tw(0.5 * char_width.max(font_size))
                     } else {
                         0
                     };
@@ -27385,10 +27423,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // edge only because the text before it ends 5.8 short of the floor).
                     let s1318_avail_tw = available_tw;
                     let s1318_natural_over_tw = current_width_tw + s1317_cw_tw - s1318_avail_tw;
+                    // （：；） are line-final marks too: 0ea3ec86 p11 「…福祉手当（都・市町村：」
+                    // holds 21 with the 「：」 at the end where Oxi stopped at 「市町」.
                     let s1318_next_mark = chars_vec.get(char_index + 1).map_or(false, |&nc| {
-                        matches!(nc, '、' | '。' | '，' | '．') || kinsoku::is_yakumono_closing(nc)
+                        matches!(nc, '、' | '。' | '，' | '．' | '：' | '；') || kinsoku::is_yakumono_closing(nc)
                     });
-                    let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．')
+                    let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．' | '：' | '；')
                         || kinsoku::is_yakumono_closing(ch);
                     let s1318_prev_open = char_index > 0
                         && chars_vec
@@ -31579,10 +31619,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // S1340: the floor's cell is the paragraph's TRACKED cell (first run's
         // w:spacing, doubled under balance): 235.65 / 11.1 = 21 cells for the
         // -4 run above, 20 for its neighbours.
+        // ...the tracking of the run that carries the most characters, not the
+        // first run's: 0ea3ec86 p9 「※入所利用者(20歳以上）、…」 opens with an
+        // untracked 「※」 run and continues at spacing -8 (cell 10.7 -> 46 cells
+        // = 492.2; the first-run reading kept the 11.5 floor's 42 cells minus
+        // the hanging indent = 44 and wrapped 「る。」 that Word keeps).
         let s1340_track = if std::env::var("OXI_S1340_DISABLE").is_err() {
             para.runs
                 .iter()
-                .find(|r| !r.text.trim().is_empty())
+                .filter(|r| !r.text.trim().is_empty())
+                .max_by_key(|r| r.text.chars().count())
                 .and_then(|r| r.style.character_spacing)
                 .unwrap_or(0.0)
                 * if self.balance_single_byte_double_byte_width { 2.0 } else { 1.0 }

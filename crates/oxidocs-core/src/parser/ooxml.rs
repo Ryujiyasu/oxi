@@ -8882,9 +8882,22 @@ fn parse_run_properties(
                 }
                 depth += 1;
                 if local == "rFonts" {
+                    // S1341 (2026-09-06, default ON, opt-out OXI_S1341_DISABLE): w:ascii
+                    // wins over w:hAnsi -- ascii names the font of U+0000-007F (digits,
+                    // Latin letters, the text these documents actually carry), hAnsi the
+                    // high Latin. Parsed in attribute order, hAnsi (written last)
+                    // overwrote ascii: reports__167853's Normal is ascii=ＭＳ 明朝 /
+                    // hAnsi=ＭＳ Ｐ明朝, Word's PDF draws its 12pt 「28.2」 in MS-Mincho at
+                    // the half cell, Oxi measured it in Ｐ明朝 (5.72) and packed a 41st
+                    // character. The ¶-mark parser had the same bug (S877).
+                    let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
+                    let mut s1341_ascii_seen = false;
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
-                        if key == "ascii" || key == "hAnsi" {
+                        if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                            if key == "ascii" {
+                                s1341_ascii_seen = true;
+                            }
                             style.font_family =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                         } else if key == "eastAsia" {
@@ -8992,9 +9005,15 @@ fn parse_run_properties(
                         }
                     }
                     "rFonts" => {
+                        // S1341: ascii wins over hAnsi (see the run-level parser).
+                        let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
+                        let mut s1341_ascii_seen = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            if key == "ascii" || key == "hAnsi" {
+                            if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                                if key == "ascii" {
+                                    s1341_ascii_seen = true;
+                                }
                                 style.font_family =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                             } else if key == "eastAsia" {

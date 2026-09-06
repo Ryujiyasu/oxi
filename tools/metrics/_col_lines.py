@@ -91,9 +91,10 @@ def oxi_lines(dump, pno, width):
             els.sort(key=lambda e: e["x"])
             span = els[-1]["x"] - els[0]["x"]
             gap = max((b["x"] - a["x"] for a, b in zip(els, els[1:])), default=0)
-            if span > width / ncols and gap < 25:
-                # one line spread over the page (a distributed heading)
-                out.append((0, key[4], round(els[0]["x"], 1), "".join(e["text"] for e in els)))
+            if gap < 25:
+                # contiguous elements are one line, in the column of its first element
+                col = min(int(els[0]["x"] // (width / ncols)), ncols - 1)
+                out.append((col, key[4], round(els[0]["x"], 1), "".join(e["text"] for e in els)))
                 continue
             # a paragraph continuing from one column into the next has lines
             # at the same y in both: split by column
