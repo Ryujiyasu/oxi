@@ -2949,7 +2949,7 @@ impl LayoutEngine {
         // number is trustworthy where one exists. While S1294 is off the guard
         // stays armed.
         let s1291_usable = std::env::var("OXI_S1291_DISABLE").is_err()
-            && (std::env::var("OXI_S1294").ok().as_deref() == Some("1")
+            && (std::env::var("OXI_S1294_DISABLE").is_err()
                 || !doc_resolved.pages.iter().any(|p| p.dropped_pgnum_restart));
 
         // S1291: the logical page number of the LAST physical page emitted.
@@ -4916,7 +4916,11 @@ cells={} pitch={:.2} text={:?}",
         // S1294: the logical number of this IR page's FIRST layout page, and
         // the base such that logical(i) = logical_base + i. A restart moves the
         // base rather than every page's number.
-        // S1294 is HELD OPT-IN (`OXI_S1294=1`), not because the law is in doubt
+        // S1294 SHIPPED default-ON 2026-09-06 (opt-out OXI_S1294_DISABLE) together
+        // with S1335, the page-15 defect named below: the two were compensating
+        // (0ea3ec86 0.7323 alone / 0.2813 with only this / 0.1040 with only S1335
+        // / 0.9940 with both, W43/O43).
+        // S1294 was HELD OPT-IN (`OXI_S1294=1`), not because the law is in doubt
         // but because a SECOND defect was cancelling it. With the blank page in
         // its right place `reference__0ea3ec86` reads Word pages 1-14 exactly
         // (they were all one page early before), and then a page-15 table that
@@ -4924,7 +4928,7 @@ cells={} pitch={:.2} text={:?}",
         // 0.2822 and the gate reads WORSE. The missing blank and the early
         // table break were compensating, and only one of them is fixed. Turn
         // this on together with the page-15 fix.
-        let s1294_on = std::env::var("OXI_S1294").ok().as_deref() == Some("1");
+        let s1294_on = std::env::var("OXI_S1294_DISABLE").is_err();
         let first_logical = page.page_number_start.unwrap_or(*logical + 1);
         let mut logical_base: i64 = first_logical as i64;
         // Vertical writing (tategaki) section: route to the dedicated path.
@@ -9312,6 +9316,10 @@ cells={} pitch={:.2} text={:?}",
                     // trailing space is not part of the chain's own extent.
                     let s1249_prev_sa = prev_space_after;
                     let dbg_para_start_pages = pages.len();
+                    if std::env::var("OXI_DBG_COL").is_ok() && num_columns > 1 {
+                        eprintln!("[COL] enter block_idx={} col={} cursor_y={:.1} band_top={:.1} pages={}",
+                            block_idx, current_column, cursor.cursor_y, col_band_top, pages.len());
+                    }
                     let (mut para_elements, sa, final_col) = self.layout_paragraph(
                         para,
                         start_x + dc_indent,
@@ -18544,6 +18552,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
             }
             let line = &lines[line_idx];
+            // S1335: set when this line is a bare column break that the natural
+            // overflow (S637) already carried into the next column.
+            let mut s1335_break_consumed = false;
             let _first_style = line
                 .fragments
                 .first()
@@ -20249,6 +20260,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         col_band_top
                     });
                     s842_apply(cursor);
+                    // S1335 (2026-09-06, default ON, opt-out OXI_S1335_DISABLE): a
+                    // bare `<w:br w:type="column"/>` line that did not fit the
+                    // column it started in has just been carried into the next
+                    // column by this overflow -- that IS the break. Letting the
+                    // explicit break fire again below moved the paragraph a second
+                    // column on (= a page from the last column) and left the
+                    // column empty. reference__0ea3ec86 p15 (2-col): 「掛金の減額」
+                    // starts with the break at cursor 772.5 of a 785 band; Word
+                    // ends column 1 there and starts column 2 with the text, Oxi
+                    // pushed a page and left column 2 blank (the +1 cascade of
+                    // 840 paragraphs that was compensating the missing S1294 blank
+                    // page).
+                    if line.break_type == LineBreakType::ColumnBreak
+                        && line.fragments.iter().all(|f| f.text.trim().is_empty())
+                        && std::env::var("OXI_S1335_DISABLE").is_err()
+                    {
+                        s1335_break_consumed = true;
+                    }
                 } else {
                     // Phantom-blank-page fix (2026-04-23): when an empty paragraph
                     // with page_break_after overflows and would produce an empty
@@ -22724,7 +22753,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
             // Handle explicit page/column breaks after this line
             if line.break_type == LineBreakType::PageBreak
-                || line.break_type == LineBreakType::ColumnBreak
+                || (line.break_type == LineBreakType::ColumnBreak && !s1335_break_consumed)
             {
                 // S733 (2026-07-03): a COLUMN break in a multi-column section
                 // advances to the NEXT COLUMN of the same page (Word semantics);
@@ -22762,6 +22791,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         cursor.advance(line_height);
                     }
                 } else {
+                    if std::env::var("OXI_DBG_COL").is_ok() {
+                        eprintln!("[COL] break-push line={}/{} break={:?} num_columns={} cur_col={}",
+                            line_idx, lines.len(), line.break_type, num_columns, cur_col);
+                    }
                     // Day 33 part 59 (2026-05-12): the line that CARRIES the break_type
                     // has its text already rendered into `elements` and should stay on
                     // the CURRENT page (text BEFORE the `<w:br w:type="page"/>` belongs
@@ -26993,6 +27026,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .unwrap_or(4.0);
                             current_width_tw + pt_to_tw(char_width) - available_tw - pt_to_tw(tol)
                         } else if std::env::var("OXI_S601_DISABLE").is_err()
+                            // S1334 (2026-09-06, default ON, opt-out OXI_S1334_DISABLE): the
+                            // hang is granted at compat <= 14 whatever the alignment, and at
+                            // compat 15 ONLY to a justified paragraph. DERIVED
+                            // (_pb_hangpunct_gen.py, 36 arms, Word PDF): 40x国+。 at 10.5pt on
+                            // a 425.2pt line -- jc=both hangs at c11 and c15, jc=left hangs
+                            // at c11 (the 。 placed AT the margin, 510.0) and WRAPS 「国。」
+                            // at c15; numPr / exact / doNotCompress / noPunctuationKerning /
+                            // balance / useFELayout / doNotWrapTextWithPunct /
+                            // doNotUseEastAsianBreakRules / useAltKinsoku / OpenType change
+                            // nothing; the faithful slice of 08709ff2's numbered row wraps
+                            // 「す。」 at c15 and hangs at c11. Unset compat = legacy.
+                            && (self.compat_mode <= 14
+                                || !self.compat_mode_explicit
+                                || is_justified
+                                || std::env::var("OXI_S1334_DISABLE").is_ok())
                             && (matches!(ch, '。' | '、' | '，' | '．' | '・')
                                 // S1220 (2026-08-25, opt-out `OXI_S1220_DISABLE`): the unified
                                 // break-billing law from the regime probes
