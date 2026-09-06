@@ -26010,7 +26010,32 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         })
                         .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
                     if prev_is_cjk || next_is_cjk {
-                        char_width = font_size / 2.0;
+                        // S1337S (2026-09-06, HELD opt-in OXI_S1337S=1): on a character
+                        // grid the balanced space is half the CELL, like every other
+                        // single-byte character -- 0ea3ec86 p5 「能訓練 31か所 生活訓練
+                        // 74か所 402・403」: both ASCII spaces 5.76 at cell 11.52 (Word),
+                        // and the 24th character ㌻ then overflows by 0.54 cell and
+                        // wraps; 167853 (97) and 0b6f3b32 (17) show only half-cell
+                        // spaces, none at half an em. Held because the 12-base SSIM A/B
+                        // reads net -0.0002 (tokumei_08 -0.0006 / -0.0005, whose Word
+                        // PDF cannot tell 5.43 from 5.25 at its 0.12pt quantisation):
+                        // find the compensating error there before defaulting it.
+                        char_width = match (grid_char_cw_ratio, grid_char_pitch) {
+                            (Some(ratio), Some(pitch))
+                                if ratio > 0.0
+                                    && pitch > 0.0
+                                    && std::env::var("OXI_S1337S").ok().as_deref() == Some("1") =>
+                            {
+                                let default_fs = pitch / ratio;
+                                let char_space_pt = pitch - default_fs;
+                                0.5 * if char_space_pt >= 0.0 {
+                                    font_size * pitch / default_fs
+                                } else {
+                                    font_size + char_space_pt
+                                }
+                            }
+                            _ => font_size / 2.0,
+                        };
                     }
                 }
                 let _ = char_index;
