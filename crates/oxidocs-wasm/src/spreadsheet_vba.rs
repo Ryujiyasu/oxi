@@ -7995,6 +7995,7 @@ impl<'a> WorkbookHost<'a> {
             drawings: Vec::new(),
             comments: Vec::new(),
             unsupported_elements: Vec::new(),
+            tab_color: None,
         };
         self.workbook.sheets.insert(at, sheet);
         self.sheets_renumbered(&|was| Some(if was >= at { was + 1 } else { was }));
@@ -21686,6 +21687,7 @@ mod tests {
                 declared_range: None,
                 tables: Vec::new(),
                 unsupported_elements: Vec::new(),
+                tab_color: None,
             }],
             ..Default::default()
         }
@@ -24035,6 +24037,7 @@ mod tests {
             declared_range: None,
             tables: Vec::new(),
             unsupported_elements: Vec::new(),
+            tab_color: None,
         });
         let module = parse_module(
             "Public Function FillSheets() As Long\n\
@@ -24095,6 +24098,7 @@ mod tests {
             declared_range: None,
             tables: Vec::new(),
             unsupported_elements: Vec::new(),
+            tab_color: None,
         });
         let module = parse_module(
             "Public Function EvaluateReferences() As String\n\
@@ -28547,6 +28551,7 @@ End Sub
             declared_range: None,
             tables: Vec::new(),
             unsupported_elements: Vec::new(),
+            tab_color: None,
         });
         let invalid = parse_module(
             "Public Sub InvalidSelection()\n\
@@ -28798,6 +28803,7 @@ End Sub
             declared_range: None,
             tables: Vec::new(),
             unsupported_elements: Vec::new(),
+            tab_color: None,
         });
         let module = parse_module(
             "Public Function UseContext() As String\n\
@@ -28850,6 +28856,7 @@ End Sub
             declared_range: None,
             tables: Vec::new(),
             unsupported_elements: Vec::new(),
+            tab_color: None,
         });
         let module = parse_module(
             "Public Function InspectUsedRange() As String\n\
@@ -28974,6 +28981,7 @@ End Sub
             declared_range: None,
             tables: Vec::new(),
             unsupported_elements: Vec::new(),
+            tab_color: None,
         });
         let module = parse_module(
             "Public Function FillWorksheets() As String\n\

@@ -2672,6 +2672,7 @@ fn parse_worksheet(
     sheet_name: &str,
     shared_strings: &[SharedString],
     stylesheet: &StyleSheet,
+    theme: &Theme,
 ) -> Result<Sheet, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut rows: Vec<Row> = Vec::new();
@@ -2698,6 +2699,8 @@ fn parse_worksheet(
     // measured from these, not from the number the sheet or the row states.
     let mut col_fonts: Vec<(u32, u32, String, f32)> = Vec::new();
     let mut merge_cells: Vec<MergeCell> = Vec::new();
+    // The colour on the sheet's tab, from <sheetPr><tabColor>.
+    let mut tab_color: Option<String> = None;
 
     // State tracking
     let mut current_row_index: u32 = 0;
@@ -2743,6 +2746,9 @@ fn parse_worksheet(
                 let name = local_name(e.name().as_ref());
                 note_unsupported(&name, &mut unsupported);
                 match name.as_str() {
+                    "tabColor" => {
+                        tab_color = parse_color_attr(&e, theme);
+                    }
                     "dimension" => {
                         declared_range = get_attr(&e, "ref")
                             .as_deref()
@@ -2956,6 +2962,10 @@ fn parse_worksheet(
                     note_unsupported(&name, &mut unsupported);
                 }
                 match name.as_str() {
+                    // <tabColor rgb="FF00B050"/> -- the sheet tab's colour.
+                    "tabColor" => {
+                        tab_color = parse_color_attr(&e, theme);
+                    }
                     // <pane xSplit="2" ySplit="3" topLeftCell="C4" state="frozen"/>
                     "pane" => {
                         if matches!(
@@ -3264,6 +3274,7 @@ fn parse_worksheet(
             hidden_cols
         },
         unsupported_elements: unsupported,
+        tab_color,
     })
 }
 
@@ -3433,7 +3444,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         match archive.try_read_part(&sheet_path)? {
             Some(sheet_xml) => {
                 let mut sheet =
-                    parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet)?;
+                    parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet, &theme)?;
                 // Whether the tab is shown is the workbook's business, not the
                 // worksheet part's.
                 sheet.visibility = info.visibility;
@@ -3622,7 +3633,7 @@ mod tests {
     </row>
   </sheetData>
 </worksheet>"#;
-        let sheet = parse_worksheet(xml, "probe", &[], &StyleSheet::default())
+        let sheet = parse_worksheet(xml, "probe", &[], &StyleSheet::default(), &Theme::default())
             .expect("should parse");
         let cells = &sheet.rows[0].cells;
         let text_of = |cell: &Cell| match &cell.value {
@@ -3635,6 +3646,40 @@ mod tests {
         // string: Excel shows 区分, not 区分クブン.
         assert_eq!(text_of(&cells[2]), "区分");
         assert!(matches!(cells[3].value, CellValue::Number(n) if n == 42.0));
+    }
+
+    #[test]
+    fn a_sheet_tab_colour_is_read_from_sheet_pr() {
+        // An explicit rgb, with the leading alpha stripped like every other colour.
+        let coloured = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr><tabColor rgb="FF00B050"/></sheetPr>
+  <sheetData/>
+</worksheet>"#;
+        let sheet = parse_worksheet(coloured, "probe", &[], &StyleSheet::default(), &Theme::default())
+            .expect("should parse");
+        assert_eq!(sheet.tab_color.as_deref(), Some("00B050"));
+
+        // No <tabColor> leaves it None.
+        let plain = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/>
+</worksheet>"#;
+        let sheet = parse_worksheet(plain, "probe", &[], &StyleSheet::default(), &Theme::default())
+            .expect("should parse");
+        assert_eq!(sheet.tab_color, None);
+
+        // A theme colour is resolved against the workbook's palette.
+        let mut theme = Theme::default();
+        theme.colours = vec!["112233".to_string(), "445566".to_string()];
+        let themed = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr><tabColor theme="1"/></sheetPr>
+  <sheetData/>
+</worksheet>"#;
+        let sheet = parse_worksheet(themed, "probe", &[], &StyleSheet::default(), &theme)
+            .expect("should parse");
+        assert_eq!(sheet.tab_color.as_deref(), Some("112233"));
     }
 
     /// Shared strings that are all dressed alike, which is what most tests want.
@@ -4250,7 +4295,7 @@ mod tests {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
 </worksheet>"#;
-        let sheet = parse_worksheet(xml, "probe", &[], &stylesheet).expect("should parse");
+        let sheet = parse_worksheet(xml, "probe", &[], &stylesheet, &Theme::default()).expect("should parse");
         assert_eq!(sheet.first_font, Some(("Calibri".to_string(), 11.0)));
         assert_eq!(sheet.normal_font, Some(("Meiryo UI".to_string(), 9.0)));
     }

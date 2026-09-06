@@ -421,6 +421,7 @@ mod tests {
             drawings: Vec::new(),
             comments: Vec::new(),
             unsupported_elements: vec![],
+            tab_color: None,
         }
     }
 

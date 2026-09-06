@@ -1588,6 +1588,14 @@ function describe() {
     const tab = document.createElement('button');
     tab.textContent = one.name;
     if (index === shown) tab.className = 'on';
+    // Excel paints the sheet's tab in its own colour when the file gives one
+    // in <sheetPr><tabColor>. The strip here is underline-shaped, so the
+    // colour shows as the tab's underline — on every coloured sheet, not only
+    // the active one, and overriding the accent the active tab would wear.
+    if (one.tab_color) {
+      tab.style.borderBottomColor = '#' + one.tab_color;
+      tab.style.borderBottomWidth = '3px';
+    }
     tab.onclick = () => {
       shown = index;
       draw();

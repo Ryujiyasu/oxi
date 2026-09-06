@@ -37,6 +37,7 @@ fn blank_sheet(name: &str) -> Sheet {
         drawings: Vec::new(),
             comments: Vec::new(),
         unsupported_elements: Vec::new(),
+        tab_color: None,
     }
 }
 

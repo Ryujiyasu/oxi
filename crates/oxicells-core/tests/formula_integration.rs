@@ -64,6 +64,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         drawings: Vec::new(),
             comments: Vec::new(),
         unsupported_elements: vec![],
+        tab_color: None,
     };
     evaluate_sheet_formulas(&mut sheet);
     let row = sheet.rows.iter().find(|r| r.index == 100).unwrap();

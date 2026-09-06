@@ -159,6 +159,11 @@ pub struct Sheet {
     /// Unsupported elements found in this sheet (e.g. "Chart", "PivotTable", "Drawing")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_elements: Vec<String>,
+    /// The colour of the sheet's tab, as a resolved `RRGGBB` hex string, where
+    /// the file gives one in `<sheetPr><tabColor>`. Excel paints the tab this
+    /// colour; a sheet with no `<tabColor>` leaves it `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_color: Option<String>,
 }
 
 /// A filter over a range, and what each filtered column is testing for.

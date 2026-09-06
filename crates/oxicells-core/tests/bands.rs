@@ -37,6 +37,7 @@ fn a_sheet(name: &str) -> Sheet {
         comments: Vec::new(),
         auto_filter: None,
         unsupported_elements: Vec::new(),
+        tab_color: None,
     };
     for index in 1..=4u32 {
         sheet.rows.push(Row {
