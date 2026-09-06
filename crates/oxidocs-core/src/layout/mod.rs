@@ -3578,9 +3578,21 @@ impl LayoutEngine {
         if std::env::var("OXI_DEVA_DISABLE").is_err()
             && text.chars().any(crate::font::is_complex_script)
         {
-            let mangal = self.registry.get("Mangal");
-            if mangal.char_widths.contains_key(&'\u{0915}') {
-                return mangal;
+            // The cs font if THIS machine can measure it (v1/v11 declare
+            // cs=Mangal, installed → its tall 1.68em box), else Nirmala UI's box
+            // (v9 declares cs=Arial Unicode MS, absent → Word falls the box to
+            // the rendered fallback, 1.33em). MEASURED per doc in Word: v1 line
+            // 23.2pt = Mangal, v9 line 15.7pt at 11pt = Nirmala. Neither is
+            // Cambria (the S1146 Latin fallback, the bug this replaces).
+            if let Some(cs) = run_style
+                .font_family_cs
+                .as_deref()
+                .or_else(|| para_style.default_run_style.as_ref().and_then(|r| r.font_family_cs.as_deref()))
+            {
+                let m = self.registry.get(cs);
+                if m.char_widths.contains_key(&'\u{0915}') {
+                    return m;
+                }
             }
             let nirmala = self.registry.get("Nirmala UI");
             if nirmala.char_widths.contains_key(&'\u{0915}') {
@@ -27388,9 +27400,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             || kinsoku::is_yakumono_opening(c)
                             || kinsoku::is_yakumono_closing(c)
                     };
-                    let s1318_cap_tw: i32 = if s1318_regime {
+                    // S1318 v6 (2026-09-07): the break-time capacity, from
+                    // `_pb_unitcap_gen.py` (52 arms on the faithful slice) and the
+                    // document lines it explains:
+                    //   - an ADJACENT PAIR of marks (）」 ）、 、「 。（ ...) collapses one
+                    //     cell, both members at half, free: 「…（8字）」…字、」 keeps
+                    //     字 (22 chars, ） 5.8 」 5.8), the same line without the
+                    //     pair wraps it;
+                    //   - STANDALONE marks together give strictly LESS than half a
+                    //     cell: 4 、 or 4 standalone brackets on the line do not pull
+                    //     in a character that needs 0.5 (m1-m4_h1, b2/b4), while
+                    //     0.49 (「介します。（各」 after its pair, 06ee35d5's 「・・」
+                    //     0.499) and 0.33 (「及び（公財）東京…」 tracked) are kept;
+                    //   - the （ of 「…（障害者総合支援法）」とされた。」 is halved at
+                    //     RENDER time only: 21 chars - the pair's cell = 20 cells and
+                    //     the 。 hangs, so the break needs nothing from it.
+                    // Oxi's pre-compression already halves a pair's second member
+                    // (0.5); the other half is credited here.
+                    let (s1318_pair_credit_tw, s1318_n_solo) = if s1318_regime {
                         let mut prev_mark = false;
-                        let mut n = 0;
+                        let mut pairs = 0;
+                        let mut solo = 0;
+                        let mut run = 0usize;
                         for c in current_line
                             .fragments
                             .iter()
@@ -27398,15 +27429,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .chain(word.chars())
                         {
                             let m = s1318_is_mark(c);
-                            if m && !prev_mark {
-                                n += 1;
+                            if m {
+                                run += 1;
+                            } else {
+                                if run == 1 {
+                                    solo += 1;
+                                } else if run >= 2 {
+                                    pairs += run - 1;
+                                }
+                                run = 0;
                             }
                             prev_mark = m;
                         }
-                        // each mark gives up half of its CELL (Word halves 「）」 to 5.76
-                        // on the 11.52 grid, not to 5.5): 「…項目(12項目）の計80項目の」
-                        // needs exactly half a cell from its one 「）」
-                        n * pt_to_tw(0.5 * char_width.max(font_size))
+                        let _ = prev_mark;
+                        if run == 1 {
+                            solo += 1;
+                        } else if run >= 2 {
+                            pairs += run - 1;
+                        }
+                        (pairs as i32 * pt_to_tw(0.5 * char_width.max(font_size)), solo)
+                    } else {
+                        (0, 0)
+                    };
+                    let s1318_cap_tw: i32 = if s1318_n_solo > 0 {
+                        pt_to_tw(0.5 * char_width.max(font_size)) - 1
                     } else {
                         0
                     };
@@ -27422,7 +27468,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // past the floor (p4 「…とされた。」: the 。 box ends at the true
                     // edge only because the text before it ends 5.8 short of the floor).
                     let s1318_avail_tw = available_tw;
-                    let s1318_natural_over_tw = current_width_tw + s1317_cw_tw - s1318_avail_tw;
+                    let s1318_natural_over_tw = current_width_tw + s1317_cw_tw - s1318_avail_tw - s1318_pair_credit_tw;
                     // （：；） are line-final marks too: 0ea3ec86 p11 「…福祉手当（都・市町村：」
                     // holds 21 with the 「：」 at the end where Oxi stopped at 「市町」.
                     let s1318_next_mark = chars_vec.get(char_index + 1).map_or(false, |&nc| {
@@ -27440,8 +27486,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // the mark itself: inside at its natural advance (no charSpace
                         // after the line's last character) within the capacity, else
                         // the S601 hang decides (natural fit of the text before it)
-                        let over = current_width_tw + pt_to_tw(font_size) - s1318_avail_tw;
-                        (over <= s1318_one_cell_tw.min(s1318_cap_tw), false)
+                        let over = current_width_tw + pt_to_tw(font_size) - s1318_avail_tw - s1318_pair_credit_tw;
+                        (over <= s1318_cap_tw, false)
                     } else if s1318_next_mark {
                         // v5: X before a mark is a normal character against the floor
                         // (19 kana + 1 、 + 「字、」 keeps 字 with 0.5 of compression and
@@ -31635,7 +31681,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         } else {
             0.0
         };
-        let char_pitch = char_pitch.map(|p| (p + s1340_track).max(1.0));
+        // S1344 (2026-09-07): the floor is cut with the SECTION cell whatever the
+        // run's tracking. `_pb_trackedge_gen.py` (39 arms on the faithful slice,
+        // spacing -8/-4/-2/0/+2/+4, two and one columns): every line ends at
+        // 20 x 11.5 = 230 (2 columns) or 42 x 11.5 = 483 (1 column) -- 22 chars
+        // at 10.7 (235.4, inside the true edge) still wrap, 20 at 11.7 (234)
+        // still wrap, and a mark gives half of ITS OWN cell (5.35 / 5.85).
+        // 167853 p3 「　離職等により…又は失うおそ」 (3194 section, -4): 239.4 - 5.7
+        // <= 235.6 fits; 167853 p2 「（予防）…吸い込|ま」 (+2, 12pt): 37 x 13.08
+        // is 0.65 cell past 37 x 12.85 and wraps. The tracked-cell floor of
+        // S1340 read the first as 227.6 and refused it.
+        let _ = s1340_track;
         match char_pitch {
             Some(pitch)
                 if ((s1211 && grid_has_char_space) || s1211b || s1211c)

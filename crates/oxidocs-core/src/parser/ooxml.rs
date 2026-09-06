@@ -8904,6 +8904,9 @@ fn parse_run_properties(
                             style.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                             style.has_explicit_east_asia = true;
+                        } else if key == "cs" {
+                            style.font_family_cs =
+                                Some(String::from_utf8_lossy(&attr.value).to_string());
                         } else if key == "asciiTheme" || key == "hAnsiTheme" {
                             if style.font_family.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
@@ -9020,6 +9023,9 @@ fn parse_run_properties(
                                 style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                                 style.has_explicit_east_asia = true;
+                            } else if key == "cs" {
+                                style.font_family_cs =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             } else if key == "asciiTheme" || key == "hAnsiTheme" {
                                 if style.font_family.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);

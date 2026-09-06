@@ -438,6 +438,11 @@ pub struct RunStyle {
     /// East Asian font family (w:rFonts eastAsia) for CJK characters
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family_east_asia: Option<String>,
+    /// Complex-script font family (w:rFonts cs) — the face Word uses for a
+    /// complex script (Devanagari and its kin). Drives the Devanagari line box
+    /// and shaping font; absent for the Latin/CJK corpus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family_cs: Option<String>,
     /// True iff `<w:rFonts w:eastAsia="..."/>` was set as an EXPLICIT attribute
     /// somewhere in the inheritance chain (run / style / docDefault), as
     /// opposed to a theme-fallback `eastAsiaTheme="minorEastAsia"`. Used by
@@ -640,6 +645,7 @@ impl Default for RunStyle {
         Self {
             font_family: None,
             font_family_east_asia: None,
+            font_family_cs: None,
             has_explicit_east_asia: false,
             east_asia_from_theme: false,
             ruby_spread: false,

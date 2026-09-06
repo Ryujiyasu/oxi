@@ -373,6 +373,9 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if child.font_family_east_asia.is_none() {
         child.font_family_east_asia = parent.font_family_east_asia.clone();
     }
+    if child.font_family_cs.is_none() {
+        child.font_family_cs = parent.font_family_cs.clone();
+    }
     // §4.6.3: explicit eastAsia attribute is inherited (sticky once set anywhere
     // up the chain). Theme fallback never sets it.
     if !child.has_explicit_east_asia && parent.has_explicit_east_asia {
