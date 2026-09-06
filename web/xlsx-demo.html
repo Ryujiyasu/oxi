@@ -170,6 +170,7 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
   color: var(--dim);
 }
 .tabs button:hover { background: #DFE3E7; }
+.tabs button.dragging { opacity: .5; }
 .tabs button.on {
   background: var(--bg);
   color: var(--accent-d);
@@ -1692,6 +1693,27 @@ function describe() {
       event.preventDefault();
       showTabMenu(event.clientX, event.clientY, index);
     };
+    // Drag a tab along the strip to reorder the sheets, as Excel does.
+    tab.draggable = true;
+    tab.ondragstart = (event) => {
+      dragFrom = index;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(index));
+      tab.classList.add('dragging');
+    };
+    tab.ondragend = () => {
+      tab.classList.remove('dragging');
+      dragFrom = null;
+    };
+    tab.ondragover = (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    };
+    tab.ondrop = (event) => {
+      event.preventDefault();
+      const from = dragFrom ?? Number(event.dataTransfer.getData('text/plain'));
+      if (Number.isInteger(from)) moveSheet(from, index);
+    };
     tabsBox.appendChild(tab);
   });
   // A plus at the end adds a sheet, where Excel puts it.
@@ -1758,6 +1780,30 @@ function addSheet() {
   draw();
   goTo(1, 0);
   markFrozen();
+}
+
+// The tab a drag picked up, held while it is dragged.
+let dragFrom = null;
+
+function moveSheet(from, to) {
+  if (!book || from === to || from < 0 || to < 0) return;
+  change(() => {
+    const was = book;
+    const sheets = [...book.sheets];
+    const [moved] = sheets.splice(from, 1);
+    sheets.splice(to, 0, moved);
+    book = { ...book, sheets };
+    step.books = [{ was, now: book }];
+  });
+  beyondValues = true;
+  // Follow the sheet that was on screen to wherever the move put it, worked
+  // out from the indices rather than the objects (recompute may replace them).
+  if (shown === from) shown = to;
+  else if (from < shown && shown <= to) shown -= 1;
+  else if (to <= shown && shown < from) shown += 1;
+  weighCalc();
+  describe();
+  draw();
 }
 
 function deleteSheet(index) {
