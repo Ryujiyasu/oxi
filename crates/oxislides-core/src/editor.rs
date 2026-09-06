@@ -93,6 +93,8 @@ pub struct PptxEditor {
     formats: HashMap<usize, HashMap<(usize, usize, usize), RunFormat>>,
     /// (slide_idx) -> { shape -> where and how big it should be }
     geoms: HashMap<usize, HashMap<usize, ShapeGeometry>>,
+    /// (slide_idx) -> { (shape, para) -> `a:pPr/@algn` ("l"/"ctr"/"r"/"just") }
+    aligns: HashMap<usize, HashMap<(usize, usize), String>>,
 }
 
 impl PptxEditor {
@@ -106,6 +108,7 @@ impl PptxEditor {
             merges: HashMap::new(),
             formats: HashMap::new(),
             geoms: HashMap::new(),
+            aligns: HashMap::new(),
         })
     }
 
@@ -201,6 +204,21 @@ impl PptxEditor {
             .insert(shape_index, geom);
     }
 
+    /// Set one paragraph's horizontal alignment. `algn` is the DrawingML value:
+    /// "l", "ctr", "r" or "just".
+    pub fn set_paragraph_align(
+        &mut self,
+        slide_index: usize,
+        shape_index: usize,
+        paragraph_index: usize,
+        algn: String,
+    ) {
+        self.aligns
+            .entry(slide_index)
+            .or_default()
+            .insert((shape_index, paragraph_index), algn);
+    }
+
     pub fn addressable_runs(&self) -> Result<Vec<Vec<Vec<Vec<String>>>>, PptxError> {
         let paths = self.resolve_slide_paths()?;
         let mut archive = OoxmlArchive::new(&self.original_data)?;
@@ -229,6 +247,7 @@ impl PptxEditor {
             || !self.merges.is_empty()
             || !self.formats.is_empty()
             || !self.geoms.is_empty()
+            || !self.aligns.is_empty()
         {
             return true;
         }
@@ -241,6 +260,7 @@ impl PptxEditor {
             && self.merges.is_empty()
             && self.formats.is_empty()
             && self.geoms.is_empty()
+            && self.aligns.is_empty()
         {
             return Ok(self.original_data.clone());
         }
@@ -282,12 +302,19 @@ impl PptxEditor {
                 path_geoms.insert(path.clone(), geoms);
             }
         }
+        let mut path_aligns: HashMap<String, &HashMap<(usize, usize), String>> = HashMap::new();
+        for (si, aligns) in &self.aligns {
+            if let Some(path) = slide_paths.get(*si) {
+                path_aligns.insert(path.clone(), aligns);
+            }
+        }
         let no_formats: HashMap<(usize, usize, usize), RunFormat> = HashMap::new();
         let no_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
         let no_splits: HashMap<(usize, usize), usize> = HashMap::new();
         let no_merges: std::collections::HashSet<(usize, usize)> =
             std::collections::HashSet::new();
         let no_geoms: HashMap<usize, ShapeGeometry> = HashMap::new();
+        let no_aligns: HashMap<(usize, usize), String> = HashMap::new();
 
         let cursor = Cursor::new(&self.original_data);
         let mut archive =
@@ -313,18 +340,21 @@ impl PptxEditor {
                     || path_merges.contains_key(&name)
                     || path_formats.contains_key(&name)
                     || path_geoms.contains_key(&name)
+                    || path_aligns.contains_key(&name)
                 {
                     let slide_edits = path_edits.get(&name).copied().unwrap_or(&no_edits);
                     let slide_splits = path_splits.get(&name).copied().unwrap_or(&no_splits);
                     let slide_merges = path_merges.get(&name).copied().unwrap_or(&no_merges);
                     let slide_formats = path_formats.get(&name).copied().unwrap_or(&no_formats);
                     let slide_geoms = path_geoms.get(&name).copied().unwrap_or(&no_geoms);
+                    let slide_aligns = path_aligns.get(&name).copied().unwrap_or(&no_aligns);
                     let mut xml = String::new();
                     entry
                         .read_to_string(&mut xml)
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
                     let patched = patch_slide_xml(
                         &xml, slide_edits, slide_splits, slide_merges, slide_formats, slide_geoms,
+                        slide_aligns,
                     )?;
                     writer
                         .write_all(patched.as_bytes())
@@ -669,6 +699,31 @@ fn pt_to_emu(pt: f32) -> i64 {
     (f64::from(pt) * 12700.0).round() as i64
 }
 
+/// Rewrite an `a:pPr` tag's `algn`, keeping every other attribute.
+fn apply_align(tag: &BytesStart<'_>, algn: &str) -> BytesStart<'static> {
+    let name = String::from_utf8_lossy(tag.name().as_ref()).into_owned();
+    let mut out = BytesStart::new(name);
+    for attr in tag.attributes().flatten() {
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        if key == "algn" {
+            continue;
+        }
+        out.push_attribute((key.as_str(), attr.unescape_value().unwrap_or_default().as_ref()));
+    }
+    out.push_attribute(("algn", algn));
+    out
+}
+
+/// A fresh `a:pPr algn="..."`, named with the paragraph's own prefix, for a
+/// paragraph that carries no properties element.
+fn new_ppr(p_tag: &BytesStart<'_>, algn: &str) -> BytesStart<'static> {
+    let prefix = tag_prefix(p_tag);
+    let name = if prefix.is_empty() { "pPr".to_string() } else { format!("{prefix}:pPr") };
+    let mut out = BytesStart::new(name);
+    out.push_attribute(("algn", algn));
+    out
+}
+
 /// Emit a fresh `<a:xfrm><a:off/><a:ext/></a:xfrm>` for a shape that carried
 /// none. A shape without its own transform inherits it, so it has no rotation
 /// or flip to preserve here.
@@ -778,6 +833,7 @@ fn patch_slide_xml(
     merges: &std::collections::HashSet<(usize, usize)>,
     formats: &HashMap<(usize, usize, usize), RunFormat>,
     geoms: &HashMap<usize, ShapeGeometry>,
+    aligns: &HashMap<(usize, usize), String>,
 ) -> Result<String, PptxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -831,6 +887,11 @@ fn patch_slide_xml(
     let mut in_geom_sppr = false;
     let mut pending_xfrm: Option<ShapeGeometry> = None;
     let mut in_geom_xfrm = false;
+    // Aligning a paragraph. `pending_align` holds the value from the target
+    // `<a:p>` start until its `a:pPr` is found to rewrite, or the first non-pPr
+    // child forces a fresh `a:pPr` to be injected first (pPr is `<a:p>`'s first
+    // child).
+    let mut pending_align: Option<(BytesStart<'static>, String)> = None;
 
     loop {
         match reader.read_event().map_err(PptxError::Xml)? {
@@ -930,6 +991,35 @@ fn patch_slide_xml(
                 in_geom_sppr = false;
                 emit(&mut writer, &mut buffer, Event::End(e.clone().into_owned()))?;
             }
+            // --- aligning a paragraph: its `a:pPr/@algn` ---
+            // The first child of the target paragraph decides it: an existing
+            // pPr is rewritten, anything else means the paragraph has none, so
+            // a fresh pPr is injected before it (pPr is the paragraph's first
+            // child).
+            Event::Start(ref e) if pending_align.is_some() => {
+                let (p_tag, algn) = pending_align.take().expect("just checked");
+                if local_name(e.name().as_ref()) == "pPr" {
+                    emit(&mut writer, &mut buffer, Event::Start(apply_align(e, &algn)))?;
+                } else {
+                    emit(&mut writer, &mut buffer, Event::Empty(new_ppr(&p_tag, &algn)))?;
+                    emit(&mut writer, &mut buffer, Event::Start(e.clone().into_owned()))?;
+                }
+            }
+            Event::Empty(ref e) if pending_align.is_some() => {
+                let (p_tag, algn) = pending_align.take().expect("just checked");
+                if local_name(e.name().as_ref()) == "pPr" {
+                    emit(&mut writer, &mut buffer, Event::Empty(apply_align(e, &algn)))?;
+                } else {
+                    emit(&mut writer, &mut buffer, Event::Empty(new_ppr(&p_tag, &algn)))?;
+                    emit(&mut writer, &mut buffer, Event::Empty(e.clone().into_owned()))?;
+                }
+            }
+            Event::End(ref e) if pending_align.is_some() && local_name(e.name().as_ref()) == "p" => {
+                // An empty paragraph with no children still takes its alignment.
+                let (p_tag, algn) = pending_align.take().expect("just checked");
+                emit(&mut writer, &mut buffer, Event::Empty(new_ppr(&p_tag, &algn)))?;
+                emit(&mut writer, &mut buffer, Event::End(e.clone().into_owned()))?;
+            }
             Event::Start(ref e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
@@ -961,6 +1051,10 @@ fn patch_slide_xml(
                             swallow_ppr = true;
                             continue;
                         }
+                        // Its first child (or its close) writes the alignment.
+                        pending_align = aligns
+                            .get(&(shape_idx, para_idx))
+                            .map(|a| (e.clone().into_owned(), a.clone()));
                     }
                     "pPr" if swallow_ppr => {
                         ppr_depth += 1;
@@ -1241,6 +1335,23 @@ mod tests {
         assert!((sh.width - 300.0).abs() < 0.1, "w = {}", sh.width);
         assert!((sh.height - 120.0).abs() < 0.1, "h = {}", sh.height);
     }
+
+    #[test]
+    fn test_editor_paragraph_align() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.pptx");
+        let mut editor = PptxEditor::new(data).expect("should open");
+        editor.set_paragraph_align(0, 0, 0, "ctr".to_string());
+        let saved = editor.save().expect("should save");
+        let pres = parse_pptx(&saved).expect("should parse");
+        if let crate::ir::ShapeContent::TextBox { paragraphs } = &pres.slides[0].shapes[0].content {
+            assert!(matches!(paragraphs[0].alignment, Some(crate::ir::SlideAlignment::Center)),
+                    "alignment persisted, got {:?}", paragraphs[0].alignment);
+            // The text is still there -- the paragraph was not mangled.
+            assert!(!paragraphs[0].runs.is_empty(), "runs kept");
+        } else {
+            panic!("Expected TextBox");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1261,7 +1372,7 @@ mod split_tests {
     fn split_at(at: usize) -> String {
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), at);
-        patch_slide_xml(SLIDE, &HashMap::new(), &splits, &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch")
+        patch_slide_xml(SLIDE, &HashMap::new(), &splits, &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashMap::new()).expect("patch")
     }
 
     fn paragraphs(xml: &str) -> Vec<String> {
@@ -1349,7 +1460,7 @@ mod split_tests {
         edits.insert((0usize, 0usize, 0usize), "Goodbye now".to_string());
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), 7);
-        let out = patch_slide_xml(SLIDE, &edits, &splits, &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch");
+        let out = patch_slide_xml(SLIDE, &edits, &splits, &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashMap::new()).expect("patch");
         let ps = paragraphs(&out);
         assert_eq!(texts(&ps[0]), "Goodbye");
         assert_eq!(texts(&ps[1]), " now");
@@ -1357,7 +1468,7 @@ mod split_tests {
 
     #[test]
     fn a_slide_with_no_split_is_left_alone() {
-        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch");
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashMap::new()).expect("patch");
         assert_eq!(paragraphs(&out).len(), 2);
     }
 }
@@ -1380,7 +1491,7 @@ mod merge_tests {
     fn merge(which: usize) -> String {
         let mut m = HashSet::new();
         m.insert((0usize, which));
-        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &m, &HashMap::new(), &HashMap::new()).expect("patch")
+        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &m, &HashMap::new(), &HashMap::new(), &HashMap::new()).expect("patch")
     }
 
     fn paragraphs(xml: &str) -> Vec<String> {
@@ -1443,7 +1554,7 @@ mod merge_tests {
 
     #[test]
     fn a_slide_with_no_join_is_left_alone() {
-        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new(), &HashMap::new())
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashMap::new())
             .expect("patch");
         assert_eq!(paragraphs(&out).len(), 3);
     }
@@ -1465,7 +1576,8 @@ mod format_tests {
     fn format(run: usize, f: RunFormat) -> String {
         let mut m = HashMap::new();
         m.insert((0usize, 0usize, run), f);
-        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m, &HashMap::new())
+        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m,
+                        &HashMap::new(), &HashMap::new())
             .expect("patch")
     }
 
@@ -1540,7 +1652,7 @@ mod format_tests {
         );
         let mut m = HashMap::new();
         m.insert((0usize, 0usize, 0usize), RunFormat { bold: Some(true), ..Default::default() });
-        let out = patch_slide_xml(OPEN, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m, &HashMap::new())
+        let out = patch_slide_xml(OPEN, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m, &HashMap::new(), &HashMap::new())
             .expect("patch");
         assert_eq!(out.matches("<a:rPr").count(), 1, "exactly one rPr: {out}");
         assert!(out.contains(r#"b="1""#), "{out}");
@@ -1557,7 +1669,7 @@ mod format_tests {
     #[test]
     fn a_slide_with_no_format_change_is_left_alone() {
         let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(),
-                                  &HashSet::new(), &HashMap::new(), &HashMap::new()).expect("patch");
+                                  &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashMap::new()).expect("patch");
         assert!(out.contains(r#"<a:rPr sz="1800" lang="en"/>"#), "{out}");
     }
 }

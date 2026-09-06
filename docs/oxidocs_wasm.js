@@ -221,12 +221,13 @@ export function edit_pptx(data, edits) {
  * @param {any} merges
  * @param {any} formats
  * @param {any} geoms
+ * @param {any} aligns
  * @returns {Uint8Array}
  */
-export function edit_pptx_with_splits(data, edits, splits, merges, formats, geoms) {
+export function edit_pptx_with_splits(data, edits, splits, merges, formats, geoms, aligns) {
     const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.edit_pptx_with_splits(ptr0, len0, edits, splits, merges, formats, geoms);
+    const ret = wasm.edit_pptx_with_splits(ptr0, len0, edits, splits, merges, formats, geoms, aligns);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }

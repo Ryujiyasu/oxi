@@ -190,6 +190,11 @@ body.presenting #presrail { display: block }
   <button id="fmtItalic" class="fmt" data-i18n-title="fItalic" title="Italic" style="font-style:italic">I</button>
   <button id="fmtUnder" class="fmt" data-i18n-title="fUnder" title="Underline" style="text-decoration:underline">U</button>
   <span class="fsep"></span>
+  <button id="alnL" class="fmt aln" data-algn="l" data-i18n-title="aLeft" title="Align left">L</button>
+  <button id="alnC" class="fmt aln" data-algn="ctr" data-i18n-title="aCenter" title="Align centre">C</button>
+  <button id="alnR" class="fmt aln" data-algn="r" data-i18n-title="aRight" title="Align right">R</button>
+  <button id="alnJ" class="fmt aln" data-algn="just" data-i18n-title="aJustify" title="Justify">J</button>
+  <span class="fsep"></span>
   <label class="fmtlabel" data-i18n="fSize">Size</label>
   <input id="fmtSize" class="fmtnum" type="number" min="1" max="400" step="1" inputmode="numeric" />
   <span class="fsep"></span>
@@ -244,6 +249,7 @@ const I18N = {
     fBold: 'Bold', fItalic: 'Italic', fUnder: 'Underline', fSize: 'Size',
     fColor: 'Colour', fHint: 'Select text, then apply a style',
     fPos: 'Shape',
+    aLeft: 'Align left', aCenter: 'Align centre', aRight: 'Align right', aJustify: 'Justify',
     saved: 'Saved. The file was written in your browser.',
     noEdits: 'Nothing has been changed yet.',
     saveFailed: 'Could not save: ',
@@ -263,6 +269,7 @@ const I18N = {
     fBold: '太字', fItalic: '斜体', fUnder: '下線', fSize: 'サイズ',
     fColor: '色', fHint: '文字を選んでから書式を適用',
     fPos: '図形',
+    aLeft: '左揃え', aCenter: '中央揃え', aRight: '右揃え', aJustify: '両端揃え',
     saved: '保存しました。ファイルはブラウザの中で作られています。',
     noEdits: 'まだ変更がありません。',
     saveFailed: '保存できませんでした: ',
@@ -553,6 +560,9 @@ const runFmt = new Map();
 // points. Its own list to the engine (`geoms`), applied only to top-level
 // shapes -- a group child's coordinates are in its group's space.
 const geomEdits = new Map();
+// Per-paragraph alignment, keyed `slideIndex/sp_index/paragraph` -> algn
+// ("l"/"ctr"/"r"/"just"). Its own list to the engine (`aligns`).
+const alignEdits = new Map();
 
 function slideIndexOf(slide) {
   return pres ? pres.slides.indexOf(slide) : 0;
@@ -579,7 +589,8 @@ function harvest() {
 
 function markDirty() {
   const n = document.getElementById('docName');
-  n.classList.toggle('dirty', edits.size > 0 || runFmt.size > 0 || geomEdits.size > 0);
+  n.classList.toggle('dirty',
+    edits.size > 0 || runFmt.size > 0 || geomEdits.size > 0 || alignEdits.size > 0);
 }
 
 // Every pending change, in the shapes the engine takes. Split and merge save
@@ -609,12 +620,18 @@ function collectPending() {
     geoms.push({ slide_index: si, shape_index: sp,
                  x: g.x, y: g.y, width: g.width, height: g.height });
   }
-  return { list, formats, geoms };
+  const aligns = [];
+  for (const [key, algn] of alignEdits) {
+    const [si, sp, pi] = key.split('/').map(Number);
+    aligns.push({ slide_index: si, shape_index: sp, paragraph_index: pi, algn });
+  }
+  return { list, formats, geoms, aligns };
 }
 function clearPending() {
   edits.clear();
   runFmt.clear();
   geomEdits.clear();
+  alignEdits.clear();
   clearSelection();
   markDirty();
 }
@@ -677,10 +694,19 @@ function buildSlide(container, slide, scale, interactive) {
       paragraphs.forEach((para, pi) => {
         const p = document.createElement('p');
         const lvl = levelFor(shape, para);
-        const align = para.alignment || (lvl && lvl.algn);
+        // The paragraph's alignment, with any in-page change on top. Keyed by
+        // slide / shape (the editor's sp_index) / paragraph.
+        const pkey = (shape.sp_index !== undefined && shape.sp_index !== null)
+          ? (slideIndexOf(slide) + '/' + shape.sp_index + '/' + pi) : null;
+        const alignOv = pkey && alignEdits.get(pkey);
+        const align = alignOv
+          ? { l: 'Left', ctr: 'Center', r: 'Right', just: 'Justify' }[alignOv]
+          : (para.alignment || (lvl && lvl.algn));
         if (align === 'Center') p.style.textAlign = 'center';
         else if (align === 'Right') p.style.textAlign = 'right';
         else if (align === 'Justify') p.style.textAlign = 'justify';
+        else if (align === 'Left') p.style.textAlign = 'left';
+        if (editing && interactive && pkey) p.dataset.pkey = pkey;
         if (lvl && lvl.line_spacing) p.style.lineHeight = lvl.line_spacing * 1.2;
         // A paragraph the engine reports with no runs still has one in the
         // file -- a break opens `<a:r><a:t></a:t></a:r>`, and an empty run is
@@ -888,6 +914,7 @@ async function open(name, data, opts) {
     edits.clear();
     runFmt.clear();
     geomEdits.clear();
+    alignEdits.clear();
     clearSelection();
     markDirty();
     pres = parse_presentation(data);
@@ -1122,6 +1149,52 @@ function syncFmtBar() {
   document.getElementById('fmtSize').value = Math.round(spanEff(s, 'size'));
   const col = spanEff(s, 'color');
   if (col && /^[0-9a-fA-F]{6}$/.test(col)) document.getElementById('fmtColor').value = '#' + col;
+  syncAlignBar();
+}
+
+// Alignment is a paragraph property, so it applies to the paragraph the
+// selection sits in rather than to the runs.
+const ALGN_IDS = { l: 'alnL', ctr: 'alnC', r: 'alnR', just: 'alnJ' };
+const ALGN_CSS = { l: 'left', ctr: 'center', r: 'right', just: 'justify' };
+function touchedParas() {
+  const ps = new Set();
+  for (const s of touchedRunSpans()) {
+    const p = s.closest('p[data-pkey]');
+    if (p) ps.add(p);
+  }
+  return [...ps];
+}
+function applyAlign(algn) {
+  const ps = touchedParas();
+  if (!ps.length) { say(t('fHint')); return; }
+  for (const p of ps) {
+    alignEdits.set(p.dataset.pkey, algn);
+    p.style.textAlign = ALGN_CSS[algn];
+  }
+  markDirty();
+  syncAlignBar();
+}
+function syncAlignBar() {
+  const p = touchedParas()[0];
+  for (const id of Object.values(ALGN_IDS)) {
+    const el = document.getElementById(id);
+    el.disabled = !p;
+    el.classList.remove('on');
+  }
+  if (!p) return;
+  let algn = alignEdits.get(p.dataset.pkey);
+  if (!algn) {
+    const ta = p.style.textAlign || 'left';
+    algn = { left: 'l', center: 'ctr', right: 'r', justify: 'just', start: 'l', '': 'l' }[ta] || 'l';
+  }
+  const el = document.getElementById(ALGN_IDS[algn]);
+  if (el) el.classList.add('on');
+}
+for (const id of Object.values(ALGN_IDS)) {
+  document.getElementById(id).onmousedown = e => {
+    e.preventDefault();                        // keep the selection
+    applyAlign(e.currentTarget.dataset.algn);
+  };
 }
 
 document.getElementById('fmtBold').onmousedown = e => {
@@ -1350,9 +1423,9 @@ function splitHere() {
   const where = caretOffsetInParagraph();
   if (!where) return;
   harvest();
-  const { list, formats, geoms } = collectPending();
+  const { list, formats, geoms, aligns } = collectPending();
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [where], [], formats, geoms);
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [where], [], formats, geoms, aligns);
     bytes = out;
     clearPending();
     pres = parse_presentation(new Uint8Array(bytes));
@@ -1415,11 +1488,11 @@ function mergeHere() {
   for (const s of document.querySelectorAll('#canvas span[data-key^="' + prevPrefix + '"]')) {
     seam += Array.from(s.textContent).length;
   }
-  const { list, formats, geoms } = collectPending();
+  const { list, formats, geoms, aligns } = collectPending();
   try {
     const merge = { slide_index: where.slide_index, shape_index: where.shape_index,
                     paragraph_index: where.paragraph_index };
-    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [merge], formats, geoms);
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [merge], formats, geoms, aligns);
     bytes = out;
     clearPending();
     pres = parse_presentation(new Uint8Array(bytes));
@@ -1441,10 +1514,10 @@ document.getElementById('canvas').addEventListener('paste', e => {
 
 document.getElementById('btnSave').onclick = async () => {
   harvest();
-  if (!edits.size && !runFmt.size && !geomEdits.size) { say(t('noEdits')); return; }
-  const { list, formats, geoms } = collectPending();
+  if (!edits.size && !runFmt.size && !geomEdits.size && !alignEdits.size) { say(t("noEdits")); return; }
+  const { list, formats, geoms, aligns } = collectPending();
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], formats, geoms);
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], formats, geoms, aligns);
     const name = (document.getElementById('docName').textContent || 'slides')
       .replace(/\.pptx$/i, '') + '-edited.pptx';
     const url = URL.createObjectURL(new Blob([out], {
@@ -1479,6 +1552,7 @@ document.getElementById('btnClose').onclick = async () => {
   edits.clear();
   runFmt.clear();
   geomEdits.clear();
+  alignEdits.clear();
   clearSelection();
   document.body.classList.remove('editing');
   markDirty();

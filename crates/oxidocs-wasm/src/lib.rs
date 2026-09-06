@@ -839,6 +839,15 @@ struct JsShapeGeom {
     height: f32,
 }
 
+/// One paragraph's new alignment, from JavaScript ("l"/"ctr"/"r"/"just").
+#[derive(Deserialize)]
+struct JsParaAlign {
+    slide_index: usize,
+    shape_index: usize,
+    paragraph_index: usize,
+    algn: String,
+}
+
 /// Edit a .pptx and break paragraphs in it, returning the modified bytes.
 ///
 /// `edits` replaces run text; `splits` cuts a paragraph in two at a character
@@ -854,6 +863,7 @@ pub fn edit_pptx_with_splits(
     merges: JsValue,
     formats: JsValue,
     geoms: JsValue,
+    aligns: JsValue,
 ) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsSlideTextEdit> = if edits.is_undefined() || edits.is_null() {
         Vec::new()
@@ -925,6 +935,14 @@ pub fn edit_pptx_with_splits(
                 height: g.height,
             },
         );
+    }
+    let js_aligns: Vec<JsParaAlign> = if aligns.is_undefined() || aligns.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(aligns).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    for a in js_aligns {
+        editor.set_paragraph_align(a.slide_index, a.shape_index, a.paragraph_index, a.algn);
     }
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }

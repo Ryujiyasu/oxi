@@ -106,7 +106,7 @@ export function edit_pptx(data: Uint8Array, edits: any): Uint8Array;
  * the text edit lands first so a split counts the characters the file will
  * actually carry. `geoms` moves and sizes top-level shapes.
  */
-export function edit_pptx_with_splits(data: Uint8Array, edits: any, splits: any, merges: any, formats: any, geoms: any): Uint8Array;
+export function edit_pptx_with_splits(data: Uint8Array, edits: any, splits: any, merges: any, formats: any, geoms: any, aligns: any): Uint8Array;
 
 /**
  * Fast text edit + re-layout using cached document (skips docx parse).
@@ -311,7 +311,7 @@ export interface InitOutput {
     readonly edit_docx: (a: number, b: number, c: any) => [number, number, number, number];
     readonly edit_docx_advanced: (a: number, b: number, c: any) => [number, number, number, number];
     readonly edit_pptx: (a: number, b: number, c: any) => [number, number, number, number];
-    readonly edit_pptx_with_splits: (a: number, b: number, c: any, d: any, e: any, f: any, g: any) => [number, number, number, number];
+    readonly edit_pptx_with_splits: (a: number, b: number, c: any, d: any, e: any, f: any, g: any, h: any) => [number, number, number, number];
     readonly edit_text_and_relayout: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly edit_xlsx: (a: number, b: number, c: any) => [number, number, number, number];
     readonly edit_xlsx_from_workbook: (a: number, b: number, c: any) => [number, number, number, number];
