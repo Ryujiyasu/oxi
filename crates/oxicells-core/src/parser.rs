@@ -3275,6 +3275,7 @@ fn parse_worksheet(
         },
         unsupported_elements: unsupported,
         tab_color,
+        origin_id: None,
     })
 }
 
@@ -3448,6 +3449,9 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                 // Whether the tab is shown is the workbook's business, not the
                 // worksheet part's.
                 sheet.visibility = info.visibility;
+                // Its position in the file is the identity an editor round-trip
+                // keeps, so a rename is not mistaken for an add-and-delete.
+                sheet.origin_id = Some(sheets.len() as u32);
                 // A table lives in its own part, named by the sheet's own
                 // relationships. Excel dresses the range from there, so no cell
                 // inside carries the header fill or the banding.

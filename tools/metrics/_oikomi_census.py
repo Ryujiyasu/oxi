@@ -26,11 +26,14 @@ pdf = sys.argv[1]
 pages = None
 show = "--show" in sys.argv
 colw_arg = None
+colw1_arg = None
 for a in sys.argv[2:]:
     if a.startswith("--pages="):
         pages = [int(x) for x in a.split("=")[1].split(",")]
     if a.startswith("--colw="):
         colw_arg = float(a.split("=")[1])
+    if a.startswith("--colw1="):
+        colw1_arg = float(a.split("=")[1])
 
 OPEN = set("（「『【［〔《〈")
 CLOSE = set("）」』】］〕》〉")
@@ -108,7 +111,7 @@ def main():
     w2 = sorted(x1 - x0 for _, x0, _, x1, _, _ in lines if x0 in col_x and x1 - x0 < 250)
     w1 = sorted(x1 - x0 for _, x0, _, x1, _, _ in lines if x0 in col_x and x1 - x0 >= 250)
     colw2 = colw_arg or (w2[int(len(w2) * 0.9)] if w2 else 0)
-    colw1 = w1[int(len(w1) * 0.9)] if w1 else 0
+    colw1 = colw1_arg or (w1[int(len(w1) * 0.9)] if w1 else 0)
     print("column left edges: %s  two-column width ~%.1f (%d lines)  single width ~%.1f (%d lines)" % (col_x, colw2, len(w2), colw1, len(w1)))
     lines.sort(key=lambda r: (r[0], 0 if r[1] == col_x[0] else 1, r[2]))
     grant_norm, grant_mark, refuse, refuse_k = [], [], [], []
@@ -124,6 +127,10 @@ def main():
         last = t.rstrip()[-1:] if t.rstrip() else ""
         if any(ch.isascii() and (ch.isalnum() or ch == " ") for ch in t.rstrip()):
             continue  # proportional Latin/digits/spaces: cell count unreliable
+        if "--single" in sys.argv and (x1 - x0) < 250:
+            continue
+        if "--double" in sys.argv and (x1 - x0) >= 250:
+            continue
         if need > cells + 0.10:
             rec = (pno, y0, t, need - cells, marks, last)
             (grant_mark if (last in MID or last in CLOSE or last in OPEN) else grant_norm).append(rec)

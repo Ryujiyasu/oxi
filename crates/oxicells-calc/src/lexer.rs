@@ -283,6 +283,40 @@ pub fn translate_formula_references(
     Ok(output)
 }
 
+/// Rewrite every reference to the sheet named `old` so it names `new` instead,
+/// leaving string literals, other sheets and unqualified references untouched.
+///
+/// The match is case-insensitive on ASCII, as Excel treats sheet names, and
+/// exact otherwise (a Japanese name has no case to fold). A formula that will
+/// not tokenize -- one that links to another workbook, say -- is returned
+/// unchanged rather than mangled.
+pub fn rename_sheet_in_formula(input: &str, old: &str, new: &str) -> String {
+    let had_equals = input.trim_start().starts_with('=');
+    let Ok(mut tokens) = tokenize(input) else {
+        return input.to_string();
+    };
+    let mut touched = false;
+    for token in &mut tokens {
+        if let Token::Name { sheet: Some(sheet), .. } = token {
+            if sheet.eq_ignore_ascii_case(old) {
+                *sheet = new.to_string();
+                touched = true;
+            }
+        }
+    }
+    if !touched {
+        return input.to_string();
+    }
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in tokens {
+        render_token(&mut output, token);
+    }
+    output
+}
+
 /// A band of rows or columns that was inserted or removed, and how far its
 /// effect reaches.
 ///
@@ -1170,6 +1204,28 @@ mod tests {
 
     fn lex(s: &str) -> Vec<Token> {
         tokenize(s).expect("should lex")
+    }
+
+    #[test]
+    fn rename_sheet_rewrites_only_that_sheets_references() {
+        assert_eq!(
+            rename_sheet_in_formula("=Data!A1+Summary!B2", "Data", "Sales"),
+            "=Sales!A1+Summary!B2"
+        );
+        // The old name matches without regard to case; the new name is kept as
+        // given.
+        assert_eq!(rename_sheet_in_formula("=data!A1", "Data", "X"), "=X!A1");
+        // A new name that needs quoting gets it; an old quoted name that no
+        // longer needs quoting loses it.
+        assert_eq!(rename_sheet_in_formula("=Data!A1", "Data", "My Sheet"), "='My Sheet'!A1");
+        assert_eq!(rename_sheet_in_formula("='Old Name'!A1", "Old Name", "New"), "=New!A1");
+        // A string literal that merely contains the name is left alone.
+        assert_eq!(
+            rename_sheet_in_formula("=\"Data!x\"&Data!A1", "Data", "Z"),
+            "=\"Data!x\"&Z!A1"
+        );
+        // Nothing to rename comes back unchanged.
+        assert_eq!(rename_sheet_in_formula("=A1+B2", "Data", "Z"), "=A1+B2");
     }
 
     #[test]

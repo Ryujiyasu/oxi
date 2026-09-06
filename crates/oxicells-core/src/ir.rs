@@ -164,6 +164,12 @@ pub struct Sheet {
     /// colour; a sheet with no `<tabColor>` leaves it `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_color: Option<String>,
+    /// A stable identity the parser stamps (the sheet's position in the file),
+    /// so an editor round-trip can tell a rename (same id, new name) from an
+    /// add-and-delete that happens to leave the count unchanged. `None` on a
+    /// sheet the editor added, and on a workbook not built by the parser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_id: Option<u32>,
 }
 
 /// A filter over a range, and what each filtered column is testing for.

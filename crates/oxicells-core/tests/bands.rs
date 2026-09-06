@@ -38,6 +38,7 @@ fn a_sheet(name: &str) -> Sheet {
         auto_filter: None,
         unsupported_elements: Vec::new(),
         tab_color: None,
+        origin_id: None,
     };
     for index in 1..=4u32 {
         sheet.rows.push(Row {

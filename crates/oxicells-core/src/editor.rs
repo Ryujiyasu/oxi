@@ -20,6 +20,7 @@ use zip::{ZipArchive, ZipWriter};
 
 use crate::ir::{AutoFilter, BorderLine, CellStyle, MergeCell, Workbook};
 use crate::parser::{parse_xlsx, XlsxError};
+use oxicells_calc::rename_sheet_in_formula;
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{get_attr, local_name};
@@ -189,17 +190,70 @@ impl XlsxEditor {
 
         let same_count = edited.sheets.len() == self.workbook.sheets.len();
         let mut origins: Vec<Option<usize>> = Vec::with_capacity(edited.sheets.len());
-        for (index, sheet) in edited.sheets.iter().enumerate() {
-            let origin = if same_count {
-                Some(index)
-            } else {
-                self.workbook
-                    .sheets
-                    .iter()
-                    .position(|held| held.name.eq_ignore_ascii_case(&sheet.name))
-            };
-            origins.push(origin);
+        if self.workbook.sheets.iter().all(|held| held.origin_id.is_some()) {
+            // The parser stamped every original sheet with a stable id, so the
+            // match is by that id: a renamed sheet keeps it, an added sheet has
+            // none, and a deleted sheet's id is simply absent from the edited
+            // list. This tells a rename apart from an add-and-delete even when
+            // the two leave the sheet count unchanged, which position matching
+            // could not.
+            for sheet in &edited.sheets {
+                origins.push(match sheet.origin_id {
+                    Some(id) => self
+                        .workbook
+                        .sheets
+                        .iter()
+                        .position(|held| held.origin_id == Some(id)),
+                    None => None,
+                });
+            }
+        } else {
+            // A workbook not built by the parser has no ids; fall back to the
+            // old rule -- position when the count is unchanged, name otherwise.
+            for (index, sheet) in edited.sheets.iter().enumerate() {
+                origins.push(if same_count {
+                    Some(index)
+                } else {
+                    self.workbook
+                        .sheets
+                        .iter()
+                        .position(|held| held.name.eq_ignore_ascii_case(&sheet.name))
+                });
+            }
         }
+
+        // A rename is a sheet matched to an origin whose name has changed.
+        // The formulas the user did not touch still name the old sheet, so
+        // every reference to it across the workbook is rewritten to the new
+        // name; the rewritten cells then fall out as ordinary edits below.
+        let renames: Vec<(String, String)> = edited
+            .sheets
+            .iter()
+            .zip(&origins)
+            .filter_map(|(after, origin)| {
+                let before = self.workbook.sheets.get((*origin)?)?;
+                (before.name != after.name).then(|| (before.name.clone(), after.name.clone()))
+            })
+            .collect();
+        let rewritten: Workbook;
+        let edited: &Workbook = if renames.is_empty() {
+            edited
+        } else {
+            let mut copy = edited.clone();
+            for sheet in &mut copy.sheets {
+                for row in &mut sheet.rows {
+                    for cell in &mut row.cells {
+                        if let Some(formula) = cell.formula.as_mut() {
+                            for (old, new) in &renames {
+                                *formula = rename_sheet_in_formula(formula, old, new);
+                            }
+                        }
+                    }
+                }
+            }
+            rewritten = copy;
+            &rewritten
+        };
 
         let rearranged = !same_count
             || origins.iter().enumerate().any(|(index, origin)| {
@@ -2686,6 +2740,70 @@ mod tests {
         assert_eq!(read_back.sheets.len(), 2);
         assert_eq!(read_back.sheets[0].visibility, crate::ir::Visibility::Visible);
         assert_eq!(read_back.sheets[1].visibility, crate::ir::Visibility::Hidden);
+    }
+
+    /// Deleting one sheet and adding another keeps the count the same, which
+    /// used to fool the position match into handing the new sheet the deleted
+    /// one's part -- its cells and its tab colour. The stable id must prevent
+    /// that: the kept sheet keeps its own content, and the added one is empty.
+    #[test]
+    fn an_add_and_delete_that_keep_the_count_do_not_swap_parts() {
+        let data = include_bytes!("../../../tests/fixtures/multi_sheet.xlsx");
+        let original = parse_xlsx(data).expect("should parse");
+        assert_eq!(
+            original.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["Data", "Summary"]
+        );
+
+        let mut edited = original.clone();
+        let mut fresh = edited.sheets[0].clone();
+        fresh.name = "Report".to_string();
+        fresh.rows = Vec::new();
+        fresh.origin_id = None;
+        fresh.tab_color = None;
+        // Drop Summary, keep Data, append the fresh sheet: two sheets again.
+        edited.sheets = vec![edited.sheets[0].clone(), fresh];
+
+        let mut editor = XlsxEditor::new(data).expect("should open");
+        editor.apply_workbook(&edited).expect("should apply");
+        let saved = editor.save().expect("should save");
+        let read_back = parse_xlsx(&saved).expect("should parse");
+
+        assert_eq!(
+            read_back.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["Data", "Report"]
+        );
+        let report_cells: usize = read_back.sheets[1].rows.iter().map(|r| r.cells.len()).sum();
+        assert_eq!(report_cells, 0, "the added sheet inherited another sheet's cells");
+        let data_cells: usize = read_back.sheets[0].rows.iter().map(|r| r.cells.len()).sum();
+        assert!(data_cells > 0, "the kept sheet lost its cells");
+    }
+
+    /// Renaming a sheet rewrites the formulas that name it, so a reference the
+    /// user never touched keeps pointing at the same data.
+    #[test]
+    fn renaming_a_sheet_rewrites_the_formulas_that_name_it() {
+        let data = include_bytes!("../../../tests/fixtures/multi_sheet.xlsx");
+        let original = parse_xlsx(data).expect("should parse");
+
+        let mut edited = original.clone();
+        // Summary's first cell now reads from Data; then Data is renamed.
+        edited.sheets[1].rows[0].cells[0].formula = Some("=Data!B2".to_string());
+        edited.sheets[0].name = "Facts".to_string();
+
+        let mut editor = XlsxEditor::new(data).expect("should open");
+        editor.apply_workbook(&edited).expect("should apply");
+        let saved = editor.save().expect("should save");
+        let read_back = parse_xlsx(&saved).expect("should parse");
+
+        assert_eq!(read_back.sheets[0].name, "Facts");
+        let formula = read_back.sheets[1]
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .find_map(|cell| cell.formula.clone())
+            .expect("the summary cell kept a formula");
+        assert_eq!(formula, "Facts!B2", "the reference was not rewritten");
     }
 
     /// A name written and read back comes through the file whole.

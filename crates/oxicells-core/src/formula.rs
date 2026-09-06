@@ -422,6 +422,7 @@ mod tests {
             comments: Vec::new(),
             unsupported_elements: vec![],
             tab_color: None,
+            origin_id: None,
         }
     }
 

@@ -6880,7 +6880,58 @@ cells={} pitch={:.2} text={:?}",
                             diffs.sort_by(|a, b| a.partial_cmp(b).unwrap());
                             let pitch = diffs.get(diffs.len() / 2).copied().unwrap_or(0.0);
                             if pitch > 1.0 {
-                                let k = (n1 - n2) / 2;
+                                // S1338 (2026-09-06, default ON, opt-out OXI_S1338_DISABLE):
+                                // Word balances GRID LINES, not rows -- a row twice the
+                                // pitch tall (0ea3ec86 p3's 「❖ 障害者に関するマーク」
+                                // heading, 42pt over a 20.55 pitch) counts as two. That
+                                // section (heading + 6 lines) is 3 rows / 4 rows in
+                                // Word's PDF (heading + 2 | 4 = 4 lines each); by rows
+                                // it was 4 / 3. Every other balanced band of 0ea3ec86,
+                                // 167853 and 0b6f3b32 (the `_colbalance_census.py`
+                                // sweep, ~50 bands) has single-line rows, where lines
+                                // and rows agree. A row's lines = floor(height / pitch),
+                                // at least 1; column 1 keeps the first rows whose lines
+                                // reach ceil(total / 2).
+                                // HELD OPT-IN (`OXI_S1338=1`) 2026-09-06: kyotei36spec's
+                                // band (46 rows / 15, rows separated by table gaps) reads
+                                // so many "lines" in column 2 that the target is never
+                                // reached inside column 1 and NOTHING moves (SSIM -0.0479
+                                // against the row count's k=15). Row height is not line
+                                // count where rows are table cells; weight only rows that
+                                // are text lines before defaulting this.
+                                let k = if std::env::var("OXI_S1338").ok().as_deref() == Some("1") {
+                                    // a row's height runs from the previous row's y (the
+                                    // band top for the first row of a column, so a
+                                    // heading's space-before counts) to its own y
+                                    let mut lines: Vec<usize> = Vec::new();
+                                    for col in [&rows1, &rows2] {
+                                        let mut prev = col_band_top;
+                                        for (i, &y) in col.iter().enumerate() {
+                                            let h = if i + 1 < col.len() {
+                                                col[i + 1] - y
+                                            } else {
+                                                (y - prev).max(pitch)
+                                            };
+                                            let h = if i == 0 { (col[1.min(col.len() - 1)] - col_band_top).max(h) } else { h };
+                                            lines.push(((h / pitch + 0.1).floor() as usize).max(1));
+                                            prev = y;
+                                        }
+                                    }
+                                    let total: usize = lines.iter().sum();
+                                    let target = (total + 1) / 2;
+                                    let mut cum = 0usize;
+                                    let mut keep = 0usize;
+                                    for (i, &l) in lines.iter().enumerate() {
+                                        cum += l;
+                                        if cum >= target {
+                                            keep = i + 1;
+                                            break;
+                                        }
+                                    }
+                                    n1.saturating_sub(keep.max(1))
+                                } else {
+                                    (n1 - n2) / 2
+                                };
                                 if k > 0 {
                                     let cut_y = rows1[n1 - k] - 0.5;
                                     let dx = col2_x0 - col1_x0;
@@ -15914,7 +15965,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // section top takes the full +14 because nothing in its style chain
         // declares an `after` at all.
         // Latin scope, like the pbb exception below.
-        let s1073 = !self.doc_body_has_real_cjk
+        // S1339 (2026-09-06, default ON, opt-out OXI_S1339_DISABLE): the section
+        // top's EXCESS rule is not Latin-only. `_pb_secbefore_gen.py` (18 arms,
+        // ＭＳ 明朝 11pt on a lines grid, prev.after 0, heading before=240):
+        // a page opened by a nextPage / oddPage / evenPage section, and a
+        // continuous section at a page top, keep the 12pt (y=77.25 = margin
+        // 65.25 + 12) at compat unset, 14 and 15 alike; a `<w:br type=page>`
+        // and a natural flow top suppress it (65.25). reference__0ea3ec86 p3:
+        // its heading 1 「❖ 障害者に関するマーク」 opens an oddPage section and
+        // Word draws it 12pt down (glyph top 79.5); the unconditional JP
+        // suppression put it at the margin, the 2-column section below then
+        // balanced 4 lines / 3 instead of Word's 4 / 4, and every page after
+        // shifted.
+        let s1073 = (!self.doc_body_has_real_cjk || std::env::var("OXI_S1339_DISABLE").is_err())
             && std::env::var("OXI_S1073_DISABLE").is_err()
             && std::env::var("OXI_S816_DISABLE").is_err();
         let s816_section_2_plus = body_para_index.is_some()
@@ -15922,8 +15985,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             && S816_PAST_FIRST_SECTION.with(|c| c.get());
         // The first page of a non-first section: the per-section page vecs are
         // still empty, so only `s816_section_2_plus` makes this a page top.
-        let s1073_section_first_page =
-            s816_section_2_plus && pages.is_empty() && current_elements.is_empty();
+        // S1339: a parity / page-number-restart filler page (S732 / S1294) pushed
+        // inside this section is empty -- the section's first CONTENT page is
+        // still its first page (0ea3ec86 p3 behind its blank p2).
+        // ...and a CONTINUOUS section merged into this IR page (S735) starts at
+        // one of `grid_runs`' block indices: its first paragraph at a page top
+        // is a section top too (0ea3ec86's heading is section 1's first
+        // paragraph, on page 3 behind the cover and the restart's blank page).
+        let s1339_merged_section_start = std::env::var("OXI_S1339_DISABLE").is_err()
+            && body_para_index.map_or(false, |bi| {
+                page.grid_runs.iter().any(|&(start, _)| start > 0 && start == bi)
+            });
+        // (the merged start may sit in IR page 0, before S816's past-first flag)
+        let s1073_section_first_page = (s816_section_2_plus
+            && pages.iter().all(|p| p.elements.is_empty())
+            && current_elements.is_empty())
+            || (s1339_merged_section_start
+                && std::env::var("OXI_S816_DISABLE").is_err()
+                && current_elements.is_empty());
         // S1072 (2026-08-05, opt-out OXI_S1072_DISABLE): an AUTO space-before
         // (w:beforeAutospacing) collapses to ZERO at a page top even on PAGE 1,
         // where an EXPLICIT w:before is kept (the COM confirmation above). HTML
@@ -15942,6 +16021,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             && std::env::var("OXI_S1072_DISABLE").is_err();
         let is_page_2_plus =
             !pages.is_empty() || !current_elements.is_empty() || s816_section_2_plus;
+        if std::env::var("OXI_DBG1073").is_ok() && effective_spacing > 0.0 {
+            eprintln!("[S1073-GATE] cy={:.3} top={:.3} eff={:.3} p2p={} s1073={} sectfirst={} pages={} elems={} bpi={:?} runs={:?} txt={:?}",
+                cursor.cursor_y, page_top, effective_spacing, is_page_2_plus, s1073, s1073_section_first_page,
+                pages.len(), current_elements.len(), body_para_index, page.grid_runs.iter().map(|r| r.0).collect::<Vec<_>>(),
+                para.runs.iter().map(|r| r.text.as_str()).collect::<String>().chars().take(16).collect::<String>());
+        }
         if (cursor.cursor_y - page_top).abs() < 0.01 && (is_page_2_plus || s1072_auto_top) {
             // _pb_sbtop_gen (2026-07-13): a pageBreakBefore paragraph KEEPS its
             // space-before at the page top (probe pbb y=84.35 = margin+12);
@@ -26200,7 +26285,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // S1210: additive for BOTH signs (see above).
                                 font_size + char_space_pt
                             };
-                            expected_w - char_width
+                            // S1340 (2026-09-06, default ON, opt-out OXI_S1340_DISABLE): a
+                            // run's tracking survives the grid cell -- the padding to the
+                            // cell used to erase it (char_width already carried cs, the
+                            // balance doubling too, and expected_w did not). Word's PDF of
+                            // reference__0ea3ec86: the `w:spacing=-4` run 「…研修を行う。」
+                            // advances 11.04/11.15 (= cell 11.5 - 2 x 0.2) on its LAST
+                            // line, so 21 characters + a hanging 。 fit where Oxi, at
+                            // 11.5, wrapped 「う。」 and pushed a line onto every page
+                            // after. (-12 reads 10.56 there, not the 10.32 of a strict
+                            // doubling -- one witness, kept as the doubling.)
+                            let s1340_track = if std::env::var("OXI_S1340_DISABLE").is_err()
+                                && style.fit_text.is_none()
+                                && !style.ruby_spread
+                            {
+                                cs * if self.balance_single_byte_double_byte_width { 2.0 } else { 1.0 }
+                            } else {
+                                0.0
+                            };
+                            expected_w + s1340_track - char_width
                         }
                     } else if ratio > 0.0
                         && pitch > 0.0
@@ -27193,11 +27296,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s1318_one_cell_tw = pt_to_tw(char_width.max(font_size));
                     // the regime measures against the TRUE column edge, not the
                     // S1211C whole-cell floor (see `s1318_floor_slack`)
-                    let s1318_avail_tw = if s1318_regime {
-                        available_tw + pt_to_tw(self.s1318_floor_slack.get().max(0.0))
-                    } else {
-                        available_tw
-                    };
+                    // S1318 v5 (2026-09-06): the capacity IS the S1211C floor -- Word's
+                    // 2048-pitch columns hold 20 cells and its 42-cell single-column
+                    // lines never reach the 43rd (the 43rd char would need 0.11 cell
+                    // against the true edge and Word still wraps it); the justified
+                    // line is then stretched to the true edge, which is what made the
+                    // PDF's 20-cell lines read as pitch 11.78. A line-final mark hangs
+                    // past the floor (p4 「…とされた。」: the 。 box ends at the true
+                    // edge only because the text before it ends 5.8 short of the floor).
+                    let s1318_avail_tw = available_tw;
                     let s1318_natural_over_tw = current_width_tw + s1317_cw_tw - s1318_avail_tw;
                     let s1318_next_mark = chars_vec.get(char_index + 1).map_or(false, |&nc| {
                         matches!(nc, '、' | '。' | '，' | '．') || kinsoku::is_yakumono_closing(nc)
@@ -27217,10 +27324,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let over = current_width_tw + pt_to_tw(font_size) - s1318_avail_tw;
                         (over <= s1318_one_cell_tw.min(s1318_cap_tw), false)
                     } else if s1318_next_mark {
-                        let unit_over = current_width_tw + s1317_cw_tw + pt_to_tw(font_size) - s1318_avail_tw;
-                        let inside = unit_over <= s1318_one_cell_tw.min(s1318_cap_tw);
-                        let natural = current_width_tw + s1317_cw_tw <= s1318_avail_tw;
-                        (inside || natural, !(inside || natural))
+                        // v5: X before a mark is a normal character against the floor
+                        // (19 kana + 1 、 + 「字、」 keeps 字 with 0.5 of compression and
+                        // hangs the 、; 20 kana + 1-4 、 + 「字、」 needs 1.0-1.5 and wraps;
+                        // p4 「…（障害者総合支援法）」とされ|た。」 keeps た: 3 brackets
+                        // minus the pair's free half = 0.5); the mark then hangs.
+                        let over = s1318_natural_over_tw;
+                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw);
+                        (fit, !fit)
                     } else {
                         let over = s1318_natural_over_tw;
                         let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw);
@@ -27312,8 +27423,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // S1318 v4: in the at-default regime the hang is granted
                             // only when the text before the mark fits at NATURAL
                             // width (compression and hang are never combined).
-                            && (!(s1318_v2 && s1318_at_default_regime)
-                                || current_width_tw <= s1318_avail_tw)
                         {
                             // S601 (2026-06-18, default ON, opt-out OXI_S601_DISABLE;
                             // char-budget wall): line-end 約物 ぶら下げ
@@ -31384,6 +31493,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             (Some(pitch), Some(ratio)) if ratio > 0.0 => (pitch - pitch / ratio).abs() > 0.01,
             _ => false,
         };
+        // S1340: the floor's cell is the paragraph's TRACKED cell (first run's
+        // w:spacing, doubled under balance): 235.65 / 11.1 = 21 cells for the
+        // -4 run above, 20 for its neighbours.
+        let s1340_track = if std::env::var("OXI_S1340_DISABLE").is_err() {
+            para.runs
+                .iter()
+                .find(|r| !r.text.trim().is_empty())
+                .and_then(|r| r.style.character_spacing)
+                .unwrap_or(0.0)
+                * if self.balance_single_byte_double_byte_width { 2.0 } else { 1.0 }
+        } else {
+            0.0
+        };
+        let char_pitch = char_pitch.map(|p| (p + s1340_track).max(1.0));
         match char_pitch {
             Some(pitch)
                 if ((s1211 && grid_has_char_space) || s1211b || s1211c)

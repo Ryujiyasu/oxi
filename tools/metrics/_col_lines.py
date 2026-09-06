@@ -90,7 +90,8 @@ def oxi_lines(dump, pno, width):
         for key, els in by_line.items():
             els.sort(key=lambda e: e["x"])
             span = els[-1]["x"] - els[0]["x"]
-            if span > width / ncols:
+            gap = max((b["x"] - a["x"] for a, b in zip(els, els[1:])), default=0)
+            if span > width / ncols and gap < 25:
                 # one line spread over the page (a distributed heading)
                 out.append((0, key[4], round(els[0]["x"], 1), "".join(e["text"] for e in els)))
                 continue
@@ -135,9 +136,10 @@ def main():
                     first = i
                 if show_all or not same or (first is not None and i <= first + 2):
                     mark = "  " if same else "!!"
+                    n = 999 if "--full" in sys.argv else 24
                     print("%s %2d W%3d y=%6.1f %-24s | O%3d y=%6.1f %s" % (
-                        mark, i, len(wt), wl[i][1] if i < len(wl) else -1, wt[:24],
-                        len(ot), ol[i][1] if i < len(ol) else -1, ot[:24]))
+                        mark, i, len(wt), wl[i][1] if i < len(wl) else -1, wt[:n],
+                        len(ot), ol[i][1] if i < len(ol) else -1, ot[:n]))
 
 
 if __name__ == "__main__":

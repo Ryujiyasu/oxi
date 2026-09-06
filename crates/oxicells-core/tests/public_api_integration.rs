@@ -212,6 +212,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
             comments: Vec::new(),
         unsupported_elements: vec![],
         tab_color: None,
+        origin_id: None,
     }
 }
 
