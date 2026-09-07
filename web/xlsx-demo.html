@@ -1806,6 +1806,40 @@ function moveSheet(from, to) {
   draw();
 }
 
+/// Open the browser's colour picker for a tab, seeded with its current colour.
+function pickTabColor(index) {
+  const sheet = book && book.sheets[index];
+  if (!sheet) return;
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.value = sheet.tab_color ? '#' + sheet.tab_color : '#217346';
+  input.style.position = 'fixed';
+  input.style.left = '-9999px';
+  document.body.appendChild(input);
+  input.addEventListener('change', () => {
+    setTabColor(index, input.value.replace('#', '').toUpperCase());
+    input.remove();
+  });
+  input.addEventListener('blur', () => input.remove());
+  input.click();
+}
+
+/// Paint a tab `hex` (RRGGBB), or clear it with `null`.
+function setTabColor(index, hex) {
+  if (!book || !book.sheets[index]) return;
+  change(() => {
+    const was = book;
+    book = {
+      ...book,
+      sheets: book.sheets.map((s, at) => (at === index ? { ...s, tab_color: hex || null } : s)),
+    };
+    step.books = [{ was, now: book }];
+  });
+  beyondValues = true;
+  weighCalc();
+  describe();
+}
+
 function deleteSheet(index) {
   if (!book || book.sheets.length <= 1) {
     sayCalc('A workbook must keep at least one sheet.');
@@ -1914,6 +1948,10 @@ function showTabMenu(x, y, index) {
     const tab = tabsBox.querySelectorAll('button')[index];
     if (tab) startRename(tab, index, book.sheets[index].name);
   });
+  item('Tab colour…', () => pickTabColor(index));
+  if (book.sheets[index] && book.sheets[index].tab_color) {
+    item('No colour', () => setTabColor(index, null));
+  }
   item('Delete', () => deleteSheet(index));
   tabMenu.style.left = x + 'px';
   tabMenu.style.top = y + 'px';
