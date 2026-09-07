@@ -187,12 +187,20 @@ fn render_pages_dwrite(
     use windows::Win32::Graphics::DirectWrite::*;
     use windows::Win32::Graphics::Imaging::*;
 
-    // S771u-scope (2026-07-10): single underline ships default-ON for LATIN
-    // documents only (no real-CJK char anywhere) — every canary doc the
-    // font-metric underline traded (helps c7b923/d77a, hurts ed025/2ea81a) is
-    // CJK; their underline correctness is gated on the CJK text-baseline work.
-    // A Latin doc's underline is correct now (nyserda signature lines = Word).
-    // Same discriminator as the layout's doc_body_has_real_cjk (LATINEM/TABTW).
+    // S1352 (2026-09-07): Word's own underline geometry, measured with
+    // `_pb_underline_probe.py` (14 fonts x 7 sizes, Word PDF): the offset below
+    // the baseline is `0.70 * winDescent * size + 0.49pt` for a font with CJK
+    // coverage and the font's own underlinePosition for one without, and the
+    // thickness is `size / 20` whatever the font (Word's is font-INDEPENDENT;
+    // the font's own underlineThickness drew MS PGothic 60% too heavy).
+    //
+    // A CJK document still gets its underlines only with OXI_S1352=1. The
+    // geometry is right (1ec1's missing payment-plan rules come back, +0.0056)
+    // but two corpus documents lose more than that: 2ea81a and c7b923 underline
+    // runs of FULL-WIDTH SPACES, and Oxi resolves those runs to a different
+    // family than Word does, so the rule is drawn from a different baseline
+    // (~1.5pt low) however correct its offset. Fix that resolution first; the
+    // Latin-document gate below is the pre-S1352 behaviour, unchanged.
     let doc_has_cjk = result.pages.iter().any(|p| p.elements.iter().any(|el| {
         if let oxidocs_core::layout::LayoutContent::Text { text, .. } = &el.content {
             text.chars().any(|c| matches!(c as u32,
@@ -200,7 +208,8 @@ fn render_pages_dwrite(
                 0xF900..=0xFAFF | 0xFF66..=0xFF9F))
         } else { false }
     }));
-    if !doc_has_cjk && std::env::var("OXI_UNDERLINE_DISABLE").is_err() {
+    let s1352 = std::env::var("OXI_S1352").ok().as_deref() == Some("1");
+    if (!doc_has_cjk || s1352) && std::env::var("OXI_UNDERLINE_DISABLE").is_err() {
         std::env::set_var("OXI_UNDERLINE", "1");
     }
 
@@ -1223,11 +1232,12 @@ unsafe fn font_ascent_pt(
 unsafe fn font_underline_ratios(
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     font_family: &str, bold: bool, italic: bool,
-) -> (f32, f32) {
+) -> (f32, f32, f32) {
     use windows::Win32::Graphics::DirectWrite::*;
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::BOOL;
-    let fb = (0.14_f32, 0.05_f32); // measured Word TNR 12pt: ~2pt below, ~0.5pt thick
+    // (offset em fraction, offset constant in pt, thickness em fraction)
+    let fb = (0.10_f32, 0.0_f32, 0.05_f32);
     let mut coll: Option<IDWriteFontCollection> = None;
     if dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_err() { return fb; }
     let coll = match coll { Some(c) => c, None => return fb };
@@ -1248,11 +1258,19 @@ unsafe fn font_underline_ratios(
     face.GetMetrics(&mut m);
     let em = m.designUnitsPerEm as f32;
     if em <= 0.0 { return fb; }
-    // underlinePosition is the top of the underline in design units, negative =
-    // below baseline. Use |position| as the distance below the baseline (GDI's .abs()).
-    let off = (-(m.underlinePosition as f32) / em).max(0.03);
-    let th = (m.underlineThickness as f32 / em).max(0.02);
-    (off, th)
+    // S1352: a face that has a Han glyph is one Word measures the CJK way.
+    let mut gi = [0u16; 1];
+    let cjk = face.GetGlyphIndices(&0x4E00u32, 1, gi.as_mut_ptr()).is_ok() && gi[0] != 0;
+    if cjk {
+        // dy = 0.70 * winDescent * size + 0.49pt (probe: MS/SimSun/HGS 0.1198,
+        // Meiryo 0.3419, Meiryo UI 0.1737, Yu 0.2275/0.2335, Malgun 0.1976,
+        // YaHei 0.2036, BIZ UD 0.1078 em at 20pt -- max residual 0.09pt).
+        ((m.descent as f32 / em) * 0.70, 0.49, 0.05)
+    } else {
+        // A Latin face keeps its own underlinePosition, which Word follows to
+        // the twip (Century 0.1001 -> 0.1018, Times 0.1089 -> 0.1078).
+        (((-(m.underlinePosition as f32)) / em).max(0.03), 0.0, 0.05)
+    }
 }
 
 unsafe fn render_text(
@@ -1775,7 +1793,7 @@ unsafe fn render_text(
                 metrics[0].baseline
             } else { font_size_pt * PT_TO_DIP * 0.8 }
         } else { font_size_pt * PT_TO_DIP * 0.8 };
-        let (off_ratio, th_ratio) = font_underline_ratios(dwrite_factory, font_family, bold, italic);
+        let (off_ratio, off_pt, th_ratio) = font_underline_ratios(dwrite_factory, font_family, bold, italic);
         // OXI_UL_YADJ (pt): position nudge for experiments. Default 0 = the raw
         // font-metric position, which is the best SIMPLE version (canary net
         // +0.0037). A global nudge does NOT clean it up: −0.75 aligns 2ea81a
@@ -1783,8 +1801,15 @@ unsafe fn render_text(
         // ed025 (correct at 0) → net −0.0345. The correct offset is per-font/
         // per-doc, so clean default-ON needs per-font handling, not one nudge.
         let yadj: f32 = std::env::var("OXI_UL_YADJ").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
-        let ul_y = y_pt * PT_TO_DIP + baseline_dip + (off_ratio * font_size_pt + yadj) * PT_TO_DIP;
-        let thickness = (th_ratio * font_size_pt * PT_TO_DIP).max(1.0);
+        let ul_y = y_pt * PT_TO_DIP + baseline_dip + (off_ratio * font_size_pt + off_pt + yadj) * PT_TO_DIP;
+        // S1352: the floor is ONE DEVICE PIXEL, not one DIP. At 150dpi a DIP is
+        // 1.5625px, so the old floor drew Word's 0.48pt rule (1px) two pixels
+        // thick -- 2ea81a's every underlined line was a double-weight rule.
+        let mut dpi_x = 96.0f32;
+        let mut dpi_y = 96.0f32;
+        rt.GetDpi(&mut dpi_x, &mut dpi_y);
+        let device_px_dip = 96.0 / dpi_x.max(1.0);
+        let thickness = (th_ratio * font_size_pt * PT_TO_DIP).max(device_px_dip);
         rt.DrawLine(
             D2D_POINT_2F { x: x_pt * PT_TO_DIP, y: ul_y },
             D2D_POINT_2F { x: (x_pt + w_pt) * PT_TO_DIP, y: ul_y },
