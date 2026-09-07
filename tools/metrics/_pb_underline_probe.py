@@ -41,9 +41,11 @@ for fi, font in enumerate(FONTS):
     for si, size in enumerate(SIZES):
         label = "%s%s" % (chr(ord("A") + fi), si)
         body = TEXT.get(font, TEXT[None])
+        # UL_KIND=double measures the two rules of a double underline
+        kind = os.environ.get("UL_KIND", "single")
         rpr = ('<w:rPr><w:rFonts w:ascii="%s" w:eastAsia="%s" w:hAnsi="%s" w:hint="eastAsia"/>'
-               '<w:sz w:val="%d"/><w:szCs w:val="%d"/><w:u w:val="single"/></w:rPr>'
-               % (font, font, font, round(size * 2), round(size * 2)))
+               '<w:sz w:val="%d"/><w:szCs w:val="%d"/><w:u w:val="%s"/></w:rPr>'
+               % (font, font, font, round(size * 2), round(size * 2), kind))
         lead = ('<w:rPr><w:rFonts w:ascii="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝" w:hAnsi="ＭＳ 明朝" w:hint="eastAsia"/>'
                 '<w:sz w:val="20"/></w:rPr>')
         paras.append('<w:p><w:pPr><w:spacing w:line="480" w:lineRule="exact"/></w:pPr>'
@@ -101,12 +103,18 @@ for pno in range(len(pd)):
         # the arm label is the first span on the same line
         line_spans = [x for x in spans if abs(x["origin"][1] - s["origin"][1]) < 0.6]
         lab = line_spans[0]["text"].strip().split()[0] if line_spans else "?"
-        found[lab] = (s["font"], round(s["size"], 2), round(d, 3), round(r.height, 3))
+        prev = found.get(lab)
+        if prev is None or d < prev[2]:
+            found[lab] = (s["font"], round(s["size"], 2), round(d, 3), round(r.height, 3),
+                          prev[2] if prev else None)
+        else:
+            found[lab] = prev[:4] + (round(d, 3),)
 print("arm  requested font          size   pdf font              dy(pt)  thick  dy/size  th/size")
 for lab, font, size in arms:
     if lab not in found:
         print("  %-4s %-22s %5.1f   (no rule found)" % (lab, font, size))
         continue
-    pf, ps, dy, th = found[lab]
-    print("  %-4s %-22s %5.1f   %-20s %6.3f %6.3f  %7.4f %7.4f"
-          % (lab, font, size, pf, dy, th, dy / ps, th / ps))
+    pf, ps, dy, th, dy2 = found[lab]
+    print("  %-4s %-22s %5.1f   %-20s %6.3f %6.3f  %7.4f %7.4f  %s"
+          % (lab, font, size, pf, dy, th, dy / ps, th / ps,
+             ("2nd %6.3f (gap %.3f, /size %.4f)" % (dy2, dy2 - dy, dy2 / ps)) if dy2 else ""))

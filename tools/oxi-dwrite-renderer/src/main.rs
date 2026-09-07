@@ -1801,7 +1801,12 @@ unsafe fn render_text(
         // ed025 (correct at 0) → net −0.0345. The correct offset is per-font/
         // per-doc, so clean default-ON needs per-font handling, not one nudge.
         let yadj: f32 = std::env::var("OXI_UL_YADJ").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
-        let ul_y = y_pt * PT_TO_DIP + baseline_dip + (off_ratio * font_size_pt + off_pt + yadj) * PT_TO_DIP;
+        // S1352: measure from the SAME origin the glyphs are drawn at. The
+        // horizontal origin carries the 2026-05-03 glyph-top alignment shift
+        // (y_pt - 1.0), and the underline was measuring from y_pt -- so every
+        // rule sat a point below its own text (2ea81a's rules: Word 180.5 /
+        // 210.5 / 240.5, Oxi 182.2 / 211.9 / 242.2).
+        let ul_y = origin.y + baseline_dip + (off_ratio * font_size_pt + off_pt + yadj) * PT_TO_DIP;
         // S1352: the floor is ONE DEVICE PIXEL, not one DIP. At 150dpi a DIP is
         // 1.5625px, so the old floor drew Word's 0.48pt rule (1px) two pixels
         // thick -- 2ea81a's every underlined line was a double-weight rule.
@@ -1810,6 +1815,12 @@ unsafe fn render_text(
         rt.GetDpi(&mut dpi_x, &mut dpi_y);
         let device_px_dip = 96.0 / dpi_x.max(1.0);
         let thickness = (th_ratio * font_size_pt * PT_TO_DIP).max(device_px_dip);
+        if std::env::var("OXI_DBG_UL").is_ok() {
+            eprintln!("[UL] fam={} size={:.2} y={:.2} baseline={:.2} off={:.3}em+{:.2}pt -> ul_y={:.2}pt th={:.2}pt {:?}",
+                font_family, font_size_pt, y_pt, baseline_dip / PT_TO_DIP,
+                off_ratio, off_pt, ul_y / PT_TO_DIP, thickness / PT_TO_DIP,
+                text.chars().take(6).collect::<String>());
+        }
         rt.DrawLine(
             D2D_POINT_2F { x: x_pt * PT_TO_DIP, y: ul_y },
             D2D_POINT_2F { x: (x_pt + w_pt) * PT_TO_DIP, y: ul_y },
@@ -1832,10 +1843,43 @@ unsafe fn render_text(
         // 0.06·fs thickness → edge-to-edge ~0 → merged. Match Word: gap 0.12·fs (center 5px),
         // thinner lines 0.05·fs (~2px). Opt-out OXI_S493G_DISABLE restores the old 0.08/0.06.
         let legacy_du = std::env::var("OXI_S493G_DISABLE").is_ok();
-        let thickness = (font_size_pt * PT_TO_DIP * if legacy_du { 0.06 } else { 0.05 }).max(1.0);
-        let offset_dip = (font_size_pt * PT_TO_DIP * 0.15).max(1.0);
-        let gap_dip = (font_size_pt * PT_TO_DIP * if legacy_du { 0.08 } else { 0.12 }).max(1.0);
-        let y1_dip = y_pt * PT_TO_DIP + baseline_dip + offset_dip;
+        // S1353 (2026-09-07): for a CJK-covered face Word puts the FIRST rule
+        // exactly where a single underline goes and the second `size/10` below
+        // it, both at the single underline's thickness -- `_pb_underline_probe.py`
+        // with UL_KIND=double: MS Gothic/Mincho 10/12/20pt give 1.44+1.08,
+        // 1.68+1.20, 2.40+2.04, and the first column is the single-underline
+        // table to the twip. The old 0.15/0.12 pair put 1ec1's 20pt title rules
+        // at 3.00/5.40 against Word's 2.40/4.44. A Latin face keeps the old
+        // geometry: Word draws ITS double underline differently again (two
+        // half-thickness rules straddling the single position, Century 10pt
+        // 0.48/1.68 at 0.24 thick), which no corpus document exercises.
+        let (off_ratio, off_pt, th_ratio) = font_underline_ratios(dwrite_factory, font_family, bold, italic);
+        // Opt-in until 1ec1's title line is placed right: its 20pt title sits
+        // 1.44pt ABOVE Word's (the whole line, ink included -- Word centres a
+        // 20pt em box in the two 17.85pt grid lines it needs), and the old
+        // 0.15/0.12 geometry happened to cancel that. Correct rules on a wrong
+        // line score worse than wrong rules on a wrong line.
+        let s1353 = off_pt > 0.0 && std::env::var("OXI_S1353").ok().as_deref() == Some("1");
+        let mut dpi_x = 96.0f32;
+        let mut dpi_y = 96.0f32;
+        rt.GetDpi(&mut dpi_x, &mut dpi_y);
+        let device_px_dip = 96.0 / dpi_x.max(1.0);
+        let thickness = if s1353 {
+            (th_ratio * font_size_pt * PT_TO_DIP).max(device_px_dip)
+        } else {
+            (font_size_pt * PT_TO_DIP * if legacy_du { 0.06 } else { 0.05 }).max(1.0)
+        };
+        let offset_dip = if s1353 {
+            (off_ratio * font_size_pt + off_pt) * PT_TO_DIP
+        } else {
+            (font_size_pt * PT_TO_DIP * 0.15).max(1.0)
+        };
+        let gap_dip = if s1353 {
+            font_size_pt * PT_TO_DIP * 0.102
+        } else {
+            (font_size_pt * PT_TO_DIP * if legacy_du { 0.08 } else { 0.12 }).max(1.0)
+        };
+        let y1_dip = if s1353 { origin.y } else { y_pt * PT_TO_DIP } + baseline_dip + offset_dip;
         let y2_dip = y1_dip + gap_dip;
         let x_start = x_pt * PT_TO_DIP;
         let x_end = (x_pt + w_pt) * PT_TO_DIP;
