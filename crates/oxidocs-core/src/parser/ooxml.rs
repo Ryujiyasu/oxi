@@ -8995,14 +8995,34 @@ fn parse_run_properties(
                         style.has_explicit_italic = true;
                     }
                     "u" => {
-                        style.underline = true;
+                        // S1355 (2026-09-07, opt-out OXI_S1355_DISABLE): `<w:u>`
+                        // carries the underline in its `w:val`; a tag that only
+                        // sets a COLOUR (`<w:u w:color="000000"/>`, what Word
+                        // leaves behind when an underline is taken off a run that
+                        // had a colour) draws NOTHING. Word truth: ed025 p8
+                        // "他の法人に対する関係で…" has that tag and no rule under
+                        // it in Word's PDF, while Oxi underlined the whole line
+                        // (p8 -0.0115 of the document's -0.0162 underline debt).
+                        // Corpus: 19 val-less tags in 2 documents against 1,935
+                        // with a val.
+                        let mut val: Option<String> = None;
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
-                                if val == "none" {
+                                val = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                        let s1355 = std::env::var("OXI_S1355_DISABLE").is_err();
+                        match val.as_deref() {
+                            Some("none") => style.underline = false,
+                            Some(v) => {
+                                style.underline = true;
+                                style.underline_style = Some(v.to_string());
+                            }
+                            None => {
+                                if s1355 {
                                     style.underline = false;
                                 } else {
-                                    style.underline_style = Some(val);
+                                    style.underline = true;
                                 }
                             }
                         }

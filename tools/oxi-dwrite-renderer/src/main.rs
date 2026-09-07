@@ -239,6 +239,9 @@ fn render_pages_dwrite(
         let scale_dpi = render_dpi as f32;
 
         for (page_idx, page) in result.pages.iter().enumerate() {
+            // the [UL]/[TYO] traces print a per-PAGE y; without the page number a
+            // reader compares page 1's rules against page 13's (2026-09-07).
+            std::env::set_var("OXI_DBG_PAGE", (page_idx + 1).to_string());
             // S494: open a new page entry in the glyph-dump buffer (if dumping).
             GLYPH_DUMP.with(|g| {
                 if let Some(v) = g.borrow_mut().as_mut() {
@@ -1816,10 +1819,11 @@ unsafe fn render_text(
         let device_px_dip = 96.0 / dpi_x.max(1.0);
         let thickness = (th_ratio * font_size_pt * PT_TO_DIP).max(device_px_dip);
         if std::env::var("OXI_DBG_UL").is_ok() {
-            eprintln!("[UL] fam={} size={:.2} y={:.2} baseline={:.2} off={:.3}em+{:.2}pt -> ul_y={:.2}pt th={:.2}pt {:?}",
-                font_family, font_size_pt, y_pt, baseline_dip / PT_TO_DIP,
-                off_ratio, off_pt, ul_y / PT_TO_DIP, thickness / PT_TO_DIP,
-                text.chars().take(6).collect::<String>());
+            eprintln!("[UL] p{} fam={} size={:.2} x={:.2}..{:.2} y={:.2} ul_y={:.2}pt th={:.2}pt {:?}",
+                std::env::var("OXI_DBG_PAGE").unwrap_or_default(),
+                font_family, font_size_pt, x_pt, x_pt + w_pt, y_pt,
+                ul_y / PT_TO_DIP, thickness / PT_TO_DIP,
+                text.chars().take(8).collect::<String>());
         }
         rt.DrawLine(
             D2D_POINT_2F { x: x_pt * PT_TO_DIP, y: ul_y },
