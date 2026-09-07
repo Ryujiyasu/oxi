@@ -32951,6 +32951,57 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         } else {
                             2.5
                         };
+                        // S1354 (2026-09-07, default ON, opt-out OXI_S1354_DISABLE):
+                        // Word centres the EM BOX -- the point size itself -- in the
+                        // n grid lines the line occupies. `_pb_gridbox_probe.py`
+                        // (MS Gothic 9/10.6/12/14/16/18/20/24/28pt on a 17.85pt
+                        // pitch, Word PDF baselines, em top = baseline - 0.8594*fs):
+                        // 4.44/3.60/3.04 for n=1, 10.94/9.76/8.93/7.87/5.97 for n=2
+                        // and 12.80 for n=3 -- every one within 0.12pt (the PDF's own
+                        // quantum) of (n*pitch - fs)/2.
+                        //
+                        // The tc-centring above (S166) plus the +2.5 S457 constant
+                        // approximates this near BODY sizes and drifts as the font
+                        // grows, because the table-cell height grows with it while
+                        // the constant does not: the probe renders 14/16pt 0.48pt
+                        // high, 18/20pt 1.44pt, 24pt 2.40pt -- 1ec1's 20pt title,
+                        // whose double underline was calibrated against the drift.
+                        // The renderer draws `baseline = y + text_y_off - 1.0 +
+                        // ascent`, so the +1.0 here cancels that origin shift, the
+                        // same way S1047 reaches Word's Latin law.
+                        // SCOPE: the CJK 83/64 lines, the same population S457's
+                        // constant was calibrated on. The probe measured CJK runs;
+                        // a Latin line on a grid follows the Latin baseline law
+                        // (S1047) and keeps its path -- ed025's 182 Latin lines
+                        // move 2.25pt DOWN under an unscoped rule.
+                        let s1354 = std::env::var("OXI_S1354_DISABLE").is_err()
+                            && line.fragments.iter().any(|f| {
+                                self.metrics_for_text(&f.text, &f.style, para_style)
+                                    .is_cjk_83_64_font()
+                            });
+                        if s1354 {
+                            let line_fs = line
+                                .fragments
+                                .iter()
+                                .filter(|f| {
+                                    self.metrics_for_text(&f.text, &f.style, para_style)
+                                        .is_cjk_83_64_font()
+                                })
+                                .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                                .fold(0.0_f32, f32::max)
+                                .max(0.1);
+                            let em_centred = (line_height - line_fs).max(0.0) / 2.0 + 1.0;
+                            if std::env::var("OXI_DBG_TYO").is_ok() {
+                                eprintln!("[TYO] fs={:.2} line_h={:.2} pitch={:.2} centering_h={:.2} old={:.2} -> S1354 {:.2}",
+                                    line_fs, line_height, pitch, centering_height, grid_base + s457_dy, em_centred);
+                            }
+                            return em_centred;
+                        }
+                        if std::env::var("OXI_DBG_TYO").is_ok() {
+                            eprintln!("[TYO] fs={:.2} line_h={:.2} pitch={:.2} centering_h={:.2} raw={:.3} grid_base={:.2} s457={:.2} -> {:.2} | em-centred would be {:.2}",
+                                para_font_size, line_height, pitch, centering_height, raw, grid_base, s457_dy,
+                                grid_base + s457_dy, (line_height - para_font_size).max(0.0) / 2.0);
+                        }
                         grid_base + s457_dy
                     } else {
                         0.0
