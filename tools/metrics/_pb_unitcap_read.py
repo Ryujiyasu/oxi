@@ -16,13 +16,44 @@ u = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(u)
 want = [a for a in sys.argv[1:] if not a.startswith("--")]
 sect = next((a.split("=")[1] for a in sys.argv[1:] if a.startswith("--sect=")), "4")
-DOCNAME = "unitcap" if sect == "4" else "unitcap" + sect
+cs = next((a.split("=")[1] for a in sys.argv[1:] if a.startswith("--charspace=")), None)
+DOCNAME = ("unitcap" if sect == "4" else "unitcap" + sect) + ("" if cs is None else "_cs" + cs)
 full = "--full" in sys.argv
 MARKS = "、。（）「」・1280びab"
 
 
+def oxi_lines(path):
+    """Oxi --dump-layout lines in document order, split into column pieces."""
+    import json
+    from collections import defaultdict
+    pages = json.load(open(path, encoding="utf-8"))["pages"]
+    out = []
+    for pi, pg in enumerate(pages):
+        byy = defaultdict(list)
+        for el in pg.get("elements") or []:
+            tx = el.get("text") or ""
+            if tx.strip():
+                byy[round(el.get("y", -1), 1)].append((el.get("x", -1), tx))
+        for y in sorted(byy):
+            items = sorted(byy[y])
+            cur, prev = [], None
+            for x, tx in items:
+                if prev is not None and x - prev > 40:
+                    out.append((pi, y, cur[0][0], "".join(a for _, a in cur)))
+                    cur = []
+                cur.append((x, tx))
+                prev = x
+            if cur:
+                out.append((pi, y, cur[0][0], "".join(a for _, a in cur)))
+    out.sort(key=lambda r: (r[0], 0 if r[2] < 300 else 1, r[1]))
+    return out
+
+
 def main():
     d = fitz.open(os.path.join(u.OUT, DOCNAME + ".pdf"))
+    oxi_path = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--oxi=")), None)
+    oxi = oxi_lines(oxi_path) if oxi_path else None
+    ocur = 0
     lines = []
     for pno in range(len(d)):
         for b in d[pno].get_text("rawdict")["blocks"]:
@@ -59,6 +90,13 @@ def main():
         nxt = lines[hit + 1][3][:3] if hit + 1 < len(lines) else ""
         print("%-13s line1=%2d/%2d last_org=%6.1f end=%6.1f %s | %s | next: %s" % (
             label, len(t), n_expect, nxt_origin - x0, end - x0, "GRANT" if len(t) >= n_expect else "refuse", adv, nxt))
+        if oxi is not None:
+            ohit = next((i for i in range(ocur, len(oxi)) if oxi[i][3][:4] == body.lstrip("　")[:4]), None)
+            if ohit is not None:
+                ocur = ohit + 1
+                o1 = oxi[ohit]; o2 = oxi[ohit + 1] if ohit + 1 < len(oxi) else None
+                ob = 51.0 if o1[2] < 300 else 308.7
+                print("%-13s   OXI line1 x0=%.2f n=%d | line2 x0=%.2f n=%d %s" % ("", o1[2] - ob, len(o1[3]), (o2[2] - (51.0 if o2[2] < 300 else 308.7)) if o2 else -1, len(o2[3]) if o2 else 0, o2[3][:10] if o2 else ""))
         if "--two" in sys.argv and hit + 1 < len(lines):
             p2, y2, x2, t2, c2 = lines[hit + 1]
             base = 51.0 if x2 < 300 else 308.7

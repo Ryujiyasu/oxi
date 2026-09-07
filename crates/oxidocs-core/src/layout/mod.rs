@@ -2163,6 +2163,12 @@ pub struct LayoutEngine {
     /// Normal declares a size — the oikomi regime comparison needs the size
     /// Word's char grid actually uses (harassmanual: Normal 10.5, not 11.0).
     doc_regime_fs: f32,
+    /// S1349: the NORMAL style's size (else docDefaults, else the default) --
+    /// the unit of leftChars / rightChars. b35123: Normal 12pt, docDefaults
+    /// 10.5, charSpace -2714: leftChars=100 is 11.35 = 12 - 0.66 while the
+    /// grid pitch and hangingChars use the 10.5 (9.85); 0ea3ec86 (Normal 11,
+    /// no docDefaults sz) cannot tell the two apart.
+    s1349_normal_fs: f32,
     /// S1211B: docDefaults rPrDefault DECLARED a w:sz (the floor pitch is then
     /// the real document default; absent = the S636 compromise 11.0/10.0 whose
     /// value Word does not share -- floor excluded there).
@@ -2598,6 +2604,7 @@ impl LayoutEngine {
         Self {
             default_font_size: 11.0,
             doc_regime_fs: 11.0,
+            s1349_normal_fs: 11.0,
             doc_default_sz_declared: false,
             s1318_floor_slack: std::cell::Cell::new(0.0),
             default_font_family: None,
@@ -2700,6 +2707,15 @@ impl LayoutEngine {
                     .and_then(|rs| rs.font_size)
             })
             .unwrap_or(default_font_size);
+        let s1349_normal_fs = doc
+            .styles
+            .styles
+            .get("Normal")
+            .or_else(|| doc.styles.styles.get("a"))
+            .and_then(|st| st.paragraph.default_run_style.as_ref())
+            .and_then(|rs| rs.font_size)
+            .or_else(|| doc.styles.doc_default_run_style.as_ref().and_then(|s| s.font_size))
+            .unwrap_or(default_font_size);
         let default_font_family = doc
             .styles
             .doc_default_run_style
@@ -2744,6 +2760,7 @@ impl LayoutEngine {
         Self {
             default_font_size,
             doc_regime_fs,
+            s1349_normal_fs,
             doc_default_sz_declared: doc
                 .styles
                 .doc_default_run_style
@@ -4761,7 +4778,7 @@ cells={} pitch={:.2} text={:?}",
             let s1331_left = if s1331_on {
                 para.style
                     .indent_left
-                    .or_else(|| para.style.indent_left_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio)))
+                    .or_else(|| self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio))
                     .unwrap_or(0.0)
                     .max(0.0)
             } else {
@@ -9294,14 +9311,14 @@ cells={} pitch={:.2} text={:?}",
                                     para.style
                                         .indent_left
                                         .or_else(|| {
-                                            para.style.indent_left_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio))
+                                            self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio)
                                         })
                                         .unwrap_or(0.0)
                                         .max(0.0),
                                     para.style
                                         .indent_right
                                         .or_else(|| {
-                                            para.style.indent_right_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio))
+                                            para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio))
                                         })
                                         .unwrap_or(0.0)
                                         .max(0.0),
@@ -9360,7 +9377,7 @@ cells={} pitch={:.2} text={:?}",
                                     .style
                                     .indent_left
                                     .or_else(|| {
-                                        para.style.indent_left_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio))
+                                        self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio)
                                     })
                                     .unwrap_or(0.0)
                                     .max(0.0);
@@ -9368,7 +9385,7 @@ cells={} pitch={:.2} text={:?}",
                                     .style
                                     .indent_right
                                     .or_else(|| {
-                                        para.style.indent_right_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio))
+                                        para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio))
                                     })
                                     .unwrap_or(0.0)
                                     .max(0.0);
@@ -16203,12 +16220,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let indent_left = para
             .style
             .indent_left
-            .or_else(|| para.style.indent_left_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio)))
+            .or_else(|| self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio))
             .unwrap_or(0.0);
         let indent_right = para
             .style
             .indent_right
-            .or_else(|| para.style.indent_right_chars.map(|c| Self::s1214_chars_pt(c, para, false, page.grid_char_pitch, page.grid_char_cw_ratio)))
+            .or_else(|| para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio)))
             .unwrap_or(0.0);
         let first_line_indent_raw = para
             .style
@@ -16510,7 +16527,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         .char_width_pt_with_fallback(c, marker_font_size, marker_metrics)
                 })
                 .sum();
-            let list_indent = para.style.list_indent.unwrap_or(18.0);
+            // S1349: a hanging indent given in characters (hangingChars, no twip
+            // first line) is the marker's hanging too -- the parser's list_indent
+            // could only see the level's twip.
+            let s1349_list_indent = if para.style.indent_first_line.is_none() {
+                para.style
+                    .indent_first_line_chars
+                    .filter(|c| *c < 0.0)
+                    .map(|c| -Self::s1214_chars_pt(c, para, true, page.grid_char_pitch, page.grid_char_cw_ratio))
+            } else {
+                None
+            };
+            let list_indent = s1349_list_indent.or(para.style.list_indent).unwrap_or(18.0);
             let mut marker_x = start_x + indent_left - list_indent;
             // S893 (2026-07-17, default ON, opt-out OXI_S893_DISABLE): the
             // list suffix tab can never go BACKWARD. When the MARKER is wider
@@ -23500,6 +23528,48 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     /// 200/100 x 10.8547 = 21.7094 rounds to exactly 434tw), so rounding here
     /// reproduces the file's own number instead of drifting 0.01pt off it -- the
     /// unrounded form moved glyphs a sub-pixel and cost 0.0003/page of SSIM.
+    /// S1349: the chars-given left indent in points -- leftChars at the default
+    /// size plus hangingChars at the paragraph's run size (None when neither).
+    fn s1349_left_pt(&self, para: &Paragraph, pitch: Option<f32>, ratio: Option<f32>) -> Option<f32> {
+        self.s1349_left_pt_style(&para.style, Self::s1351_unit_run(&para.style, &para.runs), pitch, ratio)
+    }
+
+    /// S1351: the run Word measures a chars indent on -- the leading page-break
+    /// run the parser folded away when there was one, else the first run that
+    /// has content (an empty run is skipped: `_pb_brrun_probe.py` arm D).
+    fn s1351_unit_run<'a>(para_style: &'a ParagraphStyle, runs: &'a [crate::ir::Run]) -> Option<&'a RunStyle> {
+        if std::env::var("OXI_S1351_DISABLE").is_ok() {
+            return runs.first().map(|r| &r.style);
+        }
+        para_style.chars_unit_run_style.as_ref().or_else(|| {
+            // Fallback for an IR the OOXML parser did not build: the field
+            // separator / end markers are bookkeeping, not content (Word skips
+            // a `<w:fldChar>`-only run: `_pb_brrun_probe.py` arm J).
+            runs.iter()
+                .find(|r| r.text.chars().any(|c| c != '\u{FFFE}' && c != '\u{FFFF}'))
+                .map(|r| &r.style)
+        })
+    }
+
+    /// S1349: leftChars / rightChars in points -- the NORMAL style's size plus
+    /// the grid's charSpace (b35123 11.35, 0ea3ec86 23.05 for 200 whatever the
+    /// run is), opt-in OXI_S1349=1; otherwise the S1214 unit.
+    fn s1349_default_chars_pt(&self, chars: f32, para: &Paragraph, pitch: Option<f32>, ratio: Option<f32>) -> f32 {
+        if std::env::var("OXI_S1349_DISABLE").is_err()
+            && std::env::var("OXI_S1349").ok().as_deref() != Some("0")
+        {
+            let extra = match (pitch, ratio) {
+                (Some(p), Some(r)) if r > 0.0 && p > 0.0 => p - p / r,
+                _ => 0.0,
+            };
+            // whole twips, as Word stores and lays them out (ed025: 3.37 x 10.5
+            // = 707.7 -> 708, 1.35 x 10.5 = 283.5 -> 283 in its own file)
+            Self::s1349_tw(chars / 100.0 * (self.s1349_normal_fs + extra))
+        } else {
+            Self::s1214_chars_pt(chars, para, false, pitch, ratio)
+        }
+    }
+
     fn s1214_chars_pt(
         chars: f32,
         para: &Paragraph,
@@ -23507,8 +23577,96 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         pitch: Option<f32>,
         ratio: Option<f32>,
     ) -> f32 {
+        if para.style.indent_hanging_chars.is_some() && first_run {
+            // S1349: the hanging term in whole twips, without the run's tracking
+            // (see s1349_left_pt / s1214_chars_unit_style)
+            let raw = chars / 100.0
+                * Self::s1214_chars_unit_style(&para.style, Self::s1351_unit_run(&para.style, &para.runs), true, true, pitch, ratio);
+            return Self::s1349_tw(raw);
+        }
         let raw = chars / 100.0 * Self::s1214_chars_unit(para, first_run, pitch, ratio);
         (raw * 20.0).round() / 20.0
+    }
+
+    /// S1349: whole twips the way Word rounds a chars term -- half TOWARD ZERO,
+    /// each term on its own, then summed: db9ca183 leftChars=235 -> 493.5 ->
+    /// 493 (+ hangingChars=99 -> 207.9 -> 208 = the stored left 701),
+    /// 3a4f/db9 hangingChars=135 -> 283.5 -> 283, ed025 rightChars=-95 ->
+    /// -199.5 -> -199 and left 849 = 708 + 141 (the sum 848.4 would round to
+    /// 848). `f32::round` (half away from zero) misses every one of them.
+    fn s1349_tw(pt: f32) -> f32 {
+        let x = pt * 20.0;
+        let r = (x.abs() + 0.5 - 1e-4).floor();
+        if x < 0.0 { -r / 20.0 } else { r / 20.0 }
+    }
+
+    /// S1349: the chars unit from a paragraph style and its first run's style
+    /// (what break_into_lines can see) -- the same arithmetic as
+    /// `s1214_chars_unit`.
+    fn s1214_chars_unit_style(
+        para_style: &ParagraphStyle,
+        first: Option<&RunStyle>,
+        first_run: bool,
+        with_track: bool,
+        pitch: Option<f32>,
+        ratio: Option<f32>,
+    ) -> f32 {
+        if std::env::var("OXI_S1214_DISABLE").is_ok() {
+            return 10.5;
+        }
+        // S1351: the parser named the paragraph's unit run (a leading page
+        // break or inline image is not in `Paragraph::runs` to be found)
+        let first = if std::env::var("OXI_S1351_DISABLE").is_ok() {
+            first
+        } else {
+            para_style.chars_unit_run_style.as_ref().or(first)
+        };
+        let drs = para_style.default_run_style.as_ref().and_then(|rs| rs.font_size);
+        let base = if first_run {
+            first.and_then(|r| r.font_size).or(drs).unwrap_or(10.5)
+        } else {
+            drs.or_else(|| first.and_then(|r| r.font_size)).unwrap_or(10.5)
+        };
+        // TRACKING counts twice for firstLineChars (04b88e7e) AND for
+        // hangingChars, from the first run's own w:spacing (the paragraph
+        // mark's only when the paragraph is empty): 31420af1 stores
+        // hanging=186 = 10 - 0.7 for a run at spacing -7 and Word draws the
+        // continuation at the stored 352, 15076df 384 = 2 x (10.5 - 0.9) at
+        // -9, order_01 199 = 10.855 - 0.9 (grid pitch + tracking).
+        let track = if first_run && with_track { first.and_then(|r| r.character_spacing).unwrap_or(0.0) } else { 0.0 };
+        let base = base + 2.0 * track;
+        match (pitch, ratio) {
+            (Some(p), Some(r)) if r > 0.0 && p > 0.0 => base + (p - p / r),
+            _ => base,
+        }
+    }
+
+    /// S1349: the chars-given left indent from a paragraph style (leftChars at
+    /// the Normal size, hangingChars at the first run's size, whole twips).
+    fn s1349_left_pt_style(&self, para_style: &ParagraphStyle, first: Option<&RunStyle>, pitch: Option<f32>, ratio: Option<f32>) -> Option<f32> {
+        let on = std::env::var("OXI_S1349_DISABLE").is_err() && std::env::var("OXI_S1349").ok().as_deref() != Some("0");
+        let extra = match (pitch, ratio) {
+            (Some(p), Some(r)) if r > 0.0 && p > 0.0 => p - p / r,
+            _ => 0.0,
+        };
+        let l = para_style.indent_left_chars.map(|c| {
+            if on {
+                c / 100.0 * (self.s1349_normal_fs + extra)
+            } else {
+                c / 100.0 * Self::s1214_chars_unit_style(para_style, first, false, false, pitch, ratio)
+            }
+        });
+        let h = para_style
+            .indent_hanging_chars
+            .map(|c| c / 100.0 * Self::s1214_chars_unit_style(para_style, first, true, true, pitch, ratio));
+        match (l, h) {
+            (None, None) => None,
+            // Word stores left = round((L + H) x units) and hanging = round(H x unit)
+            // and puts the first line at their difference: db9ca183 leftChars=235
+            // hangingChars=99 -> 701 - 208 = 493 twips, where rounding L alone gives
+            // 494 -- the twip that decided whether 「government」 fit its line.
+            _ => Some(Self::s1349_tw(l.unwrap_or(0.0)) + Self::s1349_tw(h.unwrap_or(0.0))),
+        }
     }
 
     fn s1214_chars_unit(
@@ -23521,9 +23679,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             return 10.5;
         }
         let base = if first_run {
-            para.runs
-                .first()
-                .and_then(|r| r.style.font_size)
+            Self::s1351_unit_run(&para.style, &para.runs)
+                .and_then(|r| r.font_size)
                 .or_else(|| {
                     para.style
                         .default_run_style
@@ -23532,11 +23689,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 })
                 .unwrap_or(10.5)
         } else {
+            // S1349: leftChars converts with the DEFAULT size -- on a character
+            // grid that is the grid's base size (2 x 11.5 = 23.05 for a 12pt
+            // and for an 8pt run alike, `_pb_unitcap_gen.py` J_ arms), never the
+            // paragraph's own. Only hangingChars / firstLineChars take the run.
+            // (S1349 converts leftChars / rightChars itself, see
+            // s1349_default_chars_pt; this unit stays for the S1214 path.)
             para.style
                 .default_run_style
                 .as_ref()
                 .and_then(|rs| rs.font_size)
-                .or_else(|| para.runs.first().and_then(|r| r.style.font_size))
+                .or_else(|| Self::s1351_unit_run(&para.style, &para.runs).and_then(|r| r.font_size))
                 .unwrap_or(10.5)
         };
         // TRACKING counts TWICE. `_pb_charunit_gen.py` again, with `w:spacing` on
@@ -23549,10 +23712,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // 10.75 where the file's own pair says 217tw = 10.85 (= 10.5 + the grid's
         // 0.3547, no tracking at all). The run's tracking was measured to double;
         // the STYLE's is not in any arm, and the corpus says it does not apply.
+        // S1351: the unit run's tracking (a folded page-break run's included,
+        // `_pb_brrun_probe.py` arm G: 10pt at -1.00 gives 8.00) -- and the
+        // RunStyle value is style-resolved, which the hangingChars census
+        // wants (kyodoken 158 = 8 - 0.1 from its paragraph style's -0.05).
         let track = if first_run {
-            para.runs
-                .first()
-                .and_then(|r| r.style.character_spacing)
+            Self::s1351_unit_run(&para.style, &para.runs)
+                .and_then(|r| r.character_spacing)
                 .unwrap_or(0.0)
         } else {
             0.0
@@ -23587,6 +23753,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
         let available_tw = pt_to_tw(available_width);
+        let dbg_frags = std::env::var("OXI_DBG_FRAGS").ok().filter(|pre| {
+            let head: String = fragments.iter().flat_map(|f| f.0.chars()).take(pre.chars().count()).collect();
+            head == *pre
+        });
+        if (std::env::var("OXI_DBG1318").is_ok() && fragments.first().map_or(false, |f| f.0.starts_with('\u{203B}'))) || dbg_frags.is_some() {
+            eprintln!("[FRAGS] avail={:.2} first_indent={:.2} left_tw={:?} left_chars={:?} hang_chars={:?} {:?}", available_width, first_line_indent,
+                para_style.indent_left, para_style.indent_left_chars, para_style.indent_hanging_chars,
+                fragments.iter().take(6).map(|f| (f.0.chars().take(6).collect::<String>(), f.1.character_spacing, f.1.font_size, f.3)).collect::<Vec<_>>());
+        }
 
         // Day 33 part 19 (2026-05-10): paragraphs containing ONLY whitespace
         // (ASCII space, tab, U+3000 fullwidth space, etc.) render as a single
@@ -26689,7 +26864,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // COM-confirmed: tab positions are absolute from left margin.
                             // current_width is relative to the indent start, so we add
                             // indent_left to get the absolute position from margin.
-                            let indent_left = para_style.indent_left.unwrap_or(0.0);
+                            // S1349: a chars-given indent (leftChars / hangingChars) is
+                            // an indent here too -- db9ca183 p3 「a. National
+                            // government (If …」 tabs from 0 without it and holds 88
+                            // characters where Word holds 78.
+                            let indent_left = para_style
+                                .indent_left
+                                .or_else(|| self.s1349_left_pt_style(para_style, fragments.first().map(|f| f.1), grid_char_pitch, grid_char_cw_ratio))
+                                .unwrap_or(0.0);
                             // S881 (re-derived 2026-07-16, default ON, opt-out
                             // OXI_S881_DISABLE): a HANGING indent creates an IMPLIED
                             // tab stop at indent_left (Word merges it into the sorted
@@ -26717,6 +26899,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 && first_line_indent < -0.01;
                             let line_start_abs = indent_left;
                             let abs_pos = current_width + line_start_abs;
+                            if dbg_frags.is_some() {
+                                eprintln!("[TAB] indent_left={:.2} cur={:.2} abs_pos={:.2} s881={} first_indent={:.2} line={}", indent_left, current_width, abs_pos, s881, first_line_indent, lines.len());
+                            }
                             // Continuation lines start at rel=0 → abs_pos == ind_left,
                             // so the `>` guard auto-scopes the implied stop to line 1.
                             let implied_stop = if s881 && indent_left > abs_pos + 0.01 {
@@ -35911,14 +36096,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         .style
                                         .indent_left
                                         .or_else(|| {
-                                            para.style.indent_left_chars.map(|c| Self::s1214_chars_pt(c, para, false, grid_char_pitch, grid_char_cw_ratio))
+                                            self.s1349_left_pt(para, grid_char_pitch, grid_char_cw_ratio)
                                         })
                                         .unwrap_or(0.0);
                                     let p_indent_right = para
                                         .style
                                         .indent_right
                                         .or_else(|| {
-                                            para.style.indent_right_chars.map(|c| Self::s1214_chars_pt(c, para, false, grid_char_pitch, grid_char_cw_ratio))
+                                            para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, grid_char_pitch, grid_char_cw_ratio))
                                         })
                                         .unwrap_or(0.0);
                                     // When both firstLine (twip) and firstLineChars exist,
@@ -46071,12 +46256,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let indent_l = para
                 .style
                 .indent_left
-                .or_else(|| para.style.indent_left_chars.map(|c| Self::s1214_chars_pt(c, para, false, grid_char_pitch, grid_char_cw_ratio)))
+                .or_else(|| self.s1349_left_pt(para, grid_char_pitch, grid_char_cw_ratio))
                 .unwrap_or(0.0);
             let indent_r = para
                 .style
                 .indent_right
-                .or_else(|| para.style.indent_right_chars.map(|c| Self::s1214_chars_pt(c, para, false, grid_char_pitch, grid_char_cw_ratio)))
+                .or_else(|| para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, grid_char_pitch, grid_char_cw_ratio)))
                 .unwrap_or(0.0);
             let first_indent_raw = para
                 .style

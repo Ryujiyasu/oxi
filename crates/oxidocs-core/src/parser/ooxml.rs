@@ -3665,7 +3665,11 @@ fn parse_paragraph(
                 } else {
                     style.list_indent = Some(ind);
                 }
-                if style.indent_left.is_none() {
+                // S1349: a leftChars / hangingChars indent is a paragraph indent
+                // too -- without this the level's left (tokyoshugyo numId 3:
+                // 630) replaced the paragraph's 2 cells and the continuation
+                // lines of 「①　業務外の傷病による欠勤が…」 sat one cell too deep.
+                if style.indent_left.is_none() && style.indent_left_chars.is_none() {
                     // S1011: a dangling numId has no level_indent to look up;
                     // use the recovered level_left (36pt) so the body indents.
                     let left = if dangling {
@@ -3742,16 +3746,32 @@ fn parse_paragraph(
     // then breaks. That maps to `page_break_after`. When the br is followed by
     // other non-empty content, it remains `page_break_before` (existing behavior).
     // See `project_empty_br_para_stub.md`.
-    if let Some(first_run) = runs.first() {
-        if first_run.text.trim() == "\x0C" || first_run.text == "\x0C" {
-            let only_br = runs.len() == 1 || runs.iter().skip(1).all(|r| r.text.is_empty());
-            if only_br {
-                style.page_break_after = true;
-            } else {
-                style.page_break_before = true;
-            }
-            runs.remove(0); // Remove the break-only run
+    // S1351: name the run Word measures this paragraph's chars indents on --
+    // the first one with content, in document order, BEFORE the break-only run
+    // below is dropped. Text counts unless it is only the field separator/end
+    // markers; an inline image counts even though its run carries no text.
+    let s1351_img_run = inline_img_runs.first().map(|(i, _)| *i);
+    style.chars_unit_run_style = runs
+        .iter()
+        .enumerate()
+        .find(|(i, r)| {
+            Some(*i) == s1351_img_run
+                || r.text.chars().any(|c| c != '\u{FFFE}' && c != '\u{FFFF}')
+        })
+        .map(|(_, r)| r.style.clone());
+    let lead_is_break = runs
+        .first()
+        .map_or(false, |first_run| first_run.text.trim() == "\x0C" || first_run.text == "\x0C");
+    if lead_is_break {
+        let only_br = runs.len() == 1 || runs.iter().skip(1).all(|r| r.text.is_empty());
+        if only_br {
+            style.page_break_after = true;
+        } else {
+            style.page_break_before = true;
         }
+        // Remove the break-only run; `chars_unit_run_style` above already kept
+        // its style, which is what Word measures the chars indents on (S1351).
+        runs.remove(0);
     }
 
     // S1252: the in-run maths route is for a paragraph that also carries
@@ -4777,7 +4797,7 @@ fn parse_paragraph_properties(
                         }
                         // hangingChars overrides firstLineChars (negative = hanging)
                         if let Some(hc) = hanging_chars {
-                            // S1349 (2026-09-07, opt-in OXI_S1349=1, see below):
+                            // S1349 (2026-09-07, default ON, opt-out OXI_S1349_DISABLE):
                             // with hangingChars the FIRST line sits at leftChars (0 when
                             // absent) and the continuation at leftChars + hangingChars
                             // cells; the twips are ignored. Faithful-slice arms
@@ -4788,14 +4808,25 @@ fn parse_paragraph_properties(
                             // leftChars=200 -> 23.05 / 45.97. a1d6e4ef's 9pt cell reads
                             // the same: (0.5 + 2.03) x 9.77 = 24.7 (the twip was 24.45).
                             // 0ea3ec86 p19 「（グループホーム…地域活動」 then holds 18.
-                            // HELD opt-in OXI_S1349=1 (2026-09-07): Phase 1 drops 96 -> 92
-                            // with it on (3a4f9fbe 0.73, tokyoshugyo 0.14, d6fd9a51 0.97,
-                            // model), all back to 1.0 with it off -- the slice's law does
-                            // not carry to those documents' hangingChars paragraphs
-                            // (the S1214 note recorded the same three losses). Open.
-                            if std::env::var("OXI_S1349").ok().as_deref() == Some("1") {
+                            // Default ON (2026-09-07, opt-out OXI_S1349_DISABLE) once two
+                            // more pieces were in place: the numbering level's indent must
+                            // not replace a chars indent (tokyoshugyo numId 3, level left
+                            // 630), and leftChars converts with the NORMAL style's size
+                            // while hangingChars converts with the run's (b35123: 11.35
+                            // and 9.85 on one paragraph). Gates: Phase 1 96/96, JA blind
+                            // 100 PASS 93 = 93 mean 0.9953 = 0.9953, SSIM b35123 +0.0042,
+                            // a1d6e4ef -0.0007 (positions only, no line moves).
+                            if std::env::var("OXI_S1349_DISABLE").is_err()
+                                && std::env::var("OXI_S1349").ok().as_deref() != Some("0")
+                            {
+                                // leftChars converts with the DEFAULT size, hangingChars
+                                // with the paragraph's run size (`_pb_unitcap_gen.py` J_
+                                // arms: 12pt leftChars=200 hangingChars=100 -> 23.06 /
+                                // 35.53, 8pt -> 23.05 / 31.57; d6fd9a51's 8pt twips 160 =
+                                // 1 char x 8), so the two stay apart in the IR.
                                 style.indent_left = None;
-                                style.indent_left_chars = Some(left_chars.unwrap_or(0.0) + hc);
+                                style.indent_left_chars = Some(left_chars.unwrap_or(0.0));
+                                style.indent_hanging_chars = Some(hc);
                                 style.indent_first_line = None;
                             }
                             style.indent_first_line_chars = Some(-hc);

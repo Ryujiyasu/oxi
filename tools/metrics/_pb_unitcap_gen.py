@@ -28,7 +28,9 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 SRC = os.path.join(REPO, "pipeline_data", "docx_corpus", "ja", "reference", "0ea3ec86480140c2.docx")
 OUT = os.path.join(REPO, "pipeline_data", "_pb_unitcap")
 SECT_IDX = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 4
-DOCNAME = "unitcap" if SECT_IDX == 4 else "unitcap%d" % SECT_IDX
+CHARSPACE = next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--charspace=")), None)
+DOCNAME = ("unitcap" if SECT_IDX == 4 else "unitcap%d" % SECT_IDX) + ("" if CHARSPACE is None else "_cs%d" % CHARSPACE)
+ONLY = next((a.split("=")[1] for a in sys.argv if a.startswith("--only=")), None)   # arm label prefix filter
 sys.stdout.reconfigure(encoding="utf-8")
 
 KANA = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわ"
@@ -417,6 +419,17 @@ ARMS.append(("S_m2_055", -1, kata(12) + "、" + kata(14) + "、" + kata(13) + "�
 ARMS.append(("S_doc_tail", -8, "※|入所利用者(20歳以上）、グループホーム利用者は、区市町村民税課税世帯の場合、「一般２」となる。" + FILL))
 ARMS.append(("S_doc_norm", -8, "※|入所利用者(20歳以上）、グループホーム利用者は、区市町村民税課税世帯の場合、「一般２」となるが" + FILL))
 ARMS.append(("S_doc_m8", -8, "※|" + kata(20) + "、" + kata(12) + "、" + kata(8) + "」" + kata(3) + "字、" + FILL))   # 44 tracked glyphs + 字、 (need ~0.8)
+# J_ arms: the unit of leftChars vs hangingChars when the paragraph is NOT the default size
+# (d6fd9a51 8pt: hanging 160 = 1 char x 8; a1d6e4ef 9pt: hanging 380/203 = 9.36 but left (489-380)/50 = 10.9)
+ARMS.append(("J_12_lh", "sz24", 'PPR{<w:ind w:leftChars="200" w:hangingChars="100"/>}' + kata(20) + "字" + kata(19) + "字"))
+ARMS.append(("J_12_h", "sz24", 'PPR{<w:ind w:hangingChars="100"/>}' + kata(20) + "字" + kata(19) + "字"))
+ARMS.append(("J_12_l", "sz24", 'PPR{<w:ind w:leftChars="200"/>}' + kata(20) + "字" + kata(19) + "字"))
+ARMS.append(("J_8_lh", "sz16", 'PPR{<w:ind w:leftChars="200" w:hangingChars="100"/>}' + kata(28) + "字" + kata(27) + "字"))
+ARMS.append(("J_8_h", "sz16", 'PPR{<w:ind w:hangingChars="100"/>}' + kata(28) + "字" + kata(27) + "字"))
+ARMS.append(("J_8_l", "sz16", 'PPR{<w:ind w:leftChars="200"/>}' + kata(28) + "字" + kata(27) + "字"))
+# K_ arms (S1348): the grid advance of an OFF-SIZE run, run size x charSpace (gen --charspace=N)
+for sz in (14, 16, 18, 20, 21, 22, 24, 28, 32):
+    ARMS.append(("K_sz%d" % sz, "sz%d" % sz, kata(10)))
 # control: normal character instead of the unit (demand 0.96 + 0.5h, no mark to pull)
 for m in (1, 2, 3):
     for h in (0, 1, 2):
@@ -432,12 +445,18 @@ def gen():
     doc = z.read("word/document.xml").decode("utf-8")
     secs = re.findall(r"<w:sectPr[ >].*?</w:sectPr>", doc, re.S)
     sect = secs[SECT_IDX]  # default 4: 2 columns, charSpace 2048; 18: 2 columns, charSpace 3194
+    if CHARSPACE is not None:
+        sect = re.sub(r'w:charSpace="-?[0-9]+"', 'w:charSpace="%d"' % CHARSPACE, sect)
     sect = re.sub(r"<w:(header|footer)Reference[^>]*/>", "", sect)
     sect = re.sub(r'w:rsid\w*="[^"]*" ?', "", sect)
     head = doc[:doc.index("<w:body>") + len("<w:body>")]
     body = ""
     for label, sp, text in ARMS:
-        if isinstance(sp, str) and sp.startswith("w"):   # character scale w:w, optional s<sz>
+        if ONLY and not label.startswith(ONLY):
+            continue
+        if isinstance(sp, str) and sp.startswith("sz"):  # plain size override
+            rpr = '<w:rPr><w:rFonts w:hint="eastAsia"/><w:sz w:val="%s"/></w:rPr>' % sp[2:]
+        elif isinstance(sp, str) and sp.startswith("w"):   # character scale w:w, optional s<sz>
             wv, _, szv = sp[1:].partition("s")
             rpr = '<w:rPr><w:rFonts w:hint="eastAsia"/><w:w w:val="%s"/>%s</w:rPr>' % (wv, '<w:sz w:val="%s"/>' % szv if szv else "")
         else:

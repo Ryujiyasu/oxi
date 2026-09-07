@@ -1521,8 +1521,25 @@ pub struct ParagraphStyle {
     /// Raw firstLineChars value (hundredths of a character width).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indent_first_line_chars: Option<f32>,
+    /// S1349: `w:hangingChars` kept apart from `indent_left_chars` because Word
+    /// converts it with the paragraph's run size (12pt: 12.49, 8pt: 8.53 on the
+    /// 10.5 grid) while `leftChars` converts with the default size (23.05 for
+    /// 200 whatever the run). The continuation line sits at leftChars +
+    /// hangingChars, the first line at leftChars.
+    #[serde(default)]
+    pub indent_hanging_chars: Option<f32>,
     /// Default run style from style definition (font size, bold, etc.)
     pub default_run_style: Option<RunStyle>,
+    /// S1351: the style of the run Word measures a chars indent
+    /// (hangingChars / firstLineChars) on -- the first run with CONTENT, which
+    /// is not always the first run that survives into `Paragraph::runs`.
+    /// A page break, a line break, a tab, a space and an inline image all
+    /// count; an empty run, a bookmark and a field-start run do not
+    /// (`_pb_brrun_probe.py` arms A-K, `_pb_imgrun_probe.py` arms A-D).
+    /// 8485f16 is the shape that forced it: a 10.5pt page-break run in front of
+    /// 12pt text, hanging 418 = 1.99 x 10.5, and Word draws the stored value.
+    #[serde(default)]
+    pub chars_unit_run_style: Option<RunStyle>,
     /// Pre-resolved list marker text (e.g., "•", "1.", "a)")
     pub list_marker: Option<String>,
     /// Hanging indent for the list marker in points
@@ -1731,7 +1748,9 @@ impl Default for ParagraphStyle {
             indent_left_chars: None,
             indent_right_chars: None,
             indent_first_line_chars: None,
+            indent_hanging_chars: None,
             default_run_style: None,
+            chars_unit_run_style: None,
             list_marker: None,
             list_indent: None,
             list_suff: None,
