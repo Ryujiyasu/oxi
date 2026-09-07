@@ -78,6 +78,9 @@ pub struct XlsxEditor {
     styles: HashMap<(usize, u32, u32), CellStyle>,
     /// Sheets whose filter is being replaced. `None` takes the filter away.
     filters: HashMap<usize, Option<AutoFilter>>,
+    /// Sheets whose tab colour is being set. `Some(hex)` paints it, `None`
+    /// takes any colour away. Keyed by the sheet's origin index.
+    tab_colors: HashMap<usize, Option<String>>,
     /// What the workbook's sheets should end up as, when they are changing.
     sheet_plan: Option<Vec<PlannedSheet>>,
     /// The names the workbook should end up keeping, when they have changed.
@@ -128,6 +131,7 @@ impl XlsxEditor {
             merges: HashMap::new(),
             styles: HashMap::new(),
             filters: HashMap::new(),
+            tab_colors: HashMap::new(),
             sheet_plan: None,
             name_plan: None,
         })
@@ -294,6 +298,9 @@ impl XlsxEditor {
             .collect();
 
         for (index, (before, after)) in pairs {
+            if before.tab_color != after.tab_color {
+                self.tab_colors.insert(index, after.tab_color.clone());
+            }
             let mut changes: Vec<((usize, u32, u32), CellEditValue)> = Vec::new();
             let held = cells_of(before);
             let now = cells_of(after);
@@ -470,6 +477,7 @@ impl XlsxEditor {
             || !self.merges.is_empty()
             || !self.styles.is_empty()
             || !self.filters.is_empty()
+            || !self.tab_colors.is_empty()
             || self.sheet_plan.is_some()
             || self.name_plan.is_some()
     }
@@ -765,12 +773,28 @@ impl XlsxEditor {
                         continue;
                     }
                 }
+                // A worksheet part whose sheet had its tab colour changed
+                // gets that written in, whether or not its cells also changed.
+                let colour_change = sheet_paths_by_index
+                    .iter()
+                    .position(|part| *part == name)
+                    .and_then(|origin| self.tab_colors.get(&origin));
                 if let Some(sheet_edits) = path_edits.get(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                    let patched = patch_worksheet_xml(&xml, sheet_edits)?;
+                    let mut patched = patch_worksheet_xml(&xml, sheet_edits)?;
+                    if let Some(colour) = colour_change {
+                        patched = set_tab_color_in_worksheet(&patched, colour);
+                    }
                     writer.write_all(patched.as_bytes())
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                } else if let Some(colour) = colour_change {
+                    let mut xml = String::new();
+                    entry.read_to_string(&mut xml)
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    let recoloured = set_tab_color_in_worksheet(&xml, colour);
+                    writer.write_all(recoloured.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                 } else {
                     let mut buf = Vec::new();
@@ -1607,6 +1631,20 @@ fn write_new_sheet(sheet: &crate::ir::Sheet) -> Result<Vec<u8>, XlsxError> {
         .write_event(Event::Start(root))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
 
+    if let Some(hex) = &sheet.tab_color {
+        writer
+            .write_event(Event::Start(BytesStart::new("sheetPr")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let mut colour = BytesStart::new("tabColor");
+        colour.push_attribute(("rgb", format!("FF{hex}").as_str()));
+        writer
+            .write_event(Event::Empty(colour))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        writer
+            .write_event(Event::End(BytesEnd::new("sheetPr")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+
     if sheet.rows.iter().all(|row| row.cells.is_empty() && !row.hidden) {
         writer
             .write_event(Event::Empty(BytesStart::new("sheetData")))
@@ -2134,6 +2172,64 @@ struct SheetEdits<'a> {
     /// The rows and columns to hold in view, when they are being set. Both
     /// zero takes the freeze away.
     panes: Option<(u32, u32)>,
+}
+
+/// Set, change or remove a worksheet part's `<sheetPr><tabColor>`. `colour` is
+/// the RRGGBB the tab should wear (written with Excel's leading FF alpha), or
+/// `None` to take any colour away. Done as string surgery so the streaming
+/// cell patcher stays untouched; a worksheet part never holds a `<sheetPr` or a
+/// raw `>` anywhere but in this one element's start tag.
+fn set_tab_color_in_worksheet(xml: &str, colour: &Option<String>) -> String {
+    let element = colour.as_ref().map(|hex| format!("<tabColor rgb=\"FF{hex}\"/>"));
+    if let Some(pr_at) = xml.find("<sheetPr") {
+        let Some(rel_end) = xml[pr_at..].find('>') else {
+            return xml.to_string();
+        };
+        let tag_end = pr_at + rel_end;
+        let self_closing = xml.as_bytes()[tag_end - 1] == b'/';
+        if self_closing {
+            match &element {
+                Some(el) => format!("{}>{el}</sheetPr>{}", &xml[..tag_end - 1], &xml[tag_end + 1..]),
+                None => xml.to_string(),
+            }
+        } else {
+            let body_start = tag_end + 1;
+            let Some(close_rel) = xml[body_start..].find("</sheetPr>") else {
+                return xml.to_string();
+            };
+            let close_at = body_start + close_rel;
+            let body = remove_tab_color(&xml[body_start..close_at]);
+            let inner = match &element {
+                Some(el) => format!("{el}{body}"),
+                None => body,
+            };
+            format!("{}{}{}", &xml[..body_start], inner, &xml[close_at..])
+        }
+    } else {
+        match &element {
+            Some(el) => match xml.find("<worksheet").and_then(|ws| {
+                xml[ws..].find('>').map(|rel| ws + rel + 1)
+            }) {
+                Some(at) => format!("{}<sheetPr>{el}</sheetPr>{}", &xml[..at], &xml[at..]),
+                None => xml.to_string(),
+            },
+            None => xml.to_string(),
+        }
+    }
+}
+
+/// A `<sheetPr>` body with any `<tabColor>` taken out.
+fn remove_tab_color(body: &str) -> String {
+    let Some(at) = body.find("<tabColor") else {
+        return body.to_string();
+    };
+    if let Some(rel) = body[at..].find("/>") {
+        return format!("{}{}", &body[..at], &body[at + rel + 2..]);
+    }
+    if let Some(rel) = body[at..].find("</tabColor>") {
+        return format!("{}{}", &body[..at], &body[at + rel + "</tabColor>".len()..]);
+    }
+    body.to_string()
 }
 
 fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String, XlsxError> {
@@ -2804,6 +2900,46 @@ mod tests {
             .find_map(|cell| cell.formula.clone())
             .expect("the summary cell kept a formula");
         assert_eq!(formula, "Facts!B2", "the reference was not rewritten");
+    }
+
+    #[test]
+    fn set_tab_color_helper_handles_the_sheet_pr_cases() {
+        let none = r#"<worksheet xmlns="x"><sheetData/></worksheet>"#;
+        let out = set_tab_color_in_worksheet(none, &Some("FF0000".to_string()));
+        assert!(out.contains(r#"<sheetPr><tabColor rgb="FFFF0000"/></sheetPr>"#), "insert: {out}");
+        let sc = r#"<worksheet xmlns="x"><sheetPr codeName="S"/><sheetData/></worksheet>"#;
+        let out = set_tab_color_in_worksheet(sc, &Some("00B050".to_string()));
+        assert!(out.contains(r#"<sheetPr codeName="S"><tabColor rgb="FF00B050"/></sheetPr>"#), "self-closing: {out}");
+        let ex = r#"<worksheet xmlns="x"><sheetPr><tabColor rgb="FFAAAAAA"/></sheetPr><sheetData/></worksheet>"#;
+        let out = set_tab_color_in_worksheet(ex, &Some("123456".to_string()));
+        assert!(out.contains(r#"<tabColor rgb="FF123456"/>"#) && !out.contains("FFAAAAAA"), "replace: {out}");
+        let out = set_tab_color_in_worksheet(ex, &None);
+        assert!(!out.contains("tabColor"), "remove: {out}");
+    }
+
+    /// A tab colour set in the editor is written on save, and taken away again
+    /// on a later save -- including on a sheet whose part has no <sheetPr> yet.
+    #[test]
+    fn a_tab_colour_set_and_removed_survives_a_save() {
+        let data = include_bytes!("../../../tests/fixtures/multi_sheet.xlsx");
+        let original = parse_xlsx(data).expect("should parse");
+        assert_eq!(original.sheets[0].tab_color, None);
+
+        let mut edited = original.clone();
+        edited.sheets[0].tab_color = Some("FF0000".to_string());
+        let mut editor = XlsxEditor::new(data).expect("open");
+        editor.apply_workbook(&edited).expect("apply");
+        let painted = editor.save().expect("save");
+        let read = parse_xlsx(&painted).expect("parse");
+        assert_eq!(read.sheets[0].tab_color.as_deref(), Some("FF0000"), "colour not written");
+
+        let mut cleared = read.clone();
+        cleared.sheets[0].tab_color = None;
+        let mut editor = XlsxEditor::new(&painted).expect("open");
+        editor.apply_workbook(&cleared).expect("apply");
+        let bare = editor.save().expect("save");
+        let read2 = parse_xlsx(&bare).expect("parse");
+        assert_eq!(read2.sheets[0].tab_color, None, "colour not removed");
     }
 
     /// A name written and read back comes through the file whole.
