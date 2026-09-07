@@ -204,11 +204,19 @@ pub fn cell_yaku_type_a(ch: char) -> bool {
 }
 
 pub fn cell_yaku_capacity(ch: char) -> f32 {
-    if is_s473_compressible(ch) || ch == '\u{3000}' {
+    if is_s473_compressible(ch)
+        || ch == '\u{3000}'
+        || (ch == '・' && std::env::var("OXI_MIDDOT_DISABLE").is_err())
+    {
         0.5
     } else {
         0.0
     }
+}
+
+/// A middle dot can lend spacing to a cell line, but cannot hang past its edge.
+pub fn cell_yaku_can_hang(ch: char) -> bool {
+    cell_yaku_type_a(ch) && ch != '・'
 }
 
 /// S475 (2026-06-01) — break-time max yakumono compression capacity for char `c`
@@ -381,6 +389,10 @@ pub fn s492_max_compress(c: char, fs: f32) -> f32 {
 /// Used for autoSpaceDE: Word adds 2.5pt only between Latin and CJK ideographs/kana.
 /// Punctuation like （、。は does NOT trigger auto-space.
 pub fn is_cjk_ideograph_or_kana(ch: char) -> bool {
+    // U+30FB is punctuation inside the Katakana block, not a kana letter.
+    if ch == '・' && std::env::var("OXI_MIDDOT_DISABLE").is_err() {
+        return false;
+    }
     matches!(ch as u32,
         // CJK Unified Ideographs
         0x4E00..=0x9FFF |
@@ -450,6 +462,20 @@ pub fn is_cjk(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn middle_dot_cell_spacing_does_not_enable_hanging_or_pair_halving() {
+        assert_eq!(cell_yaku_capacity('・'), 0.5);
+        assert!(cell_yaku_type_a('・'));
+        assert!(!cell_yaku_can_hang('・'));
+        assert!(!is_yakumono_closing('・'));
+        assert!(!is_hangable_punct('・'));
+        assert!(!is_cjk_ideograph_or_kana('・'));
+        assert!(is_cjk('・'));
+        assert!(is_cjk_ideograph_or_kana('カ'));
+        assert!(cell_yaku_can_hang('、'));
+        assert!(cell_yaku_can_hang('）'));
+    }
 
     #[test]
     fn test_line_start_prohibited() {
