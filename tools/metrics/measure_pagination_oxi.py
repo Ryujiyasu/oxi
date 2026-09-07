@@ -115,7 +115,7 @@ def aggregate_dump(dump: dict) -> dict:
                 base_key = (pi, cpi, cri, cci)
                 key = base_key
                 instance = 0
-                while key in groups:
+                while key in groups and not el.get("vert"):
                     existing_y = groups[key]["y_min"]
                     if abs(el["y"] - existing_y) <= 60:
                         break  # close enough — same cell
@@ -150,14 +150,12 @@ def aggregate_dump(dump: dict) -> dict:
         for key, slot in groups.items():
             # Sort by (y, x) so multi-line wrapped paragraphs concatenate
             # line-by-line top-to-bottom, not interleaved by X across lines.
-            # S724: VERTICAL-writing paragraphs (tbRl sections, "vert": true
-            # elements) read columns RIGHT→LEFT — sort those by (y, -x) so the
-            # concatenated text starts with the paragraph's first characters.
-            # Without this the text-prefix matcher could never match a vertical
-            # doc, and the gate scored only the (unrepresentative) remainder
-            # (probevert: 47/60 paragraphs DROPPED yet PASS 1.0).
+            # Vertical elements are emitted in reading order: runs down each
+            # column, columns right to left, then the next horizontal band.
+            # Coordinate sorting loses that order when the first column is
+            # indented or a column contains several run-sized elements.
             if slot["text_parts"] and all(p[3] for p in slot["text_parts"]):
-                slot["text_parts"].sort(key=lambda yxt: (yxt[0], -yxt[1]))
+                pass
             else:
                 slot["text_parts"].sort(key=lambda yxt: (yxt[0], yxt[1]))
             text = "".join(t for _, _, t, _ in slot["text_parts"])

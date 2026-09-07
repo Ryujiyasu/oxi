@@ -1832,6 +1832,8 @@ pub struct LayoutElement {
     /// and table cell emit (mod.rs ~6840) for text elements; 0.0 for non-text
     /// elements. See [[session71-y-convention-refactor-design]].
     pub text_y_off: f32,
+    /// Vertical displacement of an annotation from its parent flow line.
+    pub flow_line_offset: f32,
 }
 
 impl LayoutElement {
@@ -1852,6 +1854,7 @@ impl LayoutElement {
             is_paragraph_start_with_lrpb: false,
             vmerge_restart_overflow_to_next_page: false,
             text_y_off: 0.0,
+            flow_line_offset: 0.0,
         }
     }
 
@@ -1882,6 +1885,7 @@ impl LayoutElement {
             is_paragraph_start_with_lrpb: false,
             vmerge_restart_overflow_to_next_page: false,
             text_y_off: 0.0,
+            flow_line_offset: 0.0,
         }
     }
 }
@@ -2869,6 +2873,16 @@ impl LayoutEngine {
                 .map(count_lrpb_markers)
                 .sum();
             if markers > 0 {
+                // Cached page breaks cannot validate their own page count.
+                // Compare their count with natural pagination before applying them.
+                if std::env::var("OXI_NATURAL_LRPB_DISABLE").is_err() {
+                    self.lrpb_count_distrust.set(true);
+                    let natural = self.layout_pass(doc);
+                    self.lrpb_count_distrust.set(false);
+                    if markers > natural.pages.len().saturating_sub(1) {
+                        return natural;
+                    }
+                }
                 let first = self.layout_pass(doc);
                 if markers > first.pages.len().saturating_sub(1) {
                     self.lrpb_count_distrust.set(true);
@@ -4079,6 +4093,7 @@ impl LayoutEngine {
                 let lines = self.break_into_lines(
                     &fragments, 1e6, 0.0, para_style, None, None, true, false, true, false, false,
                     false,
+                    false,
                 );
                 let natural_w: f32 = lines
                     .iter()
@@ -4454,9 +4469,10 @@ impl LayoutEngine {
             }
         }
 
-        // Final page (separators included; empty trailing pages are not pushed
-        // unless the document produced no pages at all).
-        if !elements.is_empty() || pages_out.is_empty() {
+        // Blank paragraph columns occupy space even when they emit no glyphs.
+        if !elements.is_empty() || pages_out.is_empty()
+            || (std::env::var("OXI_VERTICAL_BLANKS_DISABLE").is_err() && avail_right < right - 0.01)
+        {
             Self::finalize_vertical_page(
                 &mut elements,
                 &mut pages_out,
@@ -4476,6 +4492,71 @@ impl LayoutEngine {
     fn balanced_band_counts(m: usize, n: usize) -> Vec<usize> {
         let n = n.max(1);
         (0..n).map(|j| (m + n - 1 - j) / n).collect()
+    }
+
+    /// Balance text in flow order, retaining variable row advances and annotations.
+    /// Tables and other non-text content continue through the existing table path.
+    fn rebalance_text_columns(elements: &mut [LayoutElement], top: f32, xs: &[f32]) -> Option<f32> {
+        if xs.len() != 2 { return None; }
+        let mut columns: [Vec<(f32, Vec<usize>)>; 2] = [Vec::new(), Vec::new()];
+        for (ei, e) in elements.iter().enumerate() {
+            let y = e.y - e.flow_line_offset;
+            if y < top - 0.1 { continue; }
+            if e.paragraph_index.is_none() || e.cell_paragraph_index.is_some()
+                || !matches!(e.content, LayoutContent::Text { .. }) { return None; }
+            let col = usize::from(e.x >= xs[1] - 1.0);
+            // A hanging line can cross the nominal column boundary. Never
+            // separate adjacent fragments of one flow row between columns;
+            // leave ambiguous geometry to the existing balancing path.
+            if elements[..ei].iter().any(|p| {
+                p.paragraph_index == e.paragraph_index
+                    && ((p.y - p.flow_line_offset) - y).abs() < 0.5
+                    && usize::from(p.x >= xs[1] - 1.0) != col
+                    && p.x <= e.x && p.x + p.width >= e.x - 0.1
+            }) {
+                return None;
+            }
+            if let Some((_, members)) = columns[col].iter_mut().find(|(ry, _)| (*ry - y).abs() < 0.5) {
+                members.push(ei);
+            } else {
+                columns[col].push((y, vec![ei]));
+            }
+        }
+        let mut rows = Vec::new();
+        for (col, rs) in columns.iter_mut().enumerate() {
+            rs.sort_by(|a,b| a.0.total_cmp(&b.0));
+            for (i, (y, members)) in rs.iter().enumerate() {
+                let h = if let Some(next) = rs.get(i + 1) { next.0 - y } else {
+                    members.iter().filter(|&&j| elements[j].flow_line_offset == 0.0)
+                        .map(|&j| elements[j].height).fold(0.0f32, f32::max)
+                };
+                let lead = if i == 0 { (y - top).max(0.0) } else { 0.0 };
+                rows.push((col, *y, members.clone(), h, lead));
+            }
+        }
+        if rows.len() < 2 { return None; }
+        let total: f32 = rows.iter().map(|r| r.3 + r.4).sum();
+        let mut sum = 0.0;
+        let mut best = (f32::INFINITY, 1usize);
+        for (i, row) in rows.iter().enumerate().take(rows.len() - 1) {
+            sum += row.3 + row.4;
+            let cost = sum.max(total - sum);
+            if cost <= best.0 + 0.01 { best = (cost, i + 1); }
+        }
+        let mut cy = [top, top];
+        for (i, (old_col, y, members, h, lead)) in rows.iter().enumerate() {
+            let col = usize::from(i >= best.1);
+            cy[col] += lead;
+            for &ei in members {
+                elements[ei].x += xs[col] - xs[*old_col];
+                elements[ei].y += cy[col] - y;
+            }
+            cy[col] += h;
+        }
+        if std::env::var("OXI_DBG_COL").is_ok() {
+            eprintln!("[TEXT_BALANCE] rows={} split={} bottoms={:?}", rows.len(), best.1, cy);
+        }
+        Some(cy[0].max(cy[1]))
     }
 
     /// Record the y of each band boundary so the page finalizer can draw
@@ -4649,7 +4730,12 @@ impl LayoutEngine {
                     if run.text.chars().all(|c| c.is_whitespace()) {
                         return 0.0;
                     }
-                    let rfs = self.resolve_font_size(&run.style, &para.style);
+                    let mut rfs = self.resolve_font_size(&run.style, &para.style);
+                    if std::env::var("OXI_VERTICAL_SCRIPTS_DISABLE").is_err() && run.style.font_size.is_some()
+                        && matches!(run.style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
+                    {
+                        rfs = (rfs * 2.0 / 3.0 * 2.0).round() / 2.0;
+                    }
                     self.metrics_for_text(&run.text, &run.style, &para.style)
                         .word_line_height_no_grid(rfs)
                 })
@@ -4662,7 +4748,14 @@ impl LayoutEngine {
             let (mark_m, mark_fs) = if para_text.chars().all(|c| c.is_whitespace()) {
                 let rpr = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                 let mark_fs = self.resolve_font_size(&rpr, &para.style);
-                (self.metrics_for_para_mark(&rpr, &para.style), mark_fs)
+                let mark_metrics = if std::env::var("OXI_VERTICAL_MARK_DISABLE").is_err()
+                    && rpr.font_family.is_some() && rpr.font_family_east_asia.is_none()
+                {
+                    self.metrics_for(&rpr, &para.style)
+                } else {
+                    self.metrics_for_para_mark(&rpr, &para.style)
+                };
+                (mark_metrics, mark_fs)
             } else {
                 (self.metrics_for_text(&para_text, &style, &para.style), fs)
             };
@@ -4741,9 +4834,7 @@ cells={} pitch={:.2} text={:?}",
                 continue;
             }
 
-            // S1329 (2026-09-05, HELD OPT-IN `OXI_S1329=1`; see the archive: the
-            // capacity model is right but without vertical punctuation compression
-            // the JA gate reads worse on 0828836/047ff775): each
+            // S1329 (opt-out OXI_S1329_DISABLE), paired with vertical breaking: each
             // character advances by ITS OWN run's size, not the paragraph's
             // first run. educational__0828836 (tbRl): a paragraph is the
             // 10.5pt bold original followed, in the same paragraph, by its 9pt
@@ -4751,7 +4842,7 @@ cells={} pitch={:.2} text={:?}",
             // 425pt column) and the original at 10.5 (38-43), Oxi walked both
             // at 10.5 (40) and drew the gloss at 10.5 -- one column too many
             // per gloss and the page's last paragraph pushed over.
-            let s1329_on = std::env::var("OXI_S1329").ok().as_deref() == Some("1");
+            let s1329_on = std::env::var("OXI_S1329_DISABLE").is_err();
             let run_fs: Vec<f32> = para
                 .runs
                 .iter()
@@ -4765,7 +4856,7 @@ cells={} pitch={:.2} text={:?}",
                 .enumerate()
                 .flat_map(|(i, r)| r.text.chars().map(move |_| i))
                 .collect();
-            // S1331 (2026-09-05, HELD OPT-IN `OXI_S1331=1`, paired with S1329): the
+            // S1331 (opt-out OXI_S1331_DISABLE, paired with S1329): the
             // paragraph's indents turned on their side -- its FIRST column
             // starts `left + firstLine` down the band, every other column
             // `left` down (a hanging indent is a negative firstLine, exactly
@@ -4774,7 +4865,7 @@ cells={} pitch={:.2} text={:?}",
             // neighbours begin at 94.5 (Word PDF glyph origins), so it holds
             // 38 chars + the indent; Oxi began at the band top and held 40,
             // which pulled the next gloss's first two characters up a column.
-            let s1331_on = std::env::var("OXI_S1331").ok().as_deref() == Some("1");
+            let s1331_on = std::env::var("OXI_S1331_DISABLE").is_err();
             let s1331_left = if s1331_on {
                 para.style
                     .indent_left
@@ -4793,6 +4884,36 @@ cells={} pitch={:.2} text={:?}",
                 0.0
             };
             let mut buf: Vec<char> = Vec::new();
+            if std::env::var("OXI_VERTICAL_BREAKER_DISABLE").is_err() {
+                let fragments: Vec<_> = para.runs.iter().enumerate()
+                    .map(|(i, r)| (r.text.as_str(), &r.style, None, i, 0usize)).collect();
+                let lines = self.break_into_lines(
+                    &fragments, band_h - s1331_left, s1331_first,
+                    &para.style, None, None, false, true, true, false, false, true,
+                    std::env::var("OXI_VERTICAL_CAPACITY_DISABLE").is_err(),
+                );
+                for (li, line) in lines.iter().enumerate() {
+                    let mut segs: Vec<(usize, String)> = Vec::new();
+                    for f in &line.fragments {
+                        match segs.last_mut() {
+                            Some((ri, text)) if *ri == f.run_index => text.push_str(&f.text),
+                            _ => segs.push((f.run_index, f.text.clone())),
+                        }
+                    }
+                    if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
+                        cols.push(VertColumn {
+                            recipe,
+                            text: segs.iter().map(|(_, s)| s.as_str()).collect(),
+                            pitch: col_pitch(a.0, b.0),
+                            segs,
+                            top: (s1331_left + if li == 0 { s1331_first } else { 0.0 }).max(0.0),
+                            blank: false,
+                            hard_break: hard_break && li == 0,
+                        });
+                    }
+                }
+                continue;
+            }
             let mut segs: Vec<(usize, String)> = Vec::new();
             let mut cur_y = (s1331_left + s1331_first).max(0.0);
             let mut col_top = cur_y;
@@ -4866,7 +4987,7 @@ cells={} pitch={:.2} text={:?}",
         // Any column with segments takes each segment's own run size; the
         // legacy path (paragraph-first-run size) stays for the opt-out and
         // for columns that carry no segments.
-        let multi = std::env::var("OXI_S1329").ok().as_deref() == Some("1")
+        let multi = std::env::var("OXI_S1329_DISABLE").is_err()
             && !col.segs.is_empty()
             && para.is_some();
         let y = y + col.top;
@@ -6900,6 +7021,12 @@ cells={} pitch={:.2} text={:?}",
                         && run_cols != num_columns
                         && std::env::var("OXI_S750_DISABLE").is_err()
                     {
+                        if let Some(bottom) = if std::env::var("OXI_TEXT_BALANCE_DISABLE").is_err() {
+                            Self::rebalance_text_columns(&mut elements, col_band_top, &col_x_positions)
+                        } else { None } {
+                            cursor.set(bottom);
+                            section_max_y = bottom;
+                        } else {
                         let col1_x0 = col_x_positions[0];
                         let col2_x0 = col_x_positions[1];
                         let split_x = col2_x0 - 1.0;
@@ -7039,6 +7166,7 @@ cells={} pitch={:.2} text={:?}",
                                     section_max_y = balanced_bottom;
                                 }
                             }
+                        }
                         }
                     }
                     // New section continues below ALL columns of the section
@@ -17030,6 +17158,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             page.doc_grid_no_type,
             para_has_lrpb,
             caps_active,
+            false,
         );
         // S-TWOSEG: replace the full-width break with one row per pair of strips.
         if let Some((_, seg1_w, _, seg2_w)) = s758_two_seg {
@@ -17099,6 +17228,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     page.doc_grid_no_type,
                     para_has_lrpb,
                     caps_active,
+                    false,
                 );
                 S721_ORPHAN_RETRY.with(|f| f.set(false));
                 if retry.len() < lines.len() {
@@ -18757,6 +18887,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             page.doc_grid_no_type,
                             para_has_lrpb,
                             caps_active,
+                            false,
                         );
                         lines.truncate(line_idx);
                         lines.extend(nl);
@@ -19839,6 +19970,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // S811: distrusted saved LRPBs (metric-incompatible font
                 // substitution) skip the per-line respect too.
                 && !self.doc_lrpb_distrust
+                && !(std::env::var("OXI_NATURAL_LRPB_DISABLE").is_err() && self.lrpb_count_distrust.get())
                 // S897 (2026-07-17, default ON, opt-out OXI_S897_DISABLE;
                 // ships WITH S895+S898 — separately each is a PASS-doc
                 // trade): LATIN docs
@@ -22219,6 +22351,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 ruby_el.run_index = Some(frag.run_index);
                                 ruby_el.char_offset = Some(0);
                             }
+                            ruby_el.flow_line_offset = ruby_y - base_el_y;
                             // Round 7.5: when char spacing > 0 (distribute*),
                             // the rendered width grows by (chars × extra). The
                             // element's `width` field tracks the visual extent
@@ -22640,15 +22773,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // (`_pb_oikomi_default_gen.py`: 15.0 per line) while the
                         // cell-aligned branch and the 324-pitch probe (16.5/16.0
                         // alternating = no compounding) were fine.
-                        // HELD as opt-in (OXI_S1319=1) 2026-09-05: JA blind neutral
-                        // (89 = 89, pcd 6 = 6) but the SSIM sentinel on the 71 grid
-                        // docs is net -0.0631 (probelac -0.071, kojin -0.032,
-                        // d1e8ac8 -0.025 vs harassmanual +0.025, de6e +0.034): the
-                        // EMF references (Word's SCREEN layout, 96dpi) sit closer to
-                        // the per-line rounded stream than to the exact one the
-                        // 600dpi PDF export shows -- the two Word layouts differ,
-                        // and the corpus truth is the screen one.
-                        let s1319 = std::env::var("OXI_S1319").ok().as_deref() == Some("1");
+                        // Enabled together with natural cached-break validation.
+                        let s1319 = std::env::var("OXI_S1319_DISABLE").is_err();
                         let raw = if s1319 {
                             let pitch_f = pitch_tw_i as f32;
                             let cur_f = cur_tw as f32;
@@ -22675,7 +22801,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     };
                     cursor.set(target_tw as f32 / 20.0);
-                    if cell_aligned && std::env::var("OXI_S1319").ok().as_deref() == Some("1") {
+                    if cell_aligned && std::env::var("OXI_S1319_DISABLE").is_err() {
                         // S1319: the cell-aligned target is exact from the margin;
                         // hand the unrounded stream to the next mid-cell line.
                         let k_raw = offset / pitch_tw_i;
@@ -23474,6 +23600,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     doc_grid_no_type,
                     para_has_lrpb,
                     caps_size_split,
+                    false,
                 );
                 let Some(head) = broken.first() else { break };
                 if seg == 0 {
@@ -23749,6 +23876,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // fragment-flattening that S655 fixes for w:position). false everywhere else
         // → byte-identical (no font_size-boundary flush for normal paragraphs).
         caps_size_split: bool,
+        vertical: bool,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -24733,6 +24861,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 let piece_w = cw - piece_start_w;
                                 let piece_w_tw = pt_to_tw(piece_w);
                                 let limit = available_tw
+                                    + if std::env::var("OXI_SEGMENT_CREDIT_DISABLE").is_err() { s1346_credit_tw } else { 0 }
                                     + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) })
                                     + right_tab_slack_tw
                                     + s958_center_slack(center_tab_stop_tw, current_width_tw)
@@ -25078,7 +25207,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .map(|c| self.registry.char_width_pt_with_fallback(c, font_size, m_field) + cs_field)
                     .sum();
                 let cw_tw = pt_to_tw(cw);
-                if current_width_tw + cw_tw > available_tw
+                if (if vertical { current_capw_tw } else { current_width_tw }) + cw_tw > available_tw
                     && !current_line.fragments.is_empty()
                     && !para_all_whitespace
                 {
@@ -26478,15 +26607,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             (Some(ratio), Some(pitch))
                                 if ratio > 0.0
                                     && pitch > 0.0
-                                    && std::env::var("OXI_S1337S").ok().as_deref() == Some("1") =>
+                                    && (std::env::var("OXI_S1337S").ok().as_deref() == Some("1")
+                                        || std::env::var("OXI_GRID_SPACE_DISABLE").is_err()) =>
                             {
                                 let default_fs = pitch / ratio;
                                 let char_space_pt = pitch - default_fs;
-                                0.5 * if char_space_pt >= 0.0 {
+                                let base = if char_space_pt >= 0.0 {
                                     font_size * pitch / default_fs
                                 } else {
                                     font_size + char_space_pt
-                                }
+                                };
+                                0.5 * base + if std::env::var("OXI_GRID_SPACE_DISABLE").is_err() {
+                                    2.0 * style.character_spacing.unwrap_or(0.0)
+                                } else { 0.0 }
                             }
                             _ => font_size / 2.0,
                         };
@@ -27642,7 +27775,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         } else {
                             s1167_cap
                         };
-                        pt_to_tw(pre_yakumono_width - s1167_cap)
+                        let capacity = pt_to_tw(pre_yakumono_width - s1167_cap);
+                        if vertical && std::env::var("OXI_VERTICAL_PAIR_DISABLE").is_err() {
+                            capacity.min(pt_to_tw(char_width))
+                        } else {
+                            capacity
+                        }
                     } else {
                         0
                     };
@@ -27666,6 +27804,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // (linesAndChars, b837) and s590 (legacy justified) keep
                     // their calibrated behavior.
                     let s725_final_char = std::env::var("OXI_S725_DISABLE").is_err()
+                        && !vertical
                         && self.compat_mode >= 15
                         && self.compat_mode_explicit
                         && !lines_and_chars
@@ -34482,7 +34621,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // Mirrors the body-paragraph LRPB SOFT rule at mod.rs:1888.
             // de6e / 29dc6e outliers (4 each) had LRPB-at-cell-start markers
             // that the table layout previously ignored.
-            let row_has_lrpb_at_cell_start = row.cells.iter().any(|cell| {
+            let row_has_lrpb_at_cell_start = !(std::env::var("OXI_NATURAL_LRPB_DISABLE").is_err() && self.lrpb_count_distrust.get()) && row.cells.iter().any(|cell| {
                 cell.blocks.first().map_or(false, |b| match b {
                     Block::Paragraph(p) => p
                         .runs
@@ -46500,6 +46639,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     false,
                     false,
                     false,
+                    false,
                 );
                 s1312_ruby_lines = lines
                     .iter()
@@ -47316,6 +47456,9 @@ enum LineBreakType {
     PageBreak,   // \x0C
     ColumnBreak, // \x0B
 }
+
+#[cfg(test)]
+mod pagination_regression_tests;
 
 #[cfg(test)]
 mod tests {
