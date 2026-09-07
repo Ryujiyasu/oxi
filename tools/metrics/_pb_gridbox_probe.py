@@ -28,8 +28,13 @@ paras = []
 for i, size in enumerate(SIZES):
     rpr = ('<w:rPr><w:rFonts w:ascii="%s" w:eastAsia="%s" w:hAnsi="%s" w:hint="eastAsia"/>'
            '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (FONT, FONT, FONT, round(size * 2), round(size * 2)))
-    paras.append('<w:p><w:pPr></w:pPr><w:r>%s<w:t>%s%02d日本語の行</w:t></w:r></w:p>'
-                 % (rpr, chr(ord("A") + i), i))
+    # GB_RULE=exact/atLeast + GB_LINE=<pt> puts the arms on an explicit line rule,
+    # which is the OTHER placement regime (1ec1's body is line=360 exact).
+    rule = os.environ.get("GB_RULE")
+    line_pt = float(os.environ.get("GB_LINE", "18"))
+    ppr = ('<w:spacing w:line="%d" w:lineRule="%s"/>' % (round(line_pt * 20), rule)) if rule else ""
+    paras.append('<w:p><w:pPr>%s</w:pPr><w:r>%s<w:t>%s%02d日本語の行</w:t></w:r></w:p>'
+                 % (ppr, rpr, chr(ord("A") + i), i))
 out = os.path.join("pipeline_data", "_pb_gridbox_probe.docx")
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as o:
     for item in z.infolist():

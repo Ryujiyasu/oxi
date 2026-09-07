@@ -32363,7 +32363,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // S495/S504 rule bottom-aligns to `line - font_cell` floored at
                 // 0.5, which for a box SMALLER than the text saturates at the
                 // floor and loses the dependence on `line` entirely.
-                if std::env::var("OXI_S1261").ok().as_deref() == Some("1")
+                // S1356 (2026-09-07): S1261's law is right and its CONVERSION was
+                // one point short -- the renderer draws at `origin.y = y - 1.0`
+                // (the 2026-05-03 glyph-top shift), so the baseline is
+                // `y + text_y_off - 1.0 + win_ascent*fs` and the offset needs a
+                // `+ 1.0` to land on `0.8*L`. Re-derived independently with
+                // `_pb_gridbox_probe.py GB_RULE=exact` (L = 12/18/24/30pt x
+                // 9/12/16/20pt: 9.54/14.34/19.14/23.94pt below the line top,
+                // size-independent) before the S1261 note was found, which is why
+                // the numbers agree. With the term: 1ec1 +0.0120, exactclip
+                // +0.0052, 459f05 +0.0017, ed025 +0.0004 -- every document up.
+                // Without it (OXI_S1261=1, the historical form): 1ec1 -0.0023,
+                // 459f05 -0.0266, ed025 -0.0026, and only exactclip gains.
+                let s1356 = std::env::var("OXI_S1356_DISABLE").is_err();
+                if (s1356 || std::env::var("OXI_S1261").ok().as_deref() == Some("1"))
                     && !in_shape_context
                     && para_style.line_spacing_rule.as_deref() == Some("exact")
                 {
@@ -32387,7 +32400,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             }
                         }
                         if let Some((fs, win_ascent)) = fs_a {
-                            return 0.8 * lh - win_ascent * fs;
+                            let origin_term = if s1356 { 1.0 } else { 0.0 };
+                            return 0.8 * lh + origin_term - win_ascent * fs;
                         }
                     }
                 }
@@ -32514,6 +32528,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // row structure); 459f05/1ec1 are NOT. A global DY fails and the no-EXCEPTION
                     // rule forbids a tokumei-only carve-out. exact-bottom-align (S495/S504)
                     // stays as-is. See [[tokumei_form_family_ssim]].
+                    // S1356 (2026-09-07, OPT-IN `OXI_S1356=1`): on an EXACT
+                    // line Word puts the baseline `0.8 * line_height` below the
+                    // line top, WHATEVER the font size -- `_pb_gridbox_probe.py`
+                    // with GB_RULE=exact: at L = 12/18/24/30pt the first baseline
+                    // sits 9.54/14.34/19.14/23.94pt below the line top, and the
+                    // 9/12/16/20pt arms of each set share one baseline to the
+                    // twip. The current `line_height - cell` moves with the size
+                    // (it is size-INdependent only because `cell == fs` for CJK,
+                    // which cancels to `L - fs`), so it drifts from the law by
+                    // `0.1406*fs - 0.2*L + 1`.
+                    // Held opt-in: 1ec1's body would move 0.91pt DOWN by the law
+                    // while its rules already render 0.96pt ABOVE Word's, i.e.
+                    // that document's line BOXES sit ~1.9pt high -- a cumulative
+                    // y error the law would expose rather than fix. Measure the
+                    // box positions first.
+                    if std::env::var("OXI_DBG_TYO").is_ok() {
+                        eprintln!("[TYO-exact] fs={:.2} line_h={:.2} max_font_cell={:.2} -> {:.2} | Word 0.8*L would need {:.2}",
+                            max_font_size, line_height, max_font_cell,
+                            (line_height - max_font_cell).max(0.5),
+                            0.8 * line_height + 1.0 - 0.8594 * max_font_size);
+                    }
                     return (line_height - max_font_cell).max(0.5);
                 }
                 // Shape context: text at bottom of line box (extra space above).
@@ -38625,7 +38660,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         .chain(buf_chars.iter())
                                                         .any(|c| c.ch == char::from(9u8));
                                                 if s1174_yakucomp
-                                                    && kinsoku::cell_yaku_type_a(ch)
+                                                    && kinsoku::cell_yaku_can_hang(ch)
                                                     && !s1199_run_of_closers
                                                     && !s1213_tabbed_line
                                                     && s1205_hang_ok
@@ -44938,7 +44973,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .and_then(|v| v.parse::<f32>().ok())
                             .unwrap_or(1.0);
                     if s1174_yakucomp
-                        && kinsoku::cell_yaku_type_a(ch)
+                        && kinsoku::cell_yaku_can_hang(ch)
                         && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
                     {
                         false
