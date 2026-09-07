@@ -93,3 +93,7 @@ jobs:
           for suite in page grid formula bands save row-model; do
             node "$suite.test.mjs"
           done
+      - name: Word vertical text rendering and WASM orientation
+        run: |
+          node --test web/vertical-text.test.mjs
+          node web/vertical-layout.test.mjs pkg

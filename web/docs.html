@@ -386,6 +386,7 @@ input[type="file"]{display:none}
 <input type="file" id="fileIn" accept=".docx">
 
 <script type="module">
+import { renderVerticalText } from '../docs/vertical-text.js';
 // ---- i18n ----
 const I18N = {
   en: {
@@ -648,6 +649,7 @@ if (window.__TAURI__) {
         for (const el of pg.elements) {
           const kind = el.kind || '';
           if (kind === 'text') {
+            if (renderVerticalText(ctx, el)) continue;
             const fs = el.font_size || 11;
             const fam = el.font_family || 'Calibri, sans-serif';
             ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
@@ -728,6 +730,7 @@ async function preloadImages(elements) {
 
 // ---- Canvas rendering ----
 function renderText(ctx, elem) {
+  if (renderVerticalText(ctx, elem)) return;
   const fontSize = elem.font_size || 11;
   const family = elem.font_family || 'Calibri, sans-serif';
   const bold = elem.bold ? 'bold ' : '';

@@ -508,6 +508,7 @@ input[type="file"]{display:none}
 <input type="file" id="fileIn" accept=".docx">
 
 <script type="module">
+import { renderVerticalText } from './vertical-text.js';
 // ---- i18n ----
 const I18N = {
   en: {
@@ -664,6 +665,7 @@ function switchMode(m) {
 function renderPageToCanvas(ctx, pg) {
   for (const el of pg.elements) {
     if (el.kind === 'text') {
+      if (renderVerticalText(ctx, el)) continue;
       const fs = el.font_size || 11;
       const fam = el.font_family || 'sans-serif';
       ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;

@@ -16,6 +16,7 @@ rmSync(dist, { recursive: true, force: true });
 mkdirSync(web, { recursive: true });
 for (const name of [
   'docs.html',
+  'vertical-text.js',
   'oxidocs_wasm.js',
   'oxidocs_wasm_bg.wasm',
   'favicon.ico',

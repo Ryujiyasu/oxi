@@ -3,6 +3,7 @@
 <body>
 <div id="status">Initializing...</div>
 <script type="module">
+import { renderVerticalText } from '../docs/vertical-text.js';
 import init, { layout_document } from './oxidocs_wasm.js';
 
 const statusEl = document.getElementById('status');
@@ -62,6 +63,7 @@ async function main() {
     for (const el of pg.elements) {
       const kind = el.kind || '';
       if (kind === 'text') {
+        if (renderVerticalText(ctx, el)) continue;
         const fs = el.font_size || 11;
         const family = el.font_family || 'Calibri, sans-serif';
         const bold = el.bold ? 'bold ' : '';

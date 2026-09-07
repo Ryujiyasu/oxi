@@ -22,6 +22,7 @@
 <div id="pages"></div>
 
 <script type="module">
+import { renderVerticalText } from '../docs/vertical-text.js';
 import init, { layout_document } from './oxidocs_wasm.js';
 
 const DPI = 150;
@@ -101,6 +102,7 @@ async function renderPage(page, index) {
 }
 
 function renderText(ctx, elem) {
+  if (renderVerticalText(ctx, elem)) return;
   const fontSize = elem.font_size || 11;
   const family = elem.font_family || 'Calibri, sans-serif';
   const bold = elem.bold ? 'bold ' : '';
