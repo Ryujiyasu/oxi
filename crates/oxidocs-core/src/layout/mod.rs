@@ -24055,9 +24055,61 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let dbg_flush: bool = std::env::var("OXI_DBGFLUSH").ok().map_or(false, |needle| {
             !needle.is_empty() && fragments.iter().any(|&(t, _, _, _, _)| t.contains(&needle))
         });
+        // S1346 (2026-09-07): the at-default regime's elective budget for a LATIN
+        // word that overflows the floor (set per fragment next to s1318_at_default_regime,
+        // read inside flush_word).
+        let s1346_regime_credit: std::cell::Cell<i32> = std::cell::Cell::new(0);
         macro_rules! flush_word {
             ($style:expr) => {
                 if !word.is_empty() {
+                    // S1346: the regime's elective half-cell for a Latin word when
+                    // the line already holds a compressible mark.
+                    let s1346_credit_tw: i32 = {
+                        let c = s1346_regime_credit.get();
+                        let latin = c > 0 && word.chars().all(|ch| (ch as u32) < 0x2E80);
+                        // elective halves on the line: a lone mark gives one, a run of k
+                        // adjacent marks k - 1 (the first member of a pair is natural)
+                        let mut halves = 0i32;
+                        if latin {
+                            let mut run = 0i32;
+                            for ch in current_line.fragments.iter().flat_map(|f| f.text.chars()) {
+                                let m = matches!(ch, '、' | '。' | '，' | '．' | '・' | '：' | '；')
+                                    || kinsoku::is_yakumono_opening(ch)
+                                    || kinsoku::is_yakumono_closing(ch);
+                                if m {
+                                    run += 1;
+                                } else {
+                                    halves += if run == 1 { 1 } else { (run - 1).max(0) };
+                                    run = 0;
+                                }
+                            }
+                            halves += if run == 1 { 1 } else { (run - 1).max(0) };
+                            // S1346: a line-initial lone opening bracket offers no blank
+                            let first_two: Vec<char> = current_line.fragments.iter().flat_map(|f| f.text.chars()).take(2).collect();
+                            if first_two.first().map_or(false, |&c| kinsoku::is_yakumono_opening(c))
+                                && !first_two.get(1).map_or(false, |&ch| {
+                                    matches!(ch, '、' | '。' | '，' | '．' | '・' | '：' | '；')
+                                        || kinsoku::is_yakumono_opening(ch)
+                                        || kinsoku::is_yakumono_closing(ch)
+                                })
+                            {
+                                halves = (halves - 1).max(0);
+                            }
+                        }
+                        // S1346: after an opening bracket the word may spend every blank
+                        // (「…各島支庁（303」 1.5 from 、、（); otherwise half a cell
+                        let open_before = latin
+                            && current_line
+                                .fragments
+                                .last()
+                                .and_then(|f| f.text.chars().last())
+                                .map_or(false, kinsoku::is_yakumono_opening);
+                        if c > 0 {
+                            (if open_before { halves * c } else if halves > 0 { c } else { 0 }) + 2
+                        } else {
+                            0
+                        }
+                    };
                     if dbg_flush {
                         eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} curw_f={:.4} ww_f={:.4} avail={} spcred={} tabslack={} line_n={} just={} s799={}",
                             word, pt_to_tw(word_width), current_width_tw, current_width, word_width, available_tw,
@@ -24379,7 +24431,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // identical. Opt-out OXI_OPENWRAP_DISABLE.
                         if std::env::var("OXI_OPENWRAP_DISABLE").is_err()
                             && preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && current_line.fragments.len() > 1 && !para_all_whitespace {
                             let mut carried: Vec<LineFragment> = Vec::new();
                             while current_line.fragments.len() > 1 {
@@ -24406,7 +24458,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                         }
                         if !preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             wrap_and_seed!(ws);
                         }
@@ -24471,7 +24523,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // final ','/'.' (one segment) then wraps here despite the KEEP
                             // decision («revenues,»: decision KEEP, segment wrapped).
                             // Apply the same exclusive-boundary hang to the LAST segment.
-                            if current_width_tw + seg_w_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                            if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 + (if cc == total_chars && c14_active && c14_space_tw > 0
                                      && !s1026_final_token
                                      && std::env::var("OXI_S1028_HG_DISABLE").is_err()
@@ -24577,7 +24629,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
                     let mut hyphenated = false;
-                    if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         // S1128 (2026-08-15, SHIPPED default-ON, opt-out
                         // OXI_S1128_DISABLE): `<w:autoHyphenation/>`.
@@ -25442,9 +25494,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // Word refuses 「お、」 with （）。 on the line (2.0 cells of marks) and
             // 「事、」 with 、、, yet keeps 「た。」 by halving three brackets. The
             // faithful-slice probe `_pb_kinsokufinal_gen.py` sweeps it.
-            let s1318_v2 = std::env::var("OXI_S1318").ok().as_deref() == Some("1");
+            // S1346 (2026-09-07): default ON (was opt-in OXI_S1318=1), opt-out
+            // OXI_S1318_DISABLE. JA blind 100: PASS 93 = 93, mean 0.9952 -> 0.9953,
+            // the only two documents whose bytes move both improve (0ea3ec86
+            // 0.9957 -> 0.9983, 167853 0.9967 -> 0.9989); Phase 1 96/96; the five
+            // faithful-slice probes (unitcap 660 lines, unitcap18 631, unitcap5
+            // 436, trackedge 84, kinsokufinal 51) agree on every break.
+            let s1318_v2 = std::env::var("OXI_S1318_DISABLE").is_err()
+                && std::env::var("OXI_S1318").ok().as_deref() != Some("0");
             let s1318_at_default_regime = s568_legacy_oikomi
                 && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
+            // S1346: a Latin word overflowing the floor is rescued by the same
+            // elective half-cell as a CJK character (`_pb_unitcap_gen.py`: 19 kana
+            // + 、 + 「111」 keeps 111 with the 、 at 5.8; 「…セ）12」 「…）123」
+            // 「…の80」 and the tracked 「及び（エオ）…ナニ1」 likewise), so
+            // flush_word gets half the grid cell when the line holds a mark.
+            s1346_regime_credit.set(if s1318_v2 && s1318_at_default_regime {
+                match (grid_char_cw_ratio, grid_char_pitch) {
+                    (Some(ratio), Some(pitch)) if ratio > 0.0 && pitch > 0.0 => pt_to_tw(0.5 * pitch),
+                    _ => 0,
+                }
+            } else {
+                0
+            });
             let s1237_at_default_refuse = !s1318_v2
                 && std::env::var("OXI_S1237_DISABLE").is_err()
                 && s568_legacy_oikomi
@@ -26269,6 +26341,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // than the grid pitch, shifting downstream content (3a4f regression).
                 let fit_text_expand = style.fit_text.is_some()
                     && style.character_spacing.map_or(false, |cs| cs > 0.01);
+                // S1347: the run's w:w scale factor for the grid cell (see below).
+                let s1347_scale = if std::env::var("OXI_S1347_DISABLE").is_err()
+                    && style.fit_text.is_none()
+                {
+                    style.text_scale.map_or(1.0, |sc| if (sc - 100.0).abs() > 0.01 && sc > 0.0 { sc / 100.0 } else { 1.0 })
+                } else {
+                    1.0
+                };
                 let char_grid_extra = if fit_text_expand {
                     0.0
                 } else if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
@@ -26407,6 +26487,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // S1210: additive for BOTH signs (see above).
                                 font_size + char_space_pt
                             };
+                            // S1347 (2026-09-07, default ON, opt-out OXI_S1347_DISABLE): a
+                            // run's character scale (w:w) scales the grid CELL, not just
+                            // the glyph -- Word draws 0ea3ec86's 90% runs at 10.37 (pitch
+                            // 11.51) and 10.6 (11.76) so 「担当課　中部総合精神保健福祉セン
+                            // ター事務室」 (21 glyphs) fits its 20-cell column. The scaled
+                            // advance, from the faithful slice's 20-value sweep
+                            // (`_pb_unitcap_gen.py` u_w*_nat, glyph origins, 10.5pt body):
+                            //   a(s) = s * (pitch + fs) / 2 + (pitch - fs) / 2
+                            // exact (<= 0.01) at s = 1/2, 3/4, 1, 5/4, 3/2, 2 (6.00, 8.74,
+                            // 11.51, 14.24, 17.00, 22.50); the other values sit 0.03-0.085
+                            // BELOW it (80%: 9.24, 90%: 10.36, 110%: 12.52) -- a
+                            // quantisation still unexplained. pitch * s would miss 50% by
+                            // 0.25 and 200% by 0.5 per character. The floor stays the
+                            // section's 20 cells (the 23rd at 90% = 237.8 wraps; the 25th
+                            // at 80% = 231.0 wraps), digits take half the scaled advance,
+                            // a 、 at 90% gives 3.5 of elective compression. Open: a 12pt
+                            // run on the 10.5 grid reads 12.50 = fs + (pitch - fs)/2, not
+                            // Oxi's fs * pitch / default_fs = 13.15 (pre-existing, not
+                            // touched here). A fit_text scale keeps the whole cell (3a4f).
+                            let expected_w = if (s1347_scale - 1.0).abs() > 1e-6 {
+                                s1347_scale * (expected_w + font_size) / 2.0 + (expected_w - font_size) / 2.0
+                            } else {
+                                expected_w
+                            };
                             // S1340 (2026-09-06, default ON, opt-out OXI_S1340_DISABLE): a
                             // run's tracking survives the grid cell -- the padding to the
                             // cell used to erase it (char_width already carried cs, the
@@ -26462,7 +26566,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 eprintln!("[S1337] ch={:?} fs={:.2} pitch={:.3} ratio={:.4} default_fs={:.2} cs={:.3} cell={:.2} natural={:.2}",
                                     ch, font_size, pitch, ratio, default_fs, char_space_pt, cell, char_width);
                             }
-                            0.5 * cell - char_width
+                            // S1347: half the scaled cell (see the full-width branch)
+                            let cell = if (s1347_scale - 1.0).abs() > 1e-6 {
+                                s1347_scale * (cell + font_size) / 2.0 + (cell - font_size) / 2.0
+                            } else {
+                                cell
+                            };
+                            // S1350 (2026-09-07): ...and half the TRACKED cell -- 0ea3ec86
+                            // p9's -8 run draws 「(20」 at 5.40 / 5.28 / 5.40 (half of
+                            // 10.69), the faithful slice the same; 5.75 put the line's
+                            // 「る。」 on a second line and a page onto the rest.
+                            let s1350_track = if std::env::var("OXI_S1340_DISABLE").is_err()
+                                && std::env::var("OXI_S1350_DISABLE").is_err()
+                                && style.fit_text.is_none()
+                                && !style.ruby_spread
+                            {
+                                style.character_spacing.unwrap_or(0.0)
+                                    * if self.balance_single_byte_double_byte_width { 2.0 } else { 1.0 }
+                            } else {
+                                0.0
+                            };
+                            0.5 * (cell + s1350_track) - char_width
                         } else {
                             char_space_pt
                         }
@@ -27376,7 +27500,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // overflowing character is refused (plain width test).
                     // S1318 v3: the cell is the grid pitch (char_width carries it
                     // for a grid-pitched character) or the em without a grid.
-                    let s1318_half_cell_tw = pt_to_tw(0.5 * char_width.max(font_size));
+                    // S1346: half of the character's OWN cell -- a tracked (-8: 10.7) or
+                    // scaled (w:w 90: 10.34) line's mark gives half of that, not half
+                    // the section pitch (trackedge s-8_m22: む needs 5.4, the 、 has 5.35).
+                    let s1318_half_cell_tw = pt_to_tw(0.5 * if char_width >= 0.75 * font_size {
+                        char_width
+                    } else {
+                        grid_char_pitch.unwrap_or(font_size).max(font_size)
+                    });
                     // S1318 v4 (2026-09-06): the at-default regime's pull-in, with the
                     // line's OWN elective capacity (every mark half an em, a pair's
                     // second member structural = free) instead of the S475 per-type
@@ -27395,6 +27526,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     //     kana + 1-4 、 + 「字、」, （）+「字、」, （）。+「字、」 are all
                     //     refused (the document's 「…がある。な|お、」, 「…などの家|事、」).
                     let s1318_regime = s1318_v2 && s1318_at_default_regime;
+                    // S1346: the regime's fit tolerance -- the floor and the cumulative
+                    // half-cell increments come from the same pitch through different
+                    // roundings and can disagree by a twip.
+                    const S1318_TOL_TW: i32 = 2;
                     let s1318_is_mark = |c: char| {
                         matches!(c, '、' | '。' | '，' | '．' | '・' | '：' | '；')
                             || kinsoku::is_yakumono_opening(c)
@@ -27447,15 +27582,39 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         } else if run >= 2 {
                             pairs += run - 1;
                         }
-                        (pairs as i32 * pt_to_tw(0.5 * char_width.max(font_size)), solo)
+                        // S1346: a LINE-INITIAL opening bracket offers no blank -- Word
+                        // draws 「（303以下は…であって行」 with the （ at full width and
+                        // wraps the 末 that needed 0.5 (the line's only mark).
+                        let first_two: Vec<char> = current_line
+                            .fragments
+                            .iter()
+                            .flat_map(|f| f.text.chars())
+                            .chain(word.chars())
+                            .take(2)
+                            .collect();
+                        if first_two.first().map_or(false, |&c| kinsoku::is_yakumono_opening(c))
+                            && !first_two.get(1).map_or(false, |&c| s1318_is_mark(c))
+                        {
+                            if solo > 0 {
+                                solo -= 1;
+                            }
+                        }
+                        // S1346 (2026-09-07, `_pb_unitcap_gen.py` 120 arms): a pair's
+                        // first member is halved UNCONDITIONALLY (a 19-cell line still
+                        // draws its ） at 5.8) -- that is natural width, which Oxi's
+                        // pre-compression already carries by halving the second
+                        // member -- and everything else (a standalone mark, the pair's
+                        // other half) is ONE elective budget of half a cell per line,
+                        // inclusive: 0.5 exactly is granted from any single mark
+                        // (）（・、」。), 0.46 from one mark of a tracked line, while 0.64
+                        // with 2 or 3 standalone marks and 1.0 with 2 are refused. The
+                        // v6 "strictly less than 0.5" came from arms whose digit sat
+                        // right before the overflowing character (see s1318_prev_latin).
+                        (0, solo + pairs)
                     } else {
                         (0, 0)
                     };
-                    let s1318_cap_tw: i32 = if s1318_n_solo > 0 {
-                        pt_to_tw(0.5 * char_width.max(font_size)) - 1
-                    } else {
-                        0
-                    };
+                    let s1318_cap_tw: i32 = if s1318_n_solo > 0 { s1318_half_cell_tw } else { 0 };
                     let s1318_one_cell_tw = pt_to_tw(char_width.max(font_size));
                     // the regime measures against the TRUE column edge, not the
                     // S1211C whole-cell floor (see `s1318_floor_slack`)
@@ -27471,23 +27630,95 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s1318_natural_over_tw = current_width_tw + s1317_cw_tw - s1318_avail_tw - s1318_pair_credit_tw;
                     // （：；） are line-final marks too: 0ea3ec86 p11 「…福祉手当（都・市町村：」
                     // holds 21 with the 「：」 at the end where Oxi stopped at 「市町」.
+                    // S1346: ・ is a line-final mark too -- 0ea3ec86 「どに入院・入所中の
+                    // 児童・生徒のために病院・」 holds 21 with the ・ hanging (the normal
+                    // branch refused it and 追い出し took 院 down with it).
                     let s1318_next_mark = chars_vec.get(char_index + 1).map_or(false, |&nc| {
-                        matches!(nc, '、' | '。' | '，' | '．' | '：' | '；') || kinsoku::is_yakumono_closing(nc)
+                        matches!(nc, '、' | '。' | '，' | '．' | '：' | '；' | '・') || kinsoku::is_yakumono_closing(nc)
                     });
-                    let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．' | '：' | '；')
+                    let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．' | '：' | '；' | '・')
                         || kinsoku::is_yakumono_closing(ch);
                     let s1318_prev_open = char_index > 0
                         && chars_vec
                             .get(char_index - 1)
                             .map_or(false, |&pc| kinsoku::is_yakumono_opening(pc));
-                    let (s1318_force_fit, s1318_refuse_here) = if !s1318_regime || s1318_prev_open {
+                    // S1346: no elective rescue for a CJK character that directly
+                    // follows a Latin-script element (digit, letter, ASCII space):
+                    // 「…セ1|字」 「…セ）1|字」 「…）a|字」 「…）1 |字」 all wrap 字 with a
+                    // standalone ） on the line (autoSpaceDE off changes nothing),
+                    // while 「…1ル字」 「…）１字」 (full-width １) keep it, and a Latin
+                    // WORD overflowing after CJK (「…）12」 「…）123」 「…の80」) is
+                    // rescued. A pair's natural half still counts (「…（…）」…1字」 keeps 字).
+                    let s1318_zw = |c: char| matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}');
+                    let s1318_prev_latin = {
+                        let pc = chars_vec[..char_index]
+                            .iter()
+                            .rev()
+                            .copied()
+                            .chain(current_line.fragments.iter().rev().flat_map(|f| f.text.chars().rev()))
+                            .find(|c| !s1318_zw(*c));
+                        pc.map_or(false, |c| (c as u32) < 0x2E80 && !c.is_control() && !s1318_is_mark(c))
+                    };
+                    // S1346: a ZERO WIDTH JOINER after this character glues the next one
+                    // to it (0ea3ec86 「…福祉ホ‍ーム」: Word sends ホ‍ー down together; the
+                    // faithful slice the same, and without the joiner ホ stays and ー
+                    // opens the next line -- ー and small kana are not line-start
+                    // prohibited here).
+                    let s1318_next_joined: Option<char> = {
+                        let mut it = chars_vec[char_index + 1..]
+                            .iter()
+                            .copied()
+                            .chain(fragments.get(frag_outer_idx + 1).map(|f| f.0.chars()).into_iter().flatten())
+                            .chain(fragments.get(frag_outer_idx + 2).map(|f| f.0.chars()).into_iter().flatten());
+                        match it.next() {
+                            Some('\u{200D}') => it.find(|c| !s1318_zw(*c)),
+                            _ => None,
+                        }
+                    };
+                    let s1318_ch_cjk = (ch as u32) >= 0x2E80;
+                    let (s1318_force_fit, s1318_refuse_here) = if !s1318_regime {
                         (false, false)
+                    } else if s1318_prev_open {
+                        // S1346 (N_/Q_ arms): after an OPENING BRACKET the overflowing
+                        // element may spend EVERY blank on the line, the bracket's own
+                        // included (each half a cell): 0ea3ec86 p13 「…各島支庁（303」
+                        // keeps 303 by halving 、 、 （ (1.5), 「…（3033」 takes 2.0 from
+                        // 、、、（, while 、（ alone (1.0) sends 「（303」 down; 「（字」
+                        // needing 1.0 is kept with 、、（ and goes down with （ alone.
+                        let budget = s1318_n_solo as i32 * s1318_half_cell_tw;
+                        let fit = s1318_natural_over_tw <= budget.max(S1318_TOL_TW);
+                        (fit, !fit)
                     } else if s1318_ch_mark {
                         // the mark itself: inside at its natural advance (no charSpace
                         // after the line's last character) within the capacity, else
-                        // the S601 hang decides (natural fit of the text before it)
+                        // the S601 hang decides (natural fit of the text before it).
+                        // S1346 (d_ arms, both section pitches): a LINE-FINAL mark may
+                        // spend up to ONE cell of elective compression, each mark's
+                        // blank being half a cell (・ = two quarters): 「・・…、」 (21)
+                        // keeps the 、 inside at 0.25 + 0.25, 「、、…・」 and 「・・…・」
+                        // (21, p30 「…病院・」) give the final ・ 0.74 from the two mid
+                        // marks. ・ never hangs whole -- 20 kana + ・ and 19.5 + ・ send
+                        // the character before it down too (p4 「…平成27年１|月・」 with
+                        // a 、 on the line) -- but its trailing quarter may overhang
+                        // (the 21-char lines end 0.26 past the floor).
+                        let s1318_cap_final_tw = (s1318_n_solo as i32 * s1318_half_cell_tw).min(s1318_one_cell_tw);
                         let over = current_width_tw + pt_to_tw(font_size) - s1318_avail_tw - s1318_pair_credit_tw;
-                        (over <= s1318_cap_tw, false)
+                        if ch == '・' {
+                            let fit = over - s1318_half_cell_tw / 2 <= s1318_cap_final_tw;
+                            (fit, !fit)
+                        } else {
+                            (over <= s1318_cap_final_tw, false)
+                        }
+                    } else if s1318_next_joined.is_some() {
+                        let over = s1318_natural_over_tw + s1318_one_cell_tw;
+                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW);
+                        (fit, !fit)
+                    } else if s1318_prev_latin && s1318_ch_cjk {
+                        // a natural fit needs no rescue; 2 twips absorb the cumulative
+                        // rounding of half cells (3194 pitch: 17 kana + ） + ab + 字 =
+                        // 4713 against a 4712 floor, Word keeps 字)
+                        let fit = s1318_natural_over_tw <= S1318_TOL_TW;
+                        (fit, !fit)
                     } else if s1318_next_mark {
                         // v5: X before a mark is a normal character against the floor
                         // (19 kana + 1 、 + 「字、」 keeps 字 with 0.5 of compression and
@@ -27495,13 +27726,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // p4 「…（障害者総合支援法）」とされ|た。」 keeps た: 3 brackets
                         // minus the pair's free half = 0.5); the mark then hangs.
                         let over = s1318_natural_over_tw;
-                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw);
+                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW);
                         (fit, !fit)
                     } else {
                         let over = s1318_natural_over_tw;
-                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw);
+                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW);
                         (fit, !fit)
                     };
+                    if s1318_regime && std::env::var("OXI_DBG1318").is_ok() {
+                        eprintln!("[S1318] ch={:?} idx={} cur_tw={} cw_tw={} avail_tw={} over_tw={} cap_tw={} half_tw={} n_elect={} prev_latin={} next_mark={} ch_mark={} force_fit={} refuse={} s475={} line={:?}",
+                            ch, char_index, current_width_tw, s1317_cw_tw, s1318_avail_tw, s1318_natural_over_tw, s1318_cap_tw, s1318_half_cell_tw, s1318_n_solo, s1318_prev_latin, s1318_next_mark, s1318_ch_mark, s1318_force_fit, s1318_refuse_here, s475_break,
+                            current_line.fragments.iter().map(|f| f.text.as_str()).collect::<String>());
+                    }
+                    let s1318_force_wrap = s1318_regime && s1318_next_joined.is_some() && s1318_refuse_here;
                     let s475_break = s475_break && !s1318_refuse_here;
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
@@ -27536,7 +27773,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 || !self.compat_mode_explicit
                                 || is_justified
                                 || std::env::var("OXI_S1334_DISABLE").is_ok())
+                            // S1346: under the regime a refused ・ is 追い出し, not hung
+                            && !(s1318_regime && ch == '・' && s1318_refuse_here)
+                            // S1346: under the regime a closing bracket hangs like 、
+                            // (19 kana + 「字」」 keeps 字 with the 」 past the floor)
                             && (matches!(ch, '。' | '、' | '，' | '．' | '・')
+                                || (s1318_regime && kinsoku::is_yakumono_closing(ch))
                                 // S1220 (2026-08-25, opt-out `OXI_S1220_DISABLE`): the unified
                                 // break-billing law from the regime probes
                                 // (_pb_wrapbill/_pb_line2bill, 4 conditions):
@@ -27628,7 +27870,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     };
                     // S1318 v4: a pull-in the regime granted is placed whatever the
                     // S475 per-type caps say.
-                    let overflow_tw = if s1318_force_fit { overflow_tw.min(-1) } else { overflow_tw };
+                    let overflow_tw = if s1318_force_fit {
+                        overflow_tw.min(-1)
+                    } else if s1318_force_wrap {
+                        overflow_tw.max(1)
+                    } else {
+                        overflow_tw
+                    };
                     if std::env::var("OXI_DBG721").is_ok()
                         && text.contains("三六協定で定める時間数")
                     {

@@ -4777,6 +4777,27 @@ fn parse_paragraph_properties(
                         }
                         // hangingChars overrides firstLineChars (negative = hanging)
                         if let Some(hc) = hanging_chars {
+                            // S1349 (2026-09-07, opt-in OXI_S1349=1, see below):
+                            // with hangingChars the FIRST line sits at leftChars (0 when
+                            // absent) and the continuation at leftChars + hangingChars
+                            // cells; the twips are ignored. Faithful-slice arms
+                            // (`_pb_unitcap_gen.py` I_h*): hangingChars=200 hanging=471
+                            // -> continuation 23.05 (2 x 11.52), hanging=471 alone ->
+                            // 23.53; left=600 + hangingChars=200 -> 23.06; leftChars=300
+                            // + hangingChars=200 -> first 34.58, continuation 57.50;
+                            // leftChars=200 -> 23.05 / 45.97. a1d6e4ef's 9pt cell reads
+                            // the same: (0.5 + 2.03) x 9.77 = 24.7 (the twip was 24.45).
+                            // 0ea3ec86 p19 「（グループホーム…地域活動」 then holds 18.
+                            // HELD opt-in OXI_S1349=1 (2026-09-07): Phase 1 drops 96 -> 92
+                            // with it on (3a4f9fbe 0.73, tokyoshugyo 0.14, d6fd9a51 0.97,
+                            // model), all back to 1.0 with it off -- the slice's law does
+                            // not carry to those documents' hangingChars paragraphs
+                            // (the S1214 note recorded the same three losses). Open.
+                            if std::env::var("OXI_S1349").ok().as_deref() == Some("1") {
+                                style.indent_left = None;
+                                style.indent_left_chars = Some(left_chars.unwrap_or(0.0) + hc);
+                                style.indent_first_line = None;
+                            }
                             style.indent_first_line_chars = Some(-hc);
                         } else if let Some(fc) = first_line_chars {
                             style.indent_first_line_chars = Some(fc);
