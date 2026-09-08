@@ -6357,6 +6357,7 @@ cells={} pitch={:.2} text={:?}",
         // it was reserved (the anchor paragraph now sits BELOW it, so resolving
         // from the paragraph's y would double-shift) — the S734 contract.
         let mut s1089_flow_pos: std::collections::HashMap<usize, (usize, f32)> = Default::default();
+        let mut shared_float_anchors: std::collections::HashMap<usize, (usize, f32)> = Default::default();
         // S758 (2026-07-06, default ON, opt-out OXI_S758_DISABLE): wrapSquare
         // floating-IMAGE side-wrap. Word narrows every LINE whose y-range
         // intersects the float's band to (float_left − distL) [right-side
@@ -6810,6 +6811,16 @@ cells={} pitch={:.2} text={:?}",
                 v
             };
             if !s758_srcs.is_empty() {
+                // Co-anchored floats share the origin from before a
+                // top-and-bottom float reserved space in the text flow.
+                let shared_origin = if std::env::var("OXI_SHARED_FLOAT_ANCHOR_DISABLE").is_err() {
+                    [s734_flow_pos.get(&block_idx), s1089_flow_pos.get(&block_idx)]
+                        .into_iter().flatten()
+                        .filter(|(pg, _)| *pg == current_page_idx)
+                        .map(|(_, y)| *y).reduce(f32::min)
+                } else { None };
+                let mut s758_anchor_y = shared_origin.unwrap_or(cursor.cursor_y);
+                let shared_advance = cursor.cursor_y - s758_anchor_y;
                 // Word pushes the float AND its anchor paragraph to the next
                 // page when the band would cross the page bottom (a wrapSquare
                 // float never splits): probeximgfloat float#2 anchored at
@@ -6830,15 +6841,15 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 s758_content_bottom
                             };
-                            let nat_bottom = cursor.cursor_y + py.max(0.0) + h;
-                            nat_bottom > fit_bottom && (fit_bottom - h) < cursor.cursor_y - 0.1
+                            let nat_bottom = s758_anchor_y + py.max(0.0) + h;
+                            nat_bottom > fit_bottom && (fit_bottom - h) < s758_anchor_y - 0.1
                         });
                 let s758_max_bottom = s758_srcs
                     .iter()
-                    .map(|(py, _w, h, _a, _x, _dl, _dr, _)| cursor.cursor_y + py.max(0.0) + h)
+                    .map(|(py, _w, h, _a, _x, _dl, _dr, _)| s758_anchor_y + py.max(0.0) + h)
                     .fold(f32::NEG_INFINITY, f32::max);
                 if s758_needs_push
-                    && s758_max_bottom - cursor.cursor_y <= content_height
+                    && s758_max_bottom - s758_anchor_y <= content_height
                     && !elements.is_empty()
                 {
                     dbg_page_push(pages.len(), 0);
@@ -6854,6 +6865,15 @@ cells={} pitch={:.2} text={:?}",
                     cursor.set(start_y);
                     lm2_cells = 0;
                     current_page_idx += 1;
+                    s758_anchor_y = start_y;
+                    if shared_origin.is_some() {
+                        cursor.advance(shared_advance);
+                        for positions in [&mut s734_flow_pos, &mut s1089_flow_pos] {
+                            if let Some(value) = positions.get_mut(&block_idx) {
+                                *value = (current_page_idx, start_y);
+                            }
+                        }
+                    }
                     footnote_reserve_current = 0.0;
                     footnote_ids_current_page.clear();
                     s900_fold(
@@ -6863,8 +6883,11 @@ cells={} pitch={:.2} text={:?}",
                         current_page_idx,
                     );
                 }
+                if shared_origin.is_some() {
+                    shared_float_anchors.insert(block_idx, (current_page_idx, s758_anchor_y));
+                }
                 for (py, w, h, h_align, px, dl, dr, physical) in &s758_srcs {
-                    let nat_top = cursor.cursor_y + py.max(0.0);
+                    let nat_top = s758_anchor_y + py.max(0.0);
                     // S981: a physical (behindDoc Tight) float may extend into the
                     // bottom margin, so clamp against the physical page bottom.
                     let cb = if *physical {
@@ -6875,7 +6898,7 @@ cells={} pitch={:.2} text={:?}",
                     // derived rule branch (a): clamp an overflowing float up
                     // against the content bottom (never above the anchor).
                     let top = if nat_top + h > cb {
-                        (cb - h).max(cursor.cursor_y)
+                        (cb - h).max(s758_anchor_y)
                     } else {
                         nat_top
                     };
@@ -7339,7 +7362,10 @@ cells={} pitch={:.2} text={:?}",
                 elements.is_empty() && cursor.cursor_y <= start_y + 0.01;
             // S469: record the NATURAL (pre-wrap) Y for anchor resolution by
             // subtracting any accumulated wrap-below advance on this page.
-            block_y_positions.push(cursor.cursor_y - anchor_flow_offset);
+            let natural_anchor_y = shared_float_anchors.get(&block_idx)
+                .filter(|(pg, _)| *pg == current_page_idx)
+                .map_or(cursor.cursor_y, |(_, y)| *y);
+            block_y_positions.push(natural_anchor_y - anchor_flow_offset);
             block_col_x.push(start_x); // S1222: the current column's left edge
             block_page_indices.push(current_page_idx);
             block_start_page_indices.push(current_page_idx);

@@ -280,3 +280,36 @@ fn table_continuations_use_destination_header_geometry() {
         }
     }
 }
+
+#[test]
+fn coanchored_floats_share_origin_and_move_to_next_page_together() {
+    // Word-exported page memberships for two wrap modes on one paragraph.
+    let cases: &[(&[u8], usize, [usize; 5])] = &[
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y200_tb120_sq220.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y200_tb120_sq80.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y200_tb200_sq220.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y200_tb200_sq80.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y300_tb120_sq220.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y300_tb120_sq80.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y300_tb200_sq220.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y300_tb200_sq80.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y400_tb120_sq220.docx"), 2, [1, 2, 2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y400_tb120_sq80.docx"), 1, [1, 1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y400_tb200_sq220.docx"), 2, [1, 2, 2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/shared_float_anchor/y400_tb200_sq80.docx"), 2, [1, 2, 2, 2, 2]),
+    ];
+    for (case, (bytes, page_count, expected_pages)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), *page_count, "case {case}");
+        for (marker, expected) in ["FILL", "ANCHOR", "AFTER", "TOPBOX", "SIDEBOX"]
+            .iter().zip(expected_pages)
+        {
+            let actual: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, p)| {
+                p.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                    if text == marker)).then_some(i + 1)
+            }).collect();
+            assert_eq!(actual, vec![*expected], "case {case}, {marker}");
+        }
+    }
+}
