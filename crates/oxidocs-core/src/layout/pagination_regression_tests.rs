@@ -1064,3 +1064,34 @@ fn split_header_extent_is_independent_of_saved_page_breaks() {
         }
     }
 }
+
+#[test]
+fn keep_lines_fits_the_last_line_before_trailing_spacing() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/keep_lines_page_end");
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in expected.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), case["pages"].as_u64().unwrap() as usize, "{name}");
+        let labels = case["labels"].as_object().unwrap();
+        let mut actual = std::collections::HashMap::new();
+        for (page_idx, page) in layout.pages.iter().enumerate() {
+            for element in &page.elements {
+                if let LayoutContent::Text { text, .. } = &element.content {
+                    if labels.contains_key(text.trim()) {
+                        actual.insert(text.trim().to_owned(), page_idx + 1);
+                    }
+                }
+            }
+        }
+        for (label, position) in labels {
+            assert_eq!(actual.get(label).copied(), position["page"].as_u64().map(|n| n as usize), "{name}: {label}");
+        }
+    }
+}

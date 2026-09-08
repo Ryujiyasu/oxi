@@ -1,0 +1,258 @@
+[
+  {
+    "name": "lines1_fill122_after0_keep0",
+    "pages": 1,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "FOLLOW": {
+        "page": 1,
+        "y": 163.20335388183594
+      }
+    }
+  },
+  {
+    "name": "lines1_fill122_after0_keep1",
+    "pages": 1,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "FOLLOW": {
+        "page": 1,
+        "y": 163.20335388183594
+      }
+    }
+  },
+  {
+    "name": "lines1_fill122_after24_keep0",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines1_fill122_after24_keep1",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines1_fill140_after0_keep0",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 166.5633544921875
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines1_fill140_after0_keep1",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 166.5633544921875
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines1_fill140_after24_keep0",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 166.5633544921875
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines1_fill140_after24_keep1",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 166.5633544921875
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines2_fill122_after0_keep0",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "TARGET1": {
+        "page": 1,
+        "y": 163.20335388183594
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines2_fill122_after0_keep1",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "TARGET1": {
+        "page": 1,
+        "y": 163.20335388183594
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines2_fill122_after24_keep0",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "TARGET1": {
+        "page": 1,
+        "y": 163.20335388183594
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines2_fill122_after24_keep1",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 148.5393524169922
+      },
+      "TARGET1": {
+        "page": 1,
+        "y": 163.20335388183594
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 20.543350219726562
+      }
+    }
+  },
+  {
+    "name": "lines2_fill140_after0_keep0",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 166.5633544921875
+      },
+      "TARGET1": {
+        "page": 2,
+        "y": 20.543350219726562
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 35.0633544921875
+      }
+    }
+  },
+  {
+    "name": "lines2_fill140_after0_keep1",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 2,
+        "y": 20.543350219726562
+      },
+      "TARGET1": {
+        "page": 2,
+        "y": 35.0633544921875
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 49.61335754394531
+      }
+    }
+  },
+  {
+    "name": "lines2_fill140_after24_keep0",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 1,
+        "y": 166.5633544921875
+      },
+      "TARGET1": {
+        "page": 2,
+        "y": 20.543350219726562
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 59.093353271484375
+      }
+    }
+  },
+  {
+    "name": "lines2_fill140_after24_keep1",
+    "pages": 2,
+    "labels": {
+      "TARGET0": {
+        "page": 2,
+        "y": 20.543350219726562
+      },
+      "TARGET1": {
+        "page": 2,
+        "y": 35.0633544921875
+      },
+      "FOLLOW": {
+        "page": 2,
+        "y": 73.61335754394531
+      }
+    }
+  }
+]

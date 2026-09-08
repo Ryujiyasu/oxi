@@ -8154,7 +8154,50 @@ cells={} pitch={:.2} text={:?}",
                             None,
                         );
                         let remaining = (start_y + effective_content_h) - cursor.cursor_y;
-                        if est_h > remaining && est_h <= effective_content_h {
+                        let estimated_overflow = est_h > remaining && est_h <= effective_content_h;
+                        // An estimate includes paragraph spacing and complete line
+                        // advances. Confirm overflow with the natural line breaker:
+                        // trailing spacing and the last line's leading may extend
+                        // below the page without moving the paragraph's text.
+                        let actual_overflow = if estimated_overflow {
+                            let mut trial_cursor = LayoutCursor {
+                                cursor_y: cursor.cursor_y,
+                                visual_y: cursor.visual_y,
+                                lm2_ideal_y: cursor.lm2_ideal_y,
+                            };
+                            let mut trial_pages: Vec<LayoutPage> = (0..pages.len())
+                                .map(|_| LayoutPage { width: page.size.width, height: page.size.height, elements: Vec::new() })
+                                .collect();
+                            let mut trial_elements = elements.clone();
+                            let mut trial_cells = lm2_cells;
+                            let mut trial_mult = mult_cumul_raw;
+                            let dc = pending_dropcap.unwrap_or(0.0);
+                            let (trial_band, trial_two_seg) = self.body_paragraph_wrap_bands(
+                                para, page, &s758_bands, current_page_idx,
+                                cursor.cursor_y, start_x, content_width,
+                            );
+                            let (_, _, final_column) = self.layout_paragraph(
+                                para, start_x + dc, &mut trial_cursor, content_width - dc,
+                                effective_content_h, start_y, page,
+                                &mut trial_pages, &mut trial_elements, grid_pitch,
+                                prev_para_style_id.as_deref(), prev_contextual_spacing,
+                                prev_autospacing_numid.as_deref(), prev_borders.as_ref(),
+                                prev_keep_next, false, prev_space_after, Some(block_idx),
+                                Some(&mut trial_cells), Some(&mut trial_mult),
+                                Self::body_adjacent_to_empty_run(para, page, block_idx),
+                                matches!(page.blocks.get(block_idx + 1), Some(Block::Table(_))),
+                                None, delta_if_current, &para_fn_heights_map,
+                                num_columns, current_column, &col_x_positions, col_band_top,
+                                false, footer_tight, s755_geom.as_ref(), trial_band, trial_two_seg,
+                                (footnote_reserve_current + delta_if_current) > 0.0,
+                                footnote_reserve_current, None,
+                                page.blocks.get(block_idx + 1).and_then(|b| match b {
+                                    Block::Paragraph(p) => p.style.borders.as_ref(), _ => None,
+                                }), false,
+                            );
+                            trial_pages.len() > pages.len() || final_column != current_column
+                        } else { false };
+                        if actual_overflow {
                             if num_columns > 1 && current_column + 1 < num_columns {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
@@ -9567,130 +9610,10 @@ cells={} pitch={:.2} text={:?}",
                     // column the float + its 9pt distL eat; requires a real
                     // horizontal overlap so decorative off-column floats stay
                     // inert.
-                    let s758_para_band: Option<(f32, f32, f32)> = s758_bands
-                        .iter()
-                        .filter(|(pg, top, bot, bx0, bx1)| {
-                            *pg == current_page_idx
-                                && cursor.cursor_y >= *top - 0.5
-                                && cursor.cursor_y < *bot - 0.5
-                                && *bx0 < start_x + content_width - 6.0
-                                && *bx1 > start_x + 6.0
-                        })
-                        .map(|(_, _, bot, bx0, bx1)| {
-                            // wrapText SIDE: text flows in the free segment with
-                            // more room for THIS PARAGRAPH'S OWN COLUMN
-                            // [margin+ind_l, content_right−ind_r] (S772b — Word
-                            // measures indents from the margin, so a paragraph
-                            // whose indents already clear the float keeps its
-                            // indent wrap; hmrc's "If Yes, tick this box" has
-                            // ind right=5831tw=291.55pt placing its column LEFT
-                            // of its checkbox float — the raw wider-free-segment
-                            // rule shifted it right of the box, Word wraps it at
-                            // the box's left edge). Right side wider → shift to
-                            // the band's right edge (probeqtbleft Word truth:
-                            // lines beside the box span [box_right+distR,
-                            // content_right], x0=221.93 = 70.94+142+9.0); left
-                            // side wider → width reduction so lines end at the
-                            // band's left edge. Indent-cleared bands compute
-                            // red=0 and are dropped by the find() below.
-                            let content_right = start_x + content_width;
-                            let s772b = std::env::var("OXI_S772_DISABLE").is_err();
-                            let (para_ind_l, para_ind_r) = if s772b {
-                                (
-                                    para.style
-                                        .indent_left
-                                        .or_else(|| {
-                                            self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio)
-                                        })
-                                        .unwrap_or(0.0)
-                                        .max(0.0),
-                                    para.style
-                                        .indent_right
-                                        .or_else(|| {
-                                            para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio))
-                                        })
-                                        .unwrap_or(0.0)
-                                        .max(0.0),
-                                )
-                            } else {
-                                (0.0, 0.0) // legacy raw-gap semantics for A/B
-                            };
-                            let pl = start_x + para_ind_l;
-                            let pr = content_right - para_ind_r;
-                            let left_room = (bx0 - pl).max(0.0);
-                            let right_room = (pr - bx1).max(0.0);
-                            if s772b && left_room.max(right_room) < 30.0 {
-                                // Degenerate: the paragraph's own column fits
-                                // NEITHER free segment (ed025c's 大口株主の名簿
-                                // heading: indent 47.25 > the 33.75pt left strip,
-                                // and the float's right edge overruns the column
-                                // → both rooms 0). Word moves such lines BELOW
-                                // the float; v1 keeps the pre-band behavior
-                                // (full-width flow) rather than a 30pt-floor
-                                // strip explosion. red=0 → dropped by find().
-                                (*bot, 0.0, 0.0)
-                            } else if right_room > left_room {
-                                // shift only the shortfall beyond the indent
-                                let shift = ((bx1 - start_x) - para_ind_l).max(0.0);
-                                (*bot, shift, shift)
-                            } else {
-                                // reduce only the shortfall beyond the right indent
-                                let red = ((content_right - bx0).max(0.0) - para_ind_r).max(0.0);
-                                (*bot, red, 0.0)
-                            }
-                        })
-                        .find(|(_, red, _)| *red > 6.0);
-                    // S-TWOSEG: the same band, asked a different question -- does
-                    // this paragraph have usable room on BOTH sides of the float?
-                    // If it does, the single-segment answer above is the wrong
-                    // shape (it would put the whole row in one strip and need
-                    // nearly twice Word's rows), so the geometry of both strips is
-                    // carried instead and the row is broken through the pair.
-                    let s758_two_seg: Option<(f32, f32, f32, f32)> = if std::env::var(
-                        "OXI_TWOSEG_DISABLE",
-                    )
-                    .is_err()
-                    {
-                        s758_bands
-                            .iter()
-                            .filter(|(pg, top, bot, bx0, bx1)| {
-                                *pg == current_page_idx
-                                    && cursor.cursor_y >= *top - 0.5
-                                    && cursor.cursor_y < *bot - 0.5
-                                    && *bx0 < start_x + content_width - 6.0
-                                    && *bx1 > start_x + 6.0
-                            })
-                            .find_map(|(_, _, _, bx0, bx1)| {
-                                let content_right = start_x + content_width;
-                                let ind_l = para
-                                    .style
-                                    .indent_left
-                                    .or_else(|| {
-                                        self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio)
-                                    })
-                                    .unwrap_or(0.0)
-                                    .max(0.0);
-                                let ind_r = para
-                                    .style
-                                    .indent_right
-                                    .or_else(|| {
-                                        para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio))
-                                    })
-                                    .unwrap_or(0.0)
-                                    .max(0.0);
-                                let pl = start_x + ind_l;
-                                let pr = content_right - ind_r;
-                                let left = bx0 - pl;
-                                let right = pr - bx1;
-                                // The same 30pt floor the single-segment arm uses to
-                                // call a strip unusable. Below it Word does not put
-                                // text there, so the pair is not a pair.
-                                (left >= 30.0 && right >= 30.0)
-                                    .then_some((pl, left, *bx1, right))
-                            })
-                    } else {
-                        None
-                    };
+                    let (s758_para_band, s758_two_seg) = self.body_paragraph_wrap_bands(
+                        para, page, &s758_bands, current_page_idx,
+                        cursor.cursor_y, start_x, content_width,
+                    );
                     if std::env::var("OXI_DBG773").is_ok() {
                         for s in &para.shapes {
                             eprintln!(
@@ -9738,20 +9661,7 @@ cells={} pitch={:.2} text={:?}",
                     // far side of the empty run is a content paragraph (NOT a Table).
                     // 683f p1 exception: empty run after a table (P11 table → P12/P13 empty
                     // → P14 content) — Word does NOT +0.5 here.
-                    let is_empty_p = |blk: &Block| matches!(blk, Block::Paragraph(p) if p.runs.iter().all(|r| r.text.is_empty()));
-                    let is_content_para = |blk: &Block| matches!(blk, Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.is_empty()));
-                    let this_empty = para.runs.iter().all(|r| r.text.is_empty());
-                    // prev_2_empty: the 2 blocks immediately before are empty AND block_idx-3 is content paragraph
-                    let prev_2_empty = block_idx >= 3
-                        && is_empty_p(&page.blocks[block_idx - 1])
-                        && is_empty_p(&page.blocks[block_idx - 2])
-                        && is_content_para(&page.blocks[block_idx - 3]);
-                    // next_2_empty: the 2 blocks immediately after are empty AND block_idx+3 is content paragraph
-                    let next_2_empty = block_idx + 3 < page.blocks.len()
-                        && is_empty_p(&page.blocks[block_idx + 1])
-                        && is_empty_p(&page.blocks[block_idx + 2])
-                        && is_content_para(&page.blocks[block_idx + 3]);
-                    let adjacent_to_empty_run = !this_empty && (prev_2_empty || next_2_empty);
+                    let adjacent_to_empty_run = Self::body_adjacent_to_empty_run(para, page, block_idx);
                     // S603: is the next sibling block a table? (page-bottom full-cell rule)
                     let next_block_is_table =
                         matches!(page.blocks.get(block_idx + 1), Some(Block::Table(_)));
@@ -15840,6 +15750,160 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && p.runs.iter().any(|r| !r.text.trim().is_empty()))
         });
         (footer_reserved, footer_has_text)
+    }
+
+    fn body_paragraph_wrap_bands(
+        &self,
+        para: &Paragraph,
+        page: &Page,
+        s758_bands: &[(usize, f32, f32, f32, f32)],
+        current_page_idx: usize,
+        cursor_y: f32,
+        start_x: f32,
+        content_width: f32,
+    ) -> (Option<(f32, f32, f32)>, Option<(f32, f32, f32, f32)>) {
+        let s758_para_band: Option<(f32, f32, f32)> = s758_bands
+            .iter()
+            .filter(|(pg, top, bot, bx0, bx1)| {
+                *pg == current_page_idx
+                    && cursor_y >= *top - 0.5
+                    && cursor_y < *bot - 0.5
+                    && *bx0 < start_x + content_width - 6.0
+                    && *bx1 > start_x + 6.0
+            })
+            .map(|(_, _, bot, bx0, bx1)| {
+                // wrapText SIDE: text flows in the free segment with
+                // more room for THIS PARAGRAPH'S OWN COLUMN
+                // [margin+ind_l, content_right−ind_r] (S772b — Word
+                // measures indents from the margin, so a paragraph
+                // whose indents already clear the float keeps its
+                // indent wrap; hmrc's "If Yes, tick this box" has
+                // ind right=5831tw=291.55pt placing its column LEFT
+                // of its checkbox float — the raw wider-free-segment
+                // rule shifted it right of the box, Word wraps it at
+                // the box's left edge). Right side wider → shift to
+                // the band's right edge (probeqtbleft Word truth:
+                // lines beside the box span [box_right+distR,
+                // content_right], x0=221.93 = 70.94+142+9.0); left
+                // side wider → width reduction so lines end at the
+                // band's left edge. Indent-cleared bands compute
+                // red=0 and are dropped by the find() below.
+                let content_right = start_x + content_width;
+                let s772b = std::env::var("OXI_S772_DISABLE").is_err();
+                let (para_ind_l, para_ind_r) = if s772b {
+                    (
+                        para.style
+                            .indent_left
+                            .or_else(|| {
+                                self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio)
+                            })
+                            .unwrap_or(0.0)
+                            .max(0.0),
+                        para.style
+                            .indent_right
+                            .or_else(|| {
+                                para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio))
+                            })
+                            .unwrap_or(0.0)
+                            .max(0.0),
+                    )
+                } else {
+                    (0.0, 0.0) // legacy raw-gap semantics for A/B
+                };
+                let pl = start_x + para_ind_l;
+                let pr = content_right - para_ind_r;
+                let left_room = (bx0 - pl).max(0.0);
+                let right_room = (pr - bx1).max(0.0);
+                if s772b && left_room.max(right_room) < 30.0 {
+                    // Degenerate: the paragraph's own column fits
+                    // NEITHER free segment (ed025c's 大口株主の名簿
+                    // heading: indent 47.25 > the 33.75pt left strip,
+                    // and the float's right edge overruns the column
+                    // → both rooms 0). Word moves such lines BELOW
+                    // the float; v1 keeps the pre-band behavior
+                    // (full-width flow) rather than a 30pt-floor
+                    // strip explosion. red=0 → dropped by find().
+                    (*bot, 0.0, 0.0)
+                } else if right_room > left_room {
+                    // shift only the shortfall beyond the indent
+                    let shift = ((bx1 - start_x) - para_ind_l).max(0.0);
+                    (*bot, shift, shift)
+                } else {
+                    // reduce only the shortfall beyond the right indent
+                    let red = ((content_right - bx0).max(0.0) - para_ind_r).max(0.0);
+                    (*bot, red, 0.0)
+                }
+            })
+            .find(|(_, red, _)| *red > 6.0);
+        // S-TWOSEG: the same band, asked a different question -- does
+        // this paragraph have usable room on BOTH sides of the float?
+        // If it does, the single-segment answer above is the wrong
+        // shape (it would put the whole row in one strip and need
+        // nearly twice Word's rows), so the geometry of both strips is
+        // carried instead and the row is broken through the pair.
+        let s758_two_seg: Option<(f32, f32, f32, f32)> = if std::env::var(
+            "OXI_TWOSEG_DISABLE",
+        )
+        .is_err()
+        {
+            s758_bands
+                .iter()
+                .filter(|(pg, top, bot, bx0, bx1)| {
+                    *pg == current_page_idx
+                        && cursor_y >= *top - 0.5
+                        && cursor_y < *bot - 0.5
+                        && *bx0 < start_x + content_width - 6.0
+                        && *bx1 > start_x + 6.0
+                })
+                .find_map(|(_, _, _, bx0, bx1)| {
+                    let content_right = start_x + content_width;
+                    let ind_l = para
+                        .style
+                        .indent_left
+                        .or_else(|| {
+                            self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio)
+                        })
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let ind_r = para
+                        .style
+                        .indent_right
+                        .or_else(|| {
+                            para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio))
+                        })
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let pl = start_x + ind_l;
+                    let pr = content_right - ind_r;
+                    let left = bx0 - pl;
+                    let right = pr - bx1;
+                    // The same 30pt floor the single-segment arm uses to
+                    // call a strip unusable. Below it Word does not put
+                    // text there, so the pair is not a pair.
+                    (left >= 30.0 && right >= 30.0)
+                        .then_some((pl, left, *bx1, right))
+                })
+        } else {
+            None
+        };
+        (s758_para_band, s758_two_seg)
+    }
+
+    fn body_adjacent_to_empty_run(para: &Paragraph, page: &Page, block_idx: usize) -> bool {
+        let is_empty_p = |blk: &Block| matches!(blk, Block::Paragraph(p) if p.runs.iter().all(|r| r.text.is_empty()));
+        let is_content_para = |blk: &Block| matches!(blk, Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.is_empty()));
+        let this_empty = para.runs.iter().all(|r| r.text.is_empty());
+        // prev_2_empty: the 2 blocks immediately before are empty AND block_idx-3 is content paragraph
+        let prev_2_empty = block_idx >= 3
+            && is_empty_p(&page.blocks[block_idx - 1])
+            && is_empty_p(&page.blocks[block_idx - 2])
+            && is_content_para(&page.blocks[block_idx - 3]);
+        // next_2_empty: the 2 blocks immediately after are empty AND block_idx+3 is content paragraph
+        let next_2_empty = block_idx + 3 < page.blocks.len()
+            && is_empty_p(&page.blocks[block_idx + 1])
+            && is_empty_p(&page.blocks[block_idx + 2])
+            && is_content_para(&page.blocks[block_idx + 3]);
+        !this_empty && (prev_2_empty || next_2_empty)
     }
 
     fn layout_paragraph(
