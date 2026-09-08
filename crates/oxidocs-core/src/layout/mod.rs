@@ -9341,7 +9341,9 @@ cells={} pitch={:.2} text={:?}",
                     && !self.doc_body_has_real_cjk
                                     && (!fresh_one_page
                                         || std::env::var("OXI_S1127_DISABLE").is_err())
-                                    && this_h <= remaining
+                                    // The heading's estimate includes space that
+                                    // can fall below the last rendered line. Its
+                                    // own estimated overflow does not guarantee a break.
                                     && first_row_h > 0.0
                                     && this_h + first_row_h > remaining + 0.5
                                     && this_h + first_row_h <= content_height + 0.5;
@@ -34999,7 +35001,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 .ok()
                 .and_then(|v| v.parse::<f32>().ok())
                 .unwrap_or(widow_k_default);
-            let widow_break_needed = row_idx == 0 && has_content && is_single_row_single_cell && {
+            // Widow protection applies to a fragment of an overflowing row;
+            // a complete row that fits does not leave a widow.
+            let widow_break_needed = row_overflows && row_idx == 0 && has_content && is_single_row_single_cell && {
                 let free_space = page_bottom - cursor.cursor_y;
                 let widow_threshold = if let Some(pitch) = table_grid_pitch {
                     pitch * widow_k

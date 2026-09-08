@@ -784,3 +784,33 @@ fn minimum_row_height_controls_first_and_continuation_fragments() {
         }
     }
 }
+
+#[test]
+fn heading_and_fitting_table_keep_their_word_page_boundaries() {
+    let cases: &[(&[u8], usize, [usize; 3])] = &[
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem24_keep0.docx"), 2, [1, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem24_keep1.docx"), 2, [2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem28.8_keep0.docx"), 2, [1, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem28.8_keep1.docx"), 2, [2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem29_keep0.docx"), 2, [1, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem29_keep1.docx"), 2, [2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem35_keep0.docx"), 2, [1, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem35_keep1.docx"), 2, [2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem60_keep0.docx"), 2, [1, 1, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem60_keep1.docx"), 2, [1, 1, 2]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem80_keep0.docx"), 1, [1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/keep_next_table/rem80_keep1.docx"), 1, [1, 1, 1]),
+    ];
+    for (case, (bytes, page_count, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), *page_count, "case {case}");
+        for (label, expected_page) in ["HEADING", "ROW001", "AFTER"].iter().zip(expected) {
+            let actual: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, page)| {
+                page.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                    if text == label)).then_some(i + 1)
+            }).collect();
+            assert_eq!(actual, vec![*expected_page], "case {case}, {label}");
+        }
+    }
+}
