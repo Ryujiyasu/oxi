@@ -2938,7 +2938,21 @@ impl LayoutEngine {
     fn layout_pass(&self, doc: &Document) -> LayoutResult {
         // Pre-pass: resolve fitText runs using actual font metrics
         let mut doc_resolved = doc.clone();
+        // The CJK vertical metrics still depend on half-point top origins.
+        // Keep that rendering compatibility here, without discarding the
+        // declared margin precision during parsing or for Latin text.
+        let has_cjk_textbox = doc.pages.iter().any(|page|
+            page.text_boxes.iter().any(|textbox| textbox.blocks.iter().any(block_has_real_cjk)));
+        let legacy_top_origin = (self.doc_body_has_real_cjk || has_cjk_textbox
+            || std::env::var("OXI_EXACT_LATIN_MARGIN_DISABLE").is_ok())
+            && std::env::var("OXI_S1097").is_err();
         for page in &mut doc_resolved.pages {
+            if legacy_top_origin {
+                page.margin.top = (page.margin.top * 2.0).round() / 2.0;
+                for (_, top, _, _, _) in &mut page.vertical_runs {
+                    *top = (*top * 2.0).round() / 2.0;
+                }
+            }
             self.resolve_fit_text_page(page);
         }
 
@@ -20383,7 +20397,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && std::env::var("OXI_S1332_DISABLE").is_err();
             let last_line_fit_h = |idx: usize| -> f32 {
                 let full = line_heights.get(idx).copied().unwrap_or(0.0);
-                if s1332_exact {
+                // With precise Latin margins, widow and orphan look-ahead
+                // can use the same single/atLeast height as the line fit test.
+                // The old shorter widow estimate compensated rounded origins.
+                if s1332_exact || (s1096_full_box
+                    && std::env::var("OXI_EXACT_LATIN_MARGIN_DISABLE").is_err()
+                    && std::env::var("OXI_WIDOW_HEIGHT_DISABLE").is_err()) {
                     return full;
                 }
                 if no_type_multiple_ink {

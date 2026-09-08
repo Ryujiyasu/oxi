@@ -360,3 +360,61 @@ fn modern_justified_hanging_preserves_decimal_paren_exclusion() {
         }
     }
 }
+
+#[test]
+fn top_margins_retain_precision_and_cjk_layout_keeps_legacy_origins() {
+    let cases: &[(&[u8], &[f32])] = &[
+        (include_bytes!("../../../../tests/fixtures/top_margin_precision/topmargin.docx"),
+            &[56.5, 56.7, 57.0, 118.5, 118.8, 119.0]),
+        (include_bytes!("../../../../tests/fixtures/top_margin_precision/topmargin_cjk.docx"),
+            &[56.5, 56.5, 57.0, 118.5, 119.0, 119.0]),
+        (include_bytes!("../../../../tests/fixtures/top_margin_precision/topmargin_cjk_box.docx"),
+            &[56.5, 56.5, 57.0, 118.5, 119.0, 119.0]),
+    ];
+    let declared = [56.5, 56.7, 57.0, 118.5, 118.8, 119.0];
+    for (case, (bytes, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        assert_eq!(doc.pages.len(), declared.len(), "case {case}");
+        for (page, top) in doc.pages.iter().zip(declared) {
+            assert!((page.margin.top - top).abs() < 0.001, "case {case}");
+        }
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), expected.len(), "case {case}");
+        for (page, top) in layout.pages.iter().zip(*expected) {
+            let marker = page.elements.iter().find(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text.starts_with("TOPMARK_"))).unwrap();
+            assert!((marker.y - top).abs() < 0.001, "case {case}: {} vs {top}", marker.y);
+        }
+        // Rendering compatibility must not alter the source geometry.
+        for (page, top) in doc.pages.iter().zip(declared) {
+            assert!((page.margin.top - top).abs() < 0.001, "case {case}");
+        }
+    }
+}
+
+#[test]
+fn widow_lookahead_uses_the_same_at_least_height_as_line_fitting() {
+    let cases: &[(&[u8], usize, &[usize])] = &[
+        (include_bytes!("../../../../tests/fixtures/top_margin_precision/widow3.docx"), 3, &[1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 8, 8, 8, 10, 10, 10, 12, 12, 12, 14, 14, 14, 16, 16, 16]),
+        (include_bytes!("../../../../tests/fixtures/top_margin_precision/widow5.docx"), 5, &[1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 7, 7, 7, 8, 8, 9, 9, 9, 10, 10, 11, 11, 11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 16, 16]),
+    ];
+    for (case, (bytes, line_count, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut rows = std::collections::HashMap::<(usize, u32), String>::new();
+        for (page, p) in layout.pages.iter().enumerate() {
+            for e in &p.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    rows.entry((page + 1, e.y.to_bits())).or_default()
+                        .extend(text.chars().filter(|c| !c.is_whitespace()));
+                }
+            }
+        }
+        for (i, page) in expected.iter().enumerate() {
+            let marker = format!("CASE{:02}LINE{}", i / line_count, i % line_count);
+            let actual: Vec<_> = rows.iter().filter_map(|((p, _), text)|
+                (text == &marker).then_some(*p)).collect();
+            assert_eq!(actual, vec![*page], "case {case}, {marker}");
+        }
+    }
+}

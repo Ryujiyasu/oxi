@@ -106,30 +106,20 @@ fn v1_sect_pg_borders_three_storage_filters() {
 }
 
 #[test]
-fn v1_sect_pgmar_asymmetric_top_rounded_others_exact() {
+fn v1_sect_pgmar_preserves_exact_twips_on_all_sides() {
     let Some(doc) = load("v1_sect_pgmar_asymmetric.docx") else { return };
     let page = &doc.pages[0];
     let m = &page.margin;
 
-    // top: w=1133 → ROUND10 → 1130tw / 20 = 56.5pt (NOT 56.65pt).
-    // COM-confirmed (0e7a 2026-04-13): top margin uses the rounded
-    // value for content-start Y. A regression that skipped rounding
-    // would shift content-start Y by 0.15pt → propagate to every
-    // page break Y on every doc.
+    // Parsing preserves source precision; rendering compatibility does not
+    // change the document's stored margins.
     assert!(
-        (m.top - 56.5).abs() < 0.001,
-        "top=1133 → ROUND10 → 56.5pt (NOT 56.65pt exact), got {}",
-        m.top
+        (m.top - 56.65).abs() < 0.001,
+        "top=1133tw must remain 56.65pt, got {}", m.top
     );
-
-    // bottom: EXACT — w=1133 / 20 = 56.65pt. The bottom margin is
-    // EXACT because Word uses it as the page-break LIMIT, not the
-    // content-start Y. Mixing the two rounding rules is the
-    // 2026-04-13 fix.
     assert!(
         (m.bottom - 56.65).abs() < 0.001,
-        "bottom=1133 → EXACT → 56.65pt (NOT rounded to 56.5pt), got {}",
-        m.bottom
+        "bottom=1133tw must remain 56.65pt, got {}", m.bottom
     );
 
     // left/right: EXACT.
