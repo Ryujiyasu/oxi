@@ -15384,7 +15384,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // empty paragraphs, which under-estimates footer empty lines.
                     // Override for empty footer paragraphs: use no-grid line height
                     // matching Word's actual footer rendering.
-                    let h = if p.runs.is_empty() || p.runs.iter().all(|r| r.text.is_empty()) {
+                    // Whitespace-only lines use paragraph-mark metrics, just
+                    // like empty lines. Their spacing is added by the stack
+                    // below, not by the text-paragraph estimate as well.
+                    let h = if p.runs.is_empty() || p.runs.iter().all(|r| r.text.trim().is_empty()) {
                         let empty_fs = p
                             .style
                             .ppr_rpr

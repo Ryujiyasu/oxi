@@ -11736,14 +11736,15 @@ fn parse_header_footer_xml(
                     "sdt" if in_root && depth == 0 => {
                         // Structured Document Tag: skip sdtPr, process sdtContent children
                         let mut sdt_depth = 1u32;
-                        let mut in_sdt_content = false;
+                        let mut content_depth = 0u32;
                         loop {
                             match reader.read_event()? {
                                 Event::Start(se) => {
                                     let sl = local_name(se.name().as_ref());
-                                    if sl == "sdtContent" && sdt_depth == 1 {
-                                        in_sdt_content = true;
-                                    } else if in_sdt_content && sl == "p" {
+                                    if sl == "sdtContent" {
+                                        content_depth += 1;
+                                        sdt_depth += 1;
+                                    } else if content_depth > 0 && sl == "p" {
                                         let pr = parse_paragraph(
                                             &mut reader,
                                             ctx,
@@ -11753,7 +11754,7 @@ fn parse_header_footer_xml(
                                             None,
                                         )?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
-                                    } else if in_sdt_content && sl == "tbl" {
+                                    } else if content_depth > 0 && sl == "tbl" {
                                         let table = parse_table(&mut reader, ctx, styles)?;
                                         blocks.push(Block::Table(table));
                                     } else {
@@ -11763,11 +11764,14 @@ fn parse_header_footer_xml(
                                 Event::End(ee) => {
                                     let sl = local_name(ee.name().as_ref());
                                     if sl == "sdtContent" {
-                                        in_sdt_content = false;
-                                    } else if sl == "sdt" && sdt_depth == 1 {
+                                        content_depth = content_depth.saturating_sub(1);
+                                    }
+                                    // Every unconsumed start, including nested
+                                    // content wrappers, has a matching end. Stop
+                                    // at this SDT rather than swallowing siblings.
+                                    sdt_depth -= 1;
+                                    if sdt_depth == 0 {
                                         break;
-                                    } else if sdt_depth > 1 {
-                                        sdt_depth -= 1;
                                     }
                                 }
                                 Event::Eof => break,
@@ -12660,6 +12664,35 @@ fn local_name(name: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::ir::Block;
+
+    #[test]
+    fn nested_header_footer_controls_preserve_following_blocks() {
+        let ctx = ParseContext {
+            _rels: HashMap::new(), media: HashMap::new(),
+            media_types: HashMap::new(), hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            footnotes: HashMap::new(), endnotes: HashMap::new(),
+            comments: HashMap::new(), theme: ThemeColors::default(),
+        };
+        let para = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
+        for root in ["hdr", "ftr"] {
+            for depth in 1..=3 {
+                let mut wrapped = para("inside");
+                for _ in 0..depth {
+                    wrapped = format!("<w:sdt><w:sdtPr><w:id w:val=\"1\"/></w:sdtPr><w:sdtContent>{wrapped}</w:sdtContent></w:sdt>");
+                }
+                let xml = format!("<w:{root} xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">{}{wrapped}{}{}</w:{root}>",
+                    para("before"), para("after"), para("tail"));
+                let blocks = parse_header_footer_xml(&xml, &ctx, &StyleSheet::default()).unwrap();
+                let texts: Vec<String> = blocks.iter().map(|b| match b {
+                    Block::Paragraph(p) => p.runs.iter().map(|r| r.text.as_str()).collect(),
+                    _ => panic!("expected paragraph"),
+                }).collect();
+                assert_eq!(texts, ["before", "inside", "after", "tail"], "{root}, depth {depth}");
+            }
+        }
+    }
 
     #[test]
     fn unbased_style_application_default_tracks_only_the_modern_baseline() {

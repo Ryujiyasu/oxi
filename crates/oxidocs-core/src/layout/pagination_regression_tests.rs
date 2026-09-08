@@ -587,3 +587,25 @@ fn cell_line_spacing_preserves_defaults_until_a_style_overrides_them() {
             "case {case}: row height disagrees with its lines");
     }
 }
+
+#[test]
+fn whitespace_footer_lines_reserve_before_spacing_only_once() {
+    let cases: &[&[u8]] = &[
+        include_bytes!("../../../../tests/fixtures/footer_spacing/empty.docx"),
+        include_bytes!("../../../../tests/fixtures/footer_spacing/tabs.docx"),
+        include_bytes!("../../../../tests/fixtures/footer_spacing/spaces.docx"),
+    ];
+    for (case, bytes) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 11, "case {case}");
+        for (arm, expected) in [1usize, 2, 3, 5, 8, 11].iter().enumerate() {
+            let marker = format!("MARK{arm}");
+            let pages: Vec<_> = layout.pages.iter().enumerate()
+                .filter_map(|(i, page)| page.elements.iter().any(|e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text == &marker)).then_some(i + 1))
+                .collect();
+            assert_eq!(pages, vec![*expected], "case {case}, {marker}");
+        }
+    }
+}
