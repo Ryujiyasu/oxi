@@ -5,6 +5,32 @@
 use super::*;
 
 #[test]
+fn section_parity_and_number_restart_have_distinct_padding_rules() {
+    let cases: &[(&[u8], usize)] = &[
+        (include_bytes!("../../../../tests/fixtures/section_parity/oddPage_c1_s2_h0.docx"), 3),
+        (include_bytes!("../../../../tests/fixtures/section_parity/oddPage_c1_s2_h1.docx"), 4),
+        (include_bytes!("../../../../tests/fixtures/section_parity/evenPage_c1_s1_h0.docx"), 3),
+        (include_bytes!("../../../../tests/fixtures/section_parity/evenPage_c2_s1_h1.docx"), 4),
+        (include_bytes!("../../../../tests/fixtures/section_parity/oddPage_c1_sNone_h0.docx"), 4),
+        (include_bytes!("../../../../tests/fixtures/section_parity/oddPage_c2_sNone_h0.docx"), 3),
+        (include_bytes!("../../../../tests/fixtures/section_parity/nextPage_c1_s1_h1.docx"), 4),
+        (include_bytes!("../../../../tests/fixtures/section_parity/nextPage_c1_s2_h1.docx"), 3),
+    ];
+    for (index, (bytes, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let expected_start = [Some(3), Some(3), Some(2), Some(2), None, None, Some(1), Some(2)][index];
+        assert_eq!(section_page_number_start(&doc.pages[1]), expected_start);
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), *expected, "case {index}");
+        let content_pages: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, p)| {
+            p.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                if text == "SECTION2")).then_some(i + 1)
+        }).collect();
+        assert_eq!(content_pages, vec![expected - 1], "section 2 in case {index}");
+    }
+}
+
+#[test]
 fn document_break_count_distrust_preserves_locally_valid_table_hint() {
     let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/table_row_cached_break.docx"));

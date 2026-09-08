@@ -2317,6 +2317,18 @@ fn block_has_real_cjk(block: &Block) -> bool {
     }
 }
 
+/// Round an explicit restart up to the odd/even section's requested parity.
+fn section_page_number_start(page: &Page) -> Option<u32> {
+    page.page_number_start.map(|start| {
+        if std::env::var("OXI_SECTION_PARITY_DISABLE").is_ok() { return start; }
+        match page.section_start_type.as_deref() {
+            Some("oddPage") if start % 2 == 0 => start.saturating_add(1),
+            Some("evenPage") if start % 2 == 1 => start.saturating_add(1),
+            _ => start,
+        }
+    })
+}
+
 /// S1304: how many `<w:lastRenderedPageBreak/>` markers this block carries.
 /// A file cannot hold more of them than it has page breaks, so the total over a
 /// document, compared against the page count a first layout pass produced, says
@@ -3054,20 +3066,40 @@ impl LayoutEngine {
                 let s957_on = std::env::var("OXI_S957_DISABLE").is_err();
                 for _ in 0..2 {
                     // The logical number this section's first page would take.
-                    let cand = if s1291 {
+                    let section_parity = match page.section_start_type.as_deref() {
+                        Some("evenPage") => Some(0),
+                        Some("oddPage") => Some(1),
+                        _ => None,
+                    };
+                    let restart_parity = s1291
+                        && std::env::var("OXI_SECTION_PARITY_DISABLE").is_err();
+                    // An odd/even section uses the continuing page sequence to
+                    // choose its side. An explicit restart suppresses padding
+                    // when odd/even headers are disabled; with those headers,
+                    // the section type chooses the side, not the restart value.
+                    // A fixed restart cannot be advanced by inserting blanks.
+                    let cand = if restart_parity && section_parity.is_some() {
+                        logical_prev + 1
+                    } else if s1291 {
                         page.page_number_start.unwrap_or(logical_prev + 1)
                     } else {
                         (pages.len() + 1) as u32
                     };
-                    let parity_bad = match page.section_start_type.as_deref() {
+                    let parity_bad = if restart_parity {
+                        section_parity.map_or(false, |parity| {
+                            (page.page_number_start.is_none() || page.even_odd_hf)
+                                && cand % 2 != parity
+                        })
+                    } else { match page.section_start_type.as_deref() {
                         Some("evenPage") => cand % 2 == 1,
                         Some("oddPage") => cand % 2 == 0,
                         _ => false,
-                    };
+                    }};
                     // S957, re-derived: the restart must CONTINUE the
                     // alternation, i.e. differ in parity from the page before.
                     // The old form asked it to MATCH the physical index.
                     let alternation_bad = s957_on
+                        && !(restart_parity && section_parity.is_some())
                         && page.even_odd_hf
                         && page.page_number_start.map_or(false, |st| {
                             if s1291 {
@@ -3176,7 +3208,7 @@ impl LayoutEngine {
                 // section's first page — the only place a restart can fire.
                 let start = if s912 && ir != prev_ir {
                     ir.and_then(|i| doc_resolved.pages.get(i))
-                        .and_then(|p| p.page_number_start)
+                        .and_then(section_page_number_start)
                 } else {
                     None
                 };
@@ -5121,7 +5153,7 @@ cells={} pitch={:.2} text={:?}",
         // table break were compensating, and only one of them is fixed. Turn
         // this on together with the page-15 fix.
         let s1294_on = std::env::var("OXI_S1294_DISABLE").is_err();
-        let first_logical = page.page_number_start.unwrap_or(*logical + 1);
+        let first_logical = section_page_number_start(page).unwrap_or(*logical + 1);
         let mut logical_base: i64 = first_logical as i64;
         // Vertical writing (tategaki) section: route to the dedicated path.
         if page.vertical_section && std::env::var("OXI_VERTICAL_DISABLE").is_err() {
