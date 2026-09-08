@@ -687,3 +687,69 @@ fn cant_split_row_fits_the_rendered_text_height() {
         }
     }
 }
+
+#[test]
+fn structural_row_revisions_respect_each_display_mode() {
+    let cases: &[(&[u8], Option<&str>, bool, bool)] = &[
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/row_live.docx"), None, false, false),
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/row_delete.docx"), Some("delete"), false, false),
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/row_delete_expanded.docx"), Some("delete"), false, false),
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/row_delete_empty_header.docx"), Some("delete"), true, false),
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/row_delete_all.docx"), Some("delete"), false, true),
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/row_insert.docx"), Some("insert"), false, false),
+    ];
+    for (case, (bytes, kind, empty, only_row)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let table = doc.pages[0].blocks.iter().find_map(|b| match b {
+            Block::Table(t) => Some(t), _ => None,
+        }).unwrap();
+        let revision = table.rows[0].tracked_change.as_ref();
+        assert_eq!(revision.map(|r| r.change_type.as_str()), *kind, "case {case}");
+        if let Some(revision) = revision {
+            assert_eq!(revision.author.as_deref(), Some("Test"));
+            assert_eq!(revision.pair_id.as_deref(), Some("1"));
+        }
+        for view in [ShowRevisions::Final, ShowRevisions::Original, ShowRevisions::All, ShowRevisions::Simple] {
+            let removed = (view == ShowRevisions::Final && *kind == Some("delete"))
+                || (view == ShowRevisions::Original && *kind == Some("insert"));
+            let layout = LayoutEngine::for_document(&doc).with_show_revisions(view).layout(&doc);
+            assert_eq!(layout.pages.len(), 1, "case {case}, {view:?}");
+            let y = |label: &str| layout.pages[0].elements.iter().find_map(|e| match &e.content {
+                LayoutContent::Text { text, .. } if text == label => Some(e.y), _ => None,
+            });
+            assert_eq!(y("REVISED").is_some(), !removed && !empty, "case {case}, {view:?}");
+            if !only_row {
+                assert!((y("KEEP").unwrap() - if removed { 72.0 } else { 112.0 }).abs() < 0.1,
+                    "case {case}, {view:?}");
+            }
+            let after = 72.0 + if removed { 0.0 } else { 40.0 }
+                + if *only_row { 0.0 } else { 11.5 };
+            assert!((y("AFTER").unwrap() - after).abs() < 0.1, "case {case}, {view:?}");
+        }
+    }
+}
+
+#[test]
+fn deleted_empty_break_before_table_keeps_its_bookmark() {
+    let cases: &[(&[u8], f32)] = &[
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/gap_live.docx"), 56.4),
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/gap_deleted.docx"), 13.2),
+        (include_bytes!("../../../../tests/fixtures/structural_revisions/gap_chain.docx"), 13.2),
+    ];
+    for (case, (bytes, advance)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).with_show_revisions(ShowRevisions::Final).layout(&doc);
+        let y = |label: &str| layout.pages[0].elements.iter().find_map(|e| match &e.content {
+            LayoutContent::Text { text, .. } if text == label => Some(e.y), _ => None,
+        }).unwrap();
+        assert!((y("SECOND") - y("FIRST") - advance).abs() < 0.1, "case {case}");
+    }
+    let mut doc = crate::parser::parse_docx(cases[1].0).unwrap();
+    filter_runs_for_show_revisions(&mut doc, true);
+    let table = doc.pages[0].blocks.iter().filter_map(|b| match b {
+        Block::Table(t) => Some(t), _ => None,
+    }).nth(1).unwrap();
+    let Block::Paragraph(p) = &table.rows[0].cells[0].blocks[0] else { panic!("cell paragraph"); };
+    assert!(p.runs.iter().any(|r| r.bookmark_name.as_deref() == Some("GapAnchor")));
+    assert!(p.runs.iter().any(|r| r.text == "SECOND"));
+}

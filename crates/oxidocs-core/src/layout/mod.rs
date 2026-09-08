@@ -1552,7 +1552,17 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
                     });
                 }
                 Block::Table(t) => {
+                    t.rows.retain(|row| match row.tracked_change.as_ref() {
+                        Some(change) if final_view => {
+                            !matches!(change.change_type.as_str(), "delete" | "moveFrom")
+                        }
+                        Some(change) => {
+                            !matches!(change.change_type.as_str(), "insert" | "moveTo")
+                        }
+                        None => true,
+                    });
                     for row in &mut t.rows {
+                        row.tracked_change = None;
                         for cell in &mut row.cells {
                             visit(&mut cell.blocks, final_view);
                         }
@@ -1561,6 +1571,7 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
                 Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
             }
         }
+        blocks.retain(|block| !matches!(block, Block::Table(t) if t.rows.is_empty()));
     }
     for_each_block_tree(doc, |blocks| visit(blocks, final_view));
     merge_marked_paragraph_breaks(doc, final_view);
@@ -1657,6 +1668,21 @@ fn merge_marked_paragraph_breaks(doc: &mut Document, final_view: bool) {
             i -= 1;
             let merge = match (&blocks[i - 1], &blocks[i]) {
                 (Block::Paragraph(a), Block::Paragraph(_)) => merges(a, final_view),
+                (Block::Paragraph(a), Block::Table(t)) => {
+                    merges(a, final_view)
+                        && a.runs.iter().all(|r| {
+                            r.text.is_empty()
+                                && r.style.inline_object_extent.is_none()
+                                && r.style.inline_math.is_none()
+                                && r.footnote_ref.is_none()
+                                && r.endnote_ref.is_none()
+                                && r.field_type.is_none()
+                                && !r.is_math
+                                && r.ruby.is_none()
+                        })
+                        && matches!(t.rows.first().and_then(|r| r.cells.first())
+                            .and_then(|c| c.blocks.first()), Some(Block::Paragraph(_)))
+                }
                 _ => false,
             };
             if !merge {
@@ -1669,7 +1695,18 @@ fn merge_marked_paragraph_breaks(doc: &mut Document, final_view: bool) {
                     continue;
                 }
             };
-            if let Block::Paragraph(next) = &mut blocks[i - 1] {
+            // An empty removed break before a table contributes no line box.
+            // Keep its zero-width anchors on the following cell paragraph.
+            let next = match &mut blocks[i - 1] {
+                Block::Paragraph(p) => Some(p),
+                Block::Table(t) => t.rows.first_mut().and_then(|r| r.cells.first_mut())
+                    .and_then(|c| c.blocks.first_mut()).and_then(|b| match b {
+                        Block::Paragraph(p) => Some(p),
+                        _ => None,
+                    }),
+                _ => None,
+            };
+            if let Some(next) = next {
                 let mut runs = head.runs;
                 runs.append(&mut next.runs);
                 next.runs = runs;
@@ -46119,6 +46156,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             probe.v_merge = None;
             let probe_row = TableRow {
                 cells: vec![probe],
+                tracked_change: None,
                 height: None,
                 height_rule: None,
                 header: false,

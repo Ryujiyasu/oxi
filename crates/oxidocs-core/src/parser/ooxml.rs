@@ -10170,12 +10170,40 @@ fn parse_table_row(
     let mut grid_before: u32 = 0;
     let mut cell_margins_override: Option<CellMargins> = None;
     let mut depth = 0;
+    let mut in_row_properties = false;
+    let mut tracked_change = None;
+    let revision = |e: &quick_xml::events::BytesStart<'_>, kind: &str| {
+        let mut change = TrackedChange {
+            change_type: if kind == "ins" { "insert" } else { "delete" }.into(),
+            author: None,
+            date: None,
+            pair_id: None,
+        };
+        for attr in e.attributes().flatten() {
+            let value = String::from_utf8_lossy(&attr.value).to_string();
+            match local_name(attr.key.as_ref()).as_str() {
+                "author" => change.author = Some(value),
+                "date" => change.date = Some(value),
+                "id" => change.pair_id = Some(value),
+                _ => {}
+            }
+        }
+        change
+    };
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "trPr" if depth == 0 => {
+                        in_row_properties = true;
+                        depth += 1;
+                    }
+                    "ins" | "del" if in_row_properties && depth == 1 => {
+                        tracked_change = Some(revision(&e, &local));
+                        drain_element(reader, &local)?;
+                    }
                     "trPrChange" => {
                         drain_element(reader, "trPrChange")?;
                         continue;
@@ -10259,6 +10287,9 @@ fn parse_table_row(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "ins" | "del" if in_row_properties && depth == 1 => {
+                        tracked_change = Some(revision(&e, &local));
+                    }
                     "trHeight" => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -10291,6 +10322,9 @@ fn parse_table_row(
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "trPr" && depth == 1 {
+                    in_row_properties = false;
+                }
                 if local == "tr" && depth == 0 {
                     break;
                 }
@@ -10305,6 +10339,7 @@ fn parse_table_row(
 
     Ok(TableRow {
         cells,
+        tracked_change,
         height,
         height_rule,
         header,

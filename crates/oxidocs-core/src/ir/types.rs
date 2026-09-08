@@ -722,6 +722,9 @@ pub struct Table {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableRow {
     pub cells: Vec<TableCell>,
+    /// Structural insertion or deletion of the row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracked_change: Option<TrackedChange>,
     /// Row height in points (w:trHeight)
     #[serde(default)]
     pub height: Option<f32>,
