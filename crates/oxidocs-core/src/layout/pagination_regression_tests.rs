@@ -212,3 +212,15 @@ fn text_balance_leaves_table_content_for_table_path() {
     assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]).is_none());
     assert_eq!(elements[1].y, 10.0);
 }
+
+#[test]
+fn text_balance_keeps_page_continuation_before_later_paragraphs() {
+    let mut elements = vec![
+        text_row(100.0, 0.0, 10.0, 2),
+        text_row(0.0, 20.0, 10.0, 3),
+        text_row(0.0, 30.0, 10.0, 4),
+    ];
+    let before: Vec<_> = elements.iter().map(|e| (e.x, e.y)).collect();
+    assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]).is_none());
+    assert_eq!(elements.iter().map(|e| (e.x, e.y)).collect::<Vec<_>>(), before);
+}

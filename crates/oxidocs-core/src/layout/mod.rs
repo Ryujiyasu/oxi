@@ -4522,6 +4522,16 @@ impl LayoutEngine {
                 columns[col].push((y, vec![ei]));
             }
         }
+        // Coordinates are not always flow order: a paragraph continuing from
+        // the preceding page can still carry the previous column's x origin.
+        // Do not move that continuation behind later paragraphs in column one.
+        let last_left = columns[0].iter().flat_map(|(_, members)| members)
+            .filter_map(|&i| elements[i].paragraph_index).max();
+        let first_right = columns[1].iter().flat_map(|(_, members)| members)
+            .filter_map(|&i| elements[i].paragraph_index).min();
+        if matches!((last_left, first_right), (Some(left), Some(right)) if right < left) {
+            return None;
+        }
         let mut rows = Vec::new();
         for (col, rs) in columns.iter_mut().enumerate() {
             rs.sort_by(|a,b| a.0.total_cmp(&b.0));
