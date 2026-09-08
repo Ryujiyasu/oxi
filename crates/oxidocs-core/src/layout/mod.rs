@@ -2097,6 +2097,33 @@ impl S755Geom {
     }
 }
 
+// Table continuations use the destination page's header/footer geometry.
+// Overflow fragments have already been rebased to the previous page top;
+// translate them, including border endpoints, before testing the next page.
+fn advance_table_page_geometry(
+    geometry: Option<&S755Geom>,
+    page_no: usize,
+    page_top: &mut f32,
+    content_height: &mut f32,
+    elements: &mut [LayoutElement],
+) -> f32 {
+    let Some(geometry) = geometry else { return 0.0; };
+    let next_top = geometry.top(page_no);
+    let next_height = geometry.ch(page_no);
+    let bottom_delta = next_top + next_height - (*page_top + *content_height);
+    let dy = next_top - *page_top;
+    for element in elements {
+        element.y += dy;
+        if let LayoutContent::TableBorder { y1, y2, .. } = &mut element.content {
+            *y1 += dy;
+            *y2 += dy;
+        }
+    }
+    *page_top = next_top;
+    *content_height = next_height;
+    bottom_delta
+}
+
 pub struct LayoutCursor {
     pub cursor_y: f32,
     pub visual_y: f32,
@@ -9075,6 +9102,7 @@ cells={} pitch={:.2} text={:?}",
                                     0.0,
                                     0.0,
                                     false,
+                                    None,
                                 );
                                 let fresh_one_page = probe_pages.is_empty();
                                 let e = probe_els
@@ -9178,6 +9206,7 @@ cells={} pitch={:.2} text={:?}",
                                         0.0,
                                         0.0,
                                         false,
+                                        None,
                                     );
                                     if rp.is_empty() {
                                         rels.iter()
@@ -10648,6 +10677,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             0.0
                         },
                         !footnote_ids_current_page.is_empty(),
+                        s755_geom.as_ref(),
                     );
                     // S740: merge the table's per-page note ids into page_fn_refs
                     // (footnote-area render) + roll the LAST page's notes into the
@@ -12633,6 +12663,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 0.0,
                                 0.0,
                                 false,
+                                None,
                             );
                             lp.elements.extend(tbl_elements);
                         }
@@ -12757,6 +12788,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 0.0,
                                 0.0,
                                 false,
+                                None,
                             );
                             lp.elements.extend(tbl_elements);
                         }
@@ -14081,6 +14113,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         0.0,
                         0.0,
                         false, // S740: no cell-footnote reservation in textboxes
+                        None,
                     );
                     elements.extend(tb_elems);
                     elements.extend(table_elements);
@@ -33381,8 +33414,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         grid_pitch: Option<f32>,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
-        page_top: f32,
-        content_height: f32,
+        mut page_top: f32,
+        mut content_height: f32,
         page_width: f32,
         page_height: f32,
         pages: &mut Vec<LayoutPage>,
@@ -33403,7 +33436,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         fn_sep: f32,
         fn_entry_reserve: f32,
         fn_entry_has_notes: bool,
+        page_geometry: Option<&S755Geom>,
     ) -> Vec<LayoutElement> {
+        let page_geometry = page_geometry.filter(|_| {
+            std::env::var("OXI_TABLE_PAGE_GEOMETRY_DISABLE").is_err()
+                // Repeated heading rows also depend on continuation sizing.
+                // Keep their current geometry until header replay and that
+                // sizing can be corrected together.
+                && !table.rows.iter().any(|row| row.header)
+        });
         let mut elements = Vec::new();
         // S740 running state: reserve on the CURRENT page + page-offset tracking.
         let mut s740_reserve: f32 = if row_footnotes.is_some() {
@@ -34654,7 +34695,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             } else {
                 0.0
             };
-            let page_bottom = page_top + content_height - s740_reserve + s992_relief;
+            let mut page_bottom = page_top + content_height - s740_reserve + s992_relief;
             s740_pending_commit = Some(row_idx);
             let row_overflows = cursor.cursor_y + row_height > page_bottom;
             // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
@@ -35311,6 +35352,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     height: page_height,
                     elements: std::mem::take(current_elements),
                 });
+                page_bottom += advance_table_page_geometry(
+                    page_geometry, pages.len() + 1, &mut page_top,
+                    &mut content_height, &mut [],
+                );
                 cursor.set(page_top);
                 s1083_row_start.clear();
                 if !s1083_moved.is_empty() {
@@ -35902,6 +35947,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     0.0,
                                     0.0,
                                     false, // S740: nested notes counted at the outer row
+                                    None,
                                 );
                                 if std::env::var("OXI_DBG_NEST").is_ok() {
                                     let emax = nested_elements
@@ -43089,6 +43135,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     elements: std::mem::take(current_elements),
                 });
 
+                page_bottom += advance_table_page_geometry(
+                    page_geometry, pages.len() + 1, &mut page_top,
+                    &mut content_height, &mut next_page_elems,
+                );
+
                 // Handle multi-page overflow: if next_page_elems still overflow,
                 // keep splitting into additional pages.
                 //
@@ -43449,6 +43500,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         height: page_height,
                         elements: this_page,
                     });
+                    page_bottom += advance_table_page_geometry(
+                        page_geometry, pages.len() + 1, &mut page_top,
+                        &mut content_height, &mut overflow,
+                    );
                     remaining = overflow;
                     // S754b: header on the next continuation page too.
                     if s754_hdr_replay {

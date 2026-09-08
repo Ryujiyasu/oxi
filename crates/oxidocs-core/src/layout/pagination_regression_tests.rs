@@ -250,3 +250,33 @@ fn text_balance_keeps_page_continuation_before_later_paragraphs() {
     assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]).is_none());
     assert_eq!(elements.iter().map(|e| (e.x, e.y)).collect::<Vec<_>>(), before);
 }
+
+#[test]
+fn table_continuations_use_destination_header_geometry() {
+    let cases: &[(&[u8], usize, usize)] = &[
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/even_rows.docx"), 26, 48),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/even_split.docx"), 26, 48),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/even_whole.docx"), 26, 46),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/first_rows.docx"), 20, 46),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/first_split.docx"), 20, 46),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/first_whole.docx"), 16, 41),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/same_rows.docx"), 26, 52),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/same_split.docx"), 26, 52),
+        (include_bytes!("../../../../tests/fixtures/table_page_geometry/same_whole.docx"), 26, 51),
+    ];
+    for (case, (bytes, second_start, third_start)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 3, "case {case}");
+        for row in 1..=60 {
+            let expected_page = if row < *second_start { 1 }
+                else if row < *third_start { 2 } else { 3 };
+            let marker = format!("ROW {row:03}");
+            let actual_pages: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, p)| {
+                p.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                    if text == &marker)).then_some(i + 1)
+            }).collect();
+            assert_eq!(actual_pages, vec![expected_page], "case {case}, {marker}");
+        }
+    }
+}
