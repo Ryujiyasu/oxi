@@ -44011,7 +44011,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             cursor.set(cont_image_bottom);
                         }
                     }
-                } else if s754_split && !is_single_cell_row && !has_lrpb_mid_row {
+                } else if ((s754_split && !has_lrpb_mid_row)
+                    || (has_lrpb_mid_row && s754_hdr_replay))
+                    && !is_single_cell_row
+                {
+                    // Replayed headers occupy space even when a saved page-break
+                    // hint selected the split. Measure every continuation header
+                    // and its line reanchoring instead of using the original row
+                    // geometry, which contains none of that repeated content.
                     // S754: multi-cell content split — the geometric fallback
                     // (row_bottom − split_y) lands the cursor ABOVE the actual
                     // continuation bottom (probethdr: row 11 at y=93 OVERLAPPED

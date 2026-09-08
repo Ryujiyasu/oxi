@@ -1025,3 +1025,42 @@ fn cell_page_break_before_preserves_row_and_header_boundaries() {
         }
     }
 }
+
+#[test]
+fn split_header_extent_is_independent_of_saved_page_breaks() {
+    let cases: &[([&[u8]; 4], usize, f32)] = &[
+        ([
+            include_bytes!("../../../../tests/fixtures/split_header_extent/short_header0_marker0.docx"),
+            include_bytes!("../../../../tests/fixtures/split_header_extent/short_header0_marker1.docx"),
+            include_bytes!("../../../../tests/fixtures/split_header_extent/short_header1_marker0.docx"),
+            include_bytes!("../../../../tests/fixtures/split_header_extent/short_header1_marker1.docx"),
+        ], 2, 24.48),
+        ([
+            include_bytes!("../../../../tests/fixtures/split_header_extent/long_header0_marker0.docx"),
+            include_bytes!("../../../../tests/fixtures/split_header_extent/long_header0_marker1.docx"),
+            include_bytes!("../../../../tests/fixtures/split_header_extent/long_header1_marker0.docx"),
+            include_bytes!("../../../../tests/fixtures/split_header_extent/long_header1_marker1.docx"),
+        ], 4, 72.51),
+    ];
+    for (cases, expected_pages, header_delta) in cases {
+        let mut positions = Vec::new();
+        for bytes in cases {
+            let doc = crate::parser::parse_docx(bytes).unwrap();
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            assert_eq!(layout.pages.len(), *expected_pages);
+            let y = layout.pages.last().unwrap().elements.iter().find_map(|e| {
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == "NEXT0").then_some(e.y)
+            }).unwrap();
+            positions.push(y);
+        }
+        // Repeated headers must retain their measured extent with or without
+        // saved hints, across one and three continuation pages. The unhinted
+        // no-header control isolates the advance measured in fresh Word exports.
+        // Hinted splits without repeated headers retain their separate cursor
+        // path; their line reanchoring is outside this header regression.
+        assert!((positions[2] - positions[3]).abs() < 0.03, "repeated header: {positions:?}");
+        for repeated in &positions[2..] {
+            assert!((repeated - positions[0] - header_delta).abs() < 0.3, "header advance: {positions:?}");
+        }
+    }
+}
