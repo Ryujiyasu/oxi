@@ -536,3 +536,30 @@ fn nested_cell_paragraph_indices_do_not_create_a_false_orphan() {
         }
     }
 }
+
+#[test]
+fn legacy_table_paragraphs_allow_a_lone_first_line() {
+    let cases: &[&[u8]] = &[
+        include_bytes!("../../../../tests/fixtures/cell_pagination/orphan_compat12.docx"),
+        include_bytes!("../../../../tests/fixtures/cell_pagination/orphan_compat14.docx"),
+        include_bytes!("../../../../tests/fixtures/cell_pagination/orphan_compat_absent.docx"),
+    ];
+    for (case, bytes) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 12, "case {case}");
+        for (column, count) in [('A', 2), ('B', 9)] {
+            for (arm, kept) in [3usize, 2, 2, 1, 1, 1].iter().enumerate() {
+                for line in 0..count {
+                    let marker = format!("{column}{arm}LINE{line}");
+                    let pages: Vec<_> = layout.pages.iter().enumerate()
+                        .filter_map(|(i, p)| p.elements.iter().any(|e| matches!(&e.content,
+                            LayoutContent::Text { text, .. } if text == &marker)).then_some(i + 1))
+                        .collect();
+                    let expected = arm * 2 + if line < *kept { 1 } else { 2 };
+                    assert_eq!(pages, vec![expected], "case {case}, {marker}");
+                }
+            }
+        }
+    }
+}

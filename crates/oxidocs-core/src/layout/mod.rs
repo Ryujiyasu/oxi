@@ -42583,6 +42583,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // Moving a row's first paragraph needs a separate
                             // whole-row decision and retains its existing rule.
                             if k == 1 && key.1 > 0
+                                // Legacy and settings-less documents allow a
+                                // lone first line in a split table paragraph.
+                                && self.compat_mode >= 15 && self.compat_mode_explicit
                                 && std::env::var("OXI_CELL_ORPHAN_DISABLE").is_err()
                                 // Nested cells reuse local paragraph indices;
                                 // their lines must not be joined to this paragraph.
