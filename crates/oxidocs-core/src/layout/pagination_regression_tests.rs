@@ -753,3 +753,34 @@ fn deleted_empty_break_before_table_keeps_its_bookmark() {
     assert!(p.runs.iter().any(|r| r.bookmark_name.as_deref() == Some("GapAnchor")));
     assert!(p.runs.iter().any(|r| r.text == "SECOND"));
 }
+
+#[test]
+fn minimum_row_height_controls_first_and_continuation_fragments() {
+    let cases: &[(&[u8], usize, &[usize])] = &[
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/long_min180_fresh0.docx"), 3, &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/long_min60_fresh0.docx"), 3, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/long_min800_fresh0.docx"), 4, &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/long_min800_fresh1.docx"), 3, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/min0.docx"), 2, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/min180.docx"), 2, &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/min400.docx"), 3, &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/min401.docx"), 3, &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/min60.docx"), 2, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/min800.docx"), 3, &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/short_min180.docx"), 2, &[2, 2, 2, 2, 2, 2]),
+        (include_bytes!("../../../../tests/fixtures/minimum_row_height/short_min800.docx"), 3, &[2, 2, 2, 2, 2, 3]),
+    ];
+    for (case, (bytes, page_count, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), *page_count, "case {case}");
+        for (index, expected_page) in expected.iter().enumerate() {
+            let label = if index + 1 == expected.len() { "AFTER".to_string() } else { format!("ROW{:03}", index + 1) };
+            let actual: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, page)| {
+                page.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                    if text == &label)).then_some(i + 1)
+            }).collect();
+            assert_eq!(actual, vec![*expected_page], "case {case}, {label}");
+        }
+    }
+}

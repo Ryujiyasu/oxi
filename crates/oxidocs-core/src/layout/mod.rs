@@ -34647,6 +34647,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // Day 26 plan: this step ALONE first, see specific regressions,
             // then proceed to step 2 (cell line snap gate by !in_table_cell).
 
+            let mut minimum_row_height = None;
             // Apply trHeight constraint.
             // 2026-04-09 (COM re-verified, 0e7a contract sample table 1):
             //   <w:trHeight w:val="830"/> with NO w:hRule attribute →
@@ -34761,7 +34762,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         } else {
                             0.0
                         };
-                        row_height = row_height.max(h + rb2_bw + s1065_vmar);
+                        // A minimum larger than the page fills the available
+                        // page height; it does not create an off-page row box.
+                        let minimum = (h + rb2_bw + s1065_vmar).min(content_height);
+                        minimum_row_height = Some(minimum);
+                        row_height = row_height.max(minimum);
                     }
                 }
             }
@@ -35387,13 +35392,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let s1247_chain_row = std::env::var("OXI_S1247_DISABLE").is_err()
                 && !has_lrpb_mid_row
                 && s1083_kn(row_idx);
+            // Even a splittable row needs room for its minimum first fragment.
+            let minimum_requires_page = minimum_row_height
+                .map_or(false, |minimum| cursor.cursor_y + minimum > page_bottom);
             let needs_row_split = row_overflows
                 && !row.cant_split
                 && has_content
                 && (is_single_cell_row || has_lrpb_mid_row || s754_split)
                 && !widow_break_needed
                 && !s1247_chain_row
-                && !image_atomic_push;
+                && !image_atomic_push
+                && !minimum_requires_page;
 
             // S1058 (2026-08-02, default ON, opt-out OXI_S1058_DISABLE): the
             // "row fits but a saved LRPB says break" whole-push
@@ -43079,7 +43088,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     {
                         match row.height {
                             Some(trh) => {
-                                s817_close.max(page_top + trh + self.rowbox2_trh_bw(table, row))
+                                s817_close.max(page_top + (trh + self.rowbox2_trh_bw(table, row)).min(content_height))
                             }
                             None => s817_close,
                         }
@@ -43944,7 +43953,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && row.height_rule.as_deref() != Some("exact")
                     {
                         row.height
-                            .map(|trh| page_top + trh + self.rowbox2_trh_bw(table, row))
+                            .map(|trh| page_top + (trh + self.rowbox2_trh_bw(table, row)).min(content_height))
                     } else {
                         None
                     };
@@ -44021,7 +44030,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && row.height_rule.as_deref() != Some("exact")
                 {
                     if let Some(trh) = row.height {
-                        let fl = page_top + trh + self.rowbox2_trh_bw(table, row);
+                        let fl = page_top + (trh + self.rowbox2_trh_bw(table, row)).min(content_height);
                         if cursor.cursor_y < fl {
                             if std::env::var("OXI_DBG_SPLIT").is_ok() {
                                 eprintln!(
