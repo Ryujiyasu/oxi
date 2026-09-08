@@ -313,3 +313,50 @@ fn coanchored_floats_share_origin_and_move_to_next_page_together() {
         }
     }
 }
+
+#[test]
+fn list_markers_use_text_descent_and_untyped_grid_keeps_natural_capacity() {
+    let cases: &[(&[u8], usize, &[usize])] = &[
+        (include_bytes!("../../../../tests/fixtures/list_pagination/Arial.docx"), 48, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48]),
+        (include_bytes!("../../../../tests/fixtures/list_pagination/Arial_notype.docx"), 48, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48]),
+        (include_bytes!("../../../../tests/fixtures/list_pagination/Symbol.docx"), 55, &[1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55]),
+        (include_bytes!("../../../../tests/fixtures/list_pagination/Symbol_notype.docx"), 55, &[1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55]),
+    ];
+    for (case, (bytes, count, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), *count, "case {case}");
+        for (i, page) in expected.iter().enumerate() {
+            let marker = format!("ITEM{}", 5320 + i * 2);
+            let actual: Vec<_> = layout.pages.iter().enumerate().filter_map(|(j, p)| {
+                p.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                    if text == &marker)).then_some(j + 1)
+            }).collect();
+            assert_eq!(actual, vec![*page], "case {case}, {marker}");
+        }
+    }
+}
+
+#[test]
+fn modern_justified_hanging_preserves_decimal_paren_exclusion() {
+    let cases: &[(&[u8], &[usize])] = &[
+        (include_bytes!("../../../../tests/fixtures/list_pagination/c14_paren.docx"), &[2]),
+        (include_bytes!("../../../../tests/fixtures/list_pagination/c15_none.docx"), &[2]),
+        (include_bytes!("../../../../tests/fixtures/list_pagination/c15_paren.docx"), &[3, 3, 3, 2]),
+    ];
+    for (case, (bytes, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), expected.len(), "case {case}");
+        for (page, count) in layout.pages.iter().zip(*expected) {
+            let mut ys: Vec<_> = page.elements.iter().filter_map(|e| match &e.content {
+                LayoutContent::Text { text, .. } if !text.trim().is_empty()
+                    && !text.trim().trim_end_matches([')', '.']).chars().all(|c| c.is_ascii_digit()) => Some(e.y),
+                _ => None,
+            }).collect();
+            ys.sort_by(f32::total_cmp);
+            ys.dedup_by(|a, b| (*a - *b).abs() < 0.1);
+            assert_eq!(ys.len(), *count, "case {case}");
+        }
+    }
+}

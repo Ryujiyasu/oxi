@@ -16923,9 +16923,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && !footer_tight
             {
                 let nat_metrics = self.metrics_for_text(&marker_text, marker_style, &para.style);
-                nat_metrics
-                    .natural_line_height_hhea(marker_font_size)
-                    .min(marker_break_h)
+                let mut marker_natural = nat_metrics.natural_line_height_hhea(marker_font_size);
+                // A Symbol bullet contributes ascent, while descent comes from
+                // the text (the same component rule as S820b below). Counting
+                // Symbol's own descent here can reject a line the body accepts.
+                if marker.contains('\u{F0B7}')
+                    && !matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"))
+                    && std::env::var("OXI_SYMBOL_FIT_DESCENT_DISABLE").is_err()
+                {
+                    let text_descent = para.runs.iter()
+                        .filter(|r| !r.text.trim().is_empty())
+                        .map(|r| {
+                            let fs = self.resolve_font_size(&r.style, &para.style);
+                            self.metrics_for_text(&r.text, &r.style, &para.style).win_descent * fs
+                        })
+                        .reduce(f32::max);
+                    if let Some(descent) = text_descent {
+                        marker_natural -= (nat_metrics.win_descent * marker_font_size - descent).max(0.0);
+                    }
+                }
+                marker_natural.min(marker_break_h)
             } else {
                 marker_break_h
             };
@@ -18288,7 +18305,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // also showed a wrapped continuation line, a <w:br/> continuation line, a
         // fresh 1-line paragraph and a fresh paragraph after an 8pt gap all
         // flipping at the SAME box-top, so the line class is not a discriminator.
-        let no_type_multiple_ink = page.doc_grid_no_type
+        // An untyped docGrid does not change the Latin page-bottom capacity.
+        // Use the hhea line as for a document with no grid; the older path
+        // below substitutes the rounded spacing height for that capacity.
+        let no_type_multiple_ink = std::env::var("OXI_NATURAL_CAPACITY_DISABLE").is_ok()
+            && page.doc_grid_no_type
             && is_multiple_spacing
             && !self.doc_body_has_real_cjk
             && std::env::var("OXI_NTMULT_DISABLE").is_err()
@@ -24228,7 +24249,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
                 })
             });
-        let s953_hang = s809_hang
+        // The modern justified arm of S1262 must retain the numbered-list
+        // exclusion too; only the legacy arm has independent hanging rules.
+        let s953_hang = (s809_hang && (s809_legacy || !s1018_decimal_paren_list))
             || (!self.doc_body_has_real_cjk
                 && self.compat_mode >= 15
                 && self.compat_mode_explicit
