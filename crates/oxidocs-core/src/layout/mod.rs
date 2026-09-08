@@ -17155,11 +17155,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .collect()
         };
 
-        // Resolve font size for line breaking
+        // Resolve font size for line breaking. An empty paragraph has no
+        // glyphs whose run formatting can set its size; its paragraph mark
+        // uses the paragraph/default inheritance chain instead.
         let default_style = RunStyle::default();
         let para_font_size = self.resolve_font_size(
             para.runs
                 .first()
+                .filter(|_| para.runs.iter().any(|r| !r.text.is_empty()))
                 .map(|r| &r.style)
                 .unwrap_or(&default_style),
             &para.style,

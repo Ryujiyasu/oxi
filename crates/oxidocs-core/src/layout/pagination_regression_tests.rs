@@ -609,3 +609,24 @@ fn whitespace_footer_lines_reserve_before_spacing_only_once() {
         }
     }
 }
+
+#[test]
+fn empty_runs_do_not_override_the_paragraph_mark_size() {
+    let cases: &[&[u8]] = &[
+        include_bytes!("../../../../tests/fixtures/empty_run_mark/none.docx"),
+        include_bytes!("../../../../tests/fixtures/empty_run_mark/empty11.docx"),
+        include_bytes!("../../../../tests/fixtures/empty_run_mark/empty20.docx"),
+        include_bytes!("../../../../tests/fixtures/empty_run_mark/space11.docx"),
+        include_bytes!("../../../../tests/fixtures/empty_run_mark/space20.docx"),
+    ];
+    for (case, bytes) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "case {case}");
+        let y = |label: &str| layout.pages[0].elements.iter()
+            .find(|e| matches!(&e.content, LayoutContent::Text { text, .. } if text == label))
+            .unwrap().y;
+        assert!((y("AFTER") - y("FIRST") - 26.4).abs() < 0.08,
+            "case {case}: empty run changed the Word paragraph-mark advance");
+    }
+}
