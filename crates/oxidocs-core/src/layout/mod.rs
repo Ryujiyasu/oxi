@@ -24980,6 +24980,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
+                            // The final segment must receive the same punctuation
+                            // allowance as the whole-token fit decision.
+                            let segment_hang_tw = if cc == total_chars {
+                                if c14_active && c14_space_tw > 0 {
+                                    if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() {
+                                        (pt_to_tw(word_trail_hang_w) - 1).max(0)
+                                    } else { 0 }
+                                } else { pt_to_tw(word_trail_hang_w) }
+                            } else { 0 };
                             // ★S1028_HG: the whole-token decision above includes the
                             // trailing-punct hang, but this SEGMENT placement re-tests
                             // WITHOUT it — a token whose only internal opportunity is its
@@ -24987,10 +24996,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // decision («revenues,»: decision KEEP, segment wrapped).
                             // Apply the same exclusive-boundary hang to the LAST segment.
                             if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
-                                + (if cc == total_chars && c14_active && c14_space_tw > 0
-                                     && !s1026_final_token
-                                     && std::env::var("OXI_S1028_HG_DISABLE").is_err()
-                                   { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 })
+                                + segment_hang_tw
                                 && !current_line.fragments.is_empty() && !para_all_whitespace
                                 && !s1059_overlong {
                                 wrap_and_seed!(ws);
@@ -25025,10 +25031,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) })
                                     + right_tab_slack_tw
                                     + s958_center_slack(center_tab_stop_tw, current_width_tw)
-                                    + (if cc == total_chars && c14_active && c14_space_tw > 0
-                                         && !s1026_final_token
-                                         && std::env::var("OXI_S1028_HG_DISABLE").is_err()
-                                       { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 });
+                                    + segment_hang_tw;
                                 let overflows = current_width_tw + piece_w_tw > limit;
                                 if !s1059 || !overflows || piece_start >= cc {
                                     let seg: String = wchars[piece_start..cc].iter().collect();
@@ -25046,7 +25049,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 let mut k = piece_start;
                                 while k < cc {
                                     let w = word_char_ws[k] - piece_start_w;
-                                    if current_width_tw + pt_to_tw(w) > limit { break; }
+                                    // Only the complete final segment can spend
+                                    // its trailing punctuation allowance.
+                                    let prefix_limit = if k + 1 == cc { limit } else { limit - segment_hang_tw };
+                                    if current_width_tw + pt_to_tw(w) > prefix_limit { break; }
                                     k += 1;
                                 }
                                 if k <= piece_start {

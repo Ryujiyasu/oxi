@@ -630,3 +630,35 @@ fn empty_runs_do_not_override_the_paragraph_mark_size() {
             "case {case}: empty run changed the Word paragraph-mark advance");
     }
 }
+
+#[test]
+fn latin_segment_punctuation_matches_word_line_breaks() {
+    let cases: &[(&[u8], &[&str])] = &[
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_comma.docx"), &["AAA AAAAA,", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_letter.docx"), &["AAA", "AAAAAx", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_long_comma.docx"), &["AAAAAAAAA", "AAAAAAAAA", "AA, NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_period.docx"), &["AAA AAAAA.", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_semicolon.docx"), &["AAA", "AAAAA;", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/15_comma.docx"), &["AAA", "AAAAA,", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/15_letter.docx"), &["AAA", "AAAAAx", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/15_long_comma.docx"), &["AAAAAAAAA", "AAAAAAAAA", "AA, NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/15_period.docx"), &["AAA", "AAAAA.", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/15_semicolon.docx"), &["AAA", "AAAAA;", "NEXT"]),
+    ];
+    for (case, (bytes, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "case {case}");
+        let mut lines: Vec<(f32, String)> = Vec::new();
+        for element in &layout.pages[0].elements {
+            if let LayoutContent::Text { text, .. } = &element.content {
+                if let Some((_, line)) = lines.iter_mut().find(|(y, _)| (*y - element.y).abs() < 0.01) {
+                    line.push_str(text);
+                } else { lines.push((element.y, text.clone())); }
+            }
+        }
+        lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let actual: Vec<_> = lines.iter().map(|(_, text)| text.trim()).filter(|text| !text.is_empty()).collect();
+        assert_eq!(actual.as_slice(), *expected, "case {case}");
+    }
+}
