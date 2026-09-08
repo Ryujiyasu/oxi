@@ -33918,6 +33918,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // cell-Y errors are a DIFFERENT mechanism (NOT this col0-before-taller-cell
             // ordering). Opt-in so a future no-docGrid vAlign=center doc gets the fix.
             let s503_enable = std::env::var("OXI_S503_ENABLE").is_ok();
+            let measure_cant_split_fit = row.cant_split
+                && !self.doc_body_has_real_cjk
+                && row.height_rule.as_deref() != Some("exact");
             let mut center_row_h: f32 = 0.0;
             let row_entry_cursor_y = cursor.cursor_y;
             // S1083 (2026-08-06, default ON, opt-out OXI_S1083_DISABLE):
@@ -34242,7 +34245,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 );
                                 // S503: render-line-height variant for centering floor
                                 // (opt-in; default OFF avoids the extra estimate call).
-                                let p3 = if s503_enable {
+                                let p3 = if s503_enable || measure_cant_split_fit {
                                     self.estimate_para_height_emit_render(
                                         para,
                                         inner_w,
@@ -34788,7 +34791,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             };
             let mut page_bottom = page_top + content_height - s740_reserve + s992_relief;
             s740_pending_commit = Some(row_idx);
-            let row_overflows = cursor.cursor_y + row_height > page_bottom;
+            // Test the whole rendered row against the remaining space without
+            // changing the height used for cell alignment before rendering.
+            let row_fit_height = if measure_cant_split_fit {
+                row_height.max(center_row_h)
+            } else {
+                row_height
+            };
+            let row_overflows = cursor.cursor_y + row_fit_height > page_bottom;
             // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
             // ANY cell's FIRST paragraph carries `<w:lastRenderedPageBreak/>`
             // on its run[0], Word's saved render broke before this row.

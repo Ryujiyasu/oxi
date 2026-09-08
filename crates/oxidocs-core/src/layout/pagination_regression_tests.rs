@@ -662,3 +662,28 @@ fn latin_segment_punctuation_matches_word_line_breaks() {
         assert_eq!(actual.as_slice(), *expected, "case {case}");
     }
 }
+
+#[test]
+fn cant_split_row_fits_the_rendered_text_height() {
+    // Word: 13 Times New Roman 11pt lines need 164.436pt, not 156pt.
+    // With 160pt left, cantSplit moves the entire row to the next page.
+    let cases: &[(&[u8], bool, bool)] = &[
+        (include_bytes!("../../../../tests/fixtures/cant_split_row_fit/lead100_cant1.docx"), true, true),
+        (include_bytes!("../../../../tests/fixtures/cant_split_row_fit/lead100_cant0.docx"), true, false),
+        (include_bytes!("../../../../tests/fixtures/cant_split_row_fit/lead90_cant1.docx"), false, true),
+        (include_bytes!("../../../../tests/fixtures/cant_split_row_fit/lead90_cant0.docx"), false, false),
+    ];
+    for (case, (bytes, overflow, cant_split)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for line in 1..=13 {
+            let label = format!("ROW{line:03}");
+            let pages: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, p)| {
+                p.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                    if text == &label)).then_some(i + 1)
+            }).collect();
+            let expected = if *overflow && (*cant_split || line == 13) { 2 } else { 1 };
+            assert_eq!(pages, vec![expected], "case {case}, {label}");
+        }
+    }
+}
