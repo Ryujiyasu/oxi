@@ -563,3 +563,27 @@ fn legacy_table_paragraphs_allow_a_lone_first_line() {
         }
     }
 }
+
+#[test]
+fn cell_line_spacing_preserves_defaults_until_a_style_overrides_them() {
+    let cases: &[(&[u8], f32)] = &[
+        (include_bytes!("../../../../tests/fixtures/cell_line_spacing/none.docx"), 15.84),
+        (include_bytes!("../../../../tests/fixtures/cell_line_spacing/empty.docx"), 15.84),
+        (include_bytes!("../../../../tests/fixtures/cell_line_spacing/single.docx"), 13.80),
+        (include_bytes!("../../../../tests/fixtures/cell_line_spacing/multiple.docx"), 20.64),
+        (include_bytes!("../../../../tests/fixtures/cell_line_spacing/direct.docx"), 27.60),
+    ];
+    for (case, (bytes, word_pitch)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "case {case}");
+        let y = |label: &str| layout.pages[0].elements.iter()
+            .find(|e| matches!(&e.content, LayoutContent::Text { text, .. } if text == label))
+            .unwrap().y;
+        assert!((y("SECOND") - y("FIRST") - word_pitch).abs() < 0.08,
+            "case {case}: Word pitch {word_pitch}");
+        // The row estimate and emitted lines must reserve the same space.
+        assert!((y("AFTER") - y("FIRST") - 2.0 * (y("SECOND") - y("FIRST"))).abs() < 0.01,
+            "case {case}: row height disagrees with its lines");
+    }
+}

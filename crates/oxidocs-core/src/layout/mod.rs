@@ -36282,17 +36282,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     continue;
                                 }
                                 s1067_skip_empties = false;
-                                // Apply table style pPr as fallback (ECMA-376: table style pPr < paragraph style < direct)
-                                // Word resets line spacing to Single and space_after to 0 for table cell
-                                // paragraphs that inherit from Normal style (no direct spacing in pPr).
-                                // COM-measured: Normal outside table = ls=13.80(1.15x) sa=10,
-                                //               Normal inside table = ls=12.00(Single) sa=0.
-                                // COM-confirmed: Word resets docDefaults-only lineSpacing to Single in table cells,
-                                // but keeps Normal style's lineSpacing. gen2_036: docDefaults line=276 → cell ls=12(Single).
-                                // test_table_borders.docx: Normal style line=276 → cell ls=13.80(1.15x).
+                                // Resolve cell line spacing in the same order as the
+                                // height estimate: direct/paragraph style, table style,
+                                // then document defaults.
+                                let cell_default_line_spacing = table.style.para_style.as_ref()
+                                    .filter(|ps| ps.line_spacing.is_some());
+                                // A table overrides document defaults only when it
+                                // declares line spacing, as in the height estimate.
+                                let preserve_cell_defaults =
+                                    std::env::var("OXI_CELL_DEFAULT_LINE_DISABLE").is_err();
                                 let effective_line_spacing =
                                     if para.style.line_spacing_from_doc_defaults {
-                                        None // Reset to single
+                                        if preserve_cell_defaults {
+                                            cell_default_line_spacing.and_then(|ps| ps.line_spacing)
+                                                .or(para.style.line_spacing)
+                                        } else { None }
                                     } else {
                                         para.style.line_spacing.or_else(|| {
                                             table
@@ -36304,7 +36308,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     };
                                 let effective_line_rule =
                                     if para.style.line_spacing_from_doc_defaults {
-                                        None
+                                        if preserve_cell_defaults {
+                                            cell_default_line_spacing.map_or(
+                                                para.style.line_spacing_rule.as_deref(),
+                                                |ps| ps.line_spacing_rule.as_deref())
+                                        } else { None }
                                     } else {
                                         para.style.line_spacing_rule.as_deref().or_else(|| {
                                             table
