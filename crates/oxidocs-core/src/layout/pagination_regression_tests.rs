@@ -418,3 +418,121 @@ fn widow_lookahead_uses_the_same_at_least_height_as_line_fitting() {
         }
     }
 }
+
+
+#[test]
+fn cell_nbsp_uses_measured_space_advance_without_changing_break_semantics() {
+    let cases: &[(&[u8], &[usize])] = &[
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/nbsp_plain.docx"), &[0, 0, 0, 0]),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/nbsp_space.docx"), &[0, 0, 0, 0]),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/nbsp_nbsp.docx"), &[1, 0, 0, 0]),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/nbsp_split.docx"), &[1, 0, 0, 0]),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/nbsp_nbsp2.docx"), &[1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/nbsp_internal.docx"), &[1, 1, 1, 1]),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/nbsp_linebreak.docx"), &[2, 1, 1, 1]),
+    ];
+    for (case, (bytes, extra_lines)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 4, "case {case}");
+        for (page, extra) in layout.pages.iter().zip(*extra_lines) {
+            let after = page.elements.iter().find(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text == "AFTER")).unwrap();
+            // Word's four cell-width probes add these whole Calibri 10pt lines.
+            let expected = 44.414 + *extra as f32 * 12.207;
+            assert!((after.y - expected).abs() < 0.01,
+                "case {case}: {} vs {expected}", after.y);
+        }
+    }
+}
+
+#[test]
+fn cell_orphan_control_keeps_first_two_lines_after_earlier_cell_paragraphs() {
+    let cases: &[(&[u8], usize, bool)] = &[
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/row2_0.docx"), 2, false),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/row2_1.docx"), 2, true),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/row5_0.docx"), 5, false),
+        (include_bytes!("../../../../tests/fixtures/cell_pagination/row5_1.docx"), 5, true),
+    ];
+    for (case, (bytes, a_lines, widow_on)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 12, "case {case}");
+        for (column, count) in [('A', *a_lines), ('B', 9)] {
+            for (arm, natural_kept) in [3usize, 2, 2, 1, 1, 1].iter().enumerate() {
+                let kept = if *widow_on && *natural_kept == 1 { 0 }
+                    else { (*natural_kept).min(count) };
+                for line in 0..count {
+                    let marker = format!("{column}{arm}LINE{line}");
+                    let pages: Vec<_> = layout.pages.iter().enumerate()
+                        .filter_map(|(i, p)| p.elements.iter().any(|e| matches!(&e.content,
+                            LayoutContent::Text { text, .. } if text == &marker)).then_some(i + 1))
+                        .collect();
+                    let expected = arm * 2 + if line < kept { 1 } else { 2 };
+                    assert_eq!(pages, vec![expected], "case {case}, {marker}");
+                }
+            }
+        }
+    }
+}
+
+
+#[test]
+fn cell_list_markers_follow_their_paragraph_across_an_orphan_split() {
+    let mut doc = crate::parser::parse_docx(include_bytes!(
+        "../../../../tests/fixtures/cell_pagination/row2_1.docx")).unwrap();
+    let mut arm = 0;
+    for page in &mut doc.pages {
+        for block in &mut page.blocks {
+            if let crate::ir::Block::Table(table) = block {
+                for (col, cell) in table.rows[0].cells.iter_mut().enumerate() {
+                    if let crate::ir::Block::Paragraph(para) = &mut cell.blocks[1] {
+                        para.style.list_marker = Some(format!("MARK{arm}{col}"));
+                        para.style.list_marker_size = Some(10.0);
+                        para.style.list_indent = Some(12.0);
+                    }
+                }
+                arm += 1;
+            }
+        }
+    }
+    assert_eq!(arm, 6);
+    let layout = LayoutEngine::for_document(&doc).layout(&doc);
+    for (arm, expected) in [1usize, 3, 5, 8, 10, 12].iter().enumerate() {
+        for col in 0..2 {
+            let marker = format!("MARK{arm}{col}");
+            let found: Vec<_> = layout.pages.iter().enumerate()
+                .filter_map(|(i, page)| page.elements.iter().any(|e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text == &marker)).then_some(i + 1))
+                .collect();
+            assert_eq!(found, vec![*expected], "{marker}");
+        }
+    }
+}
+
+
+#[test]
+fn nested_cell_paragraph_indices_do_not_create_a_false_orphan() {
+    let doc = crate::parser::parse_docx(include_bytes!(
+        "../../../../tests/fixtures/cell_pagination/nested.docx")).unwrap();
+    let layout = LayoutEngine::for_document(&doc).layout(&doc);
+    assert_eq!(layout.pages.len(), 11);
+    let titles = [1usize, 2, 4, 6, 8, 10];
+    let nested_first = [1usize, 2, 4, 7, 9, 11];
+    let nested_second = [1usize, 3, 5, 7, 9, 11];
+    for arm in 0..6 {
+        for (col, label) in ['A', 'B'].iter().enumerate() {
+            for (marker, expected) in [
+                (format!("{label}{arm}LINE0"), titles[arm]),
+                (format!("N{arm}{col}LINE0"), nested_first[arm]),
+                (format!("N{arm}{col}LINE1"), nested_second[arm]),
+            ] {
+                let found: Vec<_> = layout.pages.iter().enumerate()
+                    .filter_map(|(i, page)| page.elements.iter().any(|e| matches!(&e.content,
+                        LayoutContent::Text { text, .. } if text == &marker)).then_some(i + 1))
+                    .collect();
+                assert_eq!(found, vec![expected], "{marker}");
+            }
+        }
+    }
+}

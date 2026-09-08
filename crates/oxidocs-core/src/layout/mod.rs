@@ -17,6 +17,17 @@ use crate::ir::*;
 /// Pre-allocated single-character strings to avoid heap allocation in hot loops.
 const TAB_STRING: &str = "\t";
 const SPACE_STRING: &str = " ";
+
+// NBSP uses the ordinary space's measured advance even when the metrics table
+// stores only the latter. Keep cell wrapping and its height estimate on the
+// same unrounded advance, without changing NBSP's line-break semantics.
+fn cell_has_em_advance(metrics: &FontMetrics, ch: char) -> bool {
+    metrics.char_widths.contains_key(&ch)
+        || (ch == '\u{00a0}'
+            && crate::font::s892_nbsp_as_space()
+            && std::env::var("OXI_CELL_NBSP_METRIC_DISABLE").is_err()
+            && metrics.char_widths.contains_key(&' '))
+}
 /// S697 (2026-06-29): Word's FIXED "1 line" for NO-GRID beforeLines/afterLines
 /// (= 240 twips). MEASURED constant 12.0pt across every font/size and para line
 /// spacing (_bl_derive). docGrid uses the grid pitch instead.
@@ -37887,7 +37898,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     && std::env::var("OXI_LATINEM_DISABLE").is_err()
                                                     && latinem_in_scope(self.doc_body_has_real_cjk)
                                                     && !kinsoku::is_cjk(ch)
-                                                    && cm.char_widths.contains_key(&ch)
+                                                    && cell_has_em_advance(cm, ch)
                                                 {
                                                     cw = cm.char_width_em(ch) * font_size;
                                                 } else if kern_active
@@ -37909,7 +37920,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         && std::env::var("OXI_S1017_DISABLE").is_err()
                                         && !self.doc_body_has_real_cjk
                                         && !kinsoku::is_cjk(ch)
-                                        && cm.char_widths.contains_key(&ch)
+                                        && cell_has_em_advance(cm, ch)
                                                 {
                                                     cw = cm.char_width_em(ch) * font_size;
                                                     if let Some(&next) =
@@ -40985,6 +40996,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 );
                                                 // Session 72 Phase A: populate text_y_off.
                                                 marker_el.text_y_off = cell_text_y_off;
+                                                // A marker travels with its cell paragraph when
+                                                // widow/orphan control changes the page split.
+                                                marker_el.cell_paragraph_index = Some(cell_para_counter);
+                                                marker_el.cell_row_index = Some(row_idx);
+                                                marker_el.cell_col_index = Some(cell_idx);
                                                 cell_elements.push(marker_el);
                                             }
                                         }
@@ -42486,7 +42502,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // uklocalspending p21 row 1 is the witness the S819 note describes:
                 // saved split 708.8, one line above it, and Word keeps that lone line.
                 //
-                // SCOPE 2 -- only where 2 lines can still be KEPT (n >= 4). Where the
+                // SCOPE 2 -- the last-line adjustment applies only where 2 lines
+                // can still be KEPT (n >= 4). Where the
                 // pull would leave 1 or 0, Word's behaviour is measured but NOT
                 // resolved, so this rule declines rather than guess:
                 //   `_pb_rowwidow` SHORT fill60 -- A is 3 lines splitting 2/1, and Word
@@ -42498,7 +42515,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // table's first row"; the row is ~263pt so it is not "taller than a
                 // page"; the remaining candidates (space before/after, lineRule
                 // atLeast, cell count, following rows) are untested. Until one of them
-                // separates the two, the n<=3 region keeps today's behaviour.
+                // separates the two, the n<=3 region keeps its last-line behaviour.
                 let s1246_limit: std::collections::HashMap<(usize, usize), f32> =
                     if s819_natural_split && std::env::var("OXI_S1246_DISABLE").is_err() {
                         // Lines of each cell paragraph, as (top, bottom) per distinct
@@ -42521,7 +42538,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                         let mut out = std::collections::HashMap::new();
                         for (key, mut lines) in plines {
-                            if lines.len() < 4 {
+                            if lines.len() < 2 {
                                 continue;
                             }
                             let widow_on = row
@@ -42561,7 +42578,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     l.1 + extra <= split_y + 0.1 - s819_q
                                 })
                                 .count();
-                            if k == n - 1 {
+                            // Once earlier paragraphs of this cell have fitted,
+                            // keep the next paragraph's first two lines together.
+                            // Moving a row's first paragraph needs a separate
+                            // whole-row decision and retains its existing rule.
+                            if k == 1 && key.1 > 0
+                                && std::env::var("OXI_CELL_ORPHAN_DISABLE").is_err()
+                                // Nested cells reuse local paragraph indices;
+                                // their lines must not be joined to this paragraph.
+                                && row.cells.get(key.0).map_or(false, |cell|
+                                    !cell.blocks.iter().any(|b| matches!(b, Block::Table(_))))
+                            {
+                                out.insert(key, lines[0].0);
+                            } else if n >= 4 && k == n - 1 {
                                 out.insert(key, lines[n - 2].0);
                             }
                         }
@@ -44968,7 +44997,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && std::env::var("OXI_LATINEM_DISABLE").is_err()
                         && latinem_in_scope(self.doc_body_has_real_cjk)
                         && !kinsoku::is_cjk(ch)
-                        && cm.char_widths.contains_key(&ch)
+                        && cell_has_em_advance(cm, ch)
                     {
                         cw = cm.char_width_em(ch) * font_size;
                     } else if kern_active
@@ -44979,7 +45008,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && std::env::var("OXI_S1017_DISABLE").is_err()
                         && !self.doc_body_has_real_cjk
                         && !kinsoku::is_cjk(ch)
-                        && cm.char_widths.contains_key(&ch)
+                        && cell_has_em_advance(cm, ch)
                     {
                         cw = cm.char_width_em(ch) * font_size;
                         if let Some(&next) = s1017_chars.get(s1017_i + 1) {
