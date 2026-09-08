@@ -34621,7 +34621,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // Mirrors the body-paragraph LRPB SOFT rule at mod.rs:1888.
             // de6e / 29dc6e outliers (4 each) had LRPB-at-cell-start markers
             // that the table layout previously ignored.
-            let row_has_lrpb_at_cell_start = !(std::env::var("OXI_NATURAL_LRPB_DISABLE").is_err() && self.lrpb_count_distrust.get()) && row.cells.iter().any(|cell| {
+            // A document-wide excess of cached breaks does not invalidate a
+            // table row's locally checked hint. The near-bottom and row-fit
+            // guards below still decide whether this hint can move the row.
+            let row_has_lrpb_at_cell_start = row.cells.iter().any(|cell| {
                 cell.blocks.first().map_or(false, |b| match b {
                     Block::Paragraph(p) => p
                         .runs

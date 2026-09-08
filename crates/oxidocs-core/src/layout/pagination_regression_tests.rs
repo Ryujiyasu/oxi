@@ -5,6 +5,22 @@
 use super::*;
 
 #[test]
+fn document_break_count_distrust_preserves_locally_valid_table_hint() {
+    let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/table_row_cached_break.docx"));
+    let doc = crate::parser::parse_docx(bytes).unwrap();
+    let engine = LayoutEngine::for_document(&doc);
+    let trusted = engine.layout_pass(&doc);
+    assert_eq!(trusted.pages.len(), 2);
+    engine.lrpb_count_distrust.set(true);
+    let distrusted = engine.layout_pass(&doc);
+    assert_eq!(distrusted.pages.len(), trusted.pages.len());
+    assert!(distrusted.pages[1].elements.iter().any(|e| {
+        matches!(&e.content, LayoutContent::Text { text, .. } if text.contains("Second"))
+    }));
+}
+
+#[test]
 fn vertical_pair_compression_does_not_charge_back_structural_spacing() {
     let mut engine = LayoutEngine::new();
     engine.default_font_size = 10.5;
