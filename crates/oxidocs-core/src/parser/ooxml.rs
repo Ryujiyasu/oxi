@@ -3769,7 +3769,10 @@ fn parse_paragraph(
         let only_br = runs.len() == 1 || runs.iter().skip(1).all(|r| r.text.is_empty());
         if only_br {
             style.page_break_after = true;
-        } else {
+        } else if !in_cell {
+            // In a table cell Word ignores a leading manual page break as a
+            // row boundary. Preserve paragraph/style pageBreakBefore instead
+            // of manufacturing one from the inline break.
             style.page_break_before = true;
         }
         // Remove the break-only run; `chars_unit_run_style` above already kept

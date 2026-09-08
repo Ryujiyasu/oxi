@@ -979,3 +979,49 @@ fn inline_symbol_cell_alignment_is_independent_of_column_order() {
         assert!((after - 0.48).abs() < 0.03, "row advance: {after}");
     }
 }
+
+#[test]
+fn cell_page_break_before_preserves_row_and_header_boundaries() {
+    let expected: serde_json::Value = serde_json::from_str(include_str!("../../../../tests/fixtures/cell_page_break_before/word.json")).unwrap();
+    let cases: &[(&str, &[u8])] = &[
+        ("control", include_bytes!("../../../../tests/fixtures/cell_page_break_before/control.docx")),
+        ("first_fresh", include_bytes!("../../../../tests/fixtures/cell_page_break_before/first_fresh.docx")),
+        ("first_lead", include_bytes!("../../../../tests/fixtures/cell_page_break_before/first_lead.docx")),
+        ("left", include_bytes!("../../../../tests/fixtures/cell_page_break_before/left.docx")),
+        ("left_cant", include_bytes!("../../../../tests/fixtures/cell_page_break_before/left_cant.docx")),
+        ("mid_left", include_bytes!("../../../../tests/fixtures/cell_page_break_before/mid_left.docx")),
+        ("mid_right", include_bytes!("../../../../tests/fixtures/cell_page_break_before/mid_right.docx")),
+        ("right", include_bytes!("../../../../tests/fixtures/cell_page_break_before/right.docx")),
+        ("left_keep", include_bytes!("../../../../tests/fixtures/cell_page_break_before/left_keep.docx")),
+        ("left_header", include_bytes!("../../../../tests/fixtures/cell_page_break_before/left_header.docx")),
+        ("left_header_keep", include_bytes!("../../../../tests/fixtures/cell_page_break_before/left_header_keep.docx")),
+        ("tall_0", include_bytes!("../../../../tests/fixtures/cell_page_break_before/tall_0.docx")),
+        ("tall_1", include_bytes!("../../../../tests/fixtures/cell_page_break_before/tall_1.docx")),
+        ("inherited", include_bytes!("../../../../tests/fixtures/cell_page_break_before/inherited.docx")),
+        ("direct_off", include_bytes!("../../../../tests/fixtures/cell_page_break_before/direct_off.docx")),
+        ("derived_off", include_bytes!("../../../../tests/fixtures/cell_page_break_before/derived_off.docx")),
+        ("manual_leading", include_bytes!("../../../../tests/fixtures/cell_page_break_before/manual_leading.docx")),
+        ("manual_same_run", include_bytes!("../../../../tests/fixtures/cell_page_break_before/manual_same_run.docx")),
+    ];
+    for &(name, bytes) in cases {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let word = &expected[name];
+        assert_eq!(layout.pages.len(), word["pages"].as_u64().unwrap() as usize, "{name}");
+        let labels = word["labels"].as_object().unwrap();
+        let mut actual = std::collections::HashMap::<String, Vec<usize>>::new();
+        for (page_idx, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    for label in text.split_whitespace().filter(|t| labels.contains_key(*t)) {
+                        actual.entry(label.to_owned()).or_default().push(page_idx + 1);
+                    }
+                }
+            }
+        }
+        for (label, pages) in labels {
+            let want: Vec<usize> = pages.as_array().unwrap().iter().map(|p| p.as_u64().unwrap() as usize).collect();
+            assert_eq!(actual.get(label), Some(&want), "{name}: {label}");
+        }
+    }
+}

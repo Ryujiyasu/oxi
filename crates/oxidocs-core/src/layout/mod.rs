@@ -35450,7 +35450,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // Even a splittable row needs room for its minimum first fragment.
             let minimum_requires_page = minimum_row_height
                 .map_or(false, |minimum| cursor.cursor_y + minimum > page_bottom);
+            // Word starts a row on a new page when the first paragraph of its
+            // first cell requests it. Other cells and later paragraphs do not
+            // impose a row break. The existing content guard avoids blank pages.
+            let explicit_row_page_break = row.cells.first()
+                .and_then(|cell| cell.blocks.first())
+                .map_or(false, |block| matches!(block,
+                    Block::Paragraph(para) if para.style.page_break_before));
             let needs_row_split = row_overflows
+                && !explicit_row_page_break
                 && !row.cant_split
                 && has_content
                 && (is_single_cell_row || has_lrpb_mid_row || s754_split)
@@ -35472,7 +35480,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // the overflow-split path and let this stale whole-push through.
             let s1058_midrow_lrpb_no_push =
                 has_lrpb_mid_row && std::env::var("OXI_S1058_DISABLE").is_err();
-            if (row_overflows
+            if (explicit_row_page_break || row_overflows
                 || (lrpb_row_should_break && !s1058_midrow_lrpb_no_push)
                 || widow_break_needed)
                 && has_content
@@ -35521,7 +35529,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // extent is (cursor - chain_start_y).
                 let mut s1083_moved: Vec<LayoutElement> = Vec::new();
                 let mut s1083_extent = 0.0f32;
-                if s1083_on {
+                if s1083_on && !explicit_row_page_break {
                     let mut c = row_idx;
                     while c > 0
                         && s1083_row_start.iter().any(|(ri, _)| *ri == c - 1)
