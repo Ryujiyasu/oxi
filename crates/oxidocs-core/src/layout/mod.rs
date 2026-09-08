@@ -24432,6 +24432,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // within `word`, run_idx, char_offset). seg_pending marks "next char starts a
         // new segment" (after a break char).
         let mut word_seg_meta: Vec<(usize, usize, usize)> = Vec::new();
+        let mut word_seg_styles: Vec<(usize, RunStyle)> = Vec::new();
         let mut seg_pending = false;
 
         // S1026 (Origin A, 2026-07-28): total / running non-whitespace char count.
@@ -25017,6 +25018,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             && std::env::var("OXI_S1059_DISABLE").is_err();
                         for &(cc, cw) in bounds.iter() {
                             if cc <= seg_start || cc > total_chars { continue; }
+                            let segment_style = word_seg_styles.iter().rev()
+                                .find(|(start, _)| *start <= seg_start)
+                                .map(|(_, style)| style).unwrap_or(&ws);
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
                             // The final segment must receive the same punctuation
@@ -25075,7 +25079,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 if !s1059 || !overflows || piece_start >= cc {
                                     let seg: String = wchars[piece_start..cc].iter().collect();
                                     current_line.fragments.push(LineFragment {
-                                        text: seg, width: piece_w, natural_width: piece_w, style: ws.clone(),
+                                        text: seg, width: piece_w, natural_width: piece_w, style: segment_style.clone(),
                                         tab_alignment: None, tab_position: None, field_type: wft,
                                         run_index: ridx, char_offset: choff + (piece_start - seg_start),
                                     });
@@ -25104,7 +25108,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 let pw = word_char_ws[k - 1] - piece_start_w;
                                 let seg: String = wchars[piece_start..k].iter().collect();
                                 current_line.fragments.push(LineFragment {
-                                    text: seg, width: pw, natural_width: pw, style: ws.clone(),
+                                    text: seg, width: pw, natural_width: pw, style: segment_style.clone(),
                                     tab_alignment: None, tab_position: None, field_type: wft,
                                     run_index: ridx, char_offset: choff + (piece_start - seg_start),
                                 });
@@ -25245,6 +25249,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     word_natural_width = 0.0;
                     if latin_wordwrap { word_seg_meta.clear(); word_char_ws.clear(); }
                     }
+                    word_seg_styles.clear();
                     if latin_wordwrap { seg_pending = false; }
                 }
             };
@@ -25325,6 +25330,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && fragments[frag_outer_idx - 1].1.vertical_align != style.vertical_align
             {
                 flush_word!(fragments[frag_outer_idx - 1].1);
+            }
+            // A private-use glyph is meaningful only in its specified face.
+            // Preserve font boundaries as paint segments inside the pending word;
+            // flushing here would introduce a break inside BBBB + symbol + CCCC.
+            if latin_wordwrap && frag_outer_idx > 0 && !word.is_empty() {
+                let (previous_text, previous_style, ..) = fragments[frag_outer_idx - 1];
+                let has_private_glyph = |value: &str| value.chars().any(|c| matches!(c as u32, 0xE000..=0xF8FF));
+                if (has_private_glyph(previous_text) || has_private_glyph(text))
+                    && (previous_style.font_family != style.font_family
+                        || previous_style.font_family_east_asia != style.font_family_east_asia
+                        || previous_style.font_family_cs != style.font_family_cs)
+                {
+                    let offset = word.chars().count();
+                    if word_breaks.last().map_or(true, |&(end, _)| end != offset) {
+                        word_breaks.push((offset, word_width));
+                    }
+                    word_seg_styles.push((offset, style.clone()));
+                    word_seg_meta.push((offset, frag_run_index, frag_char_start));
+                }
             }
             let font_size = self.resolve_font_size(style, para_style);
             // S899b (2026-07-17): the BREAK width of a superscript/subscript
@@ -31617,6 +31641,33 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     s1322_win_natural = (metrics.win_ascent + metrics.win_descent) * font_size;
                 }
             }
+        }
+
+        // Inline legacy symbols share a baseline with the surrounding text.
+        // Their ascent and the text descent can exceed either complete font box.
+        // Keep exact advances here: pixel-rounding each component loses the
+        // 0.48pt growth of a Symbol arrow beside Calibri at 9pt.
+        let has_inline_symbol = line.fragments.iter().any(|f| {
+            f.text.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
+                && matches!(self.metrics_for_text(&f.text, &f.style, para_style).family.as_str(), "Symbol" | "Wingdings")
+        });
+        if has_inline_symbol && !dominant_cjk_83_64 {
+            let mut ascent = 0.0f32;
+            let mut descent = 0.0f32;
+            for frag in &line.fragments {
+                if Self::s1298_glyphless(frag) { continue; }
+                let fs = frag.style.font_size.unwrap_or(para_font_size);
+                let m = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
+                ascent = ascent.max((m.win_ascent + leading) * fs);
+                descent = descent.max(m.win_descent * fs);
+            }
+            let overflow = (ascent + descent - hhea_natural_max).max(0.0);
+            let factor = if matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto")) {
+                para_style.line_spacing.unwrap_or(1.0).max(0.01)
+            } else { 1.0 };
+            // The spacing multiple scales the font box, not baseline overflow.
+            hhea_natural_max += overflow / factor;
         }
 
         let run_base = max_ascent + max_descent;
@@ -40223,6 +40274,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         row_line_pitch,
                                                         true,
                                                     );
+                                                    let base = if matches!(effective_line_rule, None | Some("auto"))
+                                                        && matches!(metrics.family.as_str(), "Symbol" | "Wingdings")
+                                                        && _text.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
+                                                    {
+                                                        metrics.natural_line_height_hhea(*fs) * effective_line_spacing.unwrap_or(1.0)
+                                                    } else { base };
                                                     match self.s1119_run_face(_text, metrics) {
                                                         Some(fb) => {
                                                             base + fb.natural_line_height_hhea(*fs)
@@ -40233,6 +40290,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 },
                                             )
                                             .fold(0.0_f32, f32::max);
+                                        if effective_line_rule != Some("exact")
+                                            && line.iter().any(|f| f.0.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
+                                                && matches!(f.8.as_deref(), Some("Symbol") | Some("Wingdings")))
+                                        {
+                                            let mut ascent = 0.0f32;
+                                            let mut descent = 0.0f32;
+                                            let mut natural_max = 0.0f32;
+                                            for f in line.iter().filter(|f| !f.0.trim().is_empty()) {
+                                                let m = self.registry.get(f.8.as_deref().unwrap_or("Calibri"));
+                                                let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
+                                                natural_max = natural_max.max(m.natural_line_height_hhea(f.1));
+                                                ascent = ascent.max((m.win_ascent + leading) * f.1);
+                                                descent = descent.max(m.win_descent * f.1);
+                                            }
+                                            // Baseline overflow is added once, outside the line-spacing multiple.
+                                            if effective_line_rule == Some("atLeast") {
+                                                lh = lh.max(ascent + descent);
+                                            } else {
+                                                lh += (ascent + descent - natural_max).max(0.0);
+                                            }
+                                        }
                                         if lh == 0.0 {
                                             // whitespace-only line: fall back to all fragments
                                             lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _, _)| {
@@ -47034,9 +47112,43 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                     None => lh,
                 };
+                // Match the exact inline-symbol basis used by the cell emitter.
+                let lh = if in_cell && matches!(eff_lr, None | Some("auto"))
+                    && matches!(metrics.family.as_str(), "Symbol" | "Wingdings")
+                    && run.text.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
+                {
+                    metrics.natural_line_height_hhea(font_size) * eff_ls.unwrap_or(1.0)
+                } else { lh };
                 s1099_lhs.push((s1099_ri, lh));
                 if lh > max_line_height {
                     max_line_height = lh;
+                }
+            }
+            // A single-line cell shares one baseline across all its runs. Include
+            // mixed symbol ascent/descent in the pre-pass too: earlier center/bottom
+            // cells must see the height of later cells before those cells are emitted.
+            // Do not combine runs across unknown line boundaries in wrapped paragraphs.
+            if in_cell && line_count == 1 && eff_lr != Some("exact")
+                && para.runs.iter().any(|r| {
+                    r.text.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
+                        && matches!(self.metrics_for_text(&r.text, &r.style, &para.style).family.as_str(), "Symbol" | "Wingdings")
+                })
+            {
+                let mut ascent = 0.0f32;
+                let mut descent = 0.0f32;
+                let mut natural_max = 0.0f32;
+                for run in para.runs.iter().filter(|r| !r.text.trim().is_empty()) {
+                    let fs = self.resolve_font_size(&run.style, &para.style);
+                    let m = self.metrics_for_text(&run.text, &run.style, &para.style);
+                    let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
+                    natural_max = natural_max.max(m.natural_line_height_hhea(fs));
+                    ascent = ascent.max((m.win_ascent + leading) * fs);
+                    descent = descent.max(m.win_descent * fs);
+                }
+                if eff_lr == Some("atLeast") {
+                    max_line_height = max_line_height.max(ascent + descent);
+                } else {
+                    max_line_height += (ascent + descent - natural_max).max(0.0);
                 }
             }
             // Task P step 7 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): grow the cell estimate

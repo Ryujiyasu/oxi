@@ -2548,104 +2548,107 @@ fn parse_paragraph(
                         math_blocks.push(mb);
                     }
                     "r" if depth == 0 => {
-                        let (mut run, dr) =
+                        let (parsed_runs, mut dr) =
                             parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
-                        // Track field state: fldChar begin/separate/end spans across runs.
-                        // Remember a CrossRef field so its cached result run is KEPT.
-                        if run.field_type.is_some() {
-                            current_field_type = run.field_type.clone();
-                            // S1174: the INSTR run itself is the substitution
-                            // anchor (it always exists — a field whose cached
-                            // result is EMPTY has no result run to anchor on:
-                            // reference__0061531a's header Part line caches "" ).
-                            // The cached-result runs that follow are marked as
-                            // continuations so a successful resolution clears
-                            // them.
-                            if run.style.styleref.is_some() {
-                                pending_styleref = run.style.styleref.clone();
-                            }
-                        }
-                        if run.text.contains('\u{FFFE}') {
-                            // Marker for fldChar separate (set in parse_run)
-                            run.text = run.text.replace('\u{FFFE}', "");
-                            field_result_depth += 1;
-                        }
-                        if run.text.contains('\u{FFFF}') {
-                            // Marker for fldChar end
-                            run.text = run.text.replace('\u{FFFF}', "");
-                            field_result_depth -= 1;
-                            if field_result_depth <= 0 {
-                                current_field_type = None;
-                                pending_styleref = None;
-                            }
-                        }
-                        // S1174: mark every cached-result run of the STYLEREF
-                        // field as a continuation — the INSTR run is the
-                        // substitution anchor, so a successful per-page
-                        // resolution places the text there and clears these.
-                        if field_result_depth > 0
-                            && run.field_type.is_none()
-                            && pending_styleref.is_some()
-                        {
-                            run.style.styleref_cont = true;
-                        }
-                        // Suppress cached field result text (between separate and end)
-                        // when the field was already evaluated (e.g. PAGE → "#"). KEEP the
-                        // cached result for CrossRef (REF/NOTEREF/PAGEREF) — Oxi can't
-                        // re-resolve the bookmark, so the cache («第１９条») is the display
-                        // value; dropping it (old "#") shifted wrapping doc-wide.
-                        // KEEP the cache for CrossRef (S685) and Cached (S708,
-                        // DATE/TIME/AUTHOR/…); only PAGE/NUMPAGES results are suppressed
-                        // (Oxi computes and substitutes those in the layout post-pass).
-                        if field_result_depth > 0
-                            && run.field_type.is_none()
-                            && !matches!(
-                                current_field_type,
-                                Some(FieldType::CrossRef) | Some(FieldType::Cached)
-                            )
-                        {
-                            run.text.clear();
-                        }
-                        // S839: an INLINE visual vector group (wpg without
-                        // txbxContent — hmrc's checkbox strips) marks its host
-                        // run as a width-bearing atomic object; break_into_lines
-                        // makes it a U+FFFC fragment of the drawing's extent and
-                        // the emit loop draws tb.vector_shapes at the fragment x.
-                        if let Some(tb) = dr.as_ref().and_then(|d| d.text_box.as_ref()) {
-                            if !tb.vector_shapes.is_empty()
-                                && tb.blocks.is_empty()
-                                && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
-                                && tb.position.as_ref().map_or(false, |tp| {
-                                    tp.x == 0.0
-                                        && tp.y == 0.0
-                                        && tp.h_relative.as_deref() == Some("column")
-                                        && tp.v_relative.as_deref() == Some("paragraph")
-                                })
-                            {
-                                run.style.inline_object_extent = Some((tb.width, tb.height));
-                            }
-                        }
-                        runs.push(run);
-                        if let Some(drawing) = dr {
-                            if let Some(image) = drawing.image {
-                                // S854: record an INLINE (non-positioned) image with
-                                // its run index so ≥2-inline-image paragraphs can flow
-                                // horizontally (decided after the run loop). Positioned
-                                // images stay on the floating path.
-                                if std::env::var("OXI_S854_DISABLE").is_err()
-                                    && image.position.is_none()
-                                {
-                                    inline_img_runs.push((runs.len() - 1, image));
-                                } else {
-                                    images.push(image);
+                        for mut run in parsed_runs {
+                            let dr = dr.take();
+                            // Track field state: fldChar begin/separate/end spans across runs.
+                            // Remember a CrossRef field so its cached result run is KEPT.
+                            if run.field_type.is_some() {
+                                current_field_type = run.field_type.clone();
+                                // S1174: the INSTR run itself is the substitution
+                                // anchor (it always exists — a field whose cached
+                                // result is EMPTY has no result run to anchor on:
+                                // reference__0061531a's header Part line caches "" ).
+                                // The cached-result runs that follow are marked as
+                                // continuations so a successful resolution clears
+                                // them.
+                                if run.style.styleref.is_some() {
+                                    pending_styleref = run.style.styleref.clone();
                                 }
                             }
-                            if let Some(shape) = drawing.shape {
-                                found_shapes.push(shape);
+                            if run.text.contains('\u{FFFE}') {
+                                // Marker for fldChar separate (set in parse_run)
+                                run.text = run.text.replace('\u{FFFE}', "");
+                                field_result_depth += 1;
                             }
-                            if let Some(tb) = drawing.text_box {
-                                s1270_tb_runs.push(runs.len().saturating_sub(1));
-                                found_text_boxes.push(tb);
+                            if run.text.contains('\u{FFFF}') {
+                                // Marker for fldChar end
+                                run.text = run.text.replace('\u{FFFF}', "");
+                                field_result_depth -= 1;
+                                if field_result_depth <= 0 {
+                                    current_field_type = None;
+                                    pending_styleref = None;
+                                }
+                            }
+                            // S1174: mark every cached-result run of the STYLEREF
+                            // field as a continuation — the INSTR run is the
+                            // substitution anchor, so a successful per-page
+                            // resolution places the text there and clears these.
+                            if field_result_depth > 0
+                                && run.field_type.is_none()
+                                && pending_styleref.is_some()
+                            {
+                                run.style.styleref_cont = true;
+                            }
+                            // Suppress cached field result text (between separate and end)
+                            // when the field was already evaluated (e.g. PAGE → "#"). KEEP the
+                            // cached result for CrossRef (REF/NOTEREF/PAGEREF) — Oxi can't
+                            // re-resolve the bookmark, so the cache («第１９条») is the display
+                            // value; dropping it (old "#") shifted wrapping doc-wide.
+                            // KEEP the cache for CrossRef (S685) and Cached (S708,
+                            // DATE/TIME/AUTHOR/…); only PAGE/NUMPAGES results are suppressed
+                            // (Oxi computes and substitutes those in the layout post-pass).
+                            if field_result_depth > 0
+                                && run.field_type.is_none()
+                                && !matches!(
+                                    current_field_type,
+                                    Some(FieldType::CrossRef) | Some(FieldType::Cached)
+                                )
+                            {
+                                run.text.clear();
+                            }
+                            // S839: an INLINE visual vector group (wpg without
+                            // txbxContent — hmrc's checkbox strips) marks its host
+                            // run as a width-bearing atomic object; break_into_lines
+                            // makes it a U+FFFC fragment of the drawing's extent and
+                            // the emit loop draws tb.vector_shapes at the fragment x.
+                            if let Some(tb) = dr.as_ref().and_then(|d| d.text_box.as_ref()) {
+                                if !tb.vector_shapes.is_empty()
+                                    && tb.blocks.is_empty()
+                                    && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
+                                    && tb.position.as_ref().map_or(false, |tp| {
+                                        tp.x == 0.0
+                                            && tp.y == 0.0
+                                            && tp.h_relative.as_deref() == Some("column")
+                                            && tp.v_relative.as_deref() == Some("paragraph")
+                                    })
+                                {
+                                    run.style.inline_object_extent = Some((tb.width, tb.height));
+                                }
+                            }
+                            runs.push(run);
+                            if let Some(drawing) = dr {
+                                if let Some(image) = drawing.image {
+                                    // S854: record an INLINE (non-positioned) image with
+                                    // its run index so ≥2-inline-image paragraphs can flow
+                                    // horizontally (decided after the run loop). Positioned
+                                    // images stay on the floating path.
+                                    if std::env::var("OXI_S854_DISABLE").is_err()
+                                        && image.position.is_none()
+                                    {
+                                        inline_img_runs.push((runs.len() - 1, image));
+                                    } else {
+                                        images.push(image);
+                                    }
+                                }
+                                if let Some(shape) = drawing.shape {
+                                    found_shapes.push(shape);
+                                }
+                                if let Some(tb) = drawing.text_box {
+                                    s1270_tb_runs.push(runs.len().saturating_sub(1));
+                                    found_text_boxes.push(tb);
+                                }
                             }
                         }
                     }
@@ -2842,7 +2845,7 @@ fn parse_paragraph(
                                         }
                                     } else if in_choice && sl == "r" && ac_depth == 1 {
                                         // Text runs inside mc:Choice belong to this paragraph
-                                        let (run, dr) = parse_run(
+                                        let (parsed_runs, dr) = parse_run(
                                             reader,
                                             ctx,
                                             styles,
@@ -2850,7 +2853,7 @@ fn parse_paragraph(
                                             allow_inline_flow,
                                             in_cell,
                                         )?;
-                                        runs.push(run);
+                                        runs.extend(parsed_runs);
                                         if let Some(drawing) = dr {
                                             if let Some(image) = drawing.image {
                                                 images.push(image);
@@ -2922,7 +2925,7 @@ fn parse_paragraph(
                                             }
                                             "sdtContent" => {}
                                             "r" => {
-                                                let (run, dr) = parse_run(
+                                                let (parsed_runs, dr) = parse_run(
                                                     reader,
                                                     ctx,
                                                     styles,
@@ -2930,7 +2933,7 @@ fn parse_paragraph(
                                                     allow_inline_flow,
                                                     in_cell,
                                                 )?;
-                                                runs.push(run);
+                                                runs.extend(parsed_runs);
                                                 if let Some(drawing) = dr {
                                                     if let Some(image) = drawing.image {
                                                         images.push(image);
@@ -2975,7 +2978,7 @@ fn parse_paragraph(
                                     if sl == "sdtContent" && sdt_depth == 1 {
                                         in_sdt_content = true;
                                     } else if in_sdt_content && sl == "r" {
-                                        let (run, dr) = parse_run(
+                                        let (parsed_runs, dr) = parse_run(
                                             reader,
                                             ctx,
                                             styles,
@@ -2983,7 +2986,7 @@ fn parse_paragraph(
                                             allow_inline_flow,
                                             in_cell,
                                         )?;
-                                        runs.push(run);
+                                        runs.extend(parsed_runs);
                                         if let Some(drawing) = dr {
                                             if let Some(image) = drawing.image {
                                                 images.push(image);
@@ -5218,6 +5221,71 @@ pub(crate) fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>
 
 /// Parse a w:r element (run). Returns the Run, optionally an Image, and field info.
 /// `url` is set when this run is inside a w:hyperlink element.
+// A symbol can interrupt ordinary text within one source run. Keep its
+// font local to that character while producing the same language-neutral runs.
+fn append_run_symbol(
+    e: &quick_xml::events::BytesStart<'_>,
+    text: &mut String,
+    spans: &mut Vec<(usize, char, String)>,
+) {
+    let mut font = None;
+    let mut code = None;
+    for attr in e.attributes().flatten() {
+        let value = attr.unescape_value().unwrap_or_default().into_owned();
+        match local_name(attr.key.as_ref()).as_str() {
+            "font" if !value.is_empty() => font = Some(value),
+            "char" => code = u16::from_str_radix(&value, 16).ok().and_then(|v| char::from_u32(v as u32)),
+            _ => {}
+        }
+    }
+    if let (Some(font), Some(code)) = (font, code) {
+        spans.push((text.len(), code, font));
+        text.push(code);
+    }
+}
+
+fn split_symbol_runs(run: Run, spans: Vec<(usize, char, String)>) -> Vec<Run> {
+    if spans.is_empty() { return vec![run]; }
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    for (offset, character, font) in spans {
+        // A field or note can replace the source text during parsing.
+        if offset < start || run.text.get(offset..).and_then(|s| s.chars().next()) != Some(character) {
+            continue;
+        }
+        if offset > start { pieces.push((start, offset, None)); }
+        let end = offset + character.len_utf8();
+        pieces.push((offset, end, Some(font)));
+        start = end;
+    }
+    if start < run.text.len() { pieces.push((start, run.text.len(), None)); }
+    if pieces.is_empty() { return vec![run]; }
+    pieces.into_iter().enumerate().map(|(index, (start, end, font))| {
+        let mut piece = run.clone();
+        piece.text = run.text[start..end].to_string();
+        if let Some(font) = font {
+            piece.style.font_family = Some(font.clone());
+            piece.style.font_family_east_asia = Some(font.clone());
+            piece.style.font_family_cs = Some(font);
+        }
+        if index > 0 {
+            piece.footnote_ref = None;
+            piece.endnote_ref = None;
+            piece.comment_range_start.clear();
+            piece.comment_range_end.clear();
+            piece.comment_references.clear();
+            piece.bookmark_name = None;
+            piece.ruby = None;
+            piece.field_type = None;
+            piece.has_last_rendered_page_break = false;
+            piece.style.inline_object_extent = None;
+            piece.style.inline_object_image = None;
+            piece.style.hr_rule = None;
+        }
+        piece
+    }).collect()
+}
+
 fn parse_run(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -5225,8 +5293,9 @@ fn parse_run(
     url: Option<String>,
     allow_inline_flow: bool,
     in_cell: bool,
-) -> Result<(Run, Option<DrawingResult>), ParseError> {
+) -> Result<(Vec<Run>, Option<DrawingResult>), ParseError> {
     let mut text = String::new();
+    let mut symbol_spans = Vec::new();
     let mut style = RunStyle::default();
     let mut drawing_result: Option<DrawingResult> = None;
     let mut depth = 0;
@@ -5387,6 +5456,10 @@ fn parse_run(
                             }
                         }
                     }
+                    "sym" if depth == 0 => {
+                        append_run_symbol(&e, &mut text, &mut symbol_spans);
+                        depth += 1;
+                    }
                     "ruby" if depth == 0 => {
                         ruby = Some(parse_ruby(reader)?);
                     }
@@ -5450,6 +5523,9 @@ fn parse_run(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "sym" if depth == 0 => {
+                        append_run_symbol(&e, &mut text, &mut symbol_spans);
+                    }
                     // S927 (2026-07-18, default ON, opt-out
                     // OXI_S927_DISABLE): CT_Cr is the legacy carriage-return
                     // spelling of a text wrapping break.  Word gives `<w:cr/>`
@@ -5673,8 +5749,7 @@ fn parse_run(
         }
     }
 
-    Ok((
-        Run {
+    let run = Run {
             text,
             style,
             url,
@@ -5690,9 +5765,8 @@ fn parse_run(
             is_math: false,
             field_type,
             has_last_rendered_page_break,
-        },
-        drawing_result,
-    ))
+        };
+    Ok((split_symbol_runs(run, symbol_spans), drawing_result))
 }
 
 /// Parse runs inside a w:hyperlink element
@@ -5718,9 +5792,11 @@ fn parse_hyperlink_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (run, dr) =
+                    let (parsed_runs, mut dr) =
                         parse_run(reader, ctx, styles, url.clone(), allow_inline_flow, in_cell)?;
-                    runs.push((run, dr));
+                    for run in parsed_runs {
+                        runs.push((run, dr.take()));
+                    }
                 } else {
                     depth += 1;
                 }
@@ -11954,7 +12030,7 @@ fn parse_tracked_change_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (mut run, _dr) =
+                    let (parsed_runs, _dr) =
                         parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                     // R62 (2026-04-29): parser stores tracked_change ONLY.
                     // Visual styling (underline/strikethrough + author-palette
@@ -11963,8 +12039,10 @@ fn parse_tracked_change_runs(
                     // author palette and ShowRevisions mode. Pre-applying
                     // hardcoded FF0000 here was legacy from before R-01
                     // landed and required compensating strip helpers.
-                    run.tracked_change = Some(tc.clone());
-                    runs.push(run);
+                    for mut run in parsed_runs {
+                        run.tracked_change = Some(tc.clone());
+                        runs.push(run);
+                    }
                 } else {
                     depth += 1;
                 }
@@ -12306,6 +12384,18 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             {
                 alias.insert(name.clone(), alt.clone());
             }
+        }
+    }
+    // Word substitutes the declared legacy Monotype Sorts face with
+    // Segoe UI Symbol when neither the face nor a supported alternate exists.
+    // An undeclared name follows the ordinary missing-font path instead.
+    for name in document.styles.font_table.keys() {
+        if name.eq_ignore_ascii_case("Monotype Sorts")
+            && !registry.supports_family(name)
+            && crate::font::runtime::resolve(name, false, false).is_none()
+            && !alias.contains_key(name)
+        {
+            alias.insert(name.clone(), "Segoe UI Symbol".to_string());
         }
     }
     // S1133 (2026-08-15, SHIPPED default-ON, opt-out OXI_S1133_DISABLE): a font
@@ -13011,6 +13101,43 @@ mod tests {
         assert_eq!(tc.author.as_deref(), Some("Bob"));
     }
 
+
+    #[test]
+    fn symbols_keep_their_fonts_inside_a_mixed_run() {
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:rPr><w:rFonts w:ascii="Times New Roman"/><w:b/><w:sz w:val="28"/></w:rPr>
+<w:t>LEFT</w:t><w:sym w:font="Symbol" w:char="F0B7"/><w:t>RIGHT</w:t>
+<w:sym w:font="Wingdings" w:char="F0FC"></w:sym><w:t>END</w:t>
+<w:sym w:font="Symbol" w:char="D800"/><w:commentReference w:id="7"/></w:r>"#;
+        let ctx = ParseContext {
+            _rels: HashMap::new(),
+            media: HashMap::new(),
+            media_types: HashMap::new(),
+            hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            footnotes: HashMap::new(),
+            endnotes: HashMap::new(),
+            comments: HashMap::new(),
+            theme: ThemeColors::default(),
+        };
+        let styles = StyleSheet::default();
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) if local_name(e.name().as_ref()) == "r" => break,
+                Event::Eof => panic!("missing run"),
+                _ => {}
+            }
+        }
+        let (runs, drawing) = parse_run(&mut reader, &ctx, &styles, Some("#anchor".into()), true, false).unwrap();
+        assert!(drawing.is_none());
+        assert_eq!(runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), vec!["LEFT", "\u{F0B7}", "RIGHT", "\u{F0FC}", "END"]);
+        assert_eq!(runs.iter().map(|r| r.style.font_family.as_deref()).collect::<Vec<_>>(), vec![Some("Times New Roman"), Some("Symbol"), Some("Times New Roman"), Some("Wingdings"), Some("Times New Roman")]);
+        assert!(runs.iter().all(|r| r.style.bold && r.style.font_size == Some(14.0) && r.url.as_deref() == Some("#anchor")));
+        assert_eq!(runs.iter().flat_map(|r| r.comment_references.iter()).collect::<Vec<_>>(), vec!["7"]);
+    }
+
     #[test]
     fn parse_run_captures_comment_reference() {
         // ECMA-376: <w:commentReference w:id="N"/> is a zero-width marker inside
@@ -13045,7 +13172,7 @@ mod tests {
         let _ = start;
         let (run, _dr) =
             parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
-        assert_eq!(run.comment_references, vec!["0".to_string()]);
+        assert_eq!(run[0].comment_references, vec!["0".to_string()]);
     }
 
     #[test]
@@ -13076,7 +13203,7 @@ mod tests {
         }
         let (run, _dr) =
             parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
-        assert_eq!(run.text, "Status\n");
+        assert_eq!(run[0].text, "Status\n");
     }
 
     #[test]

@@ -814,3 +814,168 @@ fn heading_and_fitting_table_keep_their_word_page_boundaries() {
         }
     }
 }
+
+#[test]
+fn inline_symbols_preserve_word_line_advances() {
+    let cases: &[(&[u8], &[f32], Option<char>)] = &[
+        (include_bytes!("../../../../tests/fixtures/run_symbols/plain_mixed0.docx"), &[0.0, 11.546, 23.066, 34.586, 46.106, 57.626, 69.026, 80.546], None),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/plain_mixed1.docx"), &[0.0, 11.546, 23.066, 34.586, 46.106, 57.626, 69.026, 80.546], None),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/sorts_mixed0.docx"), &[0.0, 11.786, 23.546, 35.186, 46.946, 58.706, 70.466, 82.106], Some('\u{F070}')),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/sorts_mixed1.docx"), &[0.0, 11.786, 23.546, 35.186, 46.946, 58.706, 70.466, 82.106], Some('\u{F070}')),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/symbol_mixed0.docx"), &[0.0, 12.266, 24.506, 36.746, 48.986, 61.226, 73.466, 85.706], Some('\u{F0B7}')),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/symbol_mixed1.docx"), &[0.0, 12.266, 24.506, 36.746, 48.986, 61.226, 73.466, 85.706], Some('\u{F0B7}')),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/wing_mixed0.docx"), &[0.0, 11.546, 23.066, 34.586, 46.106, 57.626, 69.026, 80.546], Some('\u{F0FC}')),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/wing_mixed1.docx"), &[0.0, 11.546, 23.066, 34.586, 46.106, 57.626, 69.026, 80.546], Some('\u{F0FC}')),
+    ];
+    for (case, (bytes, expected, symbol)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 2, "case {case}");
+        let mut positions = Vec::new();
+        let mut symbols = 0;
+        for (page, p) in layout.pages.iter().enumerate() {
+            for e in &p.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    if text.starts_with("ROW") {
+                        assert_eq!(page, 0, "case {case}");
+                        positions.push(e.y);
+                    }
+                    if text == "AFTER" { assert_eq!(page, 1, "case {case}"); }
+                    if let Some(symbol) = symbol { symbols += text.chars().filter(|c| c == symbol).count(); }
+                }
+            }
+        }
+        assert_eq!(positions.len(), expected.len(), "case {case}");
+        for (y, expected) in positions.iter().zip(*expected) {
+            assert!((y - positions[0] - expected).abs() < 0.15, "case {case}: {} vs {expected}", y - positions[0]);
+        }
+        assert_eq!(symbols, if symbol.is_some() { 8 } else { 0 }, "case {case}");
+    }
+}
+
+#[test]
+fn declared_legacy_symbols_use_the_word_substitute() {
+    let cases: &[&[u8]] = &[
+        include_bytes!("../../../../tests/fixtures/run_symbols/declared_ansi.docx"),
+        include_bytes!("../../../../tests/fixtures/run_symbols/declared_symbol.docx"),
+        include_bytes!("../../../../tests/fixtures/run_symbols/declared_zero.docx"),
+        include_bytes!("../../../../tests/fixtures/run_symbols/declared_segoe.docx"),
+    ];
+    for (case, bytes) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 2, "case {case}");
+        for line in 1..=8 {
+            let label = format!("ROW{line:03}");
+            let pages: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, page)| {
+                page.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                    if text == &label)).then_some(i + 1)
+            }).collect();
+            assert_eq!(pages, vec![if line == 8 { 2 } else { 1 }], "case {case}, {label}");
+        }
+        let after: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, page)| {
+            page.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                if text == "AFTER")).then_some(i + 1)
+        }).collect();
+        assert_eq!(after, vec![2], "case {case}");
+    }
+}
+
+#[test]
+fn glued_symbols_keep_their_font_without_adding_word_breaks() {
+    let cases: &[(&[u8], char, &str)] = &[
+        (include_bytes!("../../../../tests/fixtures/run_symbols/glued_symbol.docx"), '\u{F0AF}', "Symbol"),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/glued_wingdings.docx"), '\u{F0E0}', "Wingdings"),
+    ];
+    for &(bytes, symbol, family) in cases {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut count = 0;
+        for page in &layout.pages {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, font_family, .. } = &e.content {
+                    if text.contains(symbol) {
+                        assert_eq!(font_family.as_deref(), Some(family), "{family}: {text:?}");
+                        assert!(!text.chars().any(|c| c.is_ascii_alphabetic()), "symbol font leaked into Latin text: {text:?}");
+                        count += text.chars().filter(|&c| c == symbol).count();
+                    }
+                }
+            }
+        }
+        assert_eq!(count, 13, "{family}");
+        // Word keeps the complete BBBB + symbol + CCCC token together at 90pt.
+        // Flushing on each font boundary would incorrectly leave BBBB on line 1.
+        let p = 9;
+        let elements: Vec<_> = layout.pages.iter().flat_map(|p| &p.elements)
+            .filter(|e| e.paragraph_index == Some(p)).collect();
+        let a = elements.iter().find(|e| matches!(&e.content, LayoutContent::Text { text, .. } if text.contains("AAAA"))).unwrap();
+        let b = elements.iter().find(|e| matches!(&e.content, LayoutContent::Text { text, .. } if text.contains("BBBB"))).unwrap();
+        assert!(b.y > a.y + 5.0, "{family}: font boundary changed word wrapping");
+    }
+}
+
+#[test]
+fn inline_symbol_row_combines_ascent_and_descent() {
+    let cases: &[&[u8]] = &[
+        include_bytes!("../../../../tests/fixtures/run_symbols/calibri_row_plain.docx"),
+        include_bytes!("../../../../tests/fixtures/run_symbols/calibri_row_symbol.docx"),
+    ];
+    let ys: Vec<_> = cases.iter().map(|bytes| {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        layout.pages.iter().flat_map(|p| &p.elements).find_map(|e| {
+            matches!(&e.content, LayoutContent::Text { text, .. } if text == "AFTER").then_some(e.y)
+        }).unwrap()
+    }).collect();
+    // Fresh Word exports: 139.00998 - 138.529999 = 0.47998pt.
+    assert!((ys[1] - ys[0] - 0.48).abs() < 0.03, "{ys:?}");
+}
+
+#[test]
+fn inline_symbol_height_respects_spacing_rules() {
+    let cases: &[(&[u8], &[u8])] = &[
+        (include_bytes!("../../../../tests/fixtures/run_symbols/spacing_body_plain.docx"), include_bytes!("../../../../tests/fixtures/run_symbols/spacing_body_symbol.docx")),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/spacing_cell_plain.docx"), include_bytes!("../../../../tests/fixtures/run_symbols/spacing_cell_symbol.docx")),
+    ];
+    let expected = [0.0, 0.0, 0.0, 0.0, 0.0, 0.48, 0.48, 0.0, 0.48, 0.0, 6.12, 9.24, 0.0, 6.12, 5.16];
+    for (context, &(plain, symbol)) in cases.iter().enumerate() {
+        let positions: Vec<_> = [plain, symbol].iter().map(|bytes| {
+            let doc = crate::parser::parse_docx(bytes).unwrap();
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            layout.pages.iter().flat_map(|p| &p.elements).filter_map(|e| {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    text.strip_prefix("AFTER").and_then(|s| s.parse::<usize>().ok()).map(|i| (i, e.y))
+                } else { None }
+            }).collect::<std::collections::HashMap<_, _>>()
+        }).collect();
+        for (i, expected) in expected.iter().enumerate() {
+            let delta = positions[1][&i] - positions[0][&i];
+            assert!((delta - expected).abs() < 0.06, "context {context}, case {i}: {delta} vs {expected}");
+        }
+    }
+}
+
+#[test]
+fn inline_symbol_cell_alignment_is_independent_of_column_order() {
+    let cases: &[(&[u8], &[u8], &str, f32)] = &[
+        (include_bytes!("../../../../tests/fixtures/run_symbols/center_first_symbol0.docx"), include_bytes!("../../../../tests/fixtures/run_symbols/center_first_symbol1.docx"), "CELL00", 0.24),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/center_last_symbol0.docx"), include_bytes!("../../../../tests/fixtures/run_symbols/center_last_symbol1.docx"), "CELL01", 0.24),
+        (include_bytes!("../../../../tests/fixtures/run_symbols/bottom_first_symbol0.docx"), include_bytes!("../../../../tests/fixtures/run_symbols/bottom_first_symbol1.docx"), "CELL00", 0.48),
+    ];
+    for &(plain, symbol, label, expected) in cases {
+        let positions: Vec<_> = [plain, symbol].iter().map(|bytes| {
+            let doc = crate::parser::parse_docx(bytes).unwrap();
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            layout.pages.iter().flat_map(|p| &p.elements).filter_map(|e| {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    Some((text.clone(), e.y))
+                } else { None }
+            }).collect::<std::collections::HashMap<_, _>>()
+        }).collect();
+        // Fresh Word exports: center +0.24pt in either column; bottom +0.48pt.
+        let delta = positions[1][label] - positions[0][label];
+        assert!((delta - expected).abs() < 0.03, "{label}: {delta} vs {expected}");
+        let after = positions[1]["AFTER"] - positions[0]["AFTER"];
+        assert!((after - 0.48).abs() < 0.03, "row advance: {after}");
+    }
+}
