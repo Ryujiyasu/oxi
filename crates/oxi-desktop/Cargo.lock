@@ -2210,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "oxi-desktop"
-version = "0.1.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
