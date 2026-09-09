@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — Spreadsheet Demo</title>
+<link rel="icon" type="image/x-icon" href="./favicon.ico">
 <style>
 :root {
   --accent: #217346;
@@ -41,7 +42,8 @@ header {
   gap: 8px 14px;
   flex-shrink: 0;
 }
-header .name { font-weight: 700; letter-spacing: .3px; }
+header .name { font-weight: 700; letter-spacing: .3px; color: inherit; text-decoration: none; }
+header a.name:hover { opacity: .78; }
 header .what { opacity: .9; font-size: 13px; }
 header .spacer { flex: 1; }
 header button, header label.file {
@@ -56,6 +58,12 @@ header button, header label.file {
 }
 header button:hover, header label.file:hover { background: rgba(255, 255, 255, .28); }
 header input[type=file] { display: none; }
+header .langs { display: inline-flex; gap: 4px; }
+header .langs button { padding: 5px 8px; opacity: .7; }
+header .langs button.on { opacity: 1; background: rgba(255, 255, 255, .34); }
+html[data-host="desktop"] aside { display: none; }
+html[data-host="desktop"] #reset { display: none; }
+html[data-host="desktop"] #fresh { display: inline-block; }
 
 main { flex: 1; display: flex; min-height: 0; }
 
@@ -255,6 +263,56 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 
 /* The two arrows sit together as one control, the way a toolbar pairs them. */
 header .step { font-size: 15px; line-height: 1; padding: 5px 9px; }
+
+#macroBox {
+  width: min(720px, 92vw);
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  color: var(--txt);
+  background: var(--bg);
+  font: inherit;
+}
+#macroBox::backdrop { background: rgba(0, 0, 0, .35); }
+#macroBox .pad { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
+#macroBox h2 { font-size: 15px; }
+#macroBox label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--dim); }
+#macroBox textarea, #macroBox input {
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
+  color: var(--txt);
+  background: var(--bg);
+}
+#macroBox textarea { height: 190px; resize: vertical; white-space: pre; }
+#macroBox .row { display: flex; gap: 12px; }
+#macroBox .row > div { flex: 1; }
+#macroBox .ends { display: flex; align-items: center; gap: 10px; }
+#macroBox .ends .spacer { flex: 1; }
+#macroBox button {
+  padding: 6px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--txt);
+  background: var(--code);
+  cursor: pointer;
+}
+#macroBox #macroRun { border-color: var(--accent); background: var(--accent); color: #fff; }
+#macroBox button:disabled { opacity: .55; cursor: default; }
+#macroResult {
+  max-height: 140px;
+  overflow: auto;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: pre-wrap;
+}
+#macroResult.bad { color: #B3261E; }
 header .dress { min-width: 30px; padding: 5px 7px; line-height: 1; }
 header #left { margin-left: 6px; }
 header #back { margin-left: 6px; }
@@ -275,32 +333,32 @@ header #on { margin-right: 4px; }
 <body>
 
 <header>
-  <span class="name">Oxi</span>
-  <span class="what">Spreadsheets drawn and edited in the browser, with no server</span>
+  <a class="name" href="./index.html" title="Oxicells">Oxicells</a>
+  <span class="what" data-i18n="lede">Spreadsheets drawn and edited in the browser, with no server</span>
   <span class="spacer"></span>
-  <button id="freeze" title="Hold everything above and left of the cursor in view">Freeze</button>
-  <button id="bold" class="dress" title="Bold (Ctrl+B)"><b>B</b></button>
-  <button id="italic" class="dress" title="Italic (Ctrl+I)"><i>I</i></button>
-  <button id="under" class="dress" title="Underline (Ctrl+U)"><u>U</u></button>
-  <button id="left" class="dress" title="Align left">&#8676;</button>
-  <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
-  <button id="right" class="dress" title="Align right">&#8677;</button>
-  <button id="wrap" class="dress" title="Wrap the text inside the cell">&#8617;</button>
-  <input id="find" disabled placeholder="Find" title="Find (Ctrl+F). Enter for the next, Shift+Enter for the one before." />
-  <select id="rules" disabled title="Rules around the cells">
-    <option value="">Rules</option>
-    <option value="all">All</option>
-    <option value="outline">Outline</option>
-    <option value="top">Top</option>
-    <option value="bottom">Bottom</option>
-    <option value="left">Left</option>
-    <option value="right">Right</option>
-    <option value="none">None</option>
+  <button id="freeze" data-i18n="freeze" data-i18n-title="freezeWhy" title="Hold everything above and left of the cursor in view">Freeze</button>
+  <button id="bold" class="dress" data-i18n-title="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+  <button id="italic" class="dress" data-i18n-title="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+  <button id="under" class="dress" data-i18n-title="under" title="Underline (Ctrl+U)"><u>U</u></button>
+  <button id="left" class="dress" data-i18n-title="alignLeft" title="Align left">&#8676;</button>
+  <button id="centre" class="dress" data-i18n-title="alignCentre" title="Centre">&#8677;&#8676;</button>
+  <button id="right" class="dress" data-i18n-title="alignRight" title="Align right">&#8677;</button>
+  <button id="wrap" class="dress" data-i18n-title="wrap" title="Wrap the text inside the cell">&#8617;</button>
+  <input id="find" disabled data-i18n-placeholder="find" data-i18n-title="findWhy" placeholder="Find" title="Find (Ctrl+F). Enter for the next, Shift+Enter for the one before." />
+  <select id="rules" disabled data-i18n-title="rulesWhy" title="Rules around the cells">
+    <option value="" data-i18n="rules">Rules</option>
+    <option value="all" data-i18n="rAll">All</option>
+    <option value="outline" data-i18n="rOutline">Outline</option>
+    <option value="top" data-i18n="rTop">Top</option>
+    <option value="bottom" data-i18n="rBottom">Bottom</option>
+    <option value="left" data-i18n="rLeft">Left</option>
+    <option value="right" data-i18n="rRight">Right</option>
+    <option value="none" data-i18n="rNone">None</option>
   </select>
-  <input id="face" list="faces" disabled placeholder="Font"
+  <input id="face" list="faces" disabled data-i18n-placeholder="font" data-i18n-title="fontWhy" placeholder="Font"
          title="The typeface the cells are set in" />
   <datalist id="faces"></datalist>
-  <input id="points" list="sizes" disabled placeholder="Size"
+  <input id="points" list="sizes" disabled data-i18n-placeholder="size" data-i18n-title="sizeWhy" placeholder="Size"
          title="How big the text is, in points" />
   <datalist id="sizes">
     <option value="8"></option><option value="9"></option>
@@ -311,18 +369,18 @@ header #on { margin-right: 4px; }
     <option value="28"></option><option value="36"></option>
     <option value="48"></option><option value="72"></option>
   </datalist>
-  <input id="ink" type="color" disabled title="Text colour" />
-  <button id="autoink" disabled title="Automatic text colour">Auto</button>
-  <select id="merge" disabled title="Draw a block of cells as one">
-    <option value="">Merge</option>
-    <option value="centre">Merge &amp; centre</option>
-    <option value="cells">Merge cells</option>
-    <option value="across">Merge across</option>
-    <option value="unmerge">Unmerge</option>
+  <input id="ink" type="color" disabled data-i18n-title="ink" title="Text colour" />
+  <button id="autoink" disabled data-i18n="auto" data-i18n-title="autoWhy" title="Automatic text colour">Auto</button>
+  <select id="merge" disabled data-i18n-title="mergeWhy" title="Draw a block of cells as one">
+    <option value="" data-i18n="merge">Merge</option>
+    <option value="centre" data-i18n="mCentre">Merge &amp; centre</option>
+    <option value="cells" data-i18n="mCells">Merge cells</option>
+    <option value="across" data-i18n="mAcross">Merge across</option>
+    <option value="unmerge" data-i18n="mUn">Unmerge</option>
   </select>
-  <input id="fill" type="color" disabled title="Fill colour" />
-  <button id="nofill" disabled title="No fill">&#8709;</button>
-  <input id="numfmt" list="numfmts" disabled placeholder="Format"
+  <input id="fill" type="color" disabled data-i18n-title="fill" title="Fill colour" />
+  <button id="nofill" disabled data-i18n-title="nofill" title="No fill">&#8709;</button>
+  <input id="numfmt" list="numfmts" disabled data-i18n-placeholder="numfmt" data-i18n-title="numfmtWhy" placeholder="Format"
          title="How the numbers look. Any Excel format code, or pick one." />
   <datalist id="numfmts">
     <option value="General">1234.5678 &#8594; 1234.5678</option>
@@ -341,13 +399,16 @@ header #on { margin-right: 4px; }
     <option value="h:mm AM/PM">0.75 &#8594; 6:00 PM</option>
     <option value="0.00E+00">1234.5678 &#8594; 1.23E+03</option>
   </datalist>
-  <button id="addBand" disabled title="Insert rows or columns (Ctrl+Shift+Plus)">Insert</button>
-  <button id="cutBand" disabled title="Delete rows or columns (Ctrl+Minus)">Delete</button>
-  <button id="back" class="step" disabled title="Undo (Ctrl+Z)">&#8630;</button>
-  <button id="on" class="step" disabled title="Redo (Ctrl+Y)">&#8631;</button>
+  <button id="addBand" disabled data-i18n="insert" data-i18n-title="insertWhy" title="Insert rows or columns (Ctrl+Shift+Plus)">Insert</button>
+  <button id="cutBand" disabled data-i18n="remove" data-i18n-title="removeWhy" title="Delete rows or columns (Ctrl+Minus)">Delete</button>
+  <button id="back" class="step" disabled data-i18n-title="undo" title="Undo (Ctrl+Z)">&#8630;</button>
+  <button id="on" class="step" disabled data-i18n-title="redo" title="Redo (Ctrl+Y)">&#8631;</button>
+  <button id="macros" data-i18n="macros" data-i18n-title="macrosWhy" title="Run a VBA macro">Macros</button>
   <button id="save" disabled>Save</button>
-  <button id="reset">Sample workbook</button>
-  <label class="file">Open a .xlsx<input type="file" id="pick" accept=".xlsx"></label>
+  <button id="reset" data-i18n="sample">Sample workbook</button>
+  <button id="fresh" hidden data-i18n="fresh">New</button>
+  <label class="file"><span data-i18n="openFile">Open a .xlsx</span><input type="file" id="pick" accept=".xlsx"></label>
+  <span class="langs"><button id="langEn">EN</button><button id="langJa">JA</button></span>
 </header>
 
 <div class="bar">
@@ -362,32 +423,181 @@ header #on { margin-right: 4px; }
     <canvas id="sheetInk"></canvas>
     <div id="paper"></div>
     <input id="entry" spellcheck="false" autocomplete="off">
-    <div id="state">Loading the engine…</div>
-    <div id="drop">Drop a .xlsx here</div>
+    <div id="state" data-i18n="engine">Loading the engine…</div>
+    <div id="drop" data-i18n="drop">Drop a .xlsx here</div>
   </div>
   <aside>
-    <h2>What Oxi read</h2>
+    <h2 data-i18n="read">What Oxi read</h2>
     <dl id="facts"></dl>
-    <h2>Column width</h2>
+    <h2 data-i18n="colWidth">Column width</h2>
     <p class="sum" id="widthRule"></p>
-    <h2>Selected cell</h2>
+    <h2 data-i18n="theCell">Selected cell</h2>
     <dl id="cellFacts"><dd class="none">Click a cell</dd></dl>
-    <h2>Not yet drawn</h2>
+    <h2 data-i18n="notDrawn">Not yet drawn</h2>
     <ul id="missing"><li class="none">—</li></ul>
   </aside>
 </main>
 
 <div class="tabs" id="tabs"><span id="tally"></span></div>
 
+<dialog id="macroBox">
+  <div class="pad">
+    <h2 data-i18n="macroTitle">Macros</h2>
+    <div>
+      <label for="macroSource" data-i18n="macroSource">VBA source</label>
+      <textarea id="macroSource" spellcheck="false">Public Sub Main()
+    Range("A1").Value = "Hello from VBA"
+End Sub</textarea>
+    </div>
+    <div class="row">
+      <div>
+        <label for="macroProc" data-i18n="macroProc">Procedure</label>
+        <input id="macroProc" list="macroProcList" spellcheck="false" autocomplete="off" value="Main">
+        <datalist id="macroProcList"></datalist>
+      </div>
+      <div>
+        <label for="macroArgs" data-i18n="macroArgs">Arguments (JSON array)</label>
+        <input id="macroArgs" spellcheck="false" autocomplete="off" placeholder="[]">
+      </div>
+    </div>
+    <div id="macroResult"></div>
+    <div class="ends">
+      <span class="spacer"></span>
+      <button type="button" id="macroClose" data-i18n="close">Close</button>
+      <button type="button" id="macroRun" data-i18n="run">Run</button>
+    </div>
+  </div>
+</dialog>
+
 <script type="module">
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                edit_xlsx_from_workbook, recalculate_spreadsheet,
-               translate_formula, shift_band, rename_sheet } from './oxidocs_wasm.js';
+               translate_formula, shift_band, rename_sheet,
+               list_spreadsheet_vba_procedures, conditional_formats } from './oxidocs_wasm.js';
+// A macro runs in a worker: the interpreter is free to take as long as the
+// macro asks for without the grid stopping being drawable meanwhile.
+import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
 // The row model is the renderer's own, written out once in JS: what the grid
 // draws and what the row heights are measured with cannot drift apart.
 import { explainRow, mayBreak } from './row-model.js';
 
-const SAMPLE = './samples/quarterly-sales.xlsx';
+// The two editors beside this one have spoken both languages for a while and
+// this one spoke neither, which is the sort of gap a suite is judged on.
+const I18N = {
+  en: {
+    lede: 'Spreadsheets drawn and edited in the browser, with no server',
+    freeze: 'Freeze', freezeWhy: 'Hold everything above and left of the cursor in view',
+    bold: 'Bold (Ctrl+B)', italic: 'Italic (Ctrl+I)', under: 'Underline (Ctrl+U)',
+    alignLeft: 'Align left', alignCentre: 'Centre', alignRight: 'Align right',
+    wrap: 'Wrap the text inside the cell',
+    find: 'Find', findWhy: 'Find (Ctrl+F). Enter for the next, Shift+Enter for the one before.',
+    rulesWhy: 'Rules around the cells',
+    font: 'Font', fontWhy: 'The typeface the cells are set in',
+    size: 'Size', sizeWhy: 'How big the text is, in points',
+    ink: 'Text colour', auto: 'Auto', autoWhy: 'Automatic text colour',
+    mergeWhy: 'Draw a block of cells as one',
+    fill: 'Fill colour', nofill: 'No fill',
+    numfmt: 'Format', numfmtWhy: 'How the numbers look. Any Excel format code, or pick one.',
+    insert: 'Insert', insertWhy: 'Insert rows or columns (Ctrl+Shift+Plus)',
+    remove: 'Delete', removeWhy: 'Delete rows or columns (Ctrl+Minus)',
+    undo: 'Undo (Ctrl+Z)', redo: 'Redo (Ctrl+Y)',
+    macros: 'Macros', macrosWhy: 'Run a VBA macro',
+    sample: 'Sample workbook', fresh: 'New',
+    openFile: 'Open a .xlsx', drop: 'Drop a .xlsx here',
+    read: 'What Oxi read', colWidth: 'Column width',
+    theCell: 'Selected cell', notDrawn: 'Not yet drawn',
+    rules: 'Rules', rAll: 'All', rOutline: 'Outline', rTop: 'Top',
+    rBottom: 'Bottom', rLeft: 'Left', rRight: 'Right', rNone: 'None',
+    merge: 'Merge', mCentre: 'Merge & centre', mCells: 'Merge cells',
+    mAcross: 'Merge across', mUn: 'Unmerge',
+    unfreeze: 'Unfreeze', unfreezeWhy: 'Let the held rows and columns scroll again',
+    addSheet: 'Add a sheet',
+    oneSheet: 'A workbook must keep at least one sheet.',
+    badName: 'A sheet name cannot be over 31 characters or contain : \\ / ? * [ ]',
+    tooSlow: 'too slow to work out formulas as you type — Excel will do it on open',
+    macroTitle: 'Macros', macroSource: 'VBA source', macroProc: 'Procedure',
+    macroArgs: 'Arguments (JSON array)', close: 'Close', run: 'Run',
+    macroNeeds: 'A procedure name and some VBA are both needed.',
+    macroRunning: 'Running…',
+    save: 'Save', saveSome: (n) => `Save (${n} cell${n === 1 ? '' : 's'})`,
+    saving: 'Saving…', engine: 'Loading the engine…',
+    opening: 'Opening a new workbook…', reading: 'Reading the sample…',
+    protectedSheet: 'This sheet is protected',
+    refused: 'The value is not allowed here',
+  },
+  ja: {
+    lede: 'サーバーを使わず、ブラウザの中だけで表計算を描いて編集します',
+    freeze: 'ウィンドウ枠の固定', freezeWhy: 'カーソルより上と左を動かないようにします',
+    bold: '太字 (Ctrl+B)', italic: '斜体 (Ctrl+I)', under: '下線 (Ctrl+U)',
+    alignLeft: '左揃え', alignCentre: '中央揃え', alignRight: '右揃え',
+    wrap: 'セル内で折り返す',
+    find: '検索', findWhy: '検索 (Ctrl+F)。Enter で次、Shift+Enter で前。',
+    rulesWhy: 'セルの罫線',
+    font: 'フォント', fontWhy: 'セルの書体',
+    size: 'サイズ', sizeWhy: '文字の大きさ（ポイント）',
+    ink: '文字の色', auto: '自動', autoWhy: '文字の色を自動にする',
+    mergeWhy: '複数のセルを一つとして描く',
+    fill: '塗りつぶしの色', nofill: '塗りつぶしなし',
+    numfmt: '表示形式', numfmtWhy: '数値の見え方。Excel の書式コードか、一覧から選べます。',
+    insert: '挿入', insertWhy: '行または列を挿入 (Ctrl+Shift+Plus)',
+    remove: '削除', removeWhy: '行または列を削除 (Ctrl+Minus)',
+    undo: '元に戻す (Ctrl+Z)', redo: 'やり直し (Ctrl+Y)',
+    macros: 'マクロ', macrosWhy: 'VBA マクロを実行します',
+    sample: 'サンプルを開く', fresh: '新規',
+    openFile: '.xlsx を開く', drop: 'ここに .xlsx をドロップ',
+    read: 'Oxi が読んだもの', colWidth: '列の幅',
+    theCell: '選択中のセル', notDrawn: 'まだ描けていないもの',
+    rules: '罫線', rAll: 'すべて', rOutline: '外枠', rTop: '上',
+    rBottom: '下', rLeft: '左', rRight: '右', rNone: 'なし',
+    merge: 'セルの結合', mCentre: '結合して中央揃え', mCells: 'セルを結合',
+    mAcross: '横方向に結合', mUn: '結合を解除',
+    unfreeze: '固定の解除', unfreezeWhy: '固定した行と列を再びスクロールできるようにします',
+    addSheet: 'シートを追加',
+    oneSheet: 'ブックにはシートが少なくとも 1 枚必要です。',
+    badName: 'シート名は 31 文字以内で、: \\ / ? * [ ] は使えません',
+    tooSlow: '入力のたびに数式を計算するには重すぎます — 開いたときに Excel が計算します',
+    macroTitle: 'マクロ', macroSource: 'VBA ソース', macroProc: 'プロシージャ',
+    macroArgs: '引数（JSON 配列）', close: '閉じる', run: '実行',
+    macroNeeds: 'プロシージャ名と VBA の両方が必要です。',
+    macroRunning: '実行しています…',
+    save: '保存', saveSome: (n) => `保存（${n} セル）`,
+    saving: '保存しています…', engine: 'エンジンを読み込んでいます…',
+    opening: '新しいブックを開いています…', reading: 'サンプルを読み込んでいます…',
+    protectedSheet: 'このシートは保護されています',
+    refused: 'この値は入力できません',
+  },
+};
+let lang = (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+const t = (key) => I18N[lang][key];
+
+/** Put every marked element into the chosen language. */
+function applyLang() {
+  document.documentElement.lang = lang;
+  for (const el of document.querySelectorAll('[data-i18n]')) {
+    const said = I18N[lang][el.dataset.i18n];
+    if (typeof said === 'string') el.textContent = said;
+  }
+  for (const el of document.querySelectorAll('[data-i18n-title]')) {
+    const said = I18N[lang][el.dataset.i18nTitle];
+    if (typeof said === 'string') el.title = said;
+  }
+  for (const el of document.querySelectorAll('[data-i18n-placeholder]')) {
+    const said = I18N[lang][el.dataset.i18nPlaceholder];
+    if (typeof said === 'string') el.placeholder = said;
+  }
+  document.getElementById('langEn').className = lang === 'en' ? 'on' : '';
+  document.getElementById('langJa').className = lang === 'ja' ? 'on' : '';
+  markSaved();
+  // Two of the controls write their own words, so they are asked again.
+  markFrozen();
+}
+document.getElementById('langEn').onclick = () => { lang = 'en'; applyLang(); };
+document.getElementById('langJa').onclick = () => { lang = 'ja'; applyLang(); };
+
+const DESKTOP = document.documentElement.dataset.host === 'desktop';
+// The app starts on an empty book of its own; the site starts on a sample,
+// because a visitor has not brought a file with them.
+const SAMPLE = DESKTOP ? './samples/blank.xlsx' : './samples/quarterly-sales.xlsx';
 /// A stored column width already carries the gutter either side of a cell's
 /// text, so it is not the width a person types into Excel: typing 10 stores
 /// 10.625. Pixels come back out of it by OOXML's own rule, confirmed to the
@@ -414,6 +624,10 @@ function washHex(hex, toward) {
 
 let book = null;
 let shown = 0;
+// Which cells the shown sheet's conditional rules catch, keyed "row,col" with
+// the row counted from zero the way the rules state their ranges. Worked out
+// when the workbook changes, not while it is being drawn.
+let conditional = new Map();
 // The file as it arrived. Saving patches THAT rather than writing a workbook
 // out afresh: everything the sheet carries and this page never modelled —
 // charts, pictures, print settings, the styles of cells nobody touched —
@@ -640,10 +854,8 @@ function markFrozen() {
   if (!button) return;
   const sheet = sheetNow();
   const on = sheet && ((sheet.frozen_rows || 0) > 0 || (sheet.frozen_cols || 0) > 0);
-  button.textContent = on ? 'Unfreeze' : 'Freeze';
-  button.title = on
-    ? 'Let the held rows and columns scroll again'
-    : 'Hold everything above and left of the cursor in view';
+  button.textContent = on ? t('unfreeze') : t('freeze');
+  button.title = on ? t('unfreezeWhy') : t('freezeWhy');
 }
 
 /**
@@ -1117,6 +1329,8 @@ function paintSheet() {
     ink.translate(geom.headWide - band.dx, geom.headHigh - band.dy);
     paintCells(ink, sheet, band, view);
     paintShapes(ink, sheet, band);
+    paintControls(ink, sheet, band);
+    paintNotes(ink, sheet, band);
     ink.restore();
   }
   paintHeaders(ink, view);
@@ -1242,6 +1456,129 @@ function paintShapes(ink, sheet, band) {
 }
 
 /** What a shape says, inside the box it says it in. */
+/**
+ * The notes a sheet carries.
+ *
+ * Excel marks every cell that holds one with a red corner, whether the note is
+ * shown or not — that mark is the only thing on the sheet saying a note is
+ * there. The box itself is drawn for the notes the workbook pins open, which
+ * is what `visible` says; the rest wait for a pointer Excel has and a printed
+ * sheet does not.
+ */
+function paintNotes(ink, sheet, band) {
+  for (const note of sheet.comments || []) {
+    // A note counts its cell's row from zero; the grid counts rows from one,
+    // the way the file's own <row r="..."> does.
+    const [row, col] = note.cell || [0, 0];
+    const cell = boxOf(row + 1, col);
+    if (cell
+      && cell.left >= band.x0 && cell.left < band.x1
+      && cell.top >= band.y0 && cell.top < band.y1) {
+      ink.save();
+      ink.fillStyle = '#C00000';
+      ink.beginPath();
+      ink.moveTo(cell.right - 5, cell.top);
+      ink.lineTo(cell.right, cell.top);
+      ink.lineTo(cell.right, cell.top + 5);
+      ink.closePath();
+      ink.fill();
+      ink.restore();
+    }
+
+    if (note.visible === false) continue;
+    const box = drawnBox(note);
+    if (!box) continue;
+    if (box.left < band.x0 || box.left >= band.x1) continue;
+    if (box.top < band.y0 || box.top >= band.y1) continue;
+    const wide = box.right - box.left;
+    const tall = box.bottom - box.top;
+    ink.save();
+    // Excel drops the note's box on a soft shadow and rules it in black.
+    ink.fillStyle = 'rgba(0, 0, 0, .22)';
+    ink.fillRect(box.left + 2, box.top + 2, wide, tall);
+    ink.fillStyle = `#${note.fill || 'FFFFE1'}`;
+    ink.fillRect(box.left, box.top, wide, tall);
+    ink.strokeStyle = '#000000';
+    ink.lineWidth = 1;
+    ink.strokeRect(box.left + .5, box.top + .5, wide - 1, tall - 1);
+    ink.restore();
+    if (note.text) saysShape(ink, note.text, box);
+  }
+}
+
+/**
+ * The buttons and tick boxes on the grid.
+ *
+ * They come from the same legacy drawing as the notes, and Excel draws them
+ * over the cells rather than in them. A control this does not know how to
+ * dress is still given its room, so the sheet shows something is there.
+ */
+function paintControls(ink, sheet, band) {
+  for (const control of sheet.form_controls || []) {
+    const box = drawnBox(control);
+    if (!box) continue;
+    if (box.left < band.x0 || box.left >= band.x1) continue;
+    if (box.top < band.y0 || box.top >= band.y1) continue;
+    const wide = box.right - box.left;
+    const tall = box.bottom - box.top;
+    const kind = control.kind || '';
+    ink.save();
+    ink.font = '11px "Segoe UI", sans-serif';
+    ink.textBaseline = 'middle';
+    if (kind === 'Checkbox' || kind === 'Radio') {
+      // The box sits at the left of the room the control was given, the way
+      // Excel puts it, with whatever caption there is beside it.
+      const side = 13;
+      const x = box.left + 1;
+      const y = box.top + (tall - side) / 2;
+      ink.fillStyle = '#FFFFFF';
+      ink.strokeStyle = '#6E6E6E';
+      ink.lineWidth = 1;
+      if (kind === 'Radio') {
+        ink.beginPath();
+        ink.arc(x + side / 2, y + side / 2, side / 2 - .5, 0, Math.PI * 2);
+        ink.fill();
+        ink.stroke();
+        if (control.checked) {
+          ink.fillStyle = '#1F1F1F';
+          ink.beginPath();
+          ink.arc(x + side / 2, y + side / 2, 2.5, 0, Math.PI * 2);
+          ink.fill();
+        }
+      } else {
+        ink.fillRect(x + .5, y + .5, side - 1, side - 1);
+        ink.strokeRect(x + .5, y + .5, side - 1, side - 1);
+        if (control.checked) {
+          ink.strokeStyle = '#1F1F1F';
+          ink.lineWidth = 1.6;
+          ink.beginPath();
+          ink.moveTo(x + 3, y + 6.5);
+          ink.lineTo(x + 5.5, y + 9.5);
+          ink.lineTo(x + 10, y + 3.5);
+          ink.stroke();
+        }
+      }
+      if (control.text) {
+        ink.fillStyle = '#1F1F1F';
+        ink.fillText(control.text, x + side + 4, box.top + tall / 2);
+      }
+    } else {
+      // A button, and anything else, is the raised face Excel gives it.
+      ink.fillStyle = kind === 'Button' ? '#F0F0F0' : '#FFFFFF';
+      ink.fillRect(box.left, box.top, wide, tall);
+      ink.strokeStyle = '#ACACAC';
+      ink.lineWidth = 1;
+      ink.strokeRect(box.left + .5, box.top + .5, wide - 1, tall - 1);
+      if (control.text) {
+        ink.fillStyle = '#1F1F1F';
+        ink.textAlign = 'center';
+        ink.fillText(control.text, box.left + wide / 2, box.top + tall / 2);
+      }
+    }
+    ink.restore();
+  }
+}
+
 function saysShape(ink, said, box) {
   const inset = (held, fallback) => (held ?? fallback) / EMU;
   const area = {
@@ -1309,7 +1646,12 @@ function paintCells(ink, sheet, band, view) {
       if (cell.col > geom.lastCol) continue;
       const box = boxOf(row.index, cell.col);
       if (!inside(box)) continue;
-      drawn.push({ row: row.index, cell, box });
+      const look = dressed(row.index, cell.col, cell.style);
+      drawn.push({
+        row: row.index,
+        cell: look === cell.style ? cell : Object.assign({}, cell, { style: look }),
+        box,
+      });
     }
   }
 
@@ -1584,6 +1926,30 @@ function paintSelection(ink, view) {
       ink.setLineDash([]);
     }
   }
+  // A list rule puts an arrow beside the cell the cursor is in, and that arrow
+  // is the whole of what a validation draws. Excel shows it on the active cell
+  // only, which is why it is painted here rather than with the cells.
+  const rule = ruleAt(sheetNow(), at.row, at.col);
+  if (rule && rule.kind === 'list' && rule.in_cell_dropdown !== false) {
+    const here = rectOf(at.row, at.col);
+    if (here) {
+      const side = Math.min(17, here.h);
+      const left = here.x + here.w;
+      const top = here.y + here.h - side;
+      ink.fillStyle = '#F0F0F0';
+      ink.fillRect(left, top, side, side);
+      ink.strokeStyle = '#ACACAC';
+      ink.lineWidth = 1;
+      ink.strokeRect(left + .5, top + .5, side - 1, side - 1);
+      ink.fillStyle = '#3C3C3C';
+      ink.beginPath();
+      ink.moveTo(left + side / 2 - 3.5, top + side / 2 - 1.5);
+      ink.lineTo(left + side / 2 + 3.5, top + side / 2 - 1.5);
+      ink.lineTo(left + side / 2, top + side / 2 + 2.5);
+      ink.closePath();
+      ink.fill();
+    }
+  }
   ink.restore();
 }
 
@@ -1676,6 +2042,9 @@ function describe() {
     }
     tab.onclick = () => {
       shown = index;
+      // Each sheet has its own rules, so what they catch is worked out again
+      // before anything is drawn with them.
+      markConditional();
       draw();
       describe();
       // Each sheet gets its own cursor rather than inheriting a position that
@@ -1720,7 +2089,7 @@ function describe() {
   const plus = document.createElement('button');
   plus.textContent = '+';
   plus.className = 'addtab';
-  plus.title = 'Add a sheet';
+  plus.title = t('addSheet');
   plus.onclick = addSheet;
   tabsBox.appendChild(plus);
   // Redrawing the tabs empties the strip they live in, and the selection's
@@ -1842,7 +2211,7 @@ function setTabColor(index, hex) {
 
 function deleteSheet(index) {
   if (!book || book.sheets.length <= 1) {
-    sayCalc('A workbook must keep at least one sheet.');
+    sayCalc(t('oneSheet'));
     return;
   }
   change(() => {
@@ -1864,7 +2233,7 @@ function renameSheet(index, proposed) {
   const sheet = book && book.sheets[index];
   if (!sheet || !trimmed || trimmed === sheet.name) return false;
   if (trimmed.length > 31 || /[:\\/?*[\]]/.test(trimmed)) {
-    sayCalc('A sheet name cannot be over 31 characters or contain : \\ / ? * [ ]');
+    sayCalc(t('badName'));
     return false;
   }
   if (book.sheets.some((s, at) => at !== index && s.name.toLowerCase() === trimmed.toLowerCase())) {
@@ -2075,7 +2444,7 @@ function recompute() {
   // it actually took is not, so let that have the last word.
   if (performance.now() - started > PATIENCE) {
     liveCalc = false;
-    sayCalc('too slow to work out formulas as you type — Excel will do it on open');
+    sayCalc(t('tooSlow'));
   }
 }
 
@@ -2560,6 +2929,7 @@ function change(what) {
   // Whatever was marked for a cut is no longer what the clipboard holds.
   if (cutFrom) cutFrom = null;
   recompute();
+  markConditional();
   undone.push(built);
   if (undone.length > DEPTH) undone.shift();
   // A fresh change is a fork: what was undone is no longer ahead of us.
@@ -3589,9 +3959,7 @@ function markSaved() {
   // behind them, so counting values alone would leave the button dark with
   // work outstanding.
   saveButton.disabled = count === 0 && !beyondValues;
-  saveButton.textContent = count === 0
-    ? 'Save'
-    : `Save (${count} cell${count === 1 ? '' : 's'})`;
+  saveButton.textContent = count === 0 ? t('save') : t('saveSome')(count);
 }
 
 async function save() {
@@ -3601,7 +3969,7 @@ async function save() {
   if (!source || (changes.size === 0 && !beyondValues)) return;
   const was = saveButton.textContent;
   saveButton.disabled = true;
-  saveButton.textContent = 'Saving…';
+  saveButton.textContent = t('saving');
   try {
     // Values alone go by the narrow path, which patches only the cells named.
     // Once formatting has moved, the whole workbook has to cross, because a
@@ -3676,6 +4044,137 @@ function heldAt(row, col) {
   if (!sheet) return undefined;
   const line = sheet.rows.find((one) => one.index === row);
   return line && line.cells.find((one) => one.col === col);
+}
+
+/**
+ * The rule covering a cell, where the sheet states one.
+ *
+ * A rule counts its rows from zero, the way a cell reference does once it is
+ * parsed; the grid counts them from one, the way `<row r="...">` does.
+ */
+/**
+ * Work out which cells the shown sheet's conditional rules catch.
+ *
+ * The engine does it, because over half the rules in a real corpus are
+ * formulas and answering those means putting the whole book to it. That is
+ * why this runs when the workbook changes rather than while it is drawn.
+ */
+function markConditional() {
+  conditional = new Map();
+  const sheet = sheetNow();
+  if (!sheet || !(sheet.conditional_rules || []).length) return;
+  try {
+    for (const hit of conditional_formats(book, shown) || []) {
+      conditional.set(`${hit.row},${hit.col}`, hit.style);
+    }
+  } catch (error) {
+    // A rule the engine cannot answer leaves its cells dressed the way the
+    // file dressed them, which is what not knowing ought to look like.
+    console.warn('conditional formats: ' + error);
+  }
+}
+
+/**
+ * A cell's own look with whatever rule caught it laid over the top. A rule
+ * states only what it changes, so everything it is silent about is kept.
+ */
+function dressed(row, col, style) {
+  // Rules count rows from zero; the grid counts them from one.
+  const over = conditional.get(`${row - 1},${col}`);
+  if (!over) return style;
+  const held = Object.assign({}, style || {});
+  for (const part of ['font_color', 'bg_color', 'bold', 'italic', 'underline', 'number_format']) {
+    if (over[part] !== undefined && over[part] !== null) held[part] = over[part];
+  }
+  return held;
+}
+
+function ruleAt(sheet, row, col) {
+  for (const rule of (sheet && sheet.validations) || []) {
+    for (const span of rule.ranges || []) {
+      const [top, left, bottom, right] = span;
+      if (row - 1 >= top && row - 1 <= bottom && col >= left && col <= right) return rule;
+    }
+  }
+  return null;
+}
+
+/**
+ * What a list rule offers: either the items spelled out in the file, or the
+ * cells it points at. A list that names another sheet is left alone — this
+ * side can only read the sheet it is drawing.
+ */
+function listItems(rule) {
+  const held = (rule.formula1 || '').trim();
+  if (!held) return null;
+  if (held.startsWith('"')) {
+    return held.replace(/^"/, '').replace(/"$/, '').split(',').map((one) => one.trim());
+  }
+  const found = held.replace(/\$/g, '').match(/^([A-Za-z]+)(\d+)(?::([A-Za-z]+)(\d+))?$/);
+  if (!found) return null;
+  const colOf = (letters) => letters.toUpperCase().split('')
+    .reduce((held, letter) => held * 26 + (letter.charCodeAt(0) - 64), 0) - 1;
+  const firstCol = colOf(found[1]);
+  const firstRow = Number(found[2]);
+  const lastCol = found[3] ? colOf(found[3]) : firstCol;
+  const lastRow = found[4] ? Number(found[4]) : firstRow;
+  const out = [];
+  for (let row = Math.min(firstRow, lastRow); row <= Math.max(firstRow, lastRow); row++) {
+    for (let col = Math.min(firstCol, lastCol); col <= Math.max(firstCol, lastCol); col++) {
+      const cell = heldAt(row, col);
+      const said = cell ? shownText(cell) : '';
+      if (said !== '') out.push(said);
+    }
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * Whether a rule takes a value.
+ *
+ * The kinds that need a formula worked out — `custom`, and dates written as
+ * expressions — are let through rather than guessed at: refusing a value on a
+ * rule this cannot read would be worse than not checking it.
+ */
+function allows(rule, text) {
+  if (text === '') return rule.allow_blank !== false;
+  const bound = (held) => {
+    const number = Number(String(held ?? '').trim());
+    return Number.isFinite(number) ? number : null;
+  };
+  const within = (value) => {
+    const low = bound(rule.formula1);
+    const high = bound(rule.formula2);
+    switch (rule.operator || 'between') {
+      case 'between': return low === null || high === null || (value >= low && value <= high);
+      case 'notBetween': return low === null || high === null || value < low || value > high;
+      case 'equal': return low === null || value === low;
+      case 'notEqual': return low === null || value !== low;
+      case 'greaterThan': return low === null || value > low;
+      case 'lessThan': return low === null || value < low;
+      case 'greaterThanOrEqual': return low === null || value >= low;
+      case 'lessThanOrEqual': return low === null || value <= low;
+      default: return true;
+    }
+  };
+  switch (rule.kind) {
+    case 'list': {
+      const items = listItems(rule);
+      return !items || items.includes(text);
+    }
+    case 'whole': {
+      const number = Number(text);
+      return Number.isInteger(number) && within(number);
+    }
+    case 'decimal': {
+      const number = Number(text);
+      return Number.isFinite(number) && within(number);
+    }
+    case 'textLength':
+      return within(text.length);
+    default:
+      return true;
+  }
 }
 
 // What the formula bar shows: the formula if there is one, else what is
@@ -3779,6 +4278,18 @@ function put(row, col, text, style) {
   const sheet = sheetNow();
   if (!sheet) return;
   const holding = heldAt(row, col);
+  // A protected sheet takes only what it left unlocked. Excel locks every cell
+  // unless the workbook says otherwise, so a cell that is not there at all is
+  // locked too, and silence in the style means the same.
+  if (sheet.protected && !(holding && holding.style && holding.style.unlocked)) {
+    sayCalc(t('protectedSheet'));
+    return;
+  }
+  const rule = ruleAt(sheet, row, col);
+  if (rule && !allows(rule, text)) {
+    sayCalc(rule.error || t('refused'));
+    return;
+  }
   const before = contentOf(holding);
   // A cell that was not there wore the empty style, not "no style": undo has
   // to be able to put a cell back to bare, and `undefined` here would mean
@@ -3955,6 +4466,13 @@ function onKey(event) {
     return;
   }
   const jump = event.ctrlKey || event.metaKey;
+  // Ctrl+S saves, the way it does in every editor a person has used, and the
+  // way the document editor beside this one already did.
+  if (jump && (event.key === 's' || event.key === 'S')) {
+    event.preventDefault();
+    if (!saveButton.disabled) save();
+    return;
+  }
   const wide = event.shiftKey;
   // Shift walks the corner being dragged; without it, the active cell.
   const from = wide ? reach : at;
@@ -4279,6 +4797,7 @@ async function open(data, name) {
   }
   shown = 0;
   weighCalc();
+  markConditional();
   markFrozen();
   const style = book.default_style || {};
   digitWidth = measureDigit(style.font_name, style.font_size);
@@ -4294,17 +4813,20 @@ async function open(data, name) {
 
 async function openSample() {
   stateBox.style.display = 'block';
-  stateBox.textContent = 'Reading the sample…';
+  stateBox.textContent = DESKTOP ? t('opening') : t('reading');
   const reply = await fetch(SAMPLE);
   if (!reply.ok) {
     stateBox.textContent =
       'The sample could not be fetched. Serve this folder over http rather than opening the file directly.';
     return;
   }
-  await open(await reply.arrayBuffer(), 'the sample');
+  await open(await reply.arrayBuffer(), DESKTOP ? 'Book1.xlsx' : 'the sample');
 }
 
 document.getElementById('reset').onclick = openSample;
+// Same door, different sign: in the app it starts a workbook rather than
+// fetching a sample, because that is what the file behind it is.
+document.getElementById('fresh').onclick = openSample;
 document.getElementById('pick').onchange = async (event) => {
   const file = event.target.files[0];
   if (file) await open(await file.arrayBuffer(), file.name);
@@ -4327,6 +4849,122 @@ sheetBox.addEventListener('drop', async (event) => {
   if (file) await open(await file.arrayBuffer(), file.name);
 });
 
+// A macro can touch anything the workbook holds, so running one is treated the
+// way opening a file is: the book is replaced wholesale and the step history
+// starts again, rather than keeping steps that point at cells the macro moved.
+const macroBox = document.getElementById('macroBox');
+const macroSource = document.getElementById('macroSource');
+const macroProc = document.getElementById('macroProc');
+const macroArgs = document.getElementById('macroArgs');
+const macroResult = document.getElementById('macroResult');
+const macroRun = document.getElementById('macroRun');
+const macroProcList = document.getElementById('macroProcList');
+
+function sayMacro(text, bad) {
+  macroResult.textContent = text;
+  macroResult.classList.toggle('bad', Boolean(bad));
+}
+
+/// Offers the procedures the source declares, so a name is picked from what is
+/// there rather than typed from memory.
+function listMacroProcedures() {
+  try {
+    const found = list_spreadsheet_vba_procedures(macroSource.value);
+    macroProcList.replaceChildren(...found.map((procedure) => {
+      const option = document.createElement('option');
+      option.value = procedure.name;
+      option.label = `${procedure.kind} · ${procedure.required_parameter_count}`
+        + `/${procedure.parameter_count} required · line ${procedure.line}`;
+      return option;
+    }));
+    const wanted = macroProc.value.trim().toLowerCase();
+    if (found.length && !found.some((procedure) => procedure.name.toLowerCase() === wanted)) {
+      macroProc.value = found[0].name;
+    }
+  } catch {
+    macroProcList.replaceChildren();
+  }
+}
+
+function reportMacro(execution) {
+  const parts = [];
+  if (execution.messages?.length) {
+    parts.push(`MsgBox:\n${execution.messages
+      .map((message) => `[${message.title}] ${message.prompt}`).join('\n')}`);
+  }
+  if (execution.debug_output?.length) {
+    parts.push(`Debug.Print:\n${execution.debug_output.join('\n')}`);
+  }
+  // Excel leaves the status bar showing whatever the macro last wrote, so a
+  // macro that forgot to hand it back still has its last word to show.
+  if (execution.status_bar !== null && execution.status_bar !== undefined) {
+    parts.push(`StatusBar:\n${execution.status_bar}`);
+  }
+  const result = execution.result;
+  if (!result || result.type === 'empty' || result.type === 'null') {
+    parts.push('Completed.');
+  } else if (result.type === 'array' || result.type === 'object') {
+    parts.push(`${result.type}: ${JSON.stringify(result.value)}`);
+  } else {
+    parts.push(`${result.type}: ${String(result.value)}`);
+  }
+  return parts.join('\n\n');
+}
+
+document.getElementById('macros').onclick = () => {
+  if (!book) return;
+  sayMacro('');
+  listMacroProcedures();
+  macroBox.showModal();
+};
+document.getElementById('macroClose').onclick = () => {
+  cancelActiveVbaExecution();
+  macroBox.close();
+};
+macroSource.addEventListener('input', listMacroProcedures);
+
+macroRun.onclick = async () => {
+  const procedure = macroProc.value.trim();
+  if (!book || !macroSource.value.trim() || !procedure) {
+    sayMacro(t('macroNeeds'), true);
+    return;
+  }
+  macroRun.disabled = true;
+  sayMacro(t('macroRunning'));
+  try {
+    const execution = await runVbaInWorker(
+      book,
+      macroSource.value,
+      procedure,
+      parseVbaArguments(macroArgs.value),
+      shown,
+      fileName,
+    );
+    book = execution.workbook;
+    // The narrow save path patches only the cells it was handed; a macro's
+    // reach is wider than any such list, so the whole workbook has to cross.
+    beyondValues = true;
+    changes.clear();
+    pristine.clear();
+    undone.length = 0;
+    redone.length = 0;
+    weighCalc();
+    markFrozen();
+    markSaved();
+    markSteps();
+    draw();
+    describe();
+    sayFaces();
+    sayMacro(reportMacro(execution));
+  } catch (error) {
+    // Cancelling is something the person did, not something that went wrong.
+    sayMacro(error?.message || String(error), error?.name !== 'AbortError');
+  } finally {
+    macroRun.disabled = false;
+  }
+};
+
+applyLang();
 await init();
 await openSample();
 </script>

@@ -34,7 +34,8 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 
 /* Title bar */
 .tb{display:flex;align-items:center;height:44px;background:#fff;color:var(--txt);padding:0 14px;font-size:13px;user-select:none;flex-shrink:0}
-.tb .logo{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#333;margin-right:16px;letter-spacing:.2px}
+.tb .logo{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#333;margin-right:16px;letter-spacing:.2px;text-decoration:none}
+.tb .logo:hover{opacity:.72}
 .logo-mark{width:22px;height:22px;border-radius:5px;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
 .tb .dn{font-size:13px;color:#333;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #saveState{margin-left:6px;font-size:12px;line-height:1}
@@ -254,7 +255,7 @@ input[type="file"]{display:none}
 
 <!-- Title bar -->
 <div class="tb">
-  <span class="logo"><span class="logo-mark">O</span><span>Oxidocs</span></span>
+  <a class="logo" href="./index.html" title="Oxi"><span class="logo-mark">O</span><span>Oxidocs</span></a>
   <span class="dn" id="docName" data-i18n="newDoc">New Document</span>
   <span id="saveState"></span>
   <div class="tb-center">

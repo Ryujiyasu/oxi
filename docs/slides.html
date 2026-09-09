@@ -40,7 +40,9 @@ body {
   background: #fff; padding: 0 14px; font-size: 13px; user-select: none;
   border-bottom: 1px solid var(--border);
 }
-.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px }
+.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px;
+  color: inherit; text-decoration: none }
+.logo:hover { opacity: .72 }
 .logo-mark {
   width: 22px; height: 22px; border-radius: 5px; background: var(--accent); color: #fff;
   display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
@@ -170,7 +172,7 @@ body.presenting #presrail { display: block }
 <body>
 
 <div class="tb">
-  <span class="logo"><span class="logo-mark">O</span><span>Oxislides</span></span>
+  <a class="logo" href="./index.html" title="Oxi"><span class="logo-mark">O</span><span>Oxislides</span></a>
   <span class="dn" id="docName" data-i18n="noFile">No presentation open</span>
   <span class="sp"></span>
   <button id="btnOpen" data-i18n="open">Open</button>
@@ -961,6 +963,13 @@ document.addEventListener('drop', e => {
 });
 document.addEventListener('keydown', e => {
   if (!pres) return;
+  // Ctrl+S saves, the way the document editor beside this one already did.
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    const button = document.getElementById('btnSave');
+    if (button && !button.hidden) button.click();
+    return;
+  }
   if (presenting) {
     if (e.key === 'Escape') { stopPresenting(); e.preventDefault(); return; }
     if (e.key === ' ' || e.key === 'n') { go(1); e.preventDefault(); return; }
