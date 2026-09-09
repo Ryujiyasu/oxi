@@ -1,0 +1,11 @@
+name = "oxi-feedback"
+main = "src/index.js"
+compatibility_date = "2026-09-09"
+
+# Created with:  npx wrangler d1 create oxi-feedback
+# Paste the id it prints here, then load the schema:
+#   npx wrangler d1 execute oxi-feedback --remote --file schema.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "oxi-feedback"
+database_id = "REPLACE_WITH_THE_ID_WRANGLER_PRINTS"

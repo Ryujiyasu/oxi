@@ -65,6 +65,11 @@ jobs:
           # The updater key was generated with an empty password on purpose
           # (the key material itself is the secret).
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+          # Where a rating goes when someone chooses to send one. Not a secret —
+          # it is a public endpoint, and it ends up in the shipped page either
+          # way. Set it as a repository variable; leave it unset and the rating
+          # card is left out of the build entirely.
+          OXI_FEEDBACK_ENDPOINT: ${{ vars.OXI_FEEDBACK_ENDPOINT }}
         with:
           projectPath: crates/oxi-desktop
           tauriScript: tauri
