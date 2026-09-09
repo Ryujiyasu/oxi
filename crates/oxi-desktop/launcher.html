@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oxi</title>
+<link rel="icon" type="image/x-icon" href="./favicon.ico">
+<style>
+:root {
+  --ink: #1b1b1b;
+  --muted: #6b6b6b;
+  --line: #e3e3e3;
+  --paper: #faf9f8;
+  --docs: #185ABD;
+  --cells: #217346;
+  --slides: #C43E1C;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  padding: 48px 24px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', Meiryo, sans-serif;
+}
+header { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+header .mark { display: block; }
+h1 {
+  margin: 0;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+header p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.apps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+  width: 100%;
+  max-width: 720px;
+}
+.app {
+  display: block;
+  padding: 22px 22px 22px 26px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--tint);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  text-decoration: none;
+  transition: box-shadow .15s ease, transform .15s ease;
+}
+.app:hover, .app:focus-visible {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .09);
+  transform: translateY(-2px);
+  outline: none;
+}
+.app:focus-visible { border-color: var(--tint); }
+.app b {
+  display: block;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--tint);
+}
+.app span {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+footer {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.6;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="mark" viewBox="0 0 256 256" width="64" height="64" aria-hidden="true">
+    <rect x="16" y="16" width="224" height="224" rx="52" fill="#C7462F"/>
+    <rect x="66" y="66" width="56" height="56" rx="7" fill="#FFFFFF" opacity=".46"/>
+    <g stroke="#FFFFFF" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M62 62 h132 v132 h-132 z"/>
+      <path d="M128 62 V194"/>
+      <path d="M62 128 H194"/>
+    </g>
+  </svg>
+  <h1>Oxi</h1>
+  <p>ドキュメントを開いて編集する / Open and edit a document</p>
+</header>
+
+<main class="apps">
+  <a class="app" href="./docs.html" style="--tint: var(--docs)">
+    <b>Oxidocs</b>
+    <span>.docx を開く・編集する<br>Documents</span>
+  </a>
+  <a class="app" href="./sheets.html" style="--tint: var(--cells)">
+    <b>Oxicells</b>
+    <span>.xlsx を開く・編集する<br>Spreadsheets</span>
+  </a>
+  <a class="app" href="./slides.html" style="--tint: var(--slides)">
+    <b>Oxislides</b>
+    <span>.pptx を開く・編集する<br>Presentations</span>
+  </a>
+</main>
+
+<footer>
+  バージョン {{VERSION}}<br>
+  メニューバーの「アプリ / Apps」からいつでも切り替えられます
+</footer>
+
+</body>
+</html>

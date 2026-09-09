@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -11,6 +13,22 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .menu(build_menu)
+        .on_menu_event(|app, event| {
+            // Every editor is a sibling page, so one relative hop reaches it
+            // whichever one is open.
+            let script = match event.id().as_ref() {
+                "go-home" => "location.href = './index.html'",
+                "go-docs" => "location.href = './docs.html'",
+                "go-sheets" => "location.href = './sheets.html'",
+                "go-slides" => "location.href = './slides.html'",
+                "reload" => "location.reload()",
+                _ => return,
+            };
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(script);
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -20,6 +38,31 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Oxi Desktop");
+}
+
+/// The three editors the window switches between, appended to the platform's
+/// default menu so the standard edit and window items stay available.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let apps = Submenu::with_items(
+        app,
+        "アプリ / Apps",
+        true,
+        &[
+            &MenuItem::with_id(app, "go-home", "ホーム / Home", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "go-docs", "Oxidocs (.docx)", true, None::<&str>)?,
+            &MenuItem::with_id(app, "go-sheets", "Oxicells (.xlsx)", true, None::<&str>)?,
+            &MenuItem::with_id(app, "go-slides", "Oxislides (.pptx)", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "reload", "再読み込み / Reload", true, Some("F5"))?,
+        ],
+    )?;
+    // Help is the last thing on a menu bar everywhere, so the apps go in front
+    // of it rather than after, which is where appending would leave them.
+    let menu = Menu::default(app)?;
+    let before_help = menu.items()?.len().saturating_sub(1);
+    menu.insert(&apps, before_help)?;
+    Ok(menu)
 }
 
 /// Startup update check: signed manifest from GitHub Releases (see

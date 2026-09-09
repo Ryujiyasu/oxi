@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- The 32px cut, for Alt+Tab and the medium icon view. The master's rules
+       come to 1.875px here, which straddles the pixel boundary and greys both
+       edges, so this cut restates them at 2px on whole pixels. Four 5x5 cells. -->
+  <rect x="2" y="2" width="28" height="28" rx="6" fill="#C7462F"/>
+  <rect x="10" y="10" width="5" height="5" fill="#FFFFFF" opacity=".46"/>
+  <g fill="#FFFFFF">
+    <rect x="8" y="8" width="16" height="2"/>
+    <rect x="8" y="22" width="16" height="2"/>
+    <rect x="8" y="10" width="2" height="12"/>
+    <rect x="22" y="10" width="2" height="12"/>
+    <rect x="15" y="8" width="2" height="16"/>
+    <rect x="8" y="15" width="16" height="2"/>
+  </g>
+</svg>
