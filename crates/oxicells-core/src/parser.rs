@@ -32,7 +32,6 @@ fn note_unsupported(name: &str, noted: &mut Vec<String>) {
         "dataValidation" | "dataValidations" => "Data validation",
         "hyperlink" | "hyperlinks" => "Hyperlinks",
         "pane" => "Split panes",
-        "sheetProtection" => "Sheet protection",
         "drawing" => "Drawings",
         "legacyDrawing" => "Comments",
         "tableParts" => "Tables",
@@ -532,6 +531,11 @@ struct XfRecord {
     wrap_text: bool,
     stacked_text: bool,
     shrink_to_fit: bool,
+    /// Whether the cell may still be edited once its sheet is protected.
+    /// Excel locks every cell by default and unlocks the few a form wants
+    /// typed into, so the negative is the one worth holding: it keeps this
+    /// struct right when it is built from its own default.
+    unlocked: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -544,6 +548,9 @@ struct StyleSheet {
     /// written. A table names the rule it draws round itself by an index into
     /// these.
     dxf_borders: Vec<BorderInfo>,
+    /// The whole of each differential format — colour, weight, fill — in the
+    /// order a `dxfId` counts them. A conditional rule names one of these.
+    dxfs: Vec<crate::ir::DiffStyle>,
     cell_xfs: Vec<XfRecord>,
     cell_style_xfs: Vec<XfRecord>,
 }
@@ -870,6 +877,78 @@ fn indexed_palette(xml: &str) -> Vec<String> {
     held
 }
 
+/// The differential formats a workbook holds, in the order a `dxfId` counts
+/// them.
+///
+/// A dxf states only what it changes, which is why every part of the answer is
+/// optional: a rule that turns text red says nothing about the fill, and the
+/// cell keeps the one it had. Excel writes a dxf's fill colour in `<bgColor>`
+/// where an ordinary fill puts it in `<fgColor>`, so the background is read
+/// first and the foreground only stands in for it.
+fn parse_dxfs(xml: &str, theme: &Theme) -> Vec<crate::ir::DiffStyle> {
+    let Some(block) = xml
+        .split("<dxfs")
+        .nth(1)
+        .and_then(|rest| rest.split("</dxfs>").next())
+    else {
+        return Vec::new();
+    };
+    let mut held = Vec::new();
+    let mut reader = Reader::from_str(block);
+    let mut current: Option<crate::ir::DiffStyle> = None;
+    let (mut in_font, mut in_fill) = (false, false);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "dxf" => {
+                        current = Some(crate::ir::DiffStyle::default());
+                        continue;
+                    }
+                    "font" => {
+                        in_font = true;
+                        continue;
+                    }
+                    "fill" => {
+                        in_fill = true;
+                        continue;
+                    }
+                    _ => {}
+                }
+                let Some(style) = current.as_mut() else { continue };
+                // `<b/>` on its own is on; only `val="0"` turns one off.
+                let on = !matches!(get_attr(e, "val").as_deref(), Some("0") | Some("false"));
+                match name.as_str() {
+                    "b" if in_font => style.bold = Some(on),
+                    "i" if in_font => style.italic = Some(on),
+                    "u" if in_font => style.underline = Some(on),
+                    "color" if in_font => style.font_color = parse_color_attr(e, theme),
+                    "bgColor" if in_fill => style.bg_color = parse_color_attr(e, theme),
+                    "fgColor" if in_fill && style.bg_color.is_none() => {
+                        style.bg_color = parse_color_attr(e, theme);
+                    }
+                    "numFmt" => style.number_format = get_attr(e, "formatCode"),
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => match local_name(e.name().as_ref()).as_str() {
+                "font" => in_font = false,
+                "fill" => in_fill = false,
+                "dxf" => {
+                    if let Some(style) = current.take() {
+                        held.push(style);
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    held
+}
+
 fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut ss = StyleSheet::default();
@@ -968,6 +1047,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             applies_number_format: unless_denied(
                                 get_attr(&e, "applyNumberFormat").as_deref(),
                             ),
+                            unlocked: false,
                         };
                     }
                     "alignment" if in_xf => {
@@ -984,6 +1064,12 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             get_attr(&e, "textRotation").as_deref() == Some("255");
                         current_xf.shrink_to_fit =
                             is_true(get_attr(&e, "shrinkToFit").as_deref());
+                    }
+                    // <protection locked="0"/> — the cells a protected sheet
+                    // still lets a person type into.
+                    "protection" if in_xf => {
+                        current_xf.unlocked =
+                            matches!(get_attr(&e, "locked").as_deref(), Some("0") | Some("false"));
                     }
 
                     // Inside a border element, parse child elements with style attr
@@ -1167,6 +1253,12 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         current_xf.shrink_to_fit =
                             is_true(get_attr(&e, "shrinkToFit").as_deref());
                     }
+                    // <protection locked="0"/> — the cells a protected sheet
+                    // still lets a person type into.
+                    "protection" if in_xf => {
+                        current_xf.unlocked =
+                            matches!(get_attr(&e, "locked").as_deref(), Some("0") | Some("false"));
+                    }
                     "xf" if section == Section::CellXfs
                         || section == Section::CellStyleXfs =>
                     {
@@ -1203,6 +1295,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             applies_number_format: unless_denied(
                                 get_attr(&e, "applyNumberFormat").as_deref(),
                             ),
+                            unlocked: false,
                         };
                         if section == Section::CellStyleXfs {
                             ss.cell_style_xfs.push(xf);
@@ -1289,6 +1382,10 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
         }
     }
 
+    // The dxfs are read in one pass of their own: they are a handful of
+    // small, self-contained blocks, and threading them through the streaming
+    // reader above would tangle them with the ordinary fonts and fills.
+    ss.dxfs = parse_dxfs(xml, theme);
     Ok(ss)
 }
 
@@ -1389,6 +1486,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         wrap_text: xf.wrap_text,
         stacked_text: xf.stacked_text,
         shrink_to_fit: xf.shrink_to_fit,
+        unlocked: xf.unlocked,
         border_top: border.top.clone(),
         border_bottom: border.bottom.clone(),
         border_left: border.left.clone(),
@@ -1433,6 +1531,194 @@ fn part_beside(from: &str, target: &str) -> String {
         }
     }
     parts.join("/")
+}
+
+/// The ranges an `sqref` names, each as `(start_row, start_col, end_row,
+/// end_col)` counted from zero. Excel writes them separated by spaces.
+fn parse_sqref(sqref: &str) -> Vec<(u32, u32, u32, u32)> {
+    sqref
+        .split_whitespace()
+        .map(|part| {
+            let (first, last) = part.split_once(':').unwrap_or((part, part));
+            let (start_col, start_row) = parse_cell_ref(first);
+            let (end_col, end_row) = parse_cell_ref(last);
+            (
+                start_row.min(end_row),
+                start_col.min(end_col),
+                start_row.max(end_row),
+                start_col.max(end_col),
+            )
+        })
+        .collect()
+}
+
+/// A validation rule as its own element states it, before its formulas — which
+/// are child elements — have been read.
+fn validation_from(e: &quick_xml::events::BytesStart) -> crate::ir::DataValidation {
+    crate::ir::DataValidation {
+        // No `type` at all is Excel's `any`, which allows everything.
+        kind: get_attr(e, "type").unwrap_or_else(|| "any".to_string()),
+        operator: get_attr(e, "operator"),
+        ranges: get_attr(e, "sqref")
+            .map(|held| parse_sqref(&held))
+            .unwrap_or_default(),
+        formula1: None,
+        formula2: None,
+        allow_blank: is_true(get_attr(e, "allowBlank").as_deref()),
+        // `showDropDown` is written when the in-cell arrow was turned OFF, so
+        // the flag is turned the right way round on the way in.
+        in_cell_dropdown: !is_true(get_attr(e, "showDropDown").as_deref()),
+        error: get_attr(e, "error"),
+        prompt: get_attr(e, "prompt"),
+    }
+}
+
+/// A conditional rule as its own element states it, before its formulas —
+/// which are child elements — have been read. The look it puts on is resolved
+/// here, because a `dxfId` means nothing once the stylesheet is out of reach.
+fn conditional_from(
+    e: &quick_xml::events::BytesStart,
+    ranges: &[(u32, u32, u32, u32)],
+    stylesheet: &StyleSheet,
+) -> crate::ir::ConditionalRule {
+    crate::ir::ConditionalRule {
+        kind: get_attr(e, "type").unwrap_or_else(|| "expression".to_string()),
+        operator: get_attr(e, "operator"),
+        text: get_attr(e, "text"),
+        formulas: Vec::new(),
+        priority: get_attr(e, "priority")
+            .and_then(|held| held.parse().ok())
+            .unwrap_or(0),
+        stop_if_true: is_true(get_attr(e, "stopIfTrue").as_deref()),
+        ranges: ranges.to_vec(),
+        style: get_attr(e, "dxfId")
+            .and_then(|held| held.parse::<usize>().ok())
+            .and_then(|at| stylesheet.dxfs.get(at))
+            .cloned(),
+    }
+}
+
+/// The buttons and tick boxes a sheet's legacy drawing carries.
+///
+/// The same part holds the notes, which is why the two are read together: a
+/// sheet can name a legacy drawing and have no notes in it at all.
+fn parse_form_controls(vml: &str) -> Vec<crate::ir::FormControl> {
+    use crate::ir::{Anchor, FormControl};
+    let mut held = Vec::new();
+    // The space matters, the same way it does for notes: `<v:shapetype>`
+    // starts with `<v:shape` too.
+    for shape in vml.split("<v:shape ").skip(1) {
+        let shape = shape.split("</v:shape>").next().unwrap_or(shape);
+        let Some(kind) = shape
+            .split("ObjectType=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+        else {
+            continue;
+        };
+        // A note is the one thing in here that is not a control, and it is
+        // read by the note parser instead.
+        if kind == "Note" {
+            continue;
+        }
+        let tagged = |name: &str| -> Option<String> {
+            let open = format!("<x:{name}>");
+            let at = shape.find(&open)? + open.len();
+            let rest = &shape[at..];
+            Some(rest[..rest.find('<')?].trim().to_string())
+        };
+        let Some(anchor) = tagged("Anchor") else { continue };
+        let numbers: Vec<i64> = anchor
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
+        let [left, dx, top, dy, right, dx2, bottom, dy2] = numbers[..] else {
+            continue;
+        };
+        let corner = |column: i64, x: i64, row: i64, y: i64| Anchor {
+            col: column.max(0) as u32,
+            col_off: x * 9525,
+            row: row.max(0) as u32,
+            row_off: y * 9525,
+        };
+        // The caption is HTML inside the shape's text box: a div, sometimes a
+        // font, and the words between them.
+        let text = shape
+            .split("<v:textbox")
+            .nth(1)
+            .and_then(|rest| rest.split("</v:textbox>").next())
+            .map(|held| {
+                let mut out = String::new();
+                let mut inside_tag = false;
+                for letter in held.chars() {
+                    match letter {
+                        '<' => inside_tag = true,
+                        '>' => inside_tag = false,
+                        _ if !inside_tag => out.push(letter),
+                        _ => {}
+                    }
+                }
+                out.split_whitespace().collect::<Vec<_>>().join(" ")
+            })
+            .filter(|held| !held.is_empty());
+        held.push(FormControl {
+            kind: kind.to_string(),
+            from: corner(left, dx, top, dy),
+            to: Some(corner(right, dx2, bottom, dy2)),
+            text,
+            checked: tagged("Checked").is_some_and(|held| held != "0"),
+        });
+    }
+    held
+}
+
+/// The links a sheet's cells carry, resolved against the sheet's own
+/// relationships.
+///
+/// A link that leaves the workbook keeps its URL in a relationship and names
+/// it by id; one that stays inside names its place outright in `location`.
+/// Neither reaches a cell's style, which is why a sheet full of blue
+/// underlined text can still have nowhere to go.
+fn parse_hyperlinks(
+    sheet_xml: &str,
+    rels: &std::collections::HashMap<String, oxidocs_common::relationships::Relationship>,
+) -> Vec<crate::ir::Hyperlink> {
+    let mut held = Vec::new();
+    let mut reader = Reader::from_str(sheet_xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                if local_name(e.name().as_ref()) != "hyperlink" {
+                    continue;
+                }
+                let Some(at) = get_attr(e, "ref") else { continue };
+                // A link can be stated over a whole range. Excel puts it on
+                // every cell of the range; the top-left is the one kept here.
+                let first = at.split(':').next().unwrap_or(&at);
+                let (col, row) = parse_cell_ref(first);
+                let inside = get_attr(e, "location");
+                let target = match &inside {
+                    Some(place) => place.clone(),
+                    None => {
+                        let Some(id) = get_attr(e, "r:id").or_else(|| get_attr(e, "id")) else {
+                            continue;
+                        };
+                        let Some(rel) = rels.get(&id) else { continue };
+                        rel.target.clone()
+                    }
+                };
+                held.push(crate::ir::Hyperlink {
+                    cell: (row, col),
+                    target,
+                    internal: inside.is_some(),
+                    tooltip: get_attr(e, "tooltip"),
+                });
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    held
 }
 
 /// Reads one `xl/tables/*.xml` part into the range and dress it describes.
@@ -2337,9 +2623,11 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
     // anchor.
     for shape in vml.split("<v:shape ").skip(1) {
         let shape = shape.split("</v:shape>").next().unwrap_or(shape);
-        if !shape.contains("<x:Visible/>") {
-            continue;
-        }
+        // A note the workbook pins open is drawn as its box. One it leaves
+        // closed is still drawn — as the red corner Excel puts on any cell
+        // that carries a note — so it is carried too, marked for what it is
+        // rather than dropped.
+        let visible = shape.contains("<x:Visible/>");
         let tagged = |name: &str| -> Option<String> {
             let open = format!("<x:{name}>");
             let at = shape.find(&open)? + open.len();
@@ -2456,6 +2744,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 clip: true,
             },
             fill: Some(fill.to_uppercase()),
+            visible,
         });
     }
     held
@@ -2684,6 +2973,21 @@ fn parse_worksheet(
     let mut auto_filter: Option<crate::ir::AutoFilter> = None;
     let mut declared_range: Option<(u32, u32, u32, u32)> = None;
     let mut unsupported: Vec<String> = Vec::new();
+    // Whether the sheet is protected, which decides nothing about how it is
+    // drawn and everything about whether it can be typed into.
+    let mut protected = false;
+    // What the sheet says its ranges will accept, and the rule being read.
+    let mut validations: Vec<crate::ir::DataValidation> = Vec::new();
+    let mut rule: Option<crate::ir::DataValidation> = None;
+    let mut rule_formula: u8 = 0;
+    let mut rule_text = String::new();
+    // The rules that change how a range looks, the ranges the block being read
+    // covers, and the rule inside it.
+    let mut conditional_rules: Vec<crate::ir::ConditionalRule> = Vec::new();
+    let mut cf_ranges: Vec<(u32, u32, u32, u32)> = Vec::new();
+    let mut cf_rule: Option<crate::ir::ConditionalRule> = None;
+    let mut in_cf_formula = false;
+    let mut cf_text = String::new();
     let mut filter_field: Option<u32> = None;
     let mut filter_criteria: Vec<String> = Vec::new();
     let mut filter_either = false;
@@ -2746,6 +3050,25 @@ fn parse_worksheet(
                 let name = local_name(e.name().as_ref());
                 note_unsupported(&name, &mut unsupported);
                 match name.as_str() {
+                    "dataValidation" => rule = Some(validation_from(&e)),
+                    "conditionalFormatting" => {
+                        cf_ranges = get_attr(&e, "sqref")
+                            .map(|held| parse_sqref(&held))
+                            .unwrap_or_default();
+                    }
+                    "cfRule" => cf_rule = Some(conditional_from(&e, &cf_ranges, stylesheet)),
+                    "formula" if cf_rule.is_some() => {
+                        in_cf_formula = true;
+                        cf_text.clear();
+                    }
+                    "formula1" if rule.is_some() => {
+                        rule_formula = 1;
+                        rule_text.clear();
+                    }
+                    "formula2" if rule.is_some() => {
+                        rule_formula = 2;
+                        rule_text.clear();
+                    }
                     "tabColor" => {
                         tab_color = parse_color_attr(&e, theme);
                     }
@@ -2855,6 +3178,34 @@ fn parse_worksheet(
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "formula" => {
+                        if let Some(held) = cf_rule.as_mut() {
+                            held.formulas.push(std::mem::take(&mut cf_text));
+                        }
+                        in_cf_formula = false;
+                    }
+                    "cfRule" => {
+                        if let Some(held) = cf_rule.take() {
+                            conditional_rules.push(held);
+                        }
+                    }
+                    "conditionalFormatting" => cf_ranges.clear(),
+                    "formula1" | "formula2" => {
+                        if let Some(rule) = rule.as_mut() {
+                            let held = std::mem::take(&mut rule_text);
+                            if rule_formula == 1 {
+                                rule.formula1 = Some(held);
+                            } else if rule_formula == 2 {
+                                rule.formula2 = Some(held);
+                            }
+                        }
+                        rule_formula = 0;
+                    }
+                    "dataValidation" => {
+                        if let Some(rule) = rule.take() {
+                            validations.push(rule);
+                        }
+                    }
                     "filterColumn" => {
                         if let (Some(field), Some(filter)) =
                             (filter_field.take(), auto_filter.as_mut())
@@ -2942,7 +3293,11 @@ fn parse_worksheet(
                 }
             }
             Event::Text(e) => {
-                if in_formula {
+                if in_cf_formula {
+                    cf_text.push_str(&e.unescape()?);
+                } else if rule_formula > 0 {
+                    rule_text.push_str(&e.unescape()?);
+                } else if in_formula {
                     let text = unescape_wide(&e.unescape()?);
                     formula_text.push_str(&text);
                 } else if in_value || in_inline_text {
@@ -2962,6 +3317,16 @@ fn parse_worksheet(
                     note_unsupported(&name, &mut unsupported);
                 }
                 match name.as_str() {
+                    "dataValidation" => validations.push(validation_from(&e)),
+                    "cfRule" => {
+                        conditional_rules.push(conditional_from(&e, &cf_ranges, stylesheet));
+                    }
+                    // <sheetProtection sheet="1"> is a sheet that is protected.
+                    // The same element without it only records the options of
+                    // one that is not, which Excel writes just as readily.
+                    "sheetProtection" => {
+                        protected = is_true(get_attr(&e, "sheet").as_deref());
+                    }
                     // <tabColor rgb="FF00B050"/> -- the sheet tab's colour.
                     "tabColor" => {
                         tab_color = parse_color_attr(&e, theme);
@@ -3274,6 +3639,17 @@ fn parse_worksheet(
             hidden_cols
         },
         unsupported_elements: unsupported,
+        protected,
+        validations,
+        conditional_rules: {
+            let mut held = conditional_rules;
+            held.sort_by_key(|rule| rule.priority);
+            held
+        },
+        // Resolved once the sheet's relationships are to hand, which is a
+        // level up from here.
+        hyperlinks: Vec::new(),
+        form_controls: Vec::new(),
         tab_color,
         origin_id: None,
     })
@@ -3446,6 +3822,15 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
             Some(sheet_xml) => {
                 let mut sheet =
                     parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet, &theme)?;
+                // What the sheet's own parts turn out to hold, which is only
+                // known once they have been read — and which decides what the
+                // walk past their names in the sheet XML really meant.
+                let mut had_notes = false;
+                let mut has_controls = false;
+                // Whether any drawing part the sheet points at held an anchor
+                // at all, which is what tells an unread drawing from no
+                // drawing.
+                let mut anchored = false;
                 // Whether the tab is shown is the workbook's business, not the
                 // worksheet part's.
                 sheet.visibility = info.visibility;
@@ -3468,14 +3853,35 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                             .find(|rel| rel.rel_type.ends_with(ending))
                             .map(|rel| part_beside(&sheet_path, &rel.target))
                     };
-                    if let (Some(notes), Some(vml)) = (beside("/comments"), beside("Drawing")) {
-                        if let (Some(notes), Some(vml)) = (
-                            archive.try_read_part(&notes)?,
-                            archive.try_read_part(&vml)?,
-                        ) {
-                            sheet.comments = parse_comments(&notes, &vml);
-                        }
+                    // The legacy drawing is read whether or not notes come with
+                    // it. The same part carries a sheet's buttons and tick
+                    // boxes, and a sheet can hold a hundred of those and not a
+                    // single note — two of the four hundred workbooks swept do
+                    // exactly that, and were being reported as unread notes.
+                    let vml = match beside("Drawing") {
+                        Some(part) => archive.try_read_part(&part)?,
+                        None => None,
+                    };
+                    let notes = match beside("/comments") {
+                        Some(part) => archive.try_read_part(&part)?,
+                        None => None,
+                    };
+                    sheet.hyperlinks = parse_hyperlinks(&sheet_xml, &rels);
+                    had_notes = notes.is_some();
+                    if let (Some(notes), Some(vml)) = (&notes, &vml) {
+                        sheet.comments = parse_comments(notes, vml);
                     }
+                    if let Some(vml) = &vml {
+                        sheet.form_controls = parse_form_controls(vml);
+                    }
+                    has_controls = vml.as_deref().is_some_and(|vml| {
+                        [
+                            "Button", "Checkbox", "Radio", "List", "Drop", "Spin", "Scroll",
+                            "GBox", "Label", "EditBox", "Dialog",
+                        ]
+                        .iter()
+                        .any(|kind| vml.contains(&format!("ObjectType=\"{kind}\"")))
+                    });
                     for rel in rels.values() {
                         if rel.rel_type.ends_with("/table") {
                             let part = part_beside(&sheet_path, &rel.target);
@@ -3495,6 +3901,14 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                             let Some(drawing_xml) = archive.try_read_part(&part)? else {
                                 continue;
                             };
+                            // Excel leaves the part behind when the last shape
+                            // on a sheet is deleted: a bare `<xdr:wsDr/>` with
+                            // nothing but its namespaces. Three of the four
+                            // hundred workbooks swept carry one, and reporting
+                            // them as unread drawings was reporting an absence.
+                            if drawing_xml.contains("Anchor") {
+                                anchored = true;
+                            }
                             let inside = part
                                 .rsplit_once('/')
                                 .map(|(dir, file)| format!("{dir}/_rels/{file}.rels"))
@@ -3563,6 +3977,31 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                             }
                         }
                     }
+                }
+                // A sheet names its drawing, its tables and its notes in its own
+                // XML, and the walk past those names was recorded before the
+                // parts they point at had been read. They have now been read,
+                // so anything that did arrive stops being a gap: a report of
+                // what cannot be shown is worth less than nothing when it lists
+                // what can.
+                let drew = !sheet.drawings.is_empty();
+                let tabled = !sheet.tables.is_empty();
+                let noted = !sheet.comments.is_empty();
+                let linked = !sheet.hyperlinks.is_empty();
+                sheet.unsupported_elements.retain(|feature| match feature.as_str() {
+                    "Drawings" => anchored && !drew,
+                    "Tables" => !tabled,
+                    // A legacy drawing is only a note when notes came with it.
+                    "Comments" => had_notes && !noted,
+                    "Hyperlinks" => !linked,
+                    "Data validation" => sheet.validations.is_empty(),
+                    "Conditional formatting" => sheet.conditional_rules.is_empty(),
+                    _ => true,
+                });
+                // Only what could not be taken is reported: a sheet whose
+                // controls all reached the IR has nothing outstanding.
+                if has_controls && sheet.form_controls.is_empty() {
+                    sheet.unsupported_elements.push("Form controls".to_string());
                 }
                 sheets.push(sheet);
             }

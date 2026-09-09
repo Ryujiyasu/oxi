@@ -76,6 +76,27 @@ export function build_docx_with_template(content, template) {
 }
 
 /**
+ * Which cells one sheet's conditional rules catch, and the look each puts on.
+ *
+ * Worked out here rather than on the page because over half of the rules in a
+ * four-hundred-workbook sweep are formulas, and answering those means putting
+ * the whole book to the engine — once for the sheet, not once per cell.
+ *
+ * Rows come back counted from zero, the way the rules state their ranges, and
+ * not the way a row's own index counts them.
+ * @param {any} workbook
+ * @param {number} sheet
+ * @returns {any}
+ */
+export function conditional_formats(workbook, sheet) {
+    const ret = wasm.conditional_formats(workbook, sheet);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * Create a blank .docx file and return it as bytes.
  * Can be used to create a new document from scratch.
  * @returns {Uint8Array}
@@ -565,6 +586,28 @@ export function read_macro_safety(_package) {
  */
 export function recalculate_spreadsheet(workbook, now) {
     const ret = wasm.recalculate_spreadsheet(workbook, !isLikeNone(now), isLikeNone(now) ? 0 : now);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Rename a sheet across the whole workbook, so the live view stays right.
+ *
+ * The sheet's own name changes, and every formula that named it is rewritten
+ * to the new name -- the same rewrite the save path does, done here too so a
+ * cross-sheet reference does not read as an error until the file is saved and
+ * reopened. Returns the updated workbook.
+ * @param {any} workbook
+ * @param {number} index
+ * @param {string} new_name
+ * @returns {any}
+ */
+export function rename_sheet(workbook, index, new_name) {
+    const ptr0 = passStringToWasm0(new_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.rename_sheet(workbook, index, ptr0, len0);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }

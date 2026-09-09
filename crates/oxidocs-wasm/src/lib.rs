@@ -695,6 +695,23 @@ pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>
         .map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Which cells one sheet's conditional rules catch, and the look each puts on.
+///
+/// Worked out here rather than on the page because over half of the rules in a
+/// four-hundred-workbook sweep are formulas, and answering those means putting
+/// the whole book to the engine — once for the sheet, not once per cell.
+///
+/// Rows come back counted from zero, the way the rules state their ranges, and
+/// not the way a row's own index counts them.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn conditional_formats(workbook: JsValue, sheet: usize) -> Result<JsValue, JsError> {
+    let workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    let caught = oxicells_core::conditional::caught(&workbook, sheet);
+    serde_wasm_bindgen::to_value(&caught).map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Recalculate every formula in a workbook and hand the workbook back.
 ///
 /// The browser holds a sheet as this IR while it is being edited, so this is

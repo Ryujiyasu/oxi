@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod chart;
+pub mod conditional;
 pub mod editor;
 pub mod fill;
 pub mod formula;

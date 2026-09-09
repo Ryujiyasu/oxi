@@ -35,6 +35,18 @@ export function build_docx(content: any): Uint8Array;
 export function build_docx_with_template(content: any, template: Uint8Array): Uint8Array;
 
 /**
+ * Which cells one sheet's conditional rules catch, and the look each puts on.
+ *
+ * Worked out here rather than on the page because over half of the rules in a
+ * four-hundred-workbook sweep are formulas, and answering those means putting
+ * the whole book to the engine — once for the sheet, not once per cell.
+ *
+ * Rows come back counted from zero, the way the rules state their ranges, and
+ * not the way a row's own index counts them.
+ */
+export function conditional_formats(workbook: any, sheet: number): any;
+
+/**
  * Create a blank .docx file and return it as bytes.
  * Can be used to create a new document from scratch.
  */
@@ -223,6 +235,16 @@ export function read_macro_safety(_package: Uint8Array): any;
 export function recalculate_spreadsheet(workbook: any, now?: number | null): any;
 
 /**
+ * Rename a sheet across the whole workbook, so the live view stays right.
+ *
+ * The sheet's own name changes, and every formula that named it is rewritten
+ * to the new name -- the same rewrite the save path does, done here too so a
+ * cross-sheet reference does not read as an error until the file is saved and
+ * reopened. Returns the updated workbook.
+ */
+export function rename_sheet(workbook: any, index: number, new_name: string): any;
+
+/**
  * Execute VBA source against an OxiCells workbook IR.
  */
 export function run_spreadsheet_vba(workbook: any, source: string, procedure: string, args: any, active_sheet: number, file_name?: string | null): any;
@@ -305,6 +327,7 @@ export interface InitOutput {
     readonly break_slide_paragraph: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: any) => [number, number, number];
     readonly build_docx: (a: any) => [number, number, number, number];
     readonly build_docx_with_template: (a: any, b: number, c: number) => [number, number, number, number];
+    readonly conditional_formats: (a: any, b: number) => [number, number, number];
     readonly create_blank_docx: () => [number, number];
     readonly create_pdf: (a: number, b: number, c: number, d: number) => [number, number];
     readonly docx_to_pdf: (a: number, b: number) => [number, number, number, number];
@@ -329,6 +352,7 @@ export interface InitOutput {
     readonly preview_hanko: (a: number, b: number) => [number, number];
     readonly read_macro_safety: (a: number, b: number) => [number, number, number];
     readonly recalculate_spreadsheet: (a: any, b: number, c: number) => [number, number, number];
+    readonly rename_sheet: (a: any, b: number, c: number, d: number) => [number, number, number];
     readonly run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
     readonly set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
     readonly shift_band: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number];

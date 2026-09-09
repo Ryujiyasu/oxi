@@ -2902,23 +2902,27 @@ mod tests {
         assert_eq!(formula, "Facts!B2", "the reference was not rewritten");
     }
 
+    /// A tab colour set in the editor is written on save, and taken away again
+    /// on a later save -- including on a sheet whose part has no <sheetPr> yet.
     #[test]
     fn set_tab_color_helper_handles_the_sheet_pr_cases() {
+        // No <sheetPr>: one is inserted right after <worksheet ...>.
         let none = r#"<worksheet xmlns="x"><sheetData/></worksheet>"#;
         let out = set_tab_color_in_worksheet(none, &Some("FF0000".to_string()));
         assert!(out.contains(r#"<sheetPr><tabColor rgb="FFFF0000"/></sheetPr>"#), "insert: {out}");
+        // Self-closing <sheetPr/>: expanded.
         let sc = r#"<worksheet xmlns="x"><sheetPr codeName="S"/><sheetData/></worksheet>"#;
         let out = set_tab_color_in_worksheet(sc, &Some("00B050".to_string()));
         assert!(out.contains(r#"<sheetPr codeName="S"><tabColor rgb="FF00B050"/></sheetPr>"#), "self-closing: {out}");
+        // Existing tabColor: replaced.
         let ex = r#"<worksheet xmlns="x"><sheetPr><tabColor rgb="FFAAAAAA"/></sheetPr><sheetData/></worksheet>"#;
         let out = set_tab_color_in_worksheet(ex, &Some("123456".to_string()));
         assert!(out.contains(r#"<tabColor rgb="FF123456"/>"#) && !out.contains("FFAAAAAA"), "replace: {out}");
+        // Remove.
         let out = set_tab_color_in_worksheet(ex, &None);
         assert!(!out.contains("tabColor"), "remove: {out}");
     }
 
-    /// A tab colour set in the editor is written on save, and taken away again
-    /// on a later save -- including on a sheet whose part has no <sheetPr> yet.
     #[test]
     fn a_tab_colour_set_and_removed_survives_a_save() {
         let data = include_bytes!("../../../tests/fixtures/multi_sheet.xlsx");
