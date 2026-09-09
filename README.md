@@ -9,8 +9,8 @@ Word (.docx) layout is scored against Microsoft Word page by page, PowerPoint (.
 
 ![release v0.8.0](https://img.shields.io/badge/release-v0.8.0-8a2be2) ![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
 
-> **Canonical repository:** [GitLab — Ryujiyasu/oxi](https://gitlab.com/Ryujiyasu/oxi) (issues, merge requests, CI).
-> The [GitHub repository](https://github.com/Ryujiyasu/oxi) is a mirror kept in sync with GitLab `main`.
+> **Canonical repository:** [GitHub — Ryujiyasu/oxi](https://github.com/Ryujiyasu/oxi) (issues, pull requests, CI, releases).
+> The [GitLab repository](https://gitlab.com/Ryujiyasu/oxi) receives `main` from GitHub and exists to run the Pages job that serves the live demo.
 
 ---
 
@@ -368,7 +368,9 @@ Contributions are welcome. Oxi has a simple acceptance criterion:
 4. Format engine additions: .xlsx layout, .pptx layout, vertical writing, etc.
 
 ### What belongs elsewhere
-Features that go beyond pixel-accurate rendering — collaboration, AI integration, desktop apps, purpose-specific workflows — belong in a separate extension or downstream project, not in Oxi core.
+Features that go beyond pixel-accurate rendering — collaboration, AI integration, purpose-specific workflows — belong in a separate extension or downstream project, not in Oxi core.
+
+The desktop app is not one of those: `oxi-desktop` is the same engine in a window rather than a tab, so it ships in core under the same license as the rest of it.
 
 ### How to contribute
 1. Fork the repository
