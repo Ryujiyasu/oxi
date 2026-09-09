@@ -567,7 +567,20 @@ const I18N = {
     refused: 'この値は入力できません',
   },
 };
-let lang = (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+
+/** The language the person last chose, which the document editor beside this
+ *  one has always remembered under the same key. */
+function heldLang() {
+  try {
+    const held = localStorage.getItem('oxi-lang');
+    if (held === 'en' || held === 'ja') return held;
+  } catch { /* a private window has no store, and that is not an error */ }
+  return (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+}
+function keepLang(picked) {
+  try { localStorage.setItem('oxi-lang', picked); } catch { /* nothing to do */ }
+}
+let lang = heldLang();
 const t = (key) => I18N[lang][key];
 
 /** Put every marked element into the chosen language. */
@@ -591,8 +604,13 @@ function applyLang() {
   // Two of the controls write their own words, so they are asked again.
   markFrozen();
 }
-document.getElementById('langEn').onclick = () => { lang = 'en'; applyLang(); };
-document.getElementById('langJa').onclick = () => { lang = 'ja'; applyLang(); };
+for (const picked of ['en', 'ja']) {
+  document.getElementById(picked === 'en' ? 'langEn' : 'langJa').onclick = () => {
+    lang = picked;
+    keepLang(picked);
+    applyLang();
+  };
+}
 
 const DESKTOP = document.documentElement.dataset.host === 'desktop';
 // The app starts on an empty book of its own; the site starts on a sample,
@@ -3989,6 +4007,10 @@ async function save() {
     // the bytes just written, so two saves in a row do not send the first
     // batch of edits twice.
     source = written;
+  // Saving is the sign that someone is using this for real work, which is
+  // what the rating card waits for. It is counted in one place for all three
+  // editors; nothing is sent by saying so.
+  window.dispatchEvent(new Event('oxi:saved'));
     changes.clear();
     pristine.clear();
     beyondValues = false;

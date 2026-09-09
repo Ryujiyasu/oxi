@@ -39,6 +39,23 @@ for (const name of ['row-model.js', 'vba-runner.js', 'vba-worker.js']) {
 // The app opens on a workbook of its own rather than on a sales sample, so the
 // empty one is what travels with it.
 cpSync(join(here, 'blank.xlsx'), join(web, 'samples', 'blank.xlsx'));
+cpSync(join(here, 'blank.pptx'), join(web, 'blank.pptx'));
+
+// The version the bundle is built at, which the pages carry so a rating can say
+// what it is a rating of.
+const { version } = JSON.parse(readFileSync(join(here, 'tauri.conf.json'), 'utf8'));
+
+// Asking what someone makes of Oxi only makes sense when there is somewhere for
+// the answer to go. Without OXI_FEEDBACK_ENDPOINT the card is left out of the
+// build entirely, rather than shipped to fail at the moment someone bothers to
+// answer it.
+const asking = (process.env.OXI_FEEDBACK_ENDPOINT || '').trim();
+if (asking) {
+  writeFileSync(
+    join(web, 'rate.js'),
+    readFileSync(join(site, 'rate.js'), 'utf8').replace('{{FEEDBACK_ENDPOINT}}', asking),
+  );
+}
 
 // The editors, under the names the launcher and the native menu navigate to.
 for (const [from, name] of [
@@ -58,7 +75,10 @@ for (const [from, name] of [
   // The pages read this to tell which they are in.
   html = html.replace(
     /<\/head>/,
-    '<script>document.documentElement.dataset.host = "desktop";</script>\n</head>',
+    '<script>document.documentElement.dataset.host = "desktop";</script>\n'
+      + `<meta name="oxi-version" content="${version}">\n`
+      + (asking ? '<script src="./rate.js" defer></script>\n' : '')
+      + '</head>',
   );
   if (!/dataset\.host = "desktop"/.test(html)) {
     throw new Error(`${name}: nowhere to mark the page as the desktop app's`);
@@ -67,7 +87,6 @@ for (const [from, name] of [
 }
 
 // The launcher, carrying the version the bundle is built at.
-const { version } = JSON.parse(readFileSync(join(here, 'tauri.conf.json'), 'utf8'));
 writeFileSync(
   join(web, 'index.html'),
   readFileSync(join(here, 'launcher.html'), 'utf8').replaceAll('{{VERSION}}', version),

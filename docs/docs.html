@@ -2363,7 +2363,12 @@ function computeDiff(original, current) {
 }
 
 // ---- Save / Export ----
-function dl(d, name, mime) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([d],{type:mime})); a.download = name; a.click(); URL.revokeObjectURL(a.href); }
+function dl(d, name, mime) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([d],{type:mime})); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+  // Saving is the sign that someone is using this for real work, which is
+  // what the rating card waits for. It is counted in one place for all three
+  // editors; nothing is sent by saying so.
+  window.dispatchEvent(new Event('oxi:saved'));
+}
 $('btnSave').addEventListener('click', () => {
   syncDocx();
   dl(currentDocx, (fileName||'doc')+'.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
