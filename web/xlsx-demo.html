@@ -57,6 +57,17 @@ header button, header label.file {
   cursor: pointer;
 }
 header button:hover, header label.file:hover { background: rgba(255, 255, 255, .28); }
+header button:disabled, header input:disabled, header select:disabled {
+  opacity: .45;
+  cursor: default;
+}
+header button:disabled:hover { background: rgba(255, 255, 255, .16); }
+header button:not(:disabled):active { background: rgba(255, 255, 255, .36); }
+header button:focus-visible, header input:focus-visible,
+header select:focus-visible, header label.file:focus-within {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
 header input[type=file] { display: none; }
 header .langs { display: inline-flex; gap: 4px; }
 header .langs button { padding: 5px 8px; opacity: .7; }

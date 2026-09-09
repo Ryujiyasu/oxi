@@ -46,6 +46,10 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .tb .ra button svg{width:16px;height:16px;vertical-align:middle}
 .tb .ra button{background:none;border:none;color:#444;cursor:pointer;padding:5px 9px;border-radius:4px;font-size:12.5px}
 .tb .ra button:hover{background:#F0F0F0}
+.tb .ra button:disabled{opacity:.45;cursor:default}
+.tb .ra button:disabled:hover{background:none}
+.tb .ra button:not(:disabled):active{background:#E4E4E4}
+.tb .ra button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .tb .ra{display:flex;gap:2px;align-items:center}
 /* Mode toggle */
 .mode-toggle{display:flex;border:1px solid #D1D1D1;background:#fff;border-radius:5px;overflow:hidden}
@@ -113,6 +117,10 @@ mark.oxi-cmt.resolved{background:transparent;border-bottom:2px dotted #bbb}
 /* Buttons */
 .rb{background:none;border:1px solid transparent;cursor:pointer;padding:3px 5px;border-radius:3px;color:var(--txt);display:inline-flex;align-items:center;justify-content:center;min-width:24px;min-height:24px;font:inherit;font-size:13px;line-height:1}
 .rb:hover{background:var(--hover);border-color:transparent}
+.rb:disabled{opacity:.45;cursor:default}
+.rb:disabled:hover{background:none}
+.rb:not(:disabled):active{background:var(--accent-l)}
+.rb:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .rb.active{background:var(--accent-l);border-color:transparent;color:var(--accent)}
 .rb svg{width:16px;height:16px;pointer-events:none}
 .rb.lg{flex-direction:column;justify-content:flex-start;gap:4px;padding:7px 9px 5px;min-width:54px;font-size:11px;line-height:1.25;text-align:center}

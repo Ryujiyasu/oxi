@@ -54,6 +54,12 @@ body {
   border-radius: 5px; padding: 5px 12px; cursor: pointer; text-decoration: none;
 }
 .tb button:hover, .tb a.btn:hover { background: var(--accent-l); border-color: var(--accent) }
+.tb button:disabled { opacity: .45; cursor: default }
+.tb button:disabled:hover { background: #fff; border-color: var(--border) }
+.tb button:not(:disabled):active { background: var(--accent-l); border-color: var(--accent) }
+.tb button:focus-visible, .tb a.btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px
+}
 .tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
 .tb button.primary:hover { background: var(--accent-h) }
 .lang { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden }
