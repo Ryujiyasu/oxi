@@ -1,0 +1,49 @@
+name: Mirror to GitLab
+
+# GitLab Pages serves the site at the URL that has been given out, and that
+# deploy runs from a push to `main` on GitLab (see .gitlab-ci.yml). Work now
+# lands on GitHub, so nothing would reach GitLab on its own and the site would
+# quietly stop being rebuilt while every page still loaded.
+#
+# So GitHub pushes it. GitLab keeps no history of its own: it is a copy that
+# exists to run the Pages job.
+#
+# Needs a GitLab project access token with the `write_repository` scope, stored
+# here as the secret GITLAB_MIRROR_TOKEN. The job fails without it rather than
+# skipping — a mirror that silently stops is a site that silently goes stale,
+# which is the failure this job exists to prevent.
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-to-gitlab
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history: GitLab is being handed the same repository, not
+          # the tip of it.
+          fetch-depth: 0
+
+      - name: Push main and tags to GitLab
+        env:
+          TOKEN: ${{ secrets.GITLAB_MIRROR_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "GITLAB_MIRROR_TOKEN is not set, so the site cannot be rebuilt." >&2
+            echo "Add a GitLab project access token (write_repository) as that secret." >&2
+            exit 1
+          fi
+          git remote add gitlab "https://oauth2:$TOKEN@gitlab.com/Ryujiyasu/oxi.git"
+          # A plain push, not a force: if GitLab has moved on its own, that is
+          # worth stopping for rather than overwriting.
+          git push gitlab HEAD:refs/heads/main
+          git push gitlab --tags

@@ -6,6 +6,12 @@
 # suites — moved to GitHub Actions (`.github/workflows/ci.yml`) when GitHub
 # became the place issues and pull requests arrive.
 #
+# Nobody pushes here any more. GitHub is where work lands, and it pushes `main`
+# across (`.github/workflows/mirror-to-gitlab.yml`) so this pipeline runs and
+# the site is rebuilt. Committing here directly would put this copy ahead of
+# GitHub and stop that mirror, which is the one thing that would take the site
+# down.
+#
 # The pixel-fidelity gates (SSIM against Word, Excel and PowerPoint's own
 # renders) need a Windows machine with Microsoft Office installed and are run
 # locally before a change is committed. They run in neither.

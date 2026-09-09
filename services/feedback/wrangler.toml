@@ -8,4 +8,4 @@ compatibility_date = "2026-09-09"
 [[d1_databases]]
 binding = "DB"
 database_name = "oxi-feedback"
-database_id = "REPLACE_WITH_THE_ID_WRANGLER_PRINTS"
+database_id = "f806c34b-ce20-46ec-aa07-69a1b0b97550"
