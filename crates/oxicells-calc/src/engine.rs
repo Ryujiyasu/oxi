@@ -402,6 +402,25 @@ impl Workbook {
         Ok(formula_result(self.eval(&expr, sheet, 0, None)))
     }
 
+    /// Evaluate a formula as though it stood in one particular cell.
+    ///
+    /// A conditional rule's formula is one formula written for the top-left of
+    /// its range and read at every cell in it, and the commonest of them all —
+    /// `MOD(ROW(),2)=0`, banded rows — asks where it is standing. Evaluated
+    /// nowhere that answers `#VALUE!` and the rule catches nothing, so the
+    /// caller says where.
+    ///
+    /// `at` is `(column, row)`, counted from zero as everything here counts.
+    pub fn evaluate_at(
+        &self,
+        sheet: &str,
+        formula: &str,
+        at: (u32, u32),
+    ) -> Result<Value, CalcError> {
+        let expr = parse(formula)?;
+        Ok(formula_result(self.eval(&expr, sheet, 0, Some(at))))
+    }
+
     // -- recalculation ----------------------------------------------------
 
     /// Recalculate every formula in dependency order.

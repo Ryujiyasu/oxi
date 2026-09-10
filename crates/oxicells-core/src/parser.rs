@@ -1585,6 +1585,9 @@ fn conditional_from(
         kind: get_attr(e, "type").unwrap_or_else(|| "expression".to_string()),
         operator: get_attr(e, "operator"),
         text: get_attr(e, "text"),
+        rank: get_attr(e, "rank").and_then(|held| held.parse().ok()),
+        bottom: is_true(get_attr(e, "bottom").as_deref()),
+        percent: is_true(get_attr(e, "percent").as_deref()),
         formulas: Vec::new(),
         priority: get_attr(e, "priority")
             .and_then(|held| held.parse().ok())

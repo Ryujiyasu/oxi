@@ -544,6 +544,17 @@ pub struct ConditionalRule {
     /// written for the top-left cell of the first range and are relative to it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formulas: Vec<String>,
+    /// How many a `top10` rule takes: the 10 of "Top 10 Items", or the
+    /// percentage when `percent` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+    /// A `top10` rule counting from the bottom instead of the top.
+    #[serde(default)]
+    pub bottom: bool,
+    /// A `top10` rule whose `rank` is a percentage of the range rather than a
+    /// count of cells.
+    #[serde(default)]
+    pub percent: bool,
     /// Lower runs first. Excel writes it on every rule.
     #[serde(default)]
     pub priority: i32,
