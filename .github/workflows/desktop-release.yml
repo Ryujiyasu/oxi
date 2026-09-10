@@ -70,6 +70,18 @@ jobs:
           # way. Set it as a repository variable; leave it unset and the rating
           # card is left out of the build entirely.
           OXI_FEEDBACK_ENDPOINT: ${{ vars.OXI_FEEDBACK_ENDPOINT }}
+          # macOS refuses to open an app from an unidentified developer, and
+          # unlike Windows it does not offer a way past it that an ordinary
+          # person will find. These sign the app and send it to Apple to be
+          # notarised. Names are Tauri's, and a wrong one does not fail the
+          # build — it produces an unsigned app — so the artifact is checked
+          # afterwards rather than the configuration being trusted.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: crates/oxi-desktop
           tauriScript: tauri
@@ -79,3 +91,23 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # What was actually produced, not what was configured. An unsigned build
+      # succeeds quietly and looks identical in the release list; the only way
+      # to tell is to ask the app.
+      - name: Check the macOS app is signed and notarised
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          app=$(find crates/oxi-desktop/target -type d -name "*.app" -path "*/bundle/macos/*" | head -1)
+          if [ -z "$app" ]; then
+            echo "no .app was built, so there is nothing to check" >&2
+            exit 1
+          fi
+          echo "checking $app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          # "Notarized Developer ID" is the only source that gets past Gatekeeper
+          # without a right-click. "Developer ID" alone means signed but not
+          # notarised, which still stops on a machine that has never seen it.
+          spctl --assess --type execute -vv "$app" 2>&1 | tee /tmp/spctl.txt
+          grep -q "source=Notarized Developer ID" /tmp/spctl.txt
+          xcrun stapler validate "$app"
