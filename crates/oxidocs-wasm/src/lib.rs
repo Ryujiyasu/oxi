@@ -18,42 +18,11 @@ thread_local! {
     static CACHED_DOCX: RefCell<Option<Vec<u8>>> = RefCell::new(None);
 }
 
-static OXI_GOTHIC: &[u8] = include_bytes!("../../oxidocs-cli/fonts/OxiGothic.ttf");
-static OXI_MINCHO: &[u8] = include_bytes!("../../oxidocs-cli/fonts/OxiMincho.ttf");
+// The faces live in `oxidocs-fonts`, which owns the files. Reaching across
+// the tree into another crate's folder worked in a checkout and nowhere
+// else: a published crate carries only its own directory.
+use oxidocs_fonts::{OXI_GOTHIC, OXI_MINCHO};
 
-/// Latin faces shipped with the build. A browser cannot read the machine's
-/// font files, so a PDF exported here can only embed what travels with the
-/// code -- and without an embedded face the writer falls back to a base-14
-/// name, leaving the viewer to choose both the outlines and the advances.
-///
-/// These five families are the free faces whose advance widths match their
-/// Microsoft counterparts: Carlito for Calibri, the three Liberation faces
-/// for Arial / Times New Roman / Courier New (measured 2026-09-02: identical
-/// on all 95 printable ASCII characters, so substituting moves no glyph).
-/// Caladea stands in for Cambria on shape alone -- its widths differ, by up
-/// to 0.19 em, so a Cambria document reflows within the line.
-static LATIN_FACE_DATA: &[(&str, &[u8])] = &[
-    ("Carlito", include_bytes!("../../oxidocs-cli/fonts/Carlito-Regular.ttf")),
-    ("Carlito-B", include_bytes!("../../oxidocs-cli/fonts/Carlito-Bold.ttf")),
-    ("Carlito-I", include_bytes!("../../oxidocs-cli/fonts/Carlito-Italic.ttf")),
-    ("Carlito-BI", include_bytes!("../../oxidocs-cli/fonts/Carlito-BoldItalic.ttf")),
-    ("LiberationSans", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-Regular.ttf")),
-    ("LiberationSans-B", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-Bold.ttf")),
-    ("LiberationSans-I", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-Italic.ttf")),
-    ("LiberationSans-BI", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-BoldItalic.ttf")),
-    ("LiberationSerif", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-Regular.ttf")),
-    ("LiberationSerif-B", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-Bold.ttf")),
-    ("LiberationSerif-I", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-Italic.ttf")),
-    ("LiberationSerif-BI", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-BoldItalic.ttf")),
-    ("LiberationMono", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-Regular.ttf")),
-    ("LiberationMono-B", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-Bold.ttf")),
-    ("LiberationMono-I", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-Italic.ttf")),
-    ("LiberationMono-BI", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-BoldItalic.ttf")),
-    ("Caladea", include_bytes!("../../oxidocs-cli/fonts/Caladea-Regular.ttf")),
-    ("Caladea-B", include_bytes!("../../oxidocs-cli/fonts/Caladea-Bold.ttf")),
-    ("Caladea-I", include_bytes!("../../oxidocs-cli/fonts/Caladea-Italic.ttf")),
-    ("Caladea-BI", include_bytes!("../../oxidocs-cli/fonts/Caladea-BoldItalic.ttf")),
-];
 
 /// Which bundled family stands in for a requested one. Anything not listed
 /// keeps its own name and goes out unembedded, exactly as before.
@@ -76,9 +45,9 @@ fn latin_face(key: &str) -> Option<&'static oxipdf_core::ir::EmbeddedFont> {
         std::collections::HashMap<&'static str, oxipdf_core::ir::EmbeddedFont>,
     > = OnceLock::new();
     let cache = CACHE.get_or_init(|| {
-        LATIN_FACE_DATA
-            .iter()
-            .map(|(name, data)| (*name, oxipdf_core::font_util::embedded_font_from_ttf(data)))
+        oxidocs_fonts::latin_faces()
+            .into_iter()
+            .map(|(name, data)| (name, oxipdf_core::font_util::embedded_font_from_ttf(data)))
             .collect()
     });
     cache.get(key)
@@ -1795,8 +1764,8 @@ fn layout_to_pdf(
     for page in &pages {
         for element in &page.contents {
             if let ContentElement::Text(span) = element {
-                if let Some((name, _)) = LATIN_FACE_DATA
-                    .iter()
+                if let Some((name, _)) = oxidocs_fonts::latin_faces()
+                    .into_iter()
                     .find(|(name, _)| *name == span.font_name.as_str())
                 {
                     used_latin.insert(name);

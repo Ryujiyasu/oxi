@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 oxidocs-core = { version = "0.8.0", path = "../oxidocs-core" }
+oxidocs-fonts = { version = "0.8.0", path = "../oxidocs-fonts" }
 oxicells-core = { version = "0.8.0", path = "../oxicells-core", optional = true }
 oxicells-calc = { version = "0.8.0", path = "../oxicells-calc", optional = true }
 oxivba-core = { version = "0.8.0", path = "../oxivba-core", optional = true }

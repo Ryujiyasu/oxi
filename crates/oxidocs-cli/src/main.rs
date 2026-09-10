@@ -944,31 +944,51 @@ fn font_key(family: &str, bold: bool, italic: bool) -> String {
 }
 
 /// Directories holding the fonts shipped with Oxi: `fonts/` beside the
-/// executable for an installed build, and the crate's own `fonts/` so a
-/// `target/release` binary run from the source tree finds them too.
+/// executable for an installed build, and the source tree's own `fonts/` so a
+/// `target/release` binary run from a checkout finds them too.
+///
+/// The files themselves belong to `oxidocs-fonts`, which is also where the
+/// browser build gets them; it answers with its own folder only while the
+/// running binary is still inside the tree that folder belongs to.
 fn bundled_font_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
     let exe = std::env::current_exe().ok();
     if let Some(dir) = exe.as_ref().and_then(|e| e.parent()) {
         dirs.push(dir.join("fonts"));
     }
-
-    // `CARGO_MANIFEST_DIR` is an absolute path baked in at compile time, so a
-    // binary handed to someone else keeps reading the build machine's working
-    // directory — a path that by then may hold nothing, or somebody else's
-    // fonts. Use it only when the running binary is still inside that source
-    // tree, which is the case it exists for: `cargo run` and `target/release`
-    // during development.
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let in_source_tree = manifest
-        .parent()
-        .and_then(|p| p.parent())
-        .zip(exe.as_ref())
-        .is_some_and(|(root, exe)| exe.starts_with(root));
-    if in_source_tree {
-        dirs.push(manifest.join("fonts"));
+    if let Some(exe) = exe.as_ref() {
+        dirs.extend(oxidocs_fonts::source_dirs(exe));
+    }
+    // Installed with `cargo install`, neither of those exists: only the binary
+    // is copied, and the faces it needs are compiled into it. So they are
+    // written out once, next to the binary, and found by the first path on
+    // every run after that.
+    if dirs.iter().all(|dir| !dir.is_dir()) {
+        if let Some(dir) = exe.as_ref().and_then(|e| e.parent()) {
+            if let Some(written) = lay_out_fonts(&dir.join("fonts")) {
+                dirs.insert(0, written);
+            }
+        }
     }
     dirs
+}
+
+/// Write the compiled-in faces into `where_to`, and say where they landed.
+///
+/// Nothing is overwritten: a face already there is somebody's deliberate copy,
+/// or one of these written on an earlier run. `None` when the directory cannot
+/// be made — an install under a read-only prefix, say — and the caller then
+/// carries on with whatever the system provides.
+fn lay_out_fonts(where_to: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::fs::create_dir_all(where_to).ok()?;
+    for (_, file, data) in oxidocs_fonts::faces() {
+        let at = where_to.join(file);
+        if at.exists() {
+            continue;
+        }
+        std::fs::write(&at, data).ok()?;
+    }
+    Some(where_to.to_path_buf())
 }
 
 fn resolve_font(family: Option<&str>, bold: bool) -> String {

@@ -1,0 +1,12 @@
+[package]
+name = "oxidocs-fonts"
+version = "0.8.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "The open faces Oxi ships: metric-compatible Latin stand-ins and the Japanese pair, as bytes"
+repository = "https://github.com/Ryujiyasu/oxi"
+include = ["src/**", "FONT_CHECKS.md"]
+
+[dependencies]
+oxidocs-fonts-latin = { version = "0.8.0", path = "../oxidocs-fonts-latin" }
+oxidocs-fonts-jp = { version = "0.8.0", path = "../oxidocs-fonts-jp" }

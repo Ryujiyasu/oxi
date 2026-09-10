@@ -460,6 +460,7 @@ dependencies = [
  "ovba",
  "oxidocs-common",
  "oxidocs-core",
+ "oxidocs-fonts",
  "oxihanko",
  "oxipdf-core",
  "oxivba-core",
@@ -494,6 +495,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxidocs-fonts"
+version = "0.8.0"
+dependencies = [
+ "oxidocs-fonts-jp",
+ "oxidocs-fonts-latin",
+]
+
+[[package]]
+name = "oxidocs-fonts-jp"
+version = "0.8.0"
+
+[[package]]
+name = "oxidocs-fonts-latin"
+version = "0.8.0"
+
+[[package]]
 name = "oxidocs-wasm"
 version = "0.8.0"
 dependencies = [
@@ -504,6 +521,7 @@ dependencies = [
  "oxicells-core",
  "oxidocs-common",
  "oxidocs-core",
+ "oxidocs-fonts",
  "oxihanko",
  "oxipdf-core",
  "oxislides-core",

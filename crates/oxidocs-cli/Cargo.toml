@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 oxidocs-common = { version = "0.8.0", path = "../oxidocs-common" }
 oxidocs-core = { version = "0.8.0", path = "../oxidocs-core" }
+oxidocs-fonts = { version = "0.8.0", path = "../oxidocs-fonts" }
 oxivba-core = { version = "0.8.0", path = "../oxivba-core" }
 oxipdf-core = { version = "0.8.0", path = "../oxipdf-core" }
 serde_json = "1"

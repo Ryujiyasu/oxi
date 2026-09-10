@@ -1,0 +1,10 @@
+[package]
+name = "oxidocs-fonts-jp"
+version = "0.8.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "The Japanese faces Oxi ships, as bytes"
+repository = "https://github.com/Ryujiyasu/oxi"
+include = ["src/**", "fonts/**"]
+
+[dependencies]
