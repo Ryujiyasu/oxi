@@ -46,4 +46,16 @@ jobs:
           # A plain push, not a force: if GitLab has moved on its own, that is
           # worth stopping for rather than overwriting.
           git push gitlab HEAD:refs/heads/main
-          git push gitlab --tags
+          # Only the tags GitLab does not already carry. `--tags` refuses the
+          # whole push the moment one tag is already there, which turned a
+          # mirror that had just pushed `main` perfectly well into a red build.
+          # A tag it already has needs nothing done to it; a tag it lacks is
+          # pushed on its own, so a real failure still fails.
+          held=$(git ls-remote --tags gitlab | awk '{print $2}' \
+            | sed -e 's#^refs/tags/##' -e 's#\^{}$##' | sort -u)
+          for tag in $(git tag); do
+            if printf '%s\n' "$held" | grep -qx "$tag"; then
+              continue
+            fi
+            git push gitlab "refs/tags/$tag"
+          done
