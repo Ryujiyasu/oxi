@@ -47,6 +47,10 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .tb .ra button{background:none;border:none;color:#444;cursor:pointer;padding:5px 9px;border-radius:4px;font-size:12.5px}
 .tb .ra button:hover{background:#F0F0F0}
 .tb .ra button:disabled{opacity:.45;cursor:default}
+.tb .ra a.btn{display:inline-flex;align-items:center;color:#444;cursor:pointer;padding:5px 9px;border-radius:4px;font-size:12.5px;text-decoration:none}
+.tb .ra a.btn:hover{background:#F0F0F0}
+.tb .ra a.btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+html[data-host="desktop"] .src{display:none}
 .tb .ra button:disabled:hover{background:none}
 .tb .ra button:not(:disabled):active{background:#E4E4E4}
 .tb .ra button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
@@ -276,6 +280,7 @@ input[type="file"]{display:none}
     <button id="btnNew" data-i18n="new">New</button>
     <button id="btnOpen" data-i18n="open">Open</button>
     <button id="btnPdf">PDF</button>
+    <a class="btn src" href="https://github.com/Ryujiyasu/oxi" target="_blank" rel="noopener" data-i18n="source">Source</a>
     <select id="langSel" style="background:#fff;color:#444;border:1px solid #D1D1D1;border-radius:4px;font-size:11px;padding:2px 4px;cursor:pointer;margin-left:4px">
       <option value="en">EN</option><option value="ja">JA</option>
     </select>
@@ -523,6 +528,7 @@ const I18N = {
   en: {
     new: 'New', newDoc: 'New Document', edit: 'Edit', preview: 'Preview',
     open: 'Open', save: 'Save', undo: 'Undo', redo: 'Redo',
+    source: 'Source',
     searchHint: 'Search (Ctrl+F)',
     home: 'Home', insert: 'Insert', layout: 'Layout',
     bold: 'Bold', italic: 'Italic', underline: 'Underline', strikethrough: 'Strikethrough',
@@ -552,6 +558,7 @@ const I18N = {
   ja: {
     new: '新規', newDoc: '新しいドキュメント', edit: '編集', preview: 'プレビュー',
     open: '開く', save: '保存', undo: '元に戻す', redo: 'やり直し',
+    source: 'ソース',
     searchHint: '検索 (Ctrl+F)',
     home: 'ホーム', insert: '挿入', layout: 'レイアウト',
     bold: '太字', italic: '斜体', underline: '下線', strikethrough: '取り消し線',

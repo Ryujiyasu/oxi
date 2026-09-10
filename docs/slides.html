@@ -55,6 +55,7 @@ body {
 }
 .tb button:hover, .tb a.btn:hover { background: var(--accent-l); border-color: var(--accent) }
 .tb button:disabled { opacity: .45; cursor: default }
+html[data-host="desktop"] .src { display: none }
 .tb button:disabled:hover { background: #fff; border-color: var(--border) }
 .tb button:not(:disabled):active { background: var(--accent-l); border-color: var(--accent) }
 .tb button:focus-visible, .tb a.btn:focus-visible {
@@ -189,6 +190,7 @@ body.presenting #presrail { display: block }
   <button id="btnClose" data-i18n="close" hidden>Close</button>
   <a class="btn" href="./docs.html" data-i18n="wordApp">Word app</a>
   <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
+  <a class="btn src" href="https://github.com/Ryujiyasu/oxi" target="_blank" rel="noopener" data-i18n="source">Source</a>
   <span class="lang">
     <button id="langEn" class="on">EN</button><button id="langJa">JA</button>
   </span>
@@ -255,6 +257,7 @@ const I18N = {
     loading: 'Loading the engine…', parsing: 'Parsing…',
     prev: 'Previous', next: 'Next', present: 'Present', close: 'Close',
     fresh: 'New', edit: 'Edit', editing: 'Done editing', save: 'Save a copy',
+    source: 'Source',
     fBold: 'Bold', fItalic: 'Italic', fUnder: 'Underline', fSize: 'Size',
     fColor: 'Colour', fHint: 'Select text, then apply a style',
     fPos: 'Shape',
@@ -275,6 +278,7 @@ const I18N = {
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
     prev: '前へ', next: '次へ', present: 'プレゼン開始', close: '閉じる',
     fresh: '新規', edit: '編集', editing: '編集を終える', save: '保存',
+    source: 'ソース',
     fBold: '太字', fItalic: '斜体', fUnder: '下線', fSize: 'サイズ',
     fColor: '色', fHint: '文字を選んでから書式を適用',
     fPos: '図形',
