@@ -3160,6 +3160,43 @@ function focusGrid() {
   if (sheetBox) sheetBox.focus();
 }
 
+/**
+ * Which of the window's three panes an element belongs to: the grid, the
+ * formula bar, or the toolbar.
+ */
+function paneOf(el) {
+  if (!el) return -1;
+  if (el === formulaBox) return 1;
+  if (el.closest && el.closest('header')) return 2;
+  if (el === sheetBox || (sheetBox && sheetBox.contains(el))) return 0;
+  return -1;
+}
+
+/**
+ * Walk the panes, which is what F6 does in Excel.
+ *
+ * The grid keeps Tab for moving between cells — the same key a browser uses to
+ * walk the controls — so without a key of its own the toolbar cannot be reached
+ * from the keyboard at all. Once the focus is on it, Tab moves along the bar
+ * and Escape hands the sheet back.
+ */
+function stepPane(step) {
+  const first = document.querySelector(
+    'header button:not(:disabled), header input:not(:disabled), header select:not(:disabled)',
+  );
+  const stops = [sheetBox, formulaBox, first];
+  const here = paneOf(document.activeElement);
+  const from = here < 0 ? 0 : here;
+  for (let tried = 1; tried <= stops.length; tried += 1) {
+    const at = (((from + step * tried) % stops.length) + stops.length) % stops.length;
+    if (stops[at]) {
+      stops[at].focus();
+      return;
+    }
+  }
+}
+
+
 // ── Selecting more than one cell ────────────────────────────────────────────
 //
 // A sheet where you can only ever be on one cell is a form. Everything people
@@ -4793,6 +4830,13 @@ document.addEventListener('mouseup', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  // F6 walks the panes. Nothing else reaches the toolbar: Tab belongs to the
+  // cells here, the way it does in Excel.
+  if (event.key === 'F6') {
+    event.preventDefault();
+    stepPane(event.shiftKey ? -1 : 1);
+    return;
+  }
   if (document.activeElement === formulaBox) {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -4803,6 +4847,14 @@ document.addEventListener('keydown', (event) => {
     } else if (event.key === 'Escape') {
       event.preventDefault();
       formulaBox.value = contentOf(heldAt(at.row, at.col));
+      focusGrid();
+    }
+    return;
+  }
+  // A control with the focus gets its own keys; Escape hands the sheet back.
+  if (paneOf(document.activeElement) === 2) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
       focusGrid();
     }
     return;
