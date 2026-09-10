@@ -2047,7 +2047,19 @@ function renderPara(p) {
   if (p.alignment) el.style.textAlign = p.alignment === 'Justify' ? 'justify' : p.alignment.toLowerCase();
   if (p.style?.indent_left) el.style.marginLeft = p.style.indent_left + 'pt';
   if (p.style?.indent_first_line) el.style.textIndent = p.style.indent_first_line + 'pt';
-  if (p.style?.list_marker) { const m = document.createElement('span'); m.className = 'oxi-marker'; m.contentEditable = 'false'; m.textContent = p.style.list_marker + ' '; el.appendChild(m); }
+  if (p.style?.list_marker) {
+    const m = document.createElement('span'); m.className = 'oxi-marker'; m.contentEditable = 'false';
+    m.textContent = p.style.list_marker + ' ';
+    // A bullet from a symbol-encoded font arrives as the private-use code point
+    // the font states, and the browser draws a tofu box for it in any other
+    // face. The layout engine picks the face by the same two characters
+    // (layout/mod.rs, the marker_font_family branch), and the preview canvas
+    // already gets it right from the layout; this is the edit view catching up.
+    const face = m.textContent.includes('\uF0B7') ? 'Symbol'
+      : m.textContent.includes('\uF06E') ? 'Wingdings' : '';
+    if (face) m.style.fontFamily = face;
+    el.appendChild(m);
+  }
   if (p.runs?.length) {
     const open = [];
     for (const r of p.runs) {
