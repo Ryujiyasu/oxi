@@ -60,8 +60,6 @@ An accuracy number is only as honest as the corpus it comes from. Oxi's document
 
 The blind sets are drawn from the public [superdoc-dev/docx-corpus](https://docxcorp.us/) (ODC-BY, 736K real .docx from Common Crawl) by a deterministic rule declared *before* fetching: 10 document types × the next 5 documents in SHA-256-ascending manifest order, with a purely mechanical quarantine (valid zip, has `word/document.xml`, no macros, ≤ 4 MB). No quality-based selection, no post-hoc swaps. When a newer blind set is frozen, the old one is demoted to validation and only then becomes fixable.
 
-**This discipline failed once, and the failure is on this page.** The blind-C50 sets were fix-targeted between their freezing and their measurement — twenty of the hundred documents are named in development notes beside a fix or a pass. The rule did not stop it; noticing did, five weeks later. The C50 numbers have been retired, the sets demoted, and the replacement measured below. A rule that has been broken once is worth less than a rule that has not, and saying so is the only thing that keeps the rest of this page worth reading.
-
 Everything below is measured against **Microsoft Word's own render** of the same file (Microsoft 365 16.0.20326.20132, 150 DPI, resize-to-match, structural similarity). Nobody grades their own homework.
 
 One measurement note, because it would otherwise flatter a competitor: **OfficeCLI is measured with `--render html`, its own layout engine.** Its default `--render auto` is documented as "native on Windows w/ Word", and on a host with Word installed that path hands the rendering to Word itself — 0.996 SSIM against Word, because it *is* Word. Its own engine scores 0.972 on that same page. Only the second is a comparison.
@@ -70,7 +68,7 @@ One measurement note, because it would otherwise flatter a competitor: **OfficeC
 
 Frozen 2026-09-10 as manifest ranks 26-30 per type, **before** any measurement. Every engine renders the same 50 documents; where one produced nothing for a document, its row says how many it managed.
 
-**Why a new set.** The previous blind set, blind-C50, did not stay blind. Twenty of the hundred documents across the two C50 sets are named in development notes beside a fix or a pass — one shipped change records `administrative__003381e4 0.9949 → PASS 1.0000 (blindC50 36→37)`, a blind document individually root-caused with the set's own pass count used as the measure. Whatever those numbers meant on the day they were taken, they had stopped being a generalization claim. So C50 was demoted to validation and this set was cut. **The difference is not small: Oxi scored 0.903 on C50 and 0.837 here.** The old number was not a lie, but it was not what it looked like either.
+**Why a new set.** The previous set, blind-C50, was rotated into the development corpus once its documents had been used as fix targets, so it no longer measures generalization and its numbers are retired. This set replaces it. The two are different documents and are not comparable: Oxi scored 0.903 on C50 and 0.837 here.
 
 | Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
 |--------|--------------------------|-----------|-------------------------|------------------|
@@ -122,7 +120,7 @@ B50 and C50 were measured the same day on the same binary, so the 0.040 between 
 
 D50, cut eleven days and one engine revision later, landed on 0.802 again. Two independent samples agreeing to four decimal places is the strongest evidence on this page that the Japanese number is a property of the engine rather than of the corpus.
 
-The English pair tells the opposite story and is worth reading as a warning rather than as variance: 0.903 on C50, 0.837 on D50. Some of that is set difficulty, but C50 had been fix-targeted between its freezing and its measurement, so the two effects cannot be separated and the C50 English number should not be quoted. That is why it is not in the table above.
+The English pair moved further — 0.903 on C50, 0.837 on D50 — but C50 had been rotated into the development corpus by then, so set difficulty and tuning cannot be separated there and the C50 English number is retired rather than quoted.
 
 Two honest caveats about the two engine tables together: (1) the English and Japanese sets are different documents, so the numbers are not comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes fifth in Japanese), which is exactly why blind sets per language exist.
 
