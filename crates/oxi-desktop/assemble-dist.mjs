@@ -97,6 +97,24 @@ writeFileSync(
 // looks wrong from the outside. So the bundle is asked to account for itself —
 // every name imported has to be exported, and every file referred to has to be
 // here — while the build can still fail rather than after it ships.
+// The engine above is taken from `docs/`, but `wasm-pack` writes it to
+// `crates/oxidocs-wasm/pkg/` and the documented step copies it to `web/`. Two
+// copies of the same build sitting in two folders is exactly the shape a stale
+// binary hides in: follow the documented step alone and the desktop app keeps
+// running whatever engine `docs/` happened to hold, with nothing to say so. So
+// the two are held against each other here.
+for (const name of ['oxidocs_wasm.js', 'oxidocs_wasm_bg.wasm']) {
+  const theirs = readFileSync(join(docs, name));
+  const ours = readFileSync(join(site, name));
+  if (!theirs.equals(ours)) {
+    throw new Error(
+      `docs/${name} and web/${name} are different builds — copy `
+        + 'crates/oxidocs-wasm/pkg/ to BOTH, or the app and the site run '
+        + 'different engines',
+    );
+  }
+}
+
 const engine = readFileSync(join(web, 'oxidocs_wasm.js'), 'utf8');
 const exported = new Set(
   [...engine.matchAll(/export (?:async )?function (\w+)/g)].map((match) => match[1]),
