@@ -712,6 +712,23 @@ pub fn conditional_formats(workbook: JsValue, sheet: usize) -> Result<JsValue, J
     serde_wasm_bindgen::to_value(&caught).map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// The height Excel gives a row whose tallest font is this one, in 96-dpi
+/// pixels, or nothing for a font that has never been measured.
+///
+/// The same measured table the native renderer draws with — a row height is
+/// not derivable from a font's own metrics, so the numbers were read off Excel
+/// and stand as data. The browser cannot measure a row the way Excel does and
+/// was declining to try, which meant a sheet whose file records no row height
+/// (openpyxl and every other writer that leaves the cache out) drew every row
+/// at the default and clipped its own title.
+///
+/// `size` is in points.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn row_height_px(face: &str, size: f32) -> Option<u16> {
+    oxicells_core::row_defaults::font_default_row_px(face, size)
+}
+
 /// Recalculate every formula in a workbook and hand the workbook back.
 ///
 /// The browser holds a sheet as this IR while it is being edited, so this is

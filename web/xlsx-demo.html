@@ -484,7 +484,8 @@ End Sub</textarea>
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                edit_xlsx_from_workbook, recalculate_spreadsheet,
                translate_formula, shift_band, rename_sheet,
-               list_spreadsheet_vba_procedures, conditional_formats } from './oxidocs_wasm.js';
+               list_spreadsheet_vba_procedures, conditional_formats,
+               row_height_px } from './oxidocs_wasm.js';
 // A macro runs in a worker: the interpreter is free to take as long as the
 // macro asks for without the grid stopping being drawable meanwhile.
 import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
@@ -744,6 +745,34 @@ function fitColumn(col) {
   const wants = fitWidth(col);
   if (wants === null) return;
   setWidth(col, Math.ceil(wants));
+}
+
+/**
+ * The height Excel gives a row whose tallest font is this one, in pixels.
+ *
+ * A row height is not something a browser can work out: it is not derivable
+ * from the font's own metrics, which is why the engine carries a table read off
+ * Excel. Without this the page had no answer at all and fell back to whatever
+ * height the file happened to remember — so a sheet from a writer that records
+ * none (openpyxl, and most report generators) drew every row at the default and
+ * cut the top off its own title.
+ *
+ * Each answer is kept, because a sheet asks for the same few faces once per
+ * row and every question is a crossing into the engine.
+ */
+const rowHeights = new Map();
+function rowHeightOf(face, size) {
+  const key = `${face}|${size}`;
+  if (!rowHeights.has(key)) {
+    let px;
+    try {
+      px = row_height_px(face || '', size);
+    } catch {
+      px = undefined;
+    }
+    rowHeights.set(key, px === null ? undefined : px);
+  }
+  return rowHeights.get(key);
 }
 
 function measureDigit(name, points) {
@@ -1119,7 +1148,7 @@ function layout() {
       // the renderer measures rows with.
       try {
         px = explainRow({
-          sheet, index, row, columns: cols, heightOf: () => undefined, advance: step,
+          sheet, index, row, columns: cols, heightOf: rowHeightOf, advance: step,
         }).px;
       } catch {
         px = Math.trunc(((row && row.height) || sheet.default_row_height || 15) * 96 / 72);
@@ -4862,7 +4891,19 @@ document.addEventListener('keydown', (event) => {
   onKey(event);
 });
 
+/**
+ * How many workbooks have been opened here.
+ *
+ * The blank workbook the app starts with is FETCHED, so it arrives a moment
+ * after the window does. Someone who picks a file inside that moment would
+ * otherwise watch it be replaced by the blank one, with nothing on screen to
+ * say why — so the fetch checks whether it is still the current request before
+ * it hands anything over.
+ */
+let opened = 0;
+
 async function open(data, name) {
+  opened += 1;
   try {
     source = new Uint8Array(data).slice();
     fileName = name || 'workbook.xlsx';
@@ -4897,6 +4938,7 @@ async function open(data, name) {
 }
 
 async function openSample() {
+  const mine = opened;
   stateBox.style.display = 'block';
   stateBox.textContent = DESKTOP ? t('opening') : t('reading');
   const reply = await fetch(SAMPLE);
@@ -4905,7 +4947,14 @@ async function openSample() {
       'The sample could not be fetched. Serve this folder over http rather than opening the file directly.';
     return;
   }
-  await open(await reply.arrayBuffer(), DESKTOP ? 'Book1.xlsx' : 'the sample');
+  const held = await reply.arrayBuffer();
+  // A workbook was opened while this one was being fetched — that one is what
+  // the person asked for, and this one is not wanted any more.
+  if (opened !== mine) {
+    stateBox.style.display = 'none';
+    return;
+  }
+  await open(held, DESKTOP ? 'Book1.xlsx' : 'the sample');
 }
 
 document.getElementById('reset').onclick = openSample;
