@@ -1,0 +1,95 @@
+[
+  {
+    "name": "capacity_h21.6_fill630",
+    "pages": 1,
+    "positions": {
+      "AFTER": [
+        1
+      ]
+    }
+  },
+  {
+    "name": "capacity_h21.6_fill638",
+    "pages": 2,
+    "positions": {
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "capacity_h21.6_fill646",
+    "pages": 2,
+    "positions": {
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "capacity_h43.2_fill630",
+    "pages": 2,
+    "positions": {
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "capacity_h43.2_fill638",
+    "pages": 2,
+    "positions": {
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "capacity_h43.2_fill646",
+    "pages": 2,
+    "positions": {
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "oversize_646_first1_pre0",
+    "pages": 2,
+    "positions": {
+      "FILL": [
+        1
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "oversize_646_first0_pre1",
+    "pages": 3,
+    "positions": {
+      "PRE": [
+        1
+      ],
+      "FILL": [
+        2
+      ],
+      "AFTER": [
+        3
+      ]
+    }
+  },
+  {
+    "name": "oversize_800_first0_pre0",
+    "pages": 2,
+    "positions": {
+      "FILL": [
+        1
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  }
+]

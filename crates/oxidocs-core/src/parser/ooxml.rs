@@ -41,6 +41,10 @@ pub struct OoxmlParser {
 
 /// Context passed through parsing functions for resource resolution
 struct ParseContext {
+    // Complex fields can span runs and paragraphs within one text story.
+    fields: std::cell::RefCell<Vec<ParseField>>,
+    // Character-style toggles are resolved before runs enter the document IR.
+    paragraph_base: std::cell::RefCell<RunStyle>,
     /// Relationship ID -> Relationship mapping
     _rels: HashMap<String, Relationship>,
     /// Relationship ID -> binary data (images, etc.)
@@ -63,6 +67,117 @@ struct ParseContext {
     theme: ThemeColors,
 }
 
+
+#[derive(Default)]
+struct ParseField {
+    instruction: String,
+    result: bool,
+}
+
+impl ParseContext {
+    fn in_toc_result(&self) -> bool {
+        self.fields.borrow().iter().any(|f| f.result
+            && f.instruction.split_whitespace().next()
+                .map_or(false, |name| name.eq_ignore_ascii_case("TOC")))
+    }
+
+    fn in_hyperlink_result(&self) -> bool {
+        self.fields.borrow().iter().any(|f| f.result
+            && f.instruction.split_whitespace().next()
+                .map_or(false, |name| name.eq_ignore_ascii_case("HYPERLINK")))
+    }
+
+    fn field_control(&self, e: &quick_xml::events::BytesStart<'_>, text: &mut String) {
+        for attr in e.attributes().flatten() {
+            if local_name(attr.key.as_ref()) != "fldCharType" { continue; }
+            let mut fields = self.fields.borrow_mut();
+            match attr.value.as_ref() {
+                b"begin" => fields.push(ParseField::default()),
+                b"separate" => {
+                    if let Some(f) = fields.last_mut() { f.result = true; }
+                    text.push('\u{FFFE}');
+                }
+                b"end" => {
+                    fields.pop();
+                    text.push('\u{FFFF}');
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn separate_story<T>(&self, parse: impl FnOnce() -> Result<T, ParseError>) -> Result<T, ParseError> {
+        let outer = self.fields.replace(Vec::new());
+        let result = parse();
+        self.fields.replace(outer);
+        result
+    }
+}
+
+fn resolve_character_style(style: &mut RunStyle, styles: &StyleSheet, toc_result: bool, paragraph_base: &RunStyle) {
+    let Some(id) = style.char_style_id.as_ref() else { return; };
+    let Some(definition) = styles.styles.get(id) else { return; };
+    let Some(base) = definition.paragraph.default_run_style.as_ref() else { return; };
+    let builtin_link = !definition.is_custom
+        && definition.display_name.as_deref().map_or(false, |name| name.eq_ignore_ascii_case("Hyperlink"));
+    // A cached TOC hyperlink displays the underlying paragraph formatting.
+    // Independent size, color and underline changes on the run still apply.
+    if toc_result && builtin_link {
+        let mut filtered = base.clone();
+        if base.bold {
+            style.bold = false;
+            style.has_explicit_bold = false;
+        }
+        if base.italic {
+            style.italic = false;
+            style.has_explicit_italic = false;
+        }
+        if style.font_size == base.font_size { style.font_size = None; }
+        if style.color.as_deref().zip(base.color.as_deref())
+            .map_or(false, |(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            style.color = None;
+        }
+        if style.underline && base.underline && style.underline_style == base.underline_style {
+            style.underline = false;
+            style.underline_style = None;
+        }
+        filtered.underline = false;
+        filtered.underline_style = None;
+        filtered.bold = false;
+        filtered.has_explicit_bold = false;
+        filtered.italic = false;
+        filtered.has_explicit_italic = false;
+        filtered.font_size = None;
+        filtered.color = None;
+        super::styles::merge_run_style(style, &filtered);
+    } else {
+        // Style bold/italic are toggles; direct run bold/italic are absolute.
+        let direct_bold = style.has_explicit_bold;
+        let direct_italic = style.has_explicit_italic;
+        super::styles::merge_run_style(style, base);
+        if !direct_bold && (base.bold || base.has_explicit_bold) {
+            style.bold = paragraph_base.bold ^ base.bold;
+            style.has_explicit_bold = true;
+        }
+        if !direct_italic && (base.italic || base.has_explicit_italic) {
+            style.italic = paragraph_base.italic ^ base.italic;
+            style.has_explicit_italic = true;
+        }
+    }
+}
+
+fn paragraph_base_run_style(styles: &StyleSheet, id: Option<&str>) -> RunStyle {
+    let mut base = id.or(styles.default_paragraph_style_id.as_deref())
+        .and_then(|id| styles.styles.get(id))
+        .and_then(|s| s.paragraph.default_run_style.clone())
+        .unwrap_or_default();
+    if let Some(defaults) = &styles.doc_default_run_style {
+        super::styles::merge_run_style(&mut base, defaults);
+    }
+    base
+}
+
 impl OoxmlParser {
     pub fn new(data: &[u8]) -> Result<Self, ParseError> {
         let cursor = Cursor::new(data.to_vec());
@@ -77,6 +192,31 @@ impl OoxmlParser {
             Err(_) => ThemeColors::default(),
         };
         let mut styles = self.parse_styles_with_theme(&theme)?;
+        // An unstyled, unthemed package inherits the reference application's
+        // Japanese defaults, as sectionless page setup does. Hosts may override
+        // the family and size without changing document-declared properties.
+        if std::env::var("OXI_APPLICATION_FONT_DEFAULTS_DISABLE").is_err()
+            && styles.styles.is_empty()
+            && self.read_part("word/theme/theme1.xml").is_err()
+            && styles.doc_default_run_style.is_none()
+        {
+            if let (Ok(family), Ok(size)) = (
+                std::env::var("OXI_APPLICATION_FONT_FAMILY")
+                    .or_else(|_| Ok::<String, std::env::VarError>("\u{6e38}\u{660e}\u{671d}".to_owned())),
+                std::env::var("OXI_APPLICATION_FONT_SIZE")
+                    .or_else(|_| Ok::<String, std::env::VarError>("10.5".to_owned())),
+            ) {
+                if let Ok(size) = size.parse::<f32>() {
+                    if !family.trim().is_empty() && size.is_finite() && size > 0.0 {
+                        let mut defaults = RunStyle::default();
+                        defaults.font_family = Some(family.clone());
+                        defaults.font_family_east_asia = Some(family);
+                        defaults.font_size = Some(size);
+                        styles.doc_default_run_style = Some(defaults);
+                    }
+                }
+            }
+        }
         self.parse_font_table(&mut styles);
         let numbering = self.parse_numbering()?;
         let ctx = self.build_context_with_theme(numbering, theme, &styles)?;
@@ -759,6 +899,66 @@ impl OoxmlParser {
         }
     }
 
+    /// Resolve resources in the relationship namespace of one XML part.
+    fn load_relationship_resources(
+        &mut self,
+        base_dir: &str,
+        rels: &HashMap<String, Relationship>,
+    ) -> (HashMap<String, Vec<u8>>, HashMap<String, String>, HashMap<String, String>) {
+        // Pre-load media and hyperlinks from relationships
+        let mut media = HashMap::new();
+        let mut media_types = HashMap::new();
+        let mut hyperlinks = HashMap::new();
+        let image_rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+        let hyperlink_rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+        for (id, rel) in rels {
+            if rel.rel_type == image_rel_type {
+                // Skip external targets (e.g., file:/// URLs)
+                if rel.target.starts_with("file:")
+                    || rel.target.starts_with("http:")
+                    || rel.target.starts_with("https:")
+                {
+                    continue;
+                }
+                // Validate relationship target path against traversal attacks
+                let path = match oxidocs_common::security::sanitize_rel_target(base_dir, &rel.target)
+                {
+                    Ok(p) => p,
+                    Err(_e) => {
+                        continue;
+                    }
+                };
+                if let Ok(data) = self.read_binary_part(&path) {
+                    let ct = match rel
+                        .target
+                        .rsplit('.')
+                        .next()
+                        .map(|s| s.to_lowercase())
+                        .as_deref()
+                    {
+                        Some("png") => "image/png",
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        Some("gif") => "image/gif",
+                        Some("bmp") => "image/bmp",
+                        Some("svg") => "image/svg+xml",
+                        Some("tiff") | Some("tif") => "image/tiff",
+                        Some("wmf") => "image/x-wmf",
+                        Some("emf") => "image/x-emf",
+                        _ => "application/octet-stream",
+                    };
+                    media_types.insert(id.clone(), ct.to_string());
+                    media.insert(id.clone(), data);
+                }
+            } else if rel.rel_type == hyperlink_rel_type {
+                hyperlinks.insert(id.clone(), rel.target.clone());
+            }
+        }
+
+        (media, media_types, hyperlinks)
+    }
+
     /// Parse header or footer XML parts referenced by relationship IDs.
     /// `watermark_out`: a VML WordArt watermark found in any part is stored
     /// here (first one wins) — see extract_vml_watermark.
@@ -774,16 +974,37 @@ impl OoxmlParser {
             // Look up the relationship target path
             let target = ctx._rels.get(&hdr_ref.rel_id).map(|r| r.target.clone());
             if let Some(target) = target {
-                let part_path = if target.starts_with('/') {
-                    target[1..].to_string()
-                } else {
-                    format!("word/{}", target)
-                };
+                let Ok(part_path) = oxidocs_common::security::sanitize_rel_target("word", &target)
+                else { continue; };
                 if let Ok(xml) = self.read_part(&part_path) {
                     if watermark_out.is_none() && std::env::var("OXI_WATERMARK_DISABLE").is_err() {
                         *watermark_out = extract_vml_watermark(&xml);
                     }
-                    if let Ok(parsed) = parse_header_footer_xml(&xml, ctx, styles) {
+                    let (base_dir, file_name) = part_path.rsplit_once('/').unwrap_or(("", &part_path));
+                    let rels_path = if base_dir.is_empty() {
+                        format!("_rels/{file_name}.rels")
+                    } else {
+                        format!("{base_dir}/_rels/{file_name}.rels")
+                    };
+                    let rels = self.read_part(&rels_path).ok()
+                        .and_then(|s| parse_relationships(&s).ok()).unwrap_or_default();
+                    let (media, media_types, hyperlinks) =
+                        self.load_relationship_resources(base_dir, &rels);
+                    let part_ctx = ParseContext {
+                        _rels: rels,
+                        media,
+                        media_types,
+                        hyperlinks,
+                        numbering: ctx.numbering.clone(),
+                        list_counters: std::cell::RefCell::new(HashMap::new()),
+                        fields: std::cell::RefCell::new(Vec::new()),
+                        paragraph_base: std::cell::RefCell::new(RunStyle::default()),
+                        footnotes: ctx.footnotes.clone(),
+                        endnotes: ctx.endnotes.clone(),
+                        comments: ctx.comments.clone(),
+                        theme: ctx.theme.clone(),
+                    };
+                    if let Ok(parsed) = parse_header_footer_xml(&xml, &part_ctx, styles) {
                         blocks.extend(parsed);
                     }
                 }
@@ -833,120 +1054,8 @@ impl OoxmlParser {
             Err(e) => return Err(e),
         };
 
-        // Pre-load media and hyperlinks from relationships
-        let mut media = HashMap::new();
-        let mut media_types = HashMap::new();
-        let mut hyperlinks = HashMap::new();
-        let image_rel_type =
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
-        let hyperlink_rel_type =
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
-        for (id, rel) in &rels {
-            if rel.rel_type == image_rel_type {
-                // Skip external targets (e.g., file:/// URLs)
-                if rel.target.starts_with("file:")
-                    || rel.target.starts_with("http:")
-                    || rel.target.starts_with("https:")
-                {
-                    continue;
-                }
-                // Validate relationship target path against traversal attacks
-                let path = match oxidocs_common::security::sanitize_rel_target("word", &rel.target)
-                {
-                    Ok(p) => p,
-                    Err(_e) => {
-                        continue;
-                    }
-                };
-                if let Ok(data) = self.read_binary_part(&path) {
-                    let ct = match rel
-                        .target
-                        .rsplit('.')
-                        .next()
-                        .map(|s| s.to_lowercase())
-                        .as_deref()
-                    {
-                        Some("png") => "image/png",
-                        Some("jpg") | Some("jpeg") => "image/jpeg",
-                        Some("gif") => "image/gif",
-                        Some("bmp") => "image/bmp",
-                        Some("svg") => "image/svg+xml",
-                        Some("tiff") | Some("tif") => "image/tiff",
-                        Some("wmf") => "image/x-wmf",
-                        Some("emf") => "image/x-emf",
-                        _ => "application/octet-stream",
-                    };
-                    media_types.insert(id.clone(), ct.to_string());
-                    media.insert(id.clone(), data);
-                }
-            } else if rel.rel_type == hyperlink_rel_type {
-                hyperlinks.insert(id.clone(), rel.target.clone());
-            }
-        }
-
-        // S759 (2026-07-09): pre-load HEADER/FOOTER part media. A header/footer
-        // image (e.g. uk_health_form's Ofsted logo) uses the PART's own rels
-        // (word/_rels/header1.xml.rels), NOT the document rels, so its r:embed
-        // resolves to empty data unless we load them. The rId namespace is
-        // per-part; add only image rIds not already present (document images
-        // win — a header image rId rarely collides with a document image rId).
-        let header_rel_type =
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
-        let footer_rel_type =
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
-        let hf_targets: Vec<String> = rels
-            .values()
-            .filter(|r| r.rel_type == header_rel_type || r.rel_type == footer_rel_type)
-            .map(|r| r.target.clone())
-            .collect();
-        for target in hf_targets {
-            let part_name = target.rsplit('/').next().unwrap_or(&target);
-            let rels_path = format!("word/_rels/{}.rels", part_name);
-            let hrels = match self.read_part(&rels_path) {
-                Ok(xml) => match parse_relationships(&xml) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
-            for (hid, hrel) in &hrels {
-                if hrel.rel_type != image_rel_type || media.contains_key(hid) {
-                    continue;
-                }
-                if hrel.target.starts_with("file:")
-                    || hrel.target.starts_with("http:")
-                    || hrel.target.starts_with("https:")
-                {
-                    continue;
-                }
-                let path = match oxidocs_common::security::sanitize_rel_target("word", &hrel.target)
-                {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
-                if let Ok(data) = self.read_binary_part(&path) {
-                    let ct = match hrel
-                        .target
-                        .rsplit('.')
-                        .next()
-                        .map(|s| s.to_lowercase())
-                        .as_deref()
-                    {
-                        Some("png") => "image/png",
-                        Some("jpg") | Some("jpeg") => "image/jpeg",
-                        Some("gif") => "image/gif",
-                        Some("bmp") => "image/bmp",
-                        Some("svg") => "image/svg+xml",
-                        Some("tiff") | Some("tif") => "image/tiff",
-                        Some("wmf") => "image/x-wmf",
-                        Some("emf") => "image/x-emf",
-                        _ => "application/octet-stream",
-                    };
-                    media_types.insert(hid.clone(), ct.to_string());
-                    media.insert(hid.clone(), data);
-                }
-            }
-        }
+        let (media, media_types, hyperlinks) =
+            self.load_relationship_resources("word", &rels);
 
         // Parse footnotes (Round 29: pass styles for pStyle inheritance —
         // footnote text style "a8" sets snapToGrid=0, which without
@@ -1017,6 +1126,8 @@ impl OoxmlParser {
             hyperlinks,
             numbering,
             list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes,
             endnotes,
             comments,
@@ -1594,6 +1705,12 @@ fn parse_body(
                                     let mut runs = prev.runs;
                                     runs.extend(joined.runs);
                                     joined.runs = runs;
+                                    // A hidden paragraph mark joins the visible text, but the
+                                    // leading paragraph still controls whether that line stays
+                                    // with the following paragraph. A direct false on the
+                                    // leading paragraph also wins over true on the continuation.
+                                    joined.style.keep_next = prev.style.keep_next;
+                                    joined.style.has_explicit_keep_next = prev.style.has_explicit_keep_next;
                                     // S784b (2026-07-11): the merged paragraph's FIRST
                                     // line is physically the HIDDEN para's first line —
                                     // its first-line indent survives (Word renders the
@@ -2301,6 +2418,35 @@ fn parse_paragraph(
     in_cell: bool,
     cell_inline_flow_width: Option<f32>,
 ) -> Result<ParagraphResult, ParseError> {
+    parse_paragraph_with_inline_images(reader, ctx, styles, allow_inline_flow, in_cell, cell_inline_flow_width, false)
+}
+
+fn parse_paragraph_with_inline_images(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+    allow_inline_flow: bool,
+    in_cell: bool,
+    cell_inline_flow_width: Option<f32>,
+    keep_inline_images: bool,
+) -> Result<ParagraphResult, ParseError> {
+    let previous = ctx.paragraph_base.replace(paragraph_base_run_style(styles, None));
+    let result = parse_paragraph_with_inline_images_impl(
+        reader, ctx, styles, allow_inline_flow, in_cell, cell_inline_flow_width, keep_inline_images,
+    );
+    ctx.paragraph_base.replace(previous);
+    result
+}
+
+fn parse_paragraph_with_inline_images_impl(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+    allow_inline_flow: bool,
+    in_cell: bool,
+    cell_inline_flow_width: Option<f32>,
+    keep_inline_images: bool,
+) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
     // S854: (run_index, image) for INLINE (non-positioned) images. A paragraph
@@ -2357,6 +2503,12 @@ fn parse_paragraph(
                             has_explicit_jc = true;
                         }
                         style_id = sid;
+                        ctx.paragraph_base.replace(paragraph_base_run_style(styles, style_id.as_deref()));
+                        if std::env::var("OXI_PARAGRAPH_MARK_STYLE_DISABLE").is_err() {
+                            if let Some(mark) = style.ppr_rpr.as_mut() {
+                                resolve_character_style(mark, styles, false, &ctx.paragraph_base.borrow());
+                            }
+                        }
                         num_pr_ref = npr;
                         para_sect_pr = spr;
                         ppr_change = ppr_change_parsed;
@@ -2674,15 +2826,8 @@ fn parse_paragraph(
                             allow_inline_flow,
                             in_cell,
                         )?;
-                        // Word does NOT apply the "Hyperlink" character style inside a
-                        // TOC entry: ToC links render in the paragraph text colour
-                        // (black), no underline — while body hyperlinks with the SAME
-                        // rStyle="Hyperlink" stay blue+underlined (measured: this doc's
-                        // body cross-refs are #0000FF, its ToC entries #000000).
-                        // Discriminator = the paragraph is a TOC style (TOC1-9).
-                        let toc_para = style_id
-                            .as_deref()
-                            .map_or(false, |s| s.to_ascii_lowercase().starts_with("toc"));
+                        // Character-style presentation is resolved from the active
+                        // field and built-in style identity when each run is read.
                         // Apply the same field-boundary handling as top-level runs so
                         // fields INSIDE a hyperlink (ToC entries wrap the PAGEREF page
                         // number in <w:hyperlink>) get their fldChar sentinels stripped
@@ -2712,11 +2857,6 @@ fn parse_paragraph(
                                 )
                             {
                                 run.text.clear();
-                            }
-                            if toc_para && run.url.is_some() {
-                                run.style.color = None;
-                                run.style.underline = false;
-                                run.style.underline_style = None;
                             }
                             // S1184: hyperlink-wrapped drawings feed the SAME
                             // machinery as top-level runs (S839 extent mark,
@@ -3923,6 +4063,11 @@ fn parse_paragraph(
         && inline_img_runs
             .iter()
             .all(|(ri, _)| runs.get(*ri).map_or(false, |r| r.text.is_empty()));
+    // A tab advances an inline picture on the paragraph's current line.
+    // Require a separate picture run so its object does not replace tab text.
+    let tab_inline_host = std::env::var("OXI_BODY_TAB_INLINE_IMAGE_DISABLE").is_err()
+        && runs.iter().any(|r| r.text.contains('\t'))
+        && inline_img_runs.iter().all(|(ri, _)| runs.get(*ri).map_or(false, |r| r.text.is_empty()));
     let s1034_single_inline = std::env::var("OXI_S1034_DISABLE").is_err()
         && allow_inline_flow
         && inline_img_runs.len() == 1
@@ -3930,7 +4075,7 @@ fn parse_paragraph(
         // WHITESPACE is effectively image-only and keeps the calibrated block
         // path (legal__001410a8's 2 figure paragraphs carry a space run — with
         // `!text.is_empty()` they flowed inline and cost it 0.9655 → 0.9616).
-        && (runs.iter().any(|run| s1251_host(run, s1251_ws_host)) || s1114_break_host)
+        && (runs.iter().any(|run| s1251_host(run, s1251_ws_host)) || s1114_break_host || tab_inline_host)
         && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty());
     // S1066 (2026-08-05, default ON, opt-out OXI_S1066_DISABLE): the S854/S984
     // horizontal inline-image flow, extended to a TABLE CELL whose paragraph
@@ -4045,6 +4190,7 @@ fn parse_paragraph(
         || s1034_single_inline
         || s1066_cell_single_flow
         || s1186_object_pair
+        || (keep_inline_images && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty()))
     {
         if std::env::var("OXI_DBG_S854").is_ok() {
             let txt: String = runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
@@ -4215,7 +4361,13 @@ fn parse_paragraph_properties(
                             match reader.read_event()? {
                                 Event::Empty(e2) => {
                                     let l = local_name(e2.name().as_ref());
-                                    if l == "sz" {
+                                    if l == "rStyle" && rd == 0
+                                        && std::env::var("OXI_PARAGRAPH_MARK_STYLE_DISABLE").is_err()
+                                    {
+                                        ppr_rpr.char_style_id = e2.attributes().flatten()
+                                            .find(|a| local_name(a.key.as_ref()) == "val")
+                                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                                    } else if l == "sz" {
                                         for a in e2.attributes().flatten() {
                                             if local_name(a.key.as_ref()) == "val" {
                                                 if let Ok(v) = std::str::from_utf8(&a.value) {
@@ -4331,7 +4483,14 @@ fn parse_paragraph_properties(
                                         });
                                     }
                                 }
-                                Event::Start(_) => {
+                                Event::Start(e2) => {
+                                    if rd == 0 && local_name(e2.name().as_ref()) == "rStyle"
+                                        && std::env::var("OXI_PARAGRAPH_MARK_STYLE_DISABLE").is_err()
+                                    {
+                                        ppr_rpr.char_style_id = e2.attributes().flatten()
+                                            .find(|a| local_name(a.key.as_ref()) == "val")
+                                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                                    }
                                     rd += 1;
                                 }
                                 Event::End(_) => {
@@ -5303,8 +5462,10 @@ fn parse_run(
     let mut drawing_result: Option<DrawingResult> = None;
     let mut depth = 0;
     let mut in_text = false;
+    let mut toc_result_for_run = None;
     let mut in_instr_text = false;
     let mut instr_text = String::new();
+    let mut accumulated_instruction: Option<String> = None;
     let mut footnote_ref: Option<u32> = None;
     let mut endnote_ref: Option<u32> = None;
     let mut ruby: Option<Ruby> = None;
@@ -5316,24 +5477,27 @@ fn parse_run(
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "fldChar" && depth == 0 { ctx.field_control(&e, &mut text); }
                 match local.as_str() {
                     "rPr" if depth == 0 => {
-                        let (s, c) = parse_run_properties(reader, ctx, styles)?;
+                        let (s, c) = parse_run_properties(reader, ctx, styles, false)?;
                         style = s;
                         rpr_change = c;
                     }
                     "t" | "delText" if depth == 0 => {
                         in_text = true;
+                        toc_result_for_run.get_or_insert_with(||
+                            ctx.in_toc_result() && (url.is_some() || ctx.in_hyperlink_result()));
                     }
                     "instrText" if depth == 0 => {
                         in_instr_text = true;
                     }
                     "drawing" if depth == 0 => {
-                        drawing_result = Some(parse_drawing(reader, ctx, styles)?);
+                        drawing_result = Some(ctx.separate_story(|| parse_drawing(reader, ctx, styles))?);
                     }
                     // VML legacy picture/shape
                     "pict" if depth == 0 => {
-                        let vml = parse_vml_pict(reader, ctx, styles)?;
+                        let vml = ctx.separate_story(|| parse_vml_pict(reader, ctx, styles))?;
                         if drawing_result.is_none() {
                             // S852: an inline horizontal rule (<v:rect o:hr="t"/>)
                             // is routed to the run style — its own line is reserved
@@ -5490,6 +5654,12 @@ fn parse_run(
                     }
                 } else if in_instr_text {
                     instr_text.push_str(&content);
+                    if let Some(f) = ctx.fields.borrow_mut().last_mut() {
+                        if !f.result {
+                            f.instruction.push_str(&content);
+                            accumulated_instruction = Some(f.instruction.clone());
+                        }
+                    }
                 }
             }
             Event::End(e) => {
@@ -5569,20 +5739,7 @@ fn parse_run(
                     "lastRenderedPageBreak" => {
                         has_last_rendered_page_break = true;
                     }
-                    "fldChar" => {
-                        // Track field state via marker characters
-                        // (parsed by parent parse_paragraph to manage field_result_depth)
-                        for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "fldCharType" {
-                                let val = String::from_utf8_lossy(&attr.value);
-                                match val.as_ref() {
-                                    "separate" => text.push('\u{FFFE}'),
-                                    "end" => text.push('\u{FFFF}'),
-                                    _ => {} // "begin" — no marker needed
-                                }
-                            }
-                        }
-                    }
+                    "fldChar" => ctx.field_control(&e, &mut text),
                     "footnoteReference" => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -5636,10 +5793,19 @@ fn parse_run(
         }
     }
 
+    resolve_character_style(&mut style, styles,
+        toc_result_for_run.unwrap_or_else(||
+            ctx.in_toc_result() && (url.is_some() || ctx.in_hyperlink_result())),
+        &ctx.paragraph_base.borrow());
+
     // If this run contains a field instruction, convert to placeholder text
     let mut field_type: Option<FieldType> = None;
     if !instr_text.is_empty() {
-        let field = instr_text.trim();
+        let cached_instruction = accumulated_instruction.as_deref().filter(|instruction| {
+            instruction.split_whitespace().next().map_or(false, |name|
+                name.eq_ignore_ascii_case("TOC") || name.eq_ignore_ascii_case("HYPERLINK"))
+        });
+        let field = cached_instruction.unwrap_or(&instr_text).trim();
         if field.contains("PAGE") && !field.contains("NUMPAGES") && !field.contains("PAGEREF") {
             text = "#".to_string();
             field_type = Some(FieldType::Page);
@@ -5842,6 +6008,8 @@ fn parse_notes_xml(
         hyperlinks: HashMap::new(),
         numbering: super::numbering::NumberingDefinitions::default(),
         list_counters: std::cell::RefCell::new(HashMap::new()),
+        fields: std::cell::RefCell::new(Vec::new()),
+        paragraph_base: std::cell::RefCell::new(RunStyle::default()),
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
         comments: HashMap::new(),
@@ -5855,6 +6023,7 @@ fn parse_notes_xml(
                 match local.as_str() {
                     "footnote" | "endnote" if !in_note => {
                         in_note = true;
+                        note_ctx.fields.borrow_mut().clear();
                         depth = 0;
                         current_blocks.clear();
                         current_id = None;
@@ -6131,6 +6300,7 @@ fn parse_drawing(
     // extent + effectExtent l + r).
     let mut effect_extent_lr: f32 = 0.0;
     let mut effect_extent_b: f32 = 0.0;
+    let mut effect_extent_t: f32 = 0.0;
     let mut alt_text = None;
     let mut rel_id = None;
     let mut depth = 0;
@@ -7061,6 +7231,11 @@ fn parse_drawing(
                                         effect_extent_lr += v / 12700.0;
                                     }
                                 }
+                                "t" => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        effect_extent_t = v / 12700.0;
+                                    }
+                                }
                                 "b" => {
                                     if let Ok(v) = val.parse::<f32>() {
                                         effect_extent_b = v / 12700.0;
@@ -7552,7 +7727,8 @@ fn parse_drawing(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
-            effect_extent_b: 0.0,
+            effect_extent_t: if std::env::var("OXI_BODY_IMAGE_TOP_EXTENT_DISABLE").is_err() { effect_extent_t } else { 0.0 },
+            effect_extent_b: if std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() { effect_extent_b } else { 0.0 },
             data,
             width,
             height,
@@ -7597,6 +7773,8 @@ fn parse_drawing(
             flip_v,
             arrow_head,
             arrow_tail,
+            wrap_polygon: Vec::new(),
+            wrap_type: None,
             is_vml: false, // DrawingML
             escapes_cell: false,
         })
@@ -7672,6 +7850,7 @@ fn parse_drawing(
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
             blocks: shape_text_blocks,
+            inline: inline_tb,
             font_ref_color: font_ref_color.clone(),
             width,
             height,
@@ -7777,6 +7956,7 @@ fn parse_drawing(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data: Vec::new(),
             width,
@@ -7819,6 +7999,7 @@ fn parse_drawing(
                 }
             }),
             advance_extra_w: effect_extent_lr,
+            effect_extent_t: 0.0,
             effect_extent_b,
             data: Vec::new(),
             width,
@@ -7850,6 +8031,9 @@ fn parse_vml_pict(
     styles: &StyleSheet,
 ) -> Result<DrawingResult, ParseError> {
     let mut shape_type = None;
+    let mut shape_wrap = None;
+    let mut shape_wrap_points: Vec<(f32, f32)> = Vec::new();
+    let mut shape_coord_size = (21600.0_f32, 21600.0_f32);
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
     let mut fill_color: Option<String> = None;
@@ -7872,6 +8056,8 @@ fn parse_vml_pict(
     let mut vml_h_align: Option<String> = None;
     let mut vml_v_align: Option<String> = None;
     let mut vml_h_relative: Option<String> = None;
+    let mut vml_dist_l: Option<f32> = None;
+    let mut vml_dist_r: Option<f32> = None;
     let mut vml_v_relative: Option<String> = None;
     let mut vml_negative_z = false;
     let mut escapes_cell = false; // o:allowincell="f" (S711b)
@@ -8002,9 +8188,33 @@ fn parse_vml_pict(
                             }
                         }
                     }
+                    "wrap" => {
+                        shape_wrap = e.attributes().flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "type")
+                            .and_then(|a| match a.value.as_ref() {
+                                b"square" => Some(WrapType::Square),
+                                b"tight" | b"through" => Some(WrapType::Tight),
+                                b"topAndBottom" => Some(WrapType::TopAndBottom),
+                                b"none" => Some(WrapType::None),
+                                _ => None,
+                            });
+                    }
                     // VML shape types
                     "shape" | "rect" | "oval" | "roundrect" | "line" => {
                         // Check VML type attribute for preset shape identification
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "wrapcoords" || key == "coordsize" {
+                                let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
+                                    .split(|c: char| c.is_whitespace() || c == ',')
+                                    .filter_map(|n| n.parse().ok()).collect();
+                                if key == "wrapcoords" {
+                                    shape_wrap_points = values.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+                                } else if values.len() == 2 && values[0] > 0.0 && values[1] > 0.0 {
+                                    shape_coord_size = (values[0], values[1]);
+                                }
+                            }
+                        }
                         let vml_type_attr = e
                             .attributes()
                             .flatten()
@@ -8033,6 +8243,14 @@ fn parse_vml_pict(
                                     let in_grp = s850 && group_depth > 0;
                                     for part in val.split(';') {
                                         let part = part.trim();
+                                        if !in_grp && std::env::var("OXI_VML_WRAP_DISTANCE_DISABLE").is_err() {
+                                            if let Some(v) = part.strip_prefix("mso-wrap-distance-left:") {
+                                                vml_dist_l = Some(parse_css_length(v.trim()));
+                                            }
+                                            if let Some(v) = part.strip_prefix("mso-wrap-distance-right:") {
+                                                vml_dist_r = Some(parse_css_length(v.trim()));
+                                            }
+                                        }
                                         if let Some(w) = part.strip_prefix("width:") {
                                             if !in_grp {
                                                 width = parse_css_length(w.trim());
@@ -8167,6 +8385,17 @@ fn parse_vml_pict(
                             }
                         }
                     }
+                    "wrap" => {
+                        shape_wrap = e.attributes().flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "type")
+                            .and_then(|a| match a.value.as_ref() {
+                                b"square" => Some(WrapType::Square),
+                                b"tight" | b"through" => Some(WrapType::Tight),
+                                b"topAndBottom" => Some(WrapType::TopAndBottom),
+                                b"none" => Some(WrapType::None),
+                                _ => None,
+                            });
+                    }
                     // S711 (2026-07-01): a SELF-CLOSING VML shape (<v:rect .../>,
                     // <v:oval/>, <v:roundrect/>, <v:line/>) arrives as Event::Empty,
                     // NOT Event::Start — the Start arm above (4261) only fires for
@@ -8178,6 +8407,19 @@ fn parse_vml_pict(
                     "shape" | "rect" | "oval" | "roundrect" | "line"
                         if std::env::var("OXI_VMLRECT_DISABLE").is_err() =>
                     {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "wrapcoords" || key == "coordsize" {
+                                let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
+                                    .split(|c: char| c.is_whitespace() || c == ',')
+                                    .filter_map(|n| n.parse().ok()).collect();
+                                if key == "wrapcoords" {
+                                    shape_wrap_points = values.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+                                } else if values.len() == 2 && values[0] > 0.0 && values[1] > 0.0 {
+                                    shape_coord_size = (values[0], values[1]);
+                                }
+                            }
+                        }
                         let vml_type_attr = e
                             .attributes()
                             .flatten()
@@ -8204,6 +8446,14 @@ fn parse_vml_pict(
                                     let in_grp = s850 && group_depth > 0;
                                     for part in val.split(';') {
                                         let part = part.trim();
+                                        if !in_grp && std::env::var("OXI_VML_WRAP_DISTANCE_DISABLE").is_err() {
+                                            if let Some(v) = part.strip_prefix("mso-wrap-distance-left:") {
+                                                vml_dist_l = Some(parse_css_length(v.trim()));
+                                            }
+                                            if let Some(v) = part.strip_prefix("mso-wrap-distance-right:") {
+                                                vml_dist_r = Some(parse_css_length(v.trim()));
+                                            }
+                                        }
                                         if let Some(w) = part.strip_prefix("width:") {
                                             if !in_grp {
                                                 width = parse_css_length(w.trim());
@@ -8335,6 +8585,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            effect_extent_t: 0.0,
             effect_extent_b: 0.0,
                 data: Vec::new(),
                 width: group_width,
@@ -8365,8 +8616,8 @@ fn parse_vml_pict(
     let s1006_zero_abs = is_absolute
         && margin_left == 0.0
         && margin_top == 0.0
-        && vml_h_align.is_some()
-        && vml_v_align.is_some()
+        && ((vml_h_align.is_some() && vml_v_align.is_some())
+            || (vml_h_relative.is_some() && vml_v_relative.is_some()))
         && std::env::var("OXI_S1006_DISABLE").is_err();
     let vml_position = if is_absolute && (margin_left != 0.0 || margin_top != 0.0) {
         Some(FloatingPosition {
@@ -8376,8 +8627,8 @@ fn parse_vml_pict(
             v_relative: Some("text".to_string()),
             h_align: None,
             v_align: None,
-            dist_l: None,
-            dist_r: None,
+            dist_l: vml_dist_l,
+            dist_r: vml_dist_r,
         })
     } else if s1006_zero_abs {
         Some(FloatingPosition {
@@ -8387,8 +8638,8 @@ fn parse_vml_pict(
             v_relative: vml_v_relative.clone(),
             h_align: vml_h_align.clone(),
             v_align: vml_v_align.clone(),
-            dist_l: None,
-            dist_r: None,
+            dist_l: vml_dist_l,
+            dist_r: vml_dist_r,
         })
     } else {
         None
@@ -8422,6 +8673,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data,
             width,
@@ -8461,6 +8713,7 @@ fn parse_vml_pict(
     if s746_inline_txbx {
         let text_box = Some(TextBox {
             blocks: text_blocks,
+            inline: true,
             font_ref_color: None,
             width,
             height,
@@ -8514,6 +8767,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data: Vec::new(),
             width,
@@ -8555,6 +8809,8 @@ fn parse_vml_pict(
         flip_v: false,
         arrow_head: false,
         arrow_tail: false,
+        wrap_polygon: shape_wrap_points.into_iter().map(|(x, y)| (x / shape_coord_size.0, y / shape_coord_size.1)).collect(),
+        wrap_type: shape_wrap,
         is_vml: true, // legacy VML <w:pict> shape
         escapes_cell,
     });
@@ -8698,6 +8954,7 @@ fn parse_ole_object(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data,
             width,
@@ -8949,6 +9206,7 @@ fn parse_run_properties(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
     styles: &StyleSheet,
+    resolve_style: bool,
 ) -> Result<(RunStyle, Option<PropertyChange>), ParseError> {
     let mut style = RunStyle::default();
     let mut depth = 0;
@@ -8987,7 +9245,7 @@ fn parse_run_properties(
                             Event::Start(inner) => {
                                 if local_name(inner.name().as_ref()) == "rPr" {
                                     let (prior, _nested) =
-                                        parse_run_properties(reader, ctx, styles)?;
+                                        parse_run_properties(reader, ctx, styles, true)?;
                                     pc.prior_run_style = Some(Box::new(prior));
                                 }
                             }
@@ -9469,18 +9727,9 @@ fn parse_run_properties(
         }
     }
 
-    // Apply character style (rStyle): matches Word output
-    // char style properties are base, direct formatting overrides
-    if let Some(ref id) = rstyle_id {
-        if let Some(sdef) = styles.styles.get(id) {
-            if let Some(ref rs) = sdef.paragraph.default_run_style {
-                super::styles::merge_run_style(&mut style, rs);
-            }
-        }
-        // S1174: keep the raw char style ID so a header STYLEREF that
-        // references a CHARACTER style (CharPartText …) can find its
-        // source runs during layout.
-        style.char_style_id = rstyle_id.clone();
+    style.char_style_id = rstyle_id;
+    if resolve_style {
+        resolve_character_style(&mut style, styles, false, &ctx.paragraph_base.borrow());
     }
 
     Ok((style, rpr_change))
@@ -9509,7 +9758,21 @@ fn parse_table(
                         grid_columns = parse_table_grid(reader)?;
                     }
                     "tr" if depth == 0 => {
-                        let row = parse_table_row(reader, ctx, styles)?;
+                        let mut inherited_row_no_split = false;
+                        if std::env::var("OXI_TABLE_ROW_STYLE_DISABLE").is_err() {
+                            let mut id = style.style_id.as_ref().or(styles.default_table_style_id.as_ref());
+                            let mut visited = std::collections::HashSet::new();
+                            while let Some(sid) = id {
+                                if !visited.insert(sid) { break; }
+                                let Some(definition) = styles.table_styles.get(sid) else { break; };
+                                if let Some(value) = definition.row_cant_split {
+                                    inherited_row_no_split = value;
+                                    break;
+                                }
+                                id = definition.style_id.as_ref();
+                            }
+                        }
+                        let row = parse_table_row(reader, ctx, styles, inherited_row_no_split)?;
                         rows.push(row);
                     }
                     _ => {
@@ -9626,8 +9889,22 @@ fn parse_table(
     });
     if let Some(ref style_id) = eff_tbl_style_id {
         if let Some(tbl_style) = styles.table_styles.get(style_id) {
-            if style.default_cell_margins.is_none() {
-                style.default_cell_margins = tbl_style.default_cell_margins.clone();
+            // The built-in Normal Table supplies application defaults when
+            // selected directly. Its stored properties still participate in
+            // basedOn inheritance for a different, custom table style.
+            let inherited_margins = if !tbl_style.is_custom
+                && tbl_style.display_name.as_deref().is_some_and(|name| name.eq_ignore_ascii_case("Normal Table"))
+            {
+                Some(CellMargins { top: Some(0.0), bottom: Some(0.0), left: Some(5.4), right: Some(5.4) })
+            } else {
+                tbl_style.default_cell_margins.clone()
+            };
+            if let Some(parent) = &inherited_margins {
+                if let Some(margins) = &mut style.default_cell_margins {
+                    margins.inherit_missing(parent);
+                } else {
+                    style.default_cell_margins = Some(parent.clone());
+                }
             }
             if style.para_style.is_none() {
                 style.para_style = tbl_style.para_style.clone();
@@ -10235,17 +10512,45 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
     Ok(style)
 }
 
+// Cell-level content controls wrap cells without changing their grid position.
+// Parse only the content branch; properties may contain unrelated XML.
+fn parse_control_cells(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+    end: &str,
+    cells: &mut Vec<TableCell>,
+) -> Result<(), ParseError> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "sdtContent" | "sdt" => parse_control_cells(reader, ctx, styles, &name, cells)?,
+                    "tc" if end == "sdtContent" => cells.push(parse_table_cell(reader, ctx, styles)?),
+                    _ => drain_element(reader, &name)?,
+                }
+            }
+            Event::End(e) if local_name(e.name().as_ref()) == end => break,
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Parse a w:tr element (table row)
 fn parse_table_row(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
     styles: &StyleSheet,
+    inherited_row_no_split: bool,
 ) -> Result<TableRow, ParseError> {
     let mut cells = Vec::new();
     let mut height: Option<f32> = None;
     let mut height_rule: Option<String> = None;
     let mut header = false;
-    let mut cant_split = false;
+    let mut cant_split = inherited_row_no_split;
     let mut grid_before: u32 = 0;
     let mut cell_margins_override: Option<CellMargins> = None;
     let mut depth = 0;
@@ -10279,6 +10584,12 @@ fn parse_table_row(
                         in_row_properties = true;
                         depth += 1;
                     }
+                    "cantSplit" if in_row_properties && depth == 1
+                        && std::env::var("OXI_TABLE_ROW_STYLE_DISABLE").is_err() => {
+                        cant_split = !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val"
+                            && matches!(a.value.as_ref(), b"0" | b"false" | b"off"));
+                        drain_element(reader, "cantSplit")?;
+                    }
                     "ins" | "del" if in_row_properties && depth == 1 => {
                         tracked_change = Some(revision(&e, &local));
                         drain_element(reader, &local)?;
@@ -10286,6 +10597,9 @@ fn parse_table_row(
                     "trPrChange" => {
                         drain_element(reader, "trPrChange")?;
                         continue;
+                    }
+                    "sdt" if depth == 0 && std::env::var("OXI_SDT_CELLS_DISABLE").is_err() => {
+                        parse_control_cells(reader, ctx, styles, "sdt", &mut cells)?;
                     }
                     "tc" if depth == 0 => {
                         let cell = parse_table_cell(reader, ctx, styles)?;
@@ -10386,7 +10700,9 @@ fn parse_table_row(
                         header = true;
                     }
                     "cantSplit" => {
-                        cant_split = true;
+                        cant_split = std::env::var("OXI_TABLE_ROW_STYLE_DISABLE").is_ok()
+                            || !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val"
+                                && matches!(a.value.as_ref(), b"0" | b"false" | b"off"));
                     }
                     "gridBefore" => {
                         for attr in e.attributes().flatten() {
@@ -10526,6 +10842,7 @@ fn parse_table_cell(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            effect_extent_t: 0.0,
             effect_extent_b: 0.0,
                                 data: Vec::new(),
                                 width: s838_cx,
@@ -10564,9 +10881,25 @@ fn parse_table_cell(
                             if image_only && std::env::var("OXI_S971_DISABLE").is_err() {
                                 let mut host = s971_cell_host.clone();
                                 host.runs.clear();
+                                let image_count = pr.inline_images.iter()
+                                    .filter(|b| matches!(b, Block::Image(_))).count();
+                                let mut image_index = 0;
                                 for b in pr.inline_images.iter_mut() {
                                     if let Block::Image(img) = b {
-                                        img.host_paragraph = Some(Box::new(host.clone()));
+                                        let mut image_host = host.clone();
+                                        // These images share one paragraph's outer spacing.
+                                        if image_index > 0 {
+                                            image_host.style.space_before = Some(0.0);
+                                            image_host.style.has_direct_before = true;
+                                            image_host.style.before_autospacing = false;
+                                        }
+                                        if image_index + 1 < image_count {
+                                            image_host.style.space_after = Some(0.0);
+                                            image_host.style.has_direct_after = true;
+                                            image_host.style.after_autospacing = false;
+                                        }
+                                        img.host_paragraph = Some(Box::new(image_host));
+                                        image_index += 1;
                                     }
                                 }
                             }
@@ -11797,6 +12130,7 @@ fn parse_header_footer_xml(
     let mut blocks = Vec::new();
     let mut depth = 0;
     let mut in_root = false;
+    let mut in_footer = false;
 
     loop {
         match reader.read_event()? {
@@ -11805,10 +12139,11 @@ fn parse_header_footer_xml(
                 match local.as_str() {
                     "hdr" | "ftr" => {
                         in_root = true;
+                        in_footer = local == "ftr";
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let mut pr = parse_paragraph(&mut reader, ctx, styles, false, false, None)?;
+                        let mut pr = parse_paragraph_with_inline_images(&mut reader, ctx, styles, in_footer, false, None, in_footer)?;
                         // S742 (2026-07-04): keep header/footer inline images —
                         // they were silently DROPPED (only pr.paragraph was
                         // pushed), so a header logo contributed no height and
@@ -11859,13 +12194,14 @@ fn parse_header_footer_xml(
                                         content_depth += 1;
                                         sdt_depth += 1;
                                     } else if content_depth > 0 && sl == "p" {
-                                        let pr = parse_paragraph(
+                                        let pr = parse_paragraph_with_inline_images(
                                             &mut reader,
                                             ctx,
                                             styles,
                                             false,
                                             false,
                                             None,
+                                            in_footer,
                                         )?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
                                     } else if content_depth > 0 && sl == "tbl" {
@@ -12244,6 +12580,8 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
         hyperlinks: HashMap::new(),
         numbering: super::numbering::NumberingDefinitions::default(),
         list_counters: std::cell::RefCell::new(HashMap::new()),
+        fields: std::cell::RefCell::new(Vec::new()),
+        paragraph_base: std::cell::RefCell::new(RunStyle::default()),
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
         comments: HashMap::new(),
@@ -12258,6 +12596,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                 match local.as_str() {
                     "comment" if !in_comment => {
                         in_comment = true;
+                        note_ctx.fields.borrow_mut().clear();
                         depth = 0;
                         current_blocks.clear();
                         current_id.clear();
@@ -12800,6 +13139,8 @@ mod tests {
             media_types: HashMap::new(), hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
             comments: HashMap::new(), theme: ThemeColors::default(),
         };
@@ -13119,6 +13460,8 @@ mod tests {
             hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(),
             endnotes: HashMap::new(),
             comments: HashMap::new(),
@@ -13157,6 +13500,8 @@ mod tests {
             hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(),
             endnotes: HashMap::new(),
             comments: HashMap::new(),
@@ -13190,6 +13535,8 @@ mod tests {
             hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(),
             endnotes: HashMap::new(),
             comments: HashMap::new(),
@@ -13445,4 +13792,78 @@ mod tests {
             assert_eq!(ruby.align, Some(expected), "align for w:val={val:?}");
         }
     }
+    #[test]
+    fn header_footer_media_ids_are_scoped_to_their_own_parts() {
+        let bytes = include_bytes!("../../../../tests/fixtures/part_media/part_media.docx");
+        let mut archive = OoxmlParser::new(bytes).unwrap();
+        let expected: Vec<Vec<u8>> = (1..=5).map(|i|
+            archive.read_binary_part(&format!("word/media/image{i}.png")).unwrap()
+        ).collect();
+        fn image_data(blocks: &[Block]) -> Vec<&[u8]> {
+            let mut images = Vec::new();
+            for block in blocks {
+                match block {
+                    Block::Image(image) => images.push(image.data.as_slice()),
+                    Block::Paragraph(p) => {
+                        for run in &p.runs {
+                            if let Some(image) = &run.style.inline_object_image {
+                                images.push(image.data.as_slice());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            images
+        }
+
+        // Each part deliberately reuses the body's relationship ID for a
+        // different image. No hash-map iteration order can resolve this globally.
+        for _ in 0..3 {
+            let doc = OoxmlParser::new(bytes).unwrap().parse().unwrap();
+            assert_eq!(doc.pages.len(), 2);
+            assert_eq!(image_data(&doc.pages[0].blocks), vec![expected[0].as_slice()]);
+            for (i, page) in doc.pages.iter().enumerate() {
+                assert_eq!(image_data(&page.header), vec![expected[1 + i * 2].as_slice()]);
+                assert_eq!(image_data(&page.footer), vec![expected[2 + i * 2].as_slice()]);
+            }
+        }
+    }
+
+    #[test]
+    fn toc_links_keep_word_character_style_properties() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/toc_character_style");
+        let cases: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(fixtures.join("word.json")).unwrap(),
+        ).unwrap();
+        for case in cases.as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let doc = OoxmlParser::new(
+                &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+            ).unwrap().parse().unwrap();
+            for (text, expected) in case["runs"].as_object().unwrap() {
+                let run = doc.pages.iter().flat_map(|p| &p.blocks).find_map(|block| {
+                    match block {
+                        Block::Paragraph(p) => p.runs.iter().find(|r| r.text.contains(text)),
+                        _ => None,
+                    }
+                }).unwrap_or_else(|| panic!("{name}: missing {text}"));
+                let style = &run.style;
+                assert_eq!(style.bold, expected["bold"].as_bool().unwrap(), "{name}: {text} bold");
+                assert_eq!(style.italic, expected["italic"].as_bool().unwrap(), "{name}: {text} italic");
+                assert_eq!(style.font_family.as_deref(), expected["font_family"].as_str(), "{name}: {text} family");
+                assert!((style.font_size.unwrap() - expected["font_size"].as_f64().unwrap() as f32).abs() < 0.1,
+                    "{name}: {text} size");
+                assert!(style.color.as_deref().unwrap_or("000000")
+                    .eq_ignore_ascii_case(expected["color"].as_str().unwrap()), "{name}: {text} color");
+                assert_eq!(style.underline, expected["underline"].as_bool().unwrap(), "{name}: {text} underline");
+                if style.underline {
+                    assert_eq!(style.underline_style.as_deref().unwrap_or("single"),
+                        expected["underline_style"].as_str().unwrap(), "{name}: {text} underline kind");
+                }
+            }
+        }
+    }
+
 }

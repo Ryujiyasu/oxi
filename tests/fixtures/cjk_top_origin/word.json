@@ -1,0 +1,146 @@
+[
+  {
+    "name": "none_72.1",
+    "mode": "none",
+    "top": 72.1,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.53997802734375
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.53997802734375
+      }
+    ]
+  },
+  {
+    "name": "none_72.25",
+    "mode": "none",
+    "top": 72.25,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.65997314453125
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.65997314453125
+      }
+    ]
+  },
+  {
+    "name": "none_72.4",
+    "mode": "none",
+    "top": 72.4,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.780029296875
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.780029296875
+      }
+    ]
+  },
+  {
+    "name": "lines_72.1",
+    "mode": "lines",
+    "top": 72.1,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.53997802734375
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.53997802734375
+      }
+    ]
+  },
+  {
+    "name": "lines_72.25",
+    "mode": "lines",
+    "top": 72.25,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.65997314453125
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.65997314453125
+      }
+    ]
+  },
+  {
+    "name": "lines_72.4",
+    "mode": "lines",
+    "top": 72.4,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.780029296875
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.780029296875
+      }
+    ]
+  },
+  {
+    "name": "linesAndChars_72.1",
+    "mode": "linesAndChars",
+    "top": 72.1,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.53997802734375
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.53997802734375
+      }
+    ]
+  },
+  {
+    "name": "linesAndChars_72.25",
+    "mode": "linesAndChars",
+    "top": 72.25,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.65997314453125
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.65997314453125
+      }
+    ]
+  },
+  {
+    "name": "linesAndChars_72.4",
+    "mode": "linesAndChars",
+    "top": 72.4,
+    "pages": 1,
+    "lines": [
+      {
+        "text": "\u672c\u65870 ",
+        "baseline": 86.780029296875
+      },
+      {
+        "text": "\u672c\u65871 ",
+        "baseline": 104.780029296875
+      }
+    ]
+  }
+]

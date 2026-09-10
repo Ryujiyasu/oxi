@@ -1831,6 +1831,8 @@ pub struct LayoutElement {
     pub width: f32,
     pub height: f32,
     pub content: LayoutContent,
+    /// Horizontal clipping offsets relative to this element; materialized after pagination.
+    pub horizontal_clip: Option<(f32, f32)>,
     /// Source paragraph index in the document body (for hit testing / editing).
     /// For table cell elements this is the TABLE's page-level block_idx
     /// (shared across all cells of the table).
@@ -1855,6 +1857,8 @@ pub struct LayoutElement {
     /// None for non-cell elements.
     pub cell_row_index: Option<usize>,
     pub cell_col_index: Option<usize>,
+    /// Ancestor row, cell, and nested block for paragraph flow identity.
+    pub cell_ancestor_path: Vec<(usize, usize, usize)>,
     /// R7.56 (Day 34 part 25, 2026-05-13): true on the FIRST text element of
     /// a cell paragraph whose run[0] carries `<w:lastRenderedPageBreak/>`.
     /// The row-split logic uses this to force a page break before this
@@ -1882,9 +1886,18 @@ pub struct LayoutElement {
     pub text_y_off: f32,
     /// Vertical displacement of an annotation from its parent flow line.
     pub flow_line_offset: f32,
+    /// Height used to fit the text line within the available page area.
+    pub content_fit_height: Option<f32>,
 }
 
+type CellFlowKey = (Vec<(usize, usize, usize)>, usize, usize, usize);
+
 impl LayoutElement {
+    fn cell_flow_key(&self) -> Option<CellFlowKey> {
+        Some((self.cell_ancestor_path.clone(), self.cell_row_index?,
+            self.cell_col_index?, self.cell_paragraph_index?))
+    }
+
     /// Create a non-text element (border, shading, image, etc.) with no source indices.
     fn new(x: f32, y: f32, width: f32, height: f32, content: LayoutContent) -> Self {
         Self {
@@ -1899,10 +1912,13 @@ impl LayoutElement {
             cell_paragraph_index: None,
             cell_row_index: None,
             cell_col_index: None,
+            cell_ancestor_path: Vec::new(),
             is_paragraph_start_with_lrpb: false,
             vmerge_restart_overflow_to_next_page: false,
             text_y_off: 0.0,
             flow_line_offset: 0.0,
+            content_fit_height: None,
+            horizontal_clip: None,
         }
     }
 
@@ -1930,10 +1946,13 @@ impl LayoutElement {
             cell_paragraph_index: None,
             cell_row_index: None,
             cell_col_index: None,
+            cell_ancestor_path: Vec::new(),
             is_paragraph_start_with_lrpb: false,
             vmerge_restart_overflow_to_next_page: false,
             text_y_off: 0.0,
             flow_line_offset: 0.0,
+            content_fit_height: None,
+            horizontal_clip: None,
         }
     }
 }
@@ -2236,6 +2255,8 @@ impl LayoutCursor {
 
 pub struct LayoutEngine {
     default_font_size: f32,
+    cell_end_style_id: Option<String>,
+    cell_default_style_id: Option<String>,
     /// S1236: the size-REGIME reference = docDefaults sz else the Normal
     /// (default paragraph style) sz else `default_font_size`. Unlike
     /// `default_font_size` it never takes the S636 11.0/10.0 compromise when
@@ -2694,6 +2715,8 @@ impl LayoutEngine {
     pub fn new() -> Self {
         Self {
             default_font_size: 11.0,
+            cell_end_style_id: Some("Normal".to_owned()),
+            cell_default_style_id: Some("Normal".to_owned()),
             doc_regime_fs: 11.0,
             s1349_normal_fs: 11.0,
             doc_default_sz_declared: false,
@@ -2850,6 +2873,14 @@ impl LayoutEngine {
             });
         Self {
             default_font_size,
+            cell_default_style_id: doc.styles.default_paragraph_style_id.clone(),
+            cell_end_style_id: doc.styles.styles.iter()
+                .find(|(_, style)| style.display_name.as_deref()
+                    .map_or(false, |name| name.eq_ignore_ascii_case("Normal")))
+                .map(|(id, _)| id.clone())
+                .or_else(|| doc.styles.styles.get("Normal")
+                    .filter(|style| style.display_name.is_none())
+                    .map(|_| "Normal".to_owned())),
             doc_regime_fs,
             s1349_normal_fs,
             doc_default_sz_declared: doc
@@ -2986,13 +3017,13 @@ impl LayoutEngine {
     fn layout_pass(&self, doc: &Document) -> LayoutResult {
         // Pre-pass: resolve fitText runs using actual font metrics
         let mut doc_resolved = doc.clone();
-        // The CJK vertical metrics still depend on half-point top origins.
-        // Keep that rendering compatibility here, without discarding the
-        // declared margin precision during parsing or for Latin text.
-        let has_cjk_textbox = doc.pages.iter().any(|page|
-            page.text_boxes.iter().any(|textbox| textbox.blocks.iter().any(block_has_real_cjk)));
-        let legacy_top_origin = (self.doc_body_has_real_cjk || has_cjk_textbox
-            || std::env::var("OXI_EXACT_LATIN_MARGIN_DISABLE").is_ok())
+        // Word preserves the declared top margin for CJK text as well. Fresh
+        // PDF probes with 72.1/72.25/72.4pt origins (no grid, lines, and
+        // linesAndChars) move their baselines by 0.12pt steps, the PDF device
+        // quantization of the declared 0.15pt changes. Half-point rounding
+        // instead moves them by 0/0.5pt and can lose a near-boundary table line.
+        // Keep the old origin only as a diagnostic opt-out.
+        let legacy_top_origin = std::env::var("OXI_EXACT_LATIN_MARGIN_DISABLE").is_ok()
             && std::env::var("OXI_S1097").is_err();
         for page in &mut doc_resolved.pages {
             if legacy_top_origin {
@@ -3369,6 +3400,18 @@ impl LayoutEngine {
         }
 
         s713_cell_snap(&mut pages);
+        for page in &mut pages {
+            let mut clipped = Vec::with_capacity(page.elements.len());
+            for mut e in std::mem::take(&mut page.elements) {
+                if let Some((left, right)) = e.horizontal_clip.take() {
+                    clipped.push(LayoutElement::new(e.x + left, 0.0, (right - left).max(0.0), page.height, LayoutContent::ClipStart));
+                    clipped.push(e);
+                    clipped.push(LayoutElement::new(0.0, 0.0, 0.0, 0.0, LayoutContent::ClipEnd));
+                } else { clipped.push(e); }
+            }
+            page.elements = clipped;
+        }
+
         LayoutResult { pages }
     }
 
@@ -4617,14 +4660,34 @@ impl LayoutEngine {
 
     /// Balance text in flow order, retaining variable row advances and annotations.
     /// Tables and other non-text content continue through the existing table path.
-    fn rebalance_text_columns(elements: &mut [LayoutElement], top: f32, xs: &[f32]) -> Option<f32> {
+    fn rebalance_text_columns(elements: &mut [LayoutElement], top: f32, xs: &[f32], blocks: &[Block], tail_gap: f32, compat_mode: u32, active_grid_pitch: Option<f32>) -> Option<f32> {
         if xs.len() != 2 { return None; }
+        let prefix_table = std::env::var("OXI_PREFIX_TABLE_BALANCE_DISABLE").is_err();
+        let first_body_index = elements.iter().filter(|e| e.y >= top - 0.1
+            && e.cell_paragraph_index.is_none() && matches!(e.content, LayoutContent::Text { .. }))
+            .filter_map(|e| e.paragraph_index).min();
+        let first_body = elements.iter().filter(|e| e.y >= top - 0.1
+            && e.paragraph_index.is_some() && e.paragraph_index == first_body_index
+            && e.cell_paragraph_index.is_none() && matches!(e.content, LayoutContent::Text { .. }))
+            .map(|e| e.y - e.flow_line_offset).fold(f32::INFINITY, f32::min);
+        let mut has_fixed_prefix = false;
         let mut columns: [Vec<(f32, Vec<usize>)>; 2] = [Vec::new(), Vec::new()];
         for (ei, e) in elements.iter().enumerate() {
             let y = e.y - e.flow_line_offset;
             if y < top - 0.1 { continue; }
             if e.paragraph_index.is_none() || e.cell_paragraph_index.is_some()
-                || !matches!(e.content, LayoutContent::Text { .. }) { return None; }
+                || !matches!(e.content, LayoutContent::Text { .. }) {
+                if prefix_table && first_body.is_finite()
+                    && (e.cell_paragraph_index.is_some() || matches!(e.content, LayoutContent::TableBorder { .. }))
+                    && e.y + e.height <= first_body + 0.1 {
+                    has_fixed_prefix = true;
+                    continue;
+                }
+                if std::env::var("OXI_DBG_COL").is_ok() {
+                    eprintln!("[BALANCE_REJECT] pi={:?} cpi={:?} x={} y={} h={} first={} text={}", e.paragraph_index,e.cell_paragraph_index,e.x,e.y,e.height,first_body,matches!(e.content, LayoutContent::Text { .. }));
+                }
+                return None;
+            }
             let col = usize::from(e.x >= xs[1] - 1.0);
             // A hanging line can cross the nominal column boundary. Never
             // separate adjacent fragments of one flow row between columns;
@@ -4651,6 +4714,7 @@ impl LayoutEngine {
         let first_right = columns[1].iter().flat_map(|(_, members)| members)
             .filter_map(|&i| elements[i].paragraph_index).min();
         if matches!((last_left, first_right), (Some(left), Some(right)) if right < left) {
+            if std::env::var("OXI_DBG_COL").is_ok() { eprintln!("[BALANCE_ORDER_REJECT] left={:?} right={:?}",last_left,first_right); }
             return None;
         }
         let mut rows = Vec::new();
@@ -4666,13 +4730,42 @@ impl LayoutEngine {
             }
         }
         if rows.len() < 2 { return None; }
+        let mode_balance = std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err();
+        let plain_balance = mode_balance && !has_fixed_prefix;
         let total: f32 = rows.iter().map(|r| r.3 + r.4).sum();
         let mut sum = 0.0;
         let mut best = (f32::INFINITY, 1usize);
         for (i, row) in rows.iter().enumerate().take(rows.len() - 1) {
             sum += row.3 + row.4;
             let cost = sum.max(total - sum);
-            if cost <= best.0 + 0.01 { best = (cost, i + 1); }
+            if plain_balance && compat_mode >= 15 {
+                // The final paragraph's spacing participates in the fit of
+                // the last line start, then follows the right-hand fragment.
+                let line_start = sum - row.3;
+                if line_start + tail_gap.max(0.0) < (total + tail_gap.max(0.0)) * 0.5 - 0.001 {
+                    best = (cost, i + 1);
+                } else { break; }
+            } else if (has_fixed_prefix || plain_balance) && std::env::var("OXI_BALANCE_LEFT_CEILING_DISABLE").is_err() {
+                if sum + if plain_balance && compat_mode < 15 { active_grid_pitch.map_or(0.01, |pitch| pitch * 0.5) } else { 0.01 } >= total - sum {
+                    best = (cost, i + 1);
+                    break;
+                }
+            } else if cost <= best.0 + 0.01 { best = (cost, i + 1); }
+        }
+        if has_fixed_prefix && std::env::var("OXI_BALANCE_LEFT_CEILING_DISABLE").is_err()
+            && std::env::var("OXI_BALANCE_WIDOW_DISABLE").is_err() && best.1 > 0 && best.1 < rows.len()
+        {
+            let paragraph = |i: usize| rows[i].2.first().and_then(|&ei| elements[ei].paragraph_index);
+            if let Some(pi) = paragraph(best.1) {
+                if paragraph(best.1 - 1) == Some(pi)
+                    && matches!(blocks.get(pi), Some(Block::Paragraph(p)) if p.style.widow_control)
+                {
+                    let first = (0..best.1).rev().take_while(|&i| paragraph(i) == Some(pi)).last().unwrap_or(best.1);
+                    let remaining = (best.1..rows.len()).take_while(|&i| paragraph(i) == Some(pi)).count();
+                    if remaining == 1 { best.1 -= 1; }
+                    if best.1 - first == 1 { best.1 = first; }
+                }
+            }
         }
         let mut cy = [top, top];
         for (i, (old_col, y, members, h, lead)) in rows.iter().enumerate() {
@@ -4687,7 +4780,10 @@ impl LayoutEngine {
         if std::env::var("OXI_DBG_COL").is_ok() {
             eprintln!("[TEXT_BALANCE] rows={} split={} bottoms={:?}", rows.len(), best.1, cy);
         }
-        Some(cy[0].max(cy[1]))
+        Some(if plain_balance {
+            if compat_mode >= 15 { cy[0].max(cy[1] + tail_gap.max(0.0)) }
+            else { cy[0].max(cy[1]).max((cy[0] + cy[1] + tail_gap.max(0.0)) * 0.5) }
+        } else { cy[0].max(cy[1]) + tail_gap.max(0.0) })
     }
 
     /// Record the y of each band boundary so the page finalizer can draw
@@ -5866,7 +5962,10 @@ cells={} pitch={:.2} text={:?}",
                             // docDefaults theme Calibri 11 = 12.649, one note-slot
                             // short at the area cutoff). uklocal/framework:
                             // Normal == docDefaults → value-identical.
-                            if p.runs.iter().all(|r| r.text.trim().is_empty()) {
+                            if p.runs.iter().all(|r| r.text.trim().is_empty())
+                                && !(p.style.line_spacing_rule.as_deref() == Some("exact")
+                                    && std::env::var("OXI_EXACT_FN_SEPARATOR_DISABLE").is_err())
+                            {
                                 if let Some(drs) = p.style.default_run_style.as_ref() {
                                     if let Some(fs) = drs.font_size {
                                         let m = self.metrics_for(drs, &p.style);
@@ -6220,6 +6319,10 @@ cells={} pitch={:.2} text={:?}",
         // transitions (the band continues at the page top on later pages).
         let mut col_band_top: f32 = start_y;
         let mut prev_space_after: f32 = 0.0;
+        // A continuous section marker has no line box. Its predecessor's
+        // after-spacing still belongs to the ending section and must survive
+        // column balancing before the next section establishes its origin.
+        let mut pending_section_gap: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
         // S1222 (2026-08-26): the COLUMN each block flows in, for anchored objects
@@ -6496,7 +6599,7 @@ cells={} pitch={:.2} text={:?}",
                 Default::default()
             };
         // resolved bands: (page_idx, top, bottom, x0, x1)
-        let mut s758_bands: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
+        let mut s758_bands: Vec<(usize, f32, f32, f32, f32, bool)> = Vec::new();
         // S847 (2026-07-14): CONSECUTIVE paragraphs sharing an IDENTICAL
         // page-anchored framePr form ONE text frame — Word stacks them
         // vertically from (x, y) and the continuation paragraphs INHERIT the
@@ -6819,6 +6922,27 @@ cells={} pitch={:.2} text={:?}",
                     );
                 }
             }
+            // Side-wrapping geometric shapes share the paragraph wrap bands.
+            for shape in page.shapes.iter().filter(|s| s.anchor_block_index == block_idx)
+                .chain(match &page.blocks[block_idx] {
+                    Block::Paragraph(p) => p.shapes.iter(),
+                    _ => [].iter(),
+                }) {
+                if matches!(shape.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight)) {
+                    if let Some(pos) = &shape.position {
+                        let top = cursor.cursor_y + pos.y;
+                        let left = start_x + pos.x;
+                        let bounds = if shape.wrap_type == Some(crate::ir::WrapType::Tight) {
+                            shape.wrap_polygon.iter().fold((0.0_f32, 0.0_f32, 1.0_f32, 1.0_f32),
+                                |(x0, y0, x1, y1), &(x, y)| (x0.min(x), y0.min(y), x1.max(x), y1.max(y)))
+                        } else { (0.0, 0.0, 1.0, 1.0) };
+                        s758_bands.push((current_page_idx, top + bounds.1 * shape.height, top + bounds.3 * shape.height,
+                            left + bounds.0 * shape.width - pos.dist_l.unwrap_or(9.0),
+                            left + bounds.2 * shape.width + pos.dist_r.unwrap_or(9.0),
+                            shape.wrap_type == Some(crate::ir::WrapType::Tight)));
+                    }
+                }
+            }
             // S758: resolve wrapSquare bands anchored to this block (band top =
             // the anchor paragraph's first-line top = the cursor here).
             // S981 (2026-07-22, gated under S975 opt-in): the trailing bool is
@@ -6829,10 +6953,10 @@ cells={} pitch={:.2} text={:?}",
             // wrapTight sidebar (y 528..840.75, past content bottom 770) that
             // Word keeps on p2; the content-bottom clamp/push sent it + its
             // anchor to p3 (S975=1: 2 -> 3 pages). REPORT_N.
-            let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool)> = {
+            let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool, bool)> = {
                 // unified (pos_y, width, height, h_align, x, dist_l, dist_r, physical)
                 // over image + textbox wrapSquare sources anchored to this block
-                let mut v: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool)> = Vec::new();
+                let mut v: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool, bool)> = Vec::new();
                 if let Some(iis) = s758_squares.get(&block_idx) {
                     for &ii in iis {
                         let img = &page.floating_images[ii];
@@ -6845,6 +6969,7 @@ cells={} pitch={:.2} text={:?}",
                                 ip.x,
                                 ip.dist_l.unwrap_or(9.0),
                                 ip.dist_r.unwrap_or(9.0),
+                                false,
                                 false,
                             ));
                         }
@@ -6866,6 +6991,7 @@ cells={} pitch={:.2} text={:?}",
                                 tp.dist_l.unwrap_or(9.0),
                                 tp.dist_r.unwrap_or(9.0),
                                 s981_physical,
+                                tb.wrap_type == Some(crate::ir::WrapType::Tight),
                             ));
                         }
                     }
@@ -6895,7 +7021,7 @@ cells={} pitch={:.2} text={:?}",
                 let s758_needs_push =
                     s758_srcs
                         .iter()
-                        .any(|(py, _w, h, _a, _x, _dl, _dr, physical)| {
+                        .any(|(py, _w, h, _a, _x, _dl, _dr, physical, _)| {
                             // S981: a physical (behindDoc Tight) source is fit against the
                             // physical page bottom — it may use the bottom margin.
                             let fit_bottom = if *physical {
@@ -6908,7 +7034,7 @@ cells={} pitch={:.2} text={:?}",
                         });
                 let s758_max_bottom = s758_srcs
                     .iter()
-                    .map(|(py, _w, h, _a, _x, _dl, _dr, _)| s758_anchor_y + py.max(0.0) + h)
+                    .map(|(py, _w, h, _a, _x, _dl, _dr, _, _)| s758_anchor_y + py.max(0.0) + h)
                     .fold(f32::NEG_INFINITY, f32::max);
                 if s758_needs_push
                     && s758_max_bottom - s758_anchor_y <= content_height
@@ -6948,7 +7074,7 @@ cells={} pitch={:.2} text={:?}",
                 if shared_origin.is_some() {
                     shared_float_anchors.insert(block_idx, (current_page_idx, s758_anchor_y));
                 }
-                for (py, w, h, h_align, px, dl, dr, physical) in &s758_srcs {
+                for (py, w, h, h_align, px, dl, dr, physical, tight) in &s758_srcs {
                     let nat_top = s758_anchor_y + py.max(0.0);
                     // S981: a physical (behindDoc Tight) float may extend into the
                     // bottom margin, so clamp against the physical page bottom.
@@ -6975,7 +7101,7 @@ cells={} pitch={:.2} text={:?}",
                     // the keep-out rect includes the wp:anchor distL/distR
                     // margins (default 114300EMU = 9.0pt); the consumption
                     // side then narrows exactly to the rect edge.
-                    let nb = (current_page_idx, top, bottom, x0 - dl, x0 + w + dr);
+                    let nb = (current_page_idx, top, bottom, x0 - dl, x0 + w + dr, *tight);
                     // S981: a physical Tight band that vertically overlaps an
                     // already-registered band of the SAME x-extent (the leading
                     // wrapSquare sidebar the author chains to it) is UNIONed —
@@ -7143,6 +7269,7 @@ cells={} pitch={:.2} text={:?}",
             // followed by a continuous 2-col 記載心得 block). Word flows the
             // new section continuously below the previous section's content;
             // a 1-col section must NOT inherit the trailing 2-col geometry.
+            let mut section_geometry_changed = false;
             if heterogeneous
                 && active_run_idx + 1 < col_runs.len()
                 && block_idx >= col_runs[active_run_idx + 1].0
@@ -7161,6 +7288,7 @@ cells={} pitch={:.2} text={:?}",
                 let run_geom_differs = col_runs[active_run_idx].2 != col_x_positions
                     || col_runs[active_run_idx].3 != col_widths;
                 if run_cols != num_columns || run_geom_differs {
+                    section_geometry_changed = true;
                     // S750 (2026-07-05, default ON, opt-out OXI_S750_DISABLE):
                     // Word BALANCES the columns of a continuous multi-column
                     // section on its FINAL page (equal column heights, splitting
@@ -7176,8 +7304,9 @@ cells={} pitch={:.2} text={:?}",
                         && std::env::var("OXI_S750_DISABLE").is_err()
                     {
                         if let Some(bottom) = if std::env::var("OXI_TEXT_BALANCE_DISABLE").is_err() {
-                            Self::rebalance_text_columns(&mut elements, col_band_top, &col_x_positions)
+                            Self::rebalance_text_columns(&mut elements, col_band_top, &col_x_positions, &page.blocks, if std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err() { pending_section_gap } else { 0.0 }, self.compat_mode, if page.doc_grid_no_type { None } else { page.grid_line_pitch })
                         } else { None } {
+                            if std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err() { pending_section_gap = 0.0; }
                             cursor.set(bottom);
                             section_max_y = bottom;
                         } else {
@@ -7348,6 +7477,14 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
+            if pending_section_gap != 0.0 {
+                cursor.advance(pending_section_gap);
+                section_max_y = section_max_y.max(cursor.cursor_y);
+                if section_geometry_changed && num_columns > 1 {
+                    col_band_top = cursor.cursor_y;
+                }
+                pending_section_gap = 0.0;
+            }
             // S469: the wrap-below anchor offset is page-local. Reset it when the
             // flow has advanced to a new page since the previous block.
             if current_page_idx != anchor_offset_page {
@@ -7467,12 +7604,22 @@ cells={} pitch={:.2} text={:?}",
                     // pageBreakBefore/keepNext pre-pushes (NDIS 0043bfe0: an empty
                     // Heading1+sectPr para's style pageBreakBefore manufactured a
                     // phantom page before every chapter section). It is the last
-                    // block of its IR page by construction, so skipping the arm's
-                    // trackers is safe.
+                    // block before the next section. Merged continuous sections
+                    // still need its style identity for neighbouring spacing.
                     if std::env::var("OXI_S945_DISABLE").is_err()
                         && para.style.page_section_break
                         && para.runs.iter().all(|r| r.text.is_empty())
                     {
+                        if para.style.continuous_section_break {
+                            if !prev_contextual_spacing
+                                || prev_para_style_id != para.style.style_id
+                            {
+                                pending_section_gap += prev_space_after;
+                            }
+                            prev_space_after = 0.0;
+                            prev_para_style_id = para.style.style_id.clone();
+                            prev_contextual_spacing = para.style.contextual_spacing;
+                        }
                         continue;
                     }
                     // S676 (2026-06-27): drop-cap float. A paragraph whose framePr is
@@ -7848,7 +7995,7 @@ cells={} pitch={:.2} text={:?}",
                         // content may exceed it).
                         let content_h_frame = (fcy.cursor_y - fy).max(14.0);
                         let fh = fp.height.unwrap_or(0.0).max(content_h_frame);
-                        s758_bands.push((current_page_idx, fy, fy + fh, fx - 9.0, fx + fw + 9.0));
+                        s758_bands.push((current_page_idx, fy, fy + fh, fx - 9.0, fx + fw + 9.0, false));
                         if std::env::var("OXI_DBG847").is_ok() {
                             let txt: String = para
                                 .runs
@@ -8172,10 +8319,11 @@ cells={} pitch={:.2} text={:?}",
                             let mut trial_cells = lm2_cells;
                             let mut trial_mult = mult_cumul_raw;
                             let dc = pending_dropcap.unwrap_or(0.0);
-                            let (trial_band, trial_two_seg) = self.body_paragraph_wrap_bands(
+                            let (trial_band, trial_two_seg, trial_wrap_advance) = self.body_paragraph_wrap_bands(
                                 para, page, &s758_bands, current_page_idx,
                                 cursor.cursor_y, start_x, content_width,
                             );
+                            trial_cursor.advance(trial_wrap_advance);
                             let (_, _, final_column) = self.layout_paragraph(
                                 para, start_x + dc, &mut trial_cursor, content_width - dc,
                                 effective_content_h, start_y, page,
@@ -8381,8 +8529,20 @@ cells={} pitch={:.2} text={:?}",
                             // Follower line count via a 1-line estimate at huge width
                             // (consistent with estimate_para_height; word_line_height_no_grid
                             // gives a different, smaller value → over-counts).
+                            let mut single_line_probe;
+                            let one_line_para = if std::env::var("OXI_KEEP_HARD_BREAK_METRICS_DISABLE").is_err()
+                                && next_para.runs.iter().any(|r| r.text.contains('\n'))
+                            {
+                                single_line_probe = next_para.clone();
+                                for run in &mut single_line_probe.runs {
+                                    run.text = run.text.replace('\n', "");
+                                }
+                                &single_line_probe
+                            } else {
+                                next_para
+                            };
                             let one_line_h = self.estimate_para_height(
-                                next_para, 1.0e6, grid_pitch, None, false, None, None,
+                                one_line_para, 1.0e6, grid_pitch, None, false, None, None,
                             );
                             // S915 (2026-07-18, opt-out OXI_S915_DISABLE):
                             // estimate_para_height adds the follower's
@@ -8559,8 +8719,18 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 line_h_next
                             };
+                            let orphan_spacing_credit = if std::env::var("OXI_KEEP_FRAGMENT_SPACING_DISABLE").is_err() {
+                                let head_includes_spacing = para.style.has_direct_spacing
+                                    || matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"));
+                                let head_after = para.style.space_after.unwrap_or(0.0);
+                                let next_before = next_para.style.space_before.unwrap_or(0.0);
+                                let included_after = if head_includes_spacing { head_after } else { 0.0 };
+                                (included_after + follower_sb - head_after.max(next_before)).max(0.0)
+                                    + follower_sa
+                            } else { 0.0 };
                             let follower_orphans = s914
-                                && (one_line_h + last_line_h) > (remaining - this_h - s934_gap);
+                                && (one_line_h + last_line_h - orphan_spacing_credit)
+                                    > (remaining - this_h - s934_gap);
                             // S1039 (2026-07-29, opt-out OXI_S1039_DISABLE): a follower
                             // that declares <w:keepLines/> cannot be split at all, so it
                             // ALWAYS moves wholly - the keepNext heading above it must
@@ -9610,10 +9780,11 @@ cells={} pitch={:.2} text={:?}",
                     // column the float + its 9pt distL eat; requires a real
                     // horizontal overlap so decorative off-column floats stay
                     // inert.
-                    let (s758_para_band, s758_two_seg) = self.body_paragraph_wrap_bands(
+                    let (s758_para_band, s758_two_seg, wrap_advance) = self.body_paragraph_wrap_bands(
                         para, page, &s758_bands, current_page_idx,
                         cursor.cursor_y, start_x, content_width,
                     );
+                    cursor.advance(wrap_advance);
                     if std::env::var("OXI_DBG773").is_ok() {
                         for s in &para.shapes {
                             eprintln!(
@@ -10647,7 +10818,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     };
                     let mut s740_fn_pages: Vec<Vec<u32>> = Vec::new();
                     let s970_pages_before_tbl = pages.len();
-                    let table_elements = self.layout_table(
+                    let mut table_elements = self.layout_table(
                         table,
                         start_x,
                         &mut cursor,
@@ -10679,6 +10850,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         !footnote_ids_current_page.is_empty(),
                         s755_geom.as_ref(),
                     );
+                    if num_columns > 1 && current_column > 0
+                        && pages.len() > s970_pages_before_tbl
+                        && std::env::var("OXI_TABLE_CONTINUATION_ORIGIN_DISABLE").is_err()
+                        && col_widths.iter().all(|w| (*w - content_width).abs() < 0.1)
+                    {
+                        let dx = col_x_positions[0] - start_x;
+                        let shift = |e: &mut LayoutElement| {
+                            e.x += dx;
+                            if let LayoutContent::TableBorder { x1, x2, .. } = &mut e.content {
+                                *x1 += dx;
+                                *x2 += dx;
+                            }
+                        };
+                        for pg in pages.iter_mut().skip(s970_pages_before_tbl + 1) {
+                            for e in &mut pg.elements { shift(e); }
+                        }
+                        for e in &mut table_elements { shift(e); }
+                    }
                     // S740: merge the table's per-page note ids into page_fn_refs
                     // (footnote-area render) + roll the LAST page's notes into the
                     // body's running reserve so following paragraphs fit correctly.
@@ -11220,6 +11409,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         candidate_y_bottom,
                                         band_x0 - dl,
                                         band_x0 + table_w_pt + dr,
+                                        false,
                                     ));
                                 }
                             }
@@ -11408,11 +11598,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         0.0
                     };
+                    let image_section_spacing = block_idx.checked_sub(1)
+                        .and_then(|i| page.blocks.get(i))
+                        .and_then(|block| match block {
+                            Block::Paragraph(marker)
+                                if marker.style.continuous_section_break
+                                    && marker.style.page_section_break
+                                    && marker.runs.iter().all(|r| r.text.is_empty()) =>
+                            {
+                                let suppressed = s1183_host.map_or(false, |host|
+                                    host.contextual_spacing && host.style_id == marker.style.style_id);
+                                Some(if suppressed { 0.0 } else {
+                                    (img_before - marker.style.space_after.unwrap_or(0.0)).max(0.0)
+                                })
+                            }
+                            _ => None,
+                        });
+                    if let Some(spacing) = image_section_spacing {
+                        img_before = spacing;
+                    }
+                    let image_section_top_spacing = if s1183_host.map_or(false, |host| host.before_autospacing) {
+                        0.0
+                    } else {
+                        image_section_spacing.unwrap_or(0.0)
+                    };
                     if cursor.cursor_y <= start_y + 0.1 {
-                        img_before = 0.0;
+                        img_before = image_section_top_spacing;
                     }
                     if cursor.cursor_y + img_before + img_adv > start_y + content_height {
-                        img_before = 0.0;
+                        img_before = image_section_top_spacing;
                         if num_columns > 1 && current_column + 1 < num_columns {
                             current_column += 1;
                             start_x = col_x_positions[current_column];
@@ -11504,14 +11718,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                         _ => None,
                     };
-                    let img_y = s1321_top.unwrap_or(cursor.visual_y);
+                    let img_y = s1321_top.unwrap_or(cursor.visual_y + if !self.doc_body_has_real_cjk { img.effect_extent_t.max(0.0) } else { 0.0 });
                     if s1321_top.is_some() {
                         if let Some(v) = block_y_positions.last_mut() {
                             *v = img_y;
                         }
                     }
+                    let img_x = if !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_BODY_IMAGE_ALIGNMENT_DISABLE").is_err() {
+                        img.host_paragraph.as_deref().map_or(start_x, |host| {
+                            let left = host.style.indent_left.unwrap_or(0.0)
+                                + host.style.indent_first_line.unwrap_or(0.0);
+                            let right = host.style.indent_right.unwrap_or(0.0);
+                            let remaining = (content_width - left - right - img.width).max(0.0);
+                            start_x + left + match host.alignment {
+                                Alignment::Center => remaining * 0.5,
+                                Alignment::Right => remaining,
+                                _ => 0.0,
+                            }
+                        })
+                    } else { start_x };
                     elements.push(LayoutElement::new(
-                        start_x,
+                        img_x,
                         img_y,
                         img.width,
                         img.height,
@@ -12676,17 +12904,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // Day 33 part 18: skip framePr paragraphs (floating frames) —
                 // they're positioned independently of inline flow, so they
                 // should not shift footer_top.
+                let image_flow = ftr_blocks.iter().any(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().any(|r| r.style.inline_object_image.is_some())));
+                let mut measured_previous = None;
+                let mut measured_after = 0.0;
                 let mut footer_h: f32 = 0.0;
                 for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
                         if para.style.frame_pr.is_some() {
                             continue;
                         }
+                        if image_flow {
+                            let (height, after) = self.footer_paragraph_flow_height(para, measured_previous, measured_after, page, hdr_width);
+                            footer_h += height;
+                            measured_previous = Some(para);
+                            measured_after = after;
+                        } else {
                         footer_h += self.estimate_para_height(
                             para, hdr_width, grid_pitch, None, false, None, None,
                         );
+                        }
                     }
                 }
+                if image_flow { footer_h += measured_after; }
                 // S1104: this paint-side `footer_h` is Paragraph-only, so a footer
                 // holding a TABLE placed its content far too low (the table's height
                 // never entered footer_top). S868 already computes the full stack —
@@ -12705,10 +12944,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     page.size.height - footer_dist - footer_h
                 };
                 let mut cy = LayoutCursor::new(footer_top);
+                let mut previous_para: Option<&Paragraph> = None;
+                let mut previous_after = 0.0;
                 for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_ftr = std::collections::HashMap::new();
-                        let (ftr_elements, _, _) = self.layout_paragraph(
+                        let (ftr_elements, after, _) = self.layout_paragraph(
                             para,
                             hdr_x,
                             &mut cy,
@@ -12719,13 +12960,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             &mut Vec::new(),
                             &mut Vec::new(),
                             grid_pitch,
+                            previous_para.and_then(|p| p.style.style_id.as_deref()),
+                            previous_para.is_some_and(|p| p.style.contextual_spacing),
+                            previous_para.filter(|p| p.style.after_autospacing).and_then(|p| p.style.num_id.as_deref()),
                             None,
                             false,
-                            None,
-                            None,
                             false,
-                            false,
-                            0.0,
+                            previous_after,
                             None,
                             None,
                             None,
@@ -12750,7 +12991,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false, // S916
                         );
                         lp.elements.extend(ftr_elements);
+                        if image_flow { previous_para = Some(para); previous_after = after; }
                     } else if let Block::Table(tbl) = block {
+                        if image_flow { cy.advance(previous_after); previous_after = 0.0; previous_para = None; }
                         // S1104 (2026-08-08, default ON, opt-out OXI_S1104_DISABLE):
                         // a TABLE in the footer is PAINTED, not just measured. S868
                         // taught `s755_footer_geom` to count a footer table's height
@@ -12889,7 +13132,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 Block::Table(_) | Block::Image(_) => true,
                                 _ => false,
                             });
-                        let footnote_bottom = if !page.footer.is_empty() && !s896_blank_footer {
+                        let footer_image_flow = ftr_blocks.iter().any(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().any(|r| r.style.inline_object_image.is_some())));
+                        let footnote_bottom = if footer_image_flow {
+                            page.size.height - self.s755_footer_geom(ftr_blocks, page).0
+                        } else if !page.footer.is_empty() && !s896_blank_footer {
                             // Recompute footer top here (mirrors lines 832-839 above).
                             // Day 33 part 18: skip framePr paragraphs (floating frames).
                             let mut footer_h: f32 = 0.0;
@@ -12927,7 +13173,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             lp.elements
                                 .iter()
                                 .filter(|e| e.y < footnote_bottom)
-                                .map(|e| e.y + e.height)
+                                .map(|e| {
+                                    let height = if !self.doc_body_has_real_cjk
+                                        && std::env::var("OXI_FN_PLACEMENT_FIT_DISABLE").is_err()
+                                    {
+                                        e.content_fit_height.unwrap_or(e.height)
+                                    } else {
+                                        e.height
+                                    };
+                                    e.y + height
+                                })
                                 .fold(0.0_f32, f32::max)
                         };
 
@@ -14759,6 +15014,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let s1106_ascii = !self.doc_body_has_real_cjk
                             && std::env::var("OXI_S1106_DISABLE").is_err();
                         self.metrics_for_para_mark_g(mark, &para.style, s1106_ascii)
+                    } else if !self.doc_body_has_real_cjk {
+                        // An empty header mark still inherits its paragraph font.
+                        // Resolve that chain even without a direct pPr/rPr, just
+                        // as for an explicitly formatted paragraph mark.
+                        self.metrics_for_para_mark_g(&fallback_style, &para.style, true)
                     } else {
                         self.doc_default_metrics()
                     };
@@ -14781,6 +15041,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         metrics.word_line_height(fs, 96.0)
                     };
+                    // Text header lines reserve their declared auto-spacing pitch.
+                    // Empty headers already apply the same multiplier in S1064.
+                    if !self.doc_body_has_real_cjk
+                        && visible_run.is_some()
+                        && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                        && std::env::var("OXI_HEADER_TEXT_MULTIPLE_DISABLE").is_err()
+                    {
+                        lh *= para.style.line_spacing.unwrap_or(1.0).max(1.0);
+                    }
                     // S1175 (2026-08-20, opt-out OXI_S1175_DISABLE): an `atLeast`
                     // line rule floors the header line like anywhere else.
                     // reference__0061531a's header paragraphs inherit line=260
@@ -15070,6 +15339,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             if let Some(last) = s813_prev_sa {
                 hdr_h += last;
             }
+            // The last paragraph's bottom rule occupies space between the
+            // header text and the body, including its declared text distance.
+            if !self.doc_body_has_real_cjk
+                && std::env::var("OXI_HEADER_BOTTOM_BORDER_DISABLE").is_err()
+            {
+                if let Some(Block::Paragraph(last)) = blocks.last() {
+                    if let Some(edge) = last.style.borders.as_ref().and_then(|b| b.bottom.as_ref()) {
+                        if !matches!(edge.style.as_str(), "nil" | "none") {
+                            hdr_h += edge.width + edge.space;
+                        }
+                    }
+                }
+            }
             // S1010: the header text flow resumes below the page-relative
             // TopAndBottom band (band_bottom == header_y when there is none).
             if std::env::var("OXI_DBG_HDR").is_ok() {
@@ -15148,6 +15430,53 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         (m.ascent - 0.71).max(0.0) * fs
     }
 
+    fn footer_paragraph_flow_height(&self, para: &Paragraph, previous: Option<&Paragraph>, previous_after: f32, page: &Page, width: f32) -> (f32, f32) {
+        let mut cy = LayoutCursor::new(0.0);
+        let empty_fn_h_ftr = std::collections::HashMap::new();
+                        let (_, after, _) = self.layout_paragraph(
+                            para,
+                            page.margin.left,
+                            &mut cy,
+                            width,
+                            99999.0,
+                            0.0,
+                            page,
+                            &mut Vec::new(),
+                            &mut Vec::new(),
+                            page.grid_line_pitch,
+                            previous.and_then(|p| p.style.style_id.as_deref()),
+                            previous.is_some_and(|p| p.style.contextual_spacing),
+                            previous.filter(|p| p.style.after_autospacing).and_then(|p| p.style.num_id.as_deref()),
+                            None,
+                            false,
+                            false,
+                            previous_after,
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            None,
+                            0.0,
+                            &empty_fn_h_ftr,
+                            1,
+                            0,
+                            &[],
+                            0.0,   // S749: band top unused (1-col)
+                            true,  // S691: footer context
+                            false, // S726: footer bottom differs
+                            None,  // S755
+                            None,  // S758
+                            None,  // S-TWOSEG
+                            false, // S835
+                            0.0,
+                            None,  // S900
+                            None,  // S903
+                            false, // S916
+                        );
+        (cy.cursor_y, after)
+    }
+
     /// S755: (footer_reserved, footer_has_text) for one footer variant's
     /// blocks (the extracted reservation incl the Day-33 empty-para and
     /// framePr rules) so first/even/odd variants share one code path.
@@ -15170,7 +15499,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             && std::env::var("OXI_S894_DISABLE").is_err()
         {
             let has_ink = blocks.iter().any(|b| match b {
-                Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty()),
+                Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty() || r.style.inline_object_image.is_some()),
                 Block::Table(_) | Block::Image(_) => true,
                 _ => false,
             });
@@ -15316,8 +15645,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 !self.doc_body_has_real_cjk && std::env::var("OXI_S806_DISABLE").is_err();
             let mut s806_first_before = true;
             let mut s803_prev_sa: Option<f32> = None;
-            for block in blocks {
+            let image_flow = blocks.iter().any(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().any(|r| r.style.inline_object_image.is_some())));
+            for (block_index, block) in blocks.iter().enumerate() {
                 if let Block::Paragraph(p) = block {
+                    if image_flow && p.style.frame_pr.is_none() {
+                        let previous = block_index.checked_sub(1).and_then(|i| match &blocks[i] { Block::Paragraph(p) => Some(p), _ => None });
+                        let (height, after) = self.footer_paragraph_flow_height(p, previous, s803_prev_sa.take().unwrap_or(0.0), page, cw);
+                        footer_h += height;
+                        s803_prev_sa = Some(after);
+                        s806_first_before = false;
+                        continue;
+                    }
                     // Day 33 part 18 (2026-05-10): skip framePr-wrapped paragraphs.
                     // framePr means floating-positioned frame (vAnchor/hAnchor set,
                     // wrap=around) — Word excludes these from inline footer height
@@ -15460,6 +15798,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // bottom 1.5 EXACT.
                     if s806_latin && std::env::var("OXI_S886_DISABLE").is_err() {
                         if let Some(b) = p.style.borders.as_ref() {
+                            // A later paragraph's top border is part of the footer stack.
+                            // The first paragraph's top is already counted below.
+                            let merges_with_prev = block_index > 0
+                                && matches!(&blocks[block_index - 1], Block::Paragraph(prev)
+                                    if prev.style.borders.as_ref() == Some(b));
+                            if block_index > 0 && !merges_with_prev
+                                && std::env::var("OXI_FOOTER_MIDDLE_TOP_BORDER_DISABLE").is_err() {
+                                if let Some(top) = b.top.as_ref() {
+                                    footer_h += top.space + top.width;
+                                }
+                            }
                             if let Some(bt) = b.bottom.as_ref() {
                                 footer_h += bt.space + bt.width;
                             }
@@ -15617,7 +15966,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             top + bot
                         };
                         for row in &t.rows {
-                            let nat = self.estimate_table_row_natural_h(
+                            let nat = self.estimate_table_row_natural_h_with_border_padding(
                                 row,
                                 &col_widths,
                                 pl,
@@ -15628,6 +15977,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 page.grid_line_pitch,
                                 page.grid_char_pitch,
                                 None,
+                                // The footer stack adds its explicit border term below.
+                                false,
                             );
                             let h = row
                                 .height
@@ -15680,7 +16031,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // flips the slice while the footer RENDER stays fixed. Latin scope
             // (!doc_body_has_real_cjk) — JP corpus byte-identical by construction.
             let mut s780_extra = 0.0f32;
-            if !self.doc_body_has_real_cjk && std::env::var("OXI_S780_DISABLE").is_err() {
+            if !image_flow && !self.doc_body_has_real_cjk && std::env::var("OXI_S780_DISABLE").is_err() {
                 if let Some(p) = blocks.iter().find_map(|b| match b {
                     Block::Paragraph(p) if p.style.frame_pr.is_none() => Some(p),
                     _ => None,
@@ -15747,7 +16098,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let footer_has_text = blocks.iter().any(|b| {
             matches!(b, Block::Paragraph(p)
             if p.style.frame_pr.is_none()
-                && p.runs.iter().any(|r| !r.text.trim().is_empty()))
+                && p.runs.iter().any(|r| !r.text.trim().is_empty() || r.style.inline_object_image.is_some()))
         });
         (footer_reserved, footer_has_text)
     }
@@ -15756,22 +16107,68 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         &self,
         para: &Paragraph,
         page: &Page,
-        s758_bands: &[(usize, f32, f32, f32, f32)],
+        s758_bands: &[(usize, f32, f32, f32, f32, bool)],
         current_page_idx: usize,
         cursor_y: f32,
         start_x: f32,
         content_width: f32,
-    ) -> (Option<(f32, f32, f32)>, Option<(f32, f32, f32, f32)>) {
+    ) -> (Option<(f32, f32, f32)>, Option<(f32, f32, f32, f32)>, f32) {
+        let intersection = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_WRAP_LINE_INTERSECTION_DISABLE").is_err();
+        let before = if intersection { para.style.space_before.unwrap_or(0.0).max(0.0) } else { 0.0 };
+        let mut line_top = cursor_y + before;
+        let mut advance = 0.0;
+        let line_height = if intersection && s758_bands.iter().any(|b| b.0 == current_page_idx && b.2 > line_top) {
+            let fragments: Vec<_> = para.runs.iter().enumerate()
+                .map(|(i,r)| (r.text.as_str(), &r.style, None, i, 0)).collect();
+            let width = (content_width - para.style.indent_left.unwrap_or(0.0)
+                - para.style.indent_right.unwrap_or(0.0)).max(1.0);
+            let lines = self.break_into_lines(&fragments, width,
+                para.style.indent_first_line.unwrap_or(0.0), &para.style,
+                page.grid_char_pitch, page.grid_char_cw_ratio, page.doc_grid_lines_and_chars,
+                true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
+                page.doc_grid_no_type, para.runs.iter().any(|r| r.has_last_rendered_page_break), false, false);
+            let fs = self.resolve_font_size(&RunStyle::default(), &para.style);
+            lines.first().map(|line| self.line_height_for_line(line, &para.style, fs,
+                para.style.snap_to_grid, page.grid_line_pitch, page.doc_grid_no_type)).unwrap_or(fs).max(0.1)
+        } else { 0.0 };
+        if intersection {
+            let left = start_x + para.style.indent_left.unwrap_or(0.0).max(0.0);
+            let right = start_x + content_width - para.style.indent_right.unwrap_or(0.0).max(0.0);
+            while let Some(band) = s758_bands.iter().find(|b|
+                b.0 == current_page_idx && line_top + line_height > b.1
+                    && line_top < b.2 - 0.5
+                    && b.3 < right && b.4 > left
+                    && (b.3 - left).max(0.0).max((right - b.4).max(0.0)) <
+                        if para.runs.iter().all(|r| r.text.is_empty())
+                            && std::env::var("OXI_EMPTY_WRAP_SLOT_DISABLE").is_err()
+                        { 9.75 } else { 30.0 })
+            {
+                let step = if band.5 {
+                    let line_step = line_height + before;
+                    ((band.2 - line_top) / line_step).ceil().max(1.0) * line_step
+                } else {
+                    (band.2 - (cursor_y + advance)).max(0.1)
+                };
+                advance += step;
+                line_top = cursor_y + advance + before;
+            }
+            if std::env::var("OXI_DBG_WRAP_INTERSECTION").is_ok() {
+                eprintln!("[WRAP_INTERSECTION] y={} before={} lh={} advance={} bands={:?} text={:?}",
+                    cursor_y, before, line_height, advance, s758_bands,
+                    para.runs.iter().map(|r| r.text.as_str()).collect::<String>().chars().take(20).collect::<String>());
+            }
+        }
         let s758_para_band: Option<(f32, f32, f32)> = s758_bands
             .iter()
-            .filter(|(pg, top, bot, bx0, bx1)| {
+            .filter(|(pg, top, bot, bx0, bx1, _)| {
                 *pg == current_page_idx
-                    && cursor_y >= *top - 0.5
-                    && cursor_y < *bot - 0.5
+                    && (if intersection { line_top + line_height > *top } else { cursor_y >= *top - 0.5 })
+                    && line_top < *bot - 0.5
                     && *bx0 < start_x + content_width - 6.0
                     && *bx1 > start_x + 6.0
             })
-            .map(|(_, _, bot, bx0, bx1)| {
+            .map(|(_, _, bot, bx0, bx1, _)| {
                 // wrapText SIDE: text flows in the free segment with
                 // more room for THIS PARAGRAPH'S OWN COLUMN
                 // [margin+ind_l, content_right−ind_r] (S772b — Word
@@ -15848,14 +16245,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         {
             s758_bands
                 .iter()
-                .filter(|(pg, top, bot, bx0, bx1)| {
+                .filter(|(pg, top, bot, bx0, bx1, _)| {
                     *pg == current_page_idx
-                        && cursor_y >= *top - 0.5
-                        && cursor_y < *bot - 0.5
+                        && (if intersection { line_top + line_height > *top } else { cursor_y >= *top - 0.5 })
+                        && line_top < *bot - 0.5
                         && *bx0 < start_x + content_width - 6.0
                         && *bx1 > start_x + 6.0
                 })
-                .find_map(|(_, _, _, bx0, bx1)| {
+                .find_map(|(_, _, _, bx0, bx1, _)| {
                     let content_right = start_x + content_width;
                     let ind_l = para
                         .style
@@ -15886,7 +16283,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         } else {
             None
         };
-        (s758_para_band, s758_two_seg)
+        (s758_para_band, s758_two_seg, advance)
     }
 
     fn body_adjacent_to_empty_run(para: &Paragraph, page: &Page, block_idx: usize) -> bool {
@@ -16358,6 +16755,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // before=240, render at y=72=margin). Body flow only.
         // Default ON (opt-out OXI_S816_DISABLE) since the Latin exact-cell
         // bundle (S815-S819) shipped together 2026-07-13.
+        // The marker's own after-spacing consumes the lower spacing layer
+        // at the section boundary without adding height. Only the following
+        // paragraph's excess before-spacing survives, including at a page top.
+        let continuous_section_start_spacing = body_para_index
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| page.blocks.get(i))
+            .and_then(|block| match block {
+                Block::Paragraph(marker)
+                    if marker.style.continuous_section_break
+                        && marker.style.page_section_break
+                        && marker.runs.iter().all(|r| r.text.is_empty()) =>
+                {
+                    Some((effective_spacing - marker.style.space_after.unwrap_or(0.0)).max(0.0))
+                }
+                _ => None,
+            });
         // S1073 (2026-08-05, opt-out OXI_S1073_DISABLE): at a SECTION top and at
         // a pageBreakBefore top, the space-before that survives is the EXCESS
         // over the previous paragraph's space-after — `max(0, before - prev
@@ -16482,6 +16895,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         }
 
+        if let Some(spacing) = continuous_section_start_spacing {
+            if !s1072_auto_top {
+                effective_spacing = spacing;
+            }
+        }
         cursor.advance(effective_spacing);
 
         // S1181 v2 (2026-08-20, OPT-IN OXI_S1181=1): a NO-TYPE docGrid runs
@@ -17717,6 +18135,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // PICTURE / w:object target had no sibling, so a `[text][picture]`
         // paragraph advanced by its text line alone.
         let mut s1116_line0_target: f32 = 0.0;
+        let mut story_image_leading = vec![0.0f32; lines.len()];
         // S851 (2026-07-14, opt-out OXI_S851_DISABLE): an inline w:object
         // form-field image (routed as a run-level inline object,
         // RunStyle.inline_object_image) contributes its box HEIGHT to its host
@@ -17806,6 +18225,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         0.0
                     };
+                    if is_header_footer { story_image_leading[li] = extra; }
                     if std::env::var("OXI_DBG_S875").is_ok() {
                         let txt: String = line
                             .fragments
@@ -17884,6 +18304,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         obj_h + descent + extra
                     };
+                    let effect_bottom = if !is_header_footer && !self.doc_body_has_real_cjk
+                        && descent == 0.0
+                        && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                        line.fragments.iter().filter_map(|f| f.style.inline_object_image.as_ref())
+                            .map(|im| im.effect_extent_b.max(0.0) + im.effect_extent_t.max(0.0)).fold(0.0_f32, f32::max)
+                    } else { 0.0 };
+                    let target = target + effect_bottom;
                     if li == 0 && target > line_heights[0] {
                         s1116_line0_target = target;
                     }
@@ -18267,6 +18694,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .iter()
                     .filter(|tb| {
                         tb.anchor_block_index == bi
+                            && (std::env::var("OXI_EXPLICIT_INLINE_BOX_DISABLE").is_ok() || tb.inline)
                             && tb.blocks.is_empty()
                             && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
                             && tb.position.as_ref().map_or(false, |p| {
@@ -19064,6 +19492,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let tp = tb.position.as_ref().unwrap();
                         (tp.y, tp.y + tb.height)
                     })
+                    .or_else(|| {
+                        // Fixed-coordinate images participate in the same local
+                        // top/bottom exclusion as shapes. A margin-relative
+                        // image at y=2 with height=60 moves the first line from
+                        // 72 to 134; a page-relative image at y=74 does likewise.
+                        // The band can intersect the paragraph before its anchor,
+                        // so it must be considered during line flow as well.
+                        page.floating_images.iter().find_map(|img| {
+                            if bi > img.anchor_block_index + 2
+                                || img.anchor_block_index > bi + 2
+                                || img.wrap_type != Some(crate::ir::WrapType::TopAndBottom)
+                            {
+                                return None;
+                            }
+                            let pos = img.position.as_ref()?;
+                            let top = match pos.v_relative.as_deref() {
+                                Some("page") => pos.y,
+                                Some("margin") => page.margin.top + pos.y,
+                                _ => return None,
+                            };
+                            Some((top, top + img.height))
+                        })
+                    })
             })
         } else {
             None
@@ -19646,8 +20097,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // leniency wrongly kept it at the p30 bottom (over −1.85 vs +2.15).
                 // Scoped to typed docGrid snap_to_grid paragraphs.
                 let atleast_floor = if std::env::var("OXI_S714_DISABLE").is_err()
-                    && !page.doc_grid_no_type
-                    && para.style.snap_to_grid
+                    && ((!page.doc_grid_no_type && para.style.snap_to_grid)
+                        || (std::env::var("OXI_ATLEAST_BODY_FLOOR_DISABLE").is_err()
+                            && !self.doc_body_has_real_cjk))
                     && para.style.line_spacing_rule.as_deref() == Some("atLeast")
                 {
                     para.style.line_spacing.unwrap_or(0.0)
@@ -19905,7 +20357,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // model needs no companion. A footer-part relief also regressed
             // uklocalspending 1.0→0.59 / ukframework 1.0→0.97, whose
             // S806-S835 fine probes close at ±0.05 with NO relief term.)
+            let exact_fn_separator = self.fn_special_declared
+                && std::env::var("OXI_EXACT_FN_SEPARATOR_DISABLE").is_err()
+                && page.footnotes.iter().find(|n| n.number == u32::MAX)
+                    .and_then(|n| n.blocks.iter().find_map(|b| match b {
+                        Block::Paragraph(p) => Some(p),
+                        _ => None,
+                    }))
+                    .is_some_and(|p| p.style.line_spacing_rule.as_deref() == Some("exact"));
             let s835_fn_relief = if s835_boundary_is_fn
+                && !exact_fn_separator
                 && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S835_DISABLE").is_err()
             {
@@ -19934,7 +20395,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // wi=906, Word KEEPS at +0.013) is a Latin natural-threshold case,
             // which this leaves alone. Gate: Phase 1 95/96 unchanged and all
             // 238 SSIM sentinel documents byte-identical, same as S1153.
+            // Private Word-measured candidate: automatic multiples must fit their
+            // natural final line exactly. The atLeast half-twip rule remains separate.
+            let multiple_exact_fit = std::env::var("OXI_MULTIPLE_FIT_NO_TOL_DISABLE").is_err()
+                && !self.doc_body_has_real_cjk && page.grid_line_pitch.is_none()
+                && !s835_boundary_is_fn
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                && para.style.line_spacing.is_some_and(|f| f > 1.0);
+            // Automatic Latin line boxes must fit at both the line and orphan checks.
+            let automatic_exact_fit = std::env::var("OXI_AUTO_LINE_FIT_DISABLE").is_err()
+                && !self.doc_body_has_real_cjk && page.grid_line_pitch.is_none()
+                && !s835_boundary_is_fn
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"));
             let s967_tol = if std::env::var("OXI_S967_DISABLE").is_ok()
+                || automatic_exact_fit
+                || multiple_exact_fit
                 || (centered_box_is_threshold
                     && std::env::var("OXI_S1154_DISABLE").is_err())
             {
@@ -19942,34 +20417,42 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 0.025
             };
-            // S1246 probe (opt-in OXI_S1246=1): above a committed footnote area
-            // Word measures a TEXT line by its FULL multiplied box -- it does not
-            // forgive the leading an auto multiple adds, the way it does for a
-            // trailing EMPTY paragraph (S1113). `_pb_fnbox` sweeps one line at
-            // w:line 240/258/300: the three last-stay box bottoms share a limit
-            // only under the full box; under the natural box their intervals do
-            // not intersect at all. Latin, non-typed-grid, fn-boundary scope.
-            let break_threshold = if std::env::var("OXI_S1246").ok().as_deref() == Some("1")
-                && s835_boundary_is_fn
-                && !self.doc_body_has_real_cjk
-                && page.grid_line_pitch.is_none()
-            {
-                // The capacity is S827's hhea line SCALED BY the auto multiple,
-                // not the unmultiplied natural (S1079) and not the multiplied
-                // spacing box: the spacing box is 13.500 where hhea is 13.428
-                // for this face, and that 0.072 is amplified by the multiple
-                // (17.000 vs 16.785 at 1.25), which is what breaks the m300 arm.
+            // A reference line reserves its note together with its multiplied
+            // text box. Apply the same height and reservation to look-ahead.
+            let footnote_fit_height = |idx: usize, threshold: f32| -> f32 {
+                let above_notes = committed_fn_delta_at_line.get(idx).copied().unwrap_or(0.0) > 0.0;
+                if std::env::var("OXI_FOOTNOTE_REF_FIT_DISABLE").is_ok()
+                    || !above_notes
+                    || self.doc_body_has_real_cjk
+                    || page.grid_line_pitch.is_some()
+                {
+                    return threshold;
+                }
                 let factor = match para.style.line_spacing_rule.as_deref() {
                     None | Some("auto") => para.style.line_spacing.unwrap_or(1.0).max(1.0),
                     _ => 1.0,
                 };
-                let hhea = s779_win_heights
-                    .get(line_idx)
-                    .copied()
-                    .unwrap_or(break_threshold);
-                (hhea * factor).max(break_threshold)
-            } else {
-                break_threshold
+                let hhea = s779_win_heights.get(idx).copied().unwrap_or(threshold);
+                (hhea * factor).max(threshold)
+            };
+            let break_threshold = footnote_fit_height(line_idx, break_threshold);
+            let footnote_fit_bottom = |idx: usize| -> f32 {
+                let bottom = page_top + content_height;
+                if std::env::var("OXI_FOOTNOTE_REF_FIT_DISABLE").is_ok()
+                    || self.doc_body_has_real_cjk
+                    || page.grid_line_pitch.is_some()
+                {
+                    return bottom;
+                }
+                let extra = if !para_fn_heights.is_empty() {
+                    let committed = committed_fn_delta_at_line.get(idx).copied().unwrap_or(0.0);
+                    (first_line_extra_content_h - committed).max(0.0)
+                } else if idx == 0 {
+                    first_line_extra_content_h
+                } else {
+                    0.0
+                };
+                bottom + extra
             };
             // S1248 (default ON, opt-out OXI_S1248_DISABLE): on a page whose foot is spoken
             // for by notes, a paragraph's TRAILING SPACE has to fit above the note
@@ -19986,8 +20469,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // and 16pt, where at 15 the flip moves by exactly the after value.
             let s1248_modern = self.compat_mode >= 15 && self.compat_mode_explicit;
             let s1248_para_after = if std::env::var("OXI_S1248_DISABLE").is_err()
-                && s835_boundary_is_fn
-                && s1248_modern
+                && ((s835_boundary_is_fn && s1248_modern)
+                    || s758_band.is_some_and(|(bottom, _, _)| cursor.cursor_y < bottom))
                 && !self.doc_body_has_real_cjk
             {
                 para.style.space_after.unwrap_or(0.0)
@@ -20007,7 +20490,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 0.0
             };
-            let mut natural_needs_page_break = if in_textbox || s832_trailing_empty {
+            // Moving an unavoidable first line from an empty page only creates
+            // an empty page. Keep it here; subsequent paragraphs still paginate.
+            let oversized_first_line = line_idx == 0
+                && elements.is_empty()
+                && current_elements.is_empty()
+                && (cursor.cursor_y - page_top).abs() < 0.025
+                && effective_lh > effective_break_bottom - page_top + 0.025;
+            let mut natural_needs_page_break = if in_textbox || s832_trailing_empty || oversized_first_line {
                 false
             } else {
                 cursor.cursor_y + break_threshold + s1248_after - s835_fn_relief
@@ -20585,6 +21075,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         line_heights.get(1).copied().unwrap_or(0.0)
                     };
+                    let next_h = footnote_fit_height(1, next_h);
                     // S835: the fn-area boundary softness (fs/16) applies to the
                     // widow/orphan fit test too — framework wp26 «shall obtain»
                     // (2-line, ref 14) was whole-moved HERE at a 0.17pt overflow
@@ -20595,13 +21086,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // whole-move an otherwise splittable paragraph (legal
                     // wp102: +0.012pt). Half a twip is the round-to-nearest
                     // tolerance; larger physical overflows still push.
-                    let orphan_rounding_tolerance = if std::env::var("OXI_S926_DISABLE").is_err() {
+                    let orphan_rounding_tolerance = if std::env::var("OXI_S926_DISABLE").is_err() && !automatic_exact_fit {
                         0.025
                     } else {
                         0.0
                     };
                     cursor.cursor_y + line_height + next_h - s835_fn_relief
-                        > page_top + content_height + orphan_rounding_tolerance
+                        > footnote_fit_bottom(1) + orphan_rounding_tolerance
                         && !current_elements.is_empty()
                 } else if line_idx == lines.len() - 2 && !needs_page_break {
                     // Widow: if the last line would overflow to the next page alone,
@@ -20624,14 +21115,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if s891_next_is_trailing_br_empty {
                         false
                     } else {
-                        let next_h = last_line_fit_h(line_idx + 1);
+                        let next_h = footnote_fit_height(
+                            line_idx + 1, last_line_fit_h(line_idx + 1));
                         // S1248: the look-ahead asks the same question the
                         // per-line test does, so it has to count the trailing
                         // space too — otherwise the last line is rejected there
                         // and kept here, and the paragraph splits 2+1 where
                         // widowControl forbids any split at all.
                         cursor.cursor_y + line_height + next_h + s1248_next_after - s835_fn_relief
-                            > page_top + content_height
+                            > footnote_fit_bottom(line_idx + 1)
                     }
                 } else {
                     false
@@ -20745,6 +21237,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 cursor.set(page_top);
                 s842_apply(cursor);
                 cur_col = 0;
+                if num_columns > 1 && std::env::var("OXI_WIDOW_COLUMN_RESET_DISABLE").is_err() {
+                    start_x = col_x_positions[0];
+                }
                 if let Some(v) = line_fn_refs_out.as_deref_mut() {
                     // earlier lines' refs stay on the old page; open the new bucket
                     v.push(Vec::new());
@@ -20759,6 +21254,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 });
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
+                if num_columns > 1 && std::env::var("OXI_WIDOW_COLUMN_RESET_DISABLE").is_err() {
+                    let dx = col_x_positions[0] - start_x;
+                    cur_col = 0;
+                    start_x = col_x_positions[0];
+                    for e in elements.iter_mut() {
+                        e.x += dx;
+                        if let LayoutContent::TableBorder { x1, x2, .. } = &mut e.content {
+                            *x1 += dx;
+                            *x2 += dx;
+                        }
+                    }
+                }
                 if let Some(g) = s755_geom {
                     page_top = g.top(pages.len() + 1);
                     content_height = g.ch(pages.len() + 1);
@@ -21010,6 +21517,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         v.push(Vec::new());
                     }
                 } // S637: end multi-column else (page-push path)
+            }
+
+            // A section's first paragraph keeps its excess before-spacing
+            // when its first line itself triggers the physical page change.
+            if line_idx == 0 && pages.len() > s749_pages_at_entry {
+                if let Some(spacing) = continuous_section_start_spacing {
+                    if !para.style.before_autospacing {
+                        cursor.advance(spacing);
+                    }
+                }
             }
 
             // Step 0: record fn refs rendered on this line's final page
@@ -21821,6 +22338,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             && matches!(mel.content, LayoutContent::Text { .. })
                         {
                             mel.text_y_off = text_y_off;
+                            mel.content_fit_height = Some(break_threshold);
                         }
                     }
                 }
@@ -22252,8 +22770,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let fs = tf.style.font_size.unwrap_or(para_font_size);
                             let m = self.metrics_for_text(&tf.text, &tf.style, &para.style);
                             emit_y + text_y_off - 1.0 + m.win_ascent * fs
+                        } else if is_header_footer {
+                            // Additional auto leading belongs below an image-only
+                            // story line, while its natural baseline stays unchanged.
+                            emit_y + line_height - story_image_leading[line_idx]
                         } else {
-                            emit_y + line_height
+                            emit_y + line_height - if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                                img.effect_extent_b.max(0.0)
+                            } else { 0.0 }
                         };
                         // S1040 (2026-07-29, opt-out OXI_S1040_DISABLE): an object
                         // TALLER than the text ascent must not render ABOVE its own
@@ -22484,6 +23009,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // (n-1)/2·fs) so it stacks down through the (centred) char-row — the
                 // line grew by (n-1)·fs and the centring pushed the char-row to the
                 // middle, so the column's middle char aligns with the body chars.
+                if !is_vert_frag {
+                    el.content_fit_height = Some(break_threshold);
+                }
                 el.text_y_off = if is_vert_frag {
                     let n = frag.text.chars().count().max(1);
                     text_y_off - (n.saturating_sub(1)) as f32 * resolved_font_size * 0.5
@@ -24433,6 +24961,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             ((content_tw as f32) * 281.0 / 7200.0).round() as i32
         };
         let mut latin_space_credit_tw: i32 = 0;
+        let mut latin_space_credit_remainder: f32 = 0.0;
         // S995/S996 / C14JUST (2026-07-24, default ON, opt-out OXI_C14JUST_DISABLE):
         // the probe-derived compat14 legacy Latin justify rule. A justified line KEEPS
         // a candidate word (compressing inter-word SPACES to the half-em floor) iff the
@@ -24587,6 +25116,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 current_width_tw = 0;
                 current_capw_tw = 0;
                 latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                 right_tab_slack_tw = 0;
                 center_tab_stop_tw = None;
                 compress_used = false;
@@ -24734,7 +25264,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // ukhealthform 'claims.') are both LEFT-aligned, where no credit
                     // exists and the budget is the bare content width.
                     let s1061b = (self.compat_mode >= 15 && self.compat_mode_explicit
-                        && (!is_justified || std::env::var("OXI_S1061_JC_DISABLE").is_ok())
+
                         && std::env::var("OXI_S1061_DISABLE").is_err())
                         || std::env::var("OXI_S1061").is_ok();
                     let word_width_tw = if s1061b {
@@ -24743,6 +25273,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         pt_to_tw(word_width)
                     };
+                    // Fit uses the unrounded compression capacity. Keep the
+                    // emitted glyph advance independent of that fit-only credit.
+                    let word_fit_width_tw = if s1061b {
+                        ((current_width + word_width - latin_space_credit_remainder) * 20.0
+                            - if std::env::var("OXI_SPACE_CREDIT_FIXED_DISABLE").is_err() { 0.0 } else { 0.01 }).ceil() as i32
+                            - current_width_tw
+                    } else { word_width_tw };
                     // S1022 (2026-07-27, char-budget badness breaker) — SHARED decision.
                     // The c14 monospace break is GREEDY oikomi (Word packs aggressively —
                     // 750/760 lines are oikomi; the global slack²-DP over-packs 0.96→0.35).
@@ -24793,7 +25330,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     + c14_space_tw) as f32;
                                 // ordinary accumulated compression capacity — read by
                                 // BOTH Origin A parts (does the candidate still fit?).
-                                let cap_fits = current_width_tw + word_width_tw
+                                let cap_fits = current_width_tw + word_fit_width_tw
                                     <= available_tw + latin_space_credit_tw;
                                 if std::env::var("OXI_S1028_DISABLE").is_err() {
                                     // ★S1028 UNIFIED SLACK-WINDOW rule (2026-07-28, OPT-IN,
@@ -24931,7 +25468,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && word_width_tw > available_tw
                         && word_char_ws.len() >= word.chars().count()
                         && std::env::var("OXI_S1157_DISABLE").is_err();
-                    if latin_wordwrap && (!word_breaks.is_empty() || s1157_no_opp) {
+                    // Terminal punctuation is part of a lexical word, not an
+                    // internal break opportunity. Let automatic hyphenation see
+                    // these words while preserving long-token and mixed-run paths.
+                    let automatic_lexical_word = self.auto_hyphenation
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1128_DISABLE").is_err()
+                        && word_seg_styles.is_empty()
+                        && word_width_tw <= available_tw
+                        && hyphen::is_lexical_word(&word);
+                    if latin_wordwrap && (!word_breaks.is_empty() || s1157_no_opp)
+                        && !automatic_lexical_word {
+
                         // LATIN-WORDWRAP split: the token is a maximal Latin run with
                         // internal break opportunities. (1) wrap the WHOLE token to a
                         // fresh line if it doesn't fit on the current one; (2) split it
@@ -24968,7 +25516,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
                             let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
                             let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
-                            let cap = current_width_tw + word_width_tw > available_tw + cr + ts + hg;
+                            let cap = current_width_tw + word_fit_width_tw > available_tw + cr + ts + hg;
                             let wr = !preceded_by_open && !s745_char_wrap && (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
                             eprintln!("[S1026-REPLAY] para={} pass={} start={} end={} cand={:?} cw_tw={} curw_tw={} avail_tw={} credit_tw={} tabslack_tw={} line={} branch=latin_wordwrap badness={} cap={} dec={}",
                                 s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
@@ -24998,7 +25546,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // identical. Opt-out OXI_OPENWRAP_DISABLE.
                         if std::env::var("OXI_OPENWRAP_DISABLE").is_err()
                             && preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && current_line.fragments.len() > 1 && !para_all_whitespace {
                             let mut carried: Vec<LineFragment> = Vec::new();
                             while current_line.fragments.len() > 1 {
@@ -25025,7 +25573,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                         }
                         if !preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             wrap_and_seed!(ws);
                         }
@@ -25200,13 +25748,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
                         let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
                         let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
-                        let cap = current_width_tw + word_width_tw > available_tw + cr + ts + hg;
+                        let cap = current_width_tw + word_fit_width_tw > available_tw + cr + ts + hg;
                         let wr = (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
                         eprintln!("[S1026-REPLAY] para={} pass={} start={} end={} cand={:?} cw_tw={} curw_tw={} avail_tw={} credit_tw={} tabslack_tw={} line={} branch=whole_word badness={} cap={} dec={}",
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
                     let mut hyphenated = false;
-                    if (current_width_tw + word_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         // S1128 (2026-08-15, SHIPPED default-ON, opt-out
                         // OXI_S1128_DISABLE): `<w:autoHyphenation/>`.
@@ -25311,7 +25859,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     current_capw_tw += word_width_tw; // S475: words have no punct capacity
                     word_width = 0.0;
                     word_natural_width = 0.0;
-                    if latin_wordwrap { word_seg_meta.clear(); word_char_ws.clear(); }
+                    if latin_wordwrap { word_breaks.clear(); word_seg_meta.clear(); word_char_ws.clear(); }
                     }
                     word_seg_styles.clear();
                     if latin_wordwrap { seg_pending = false; }
@@ -25401,10 +25949,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             if latin_wordwrap && frag_outer_idx > 0 && !word.is_empty() {
                 let (previous_text, previous_style, ..) = fragments[frag_outer_idx - 1];
                 let has_private_glyph = |value: &str| value.chars().any(|c| matches!(c as u32, 0xE000..=0xF8FF));
-                if (has_private_glyph(previous_text) || has_private_glyph(text))
+                let script_size_boundary = std::env::var("OXI_SCRIPT_SIZE_SEGMENTS_DISABLE").is_err()
+                    && previous_style.vertical_align == style.vertical_align
+                    && matches!(style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
+                    && previous_style.font_size != style.font_size;
+                if script_size_boundary || ((has_private_glyph(previous_text) || has_private_glyph(text))
                     && (previous_style.font_family != style.font_family
                         || previous_style.font_family_east_asia != style.font_family_east_asia
-                        || previous_style.font_family_cs != style.font_family_cs)
+                        || previous_style.font_family_cs != style.font_family_cs))
                 {
                     let offset = word.chars().count();
                     if word_breaks.last().map_or(true, |&(end, _)| end != offset) {
@@ -25453,6 +26005,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     current_width_tw = 0;
                     current_capw_tw = 0;
                     latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                     right_tab_slack_tw = 0;
                     center_tab_stop_tw = None;
                     compress_used = false;
@@ -25509,6 +26062,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     current_width_tw = 0;
                     current_capw_tw = 0;
                     latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                     right_tab_slack_tw = 0;
                     center_tab_stop_tw = None;
                     compress_used = false;
@@ -25553,6 +26107,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     current_width_tw = 0;
                     current_capw_tw = 0;
                     latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                     right_tab_slack_tw = 0;
                     center_tab_stop_tw = None;
                     compress_used = false;
@@ -25597,6 +26152,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         current_width_tw = 0;
                         current_capw_tw = 0;
                         latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                         right_tab_slack_tw = 0;
                         center_tab_stop_tw = None;
                         compress_used = false;
@@ -25641,6 +26197,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         current_width_tw = 0;
                         current_capw_tw = 0;
                         latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                         right_tab_slack_tw = 0;
                         center_tab_stop_tw = None;
                         compress_used = false;
@@ -25665,6 +26222,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         current_width_tw = 0;
                         current_capw_tw = 0;
                         latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                         right_tab_slack_tw = 0;
                         center_tab_stop_tw = None;
                         compress_used = false;
@@ -26647,13 +27205,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // (test_line_heights +0.0428, test_lists, gen_headings, gen_long),
                 // 5 improved / 0 regressed / 0 page-count shifts; real_en mean +0.0002;
                 // fixes nyserda pagination (57→56=Word, Exhibit boundaries aligned).
+                let no_break_hyphen_em = ch == '\u{2011}' && s888_latin_hyphen
+                    && std::env::var("OXI_NOBREAK_HYPHEN_EM_DISABLE").is_err();
+                let latin_metric_char = if no_break_hyphen_em
+                    && !char_metrics.char_widths.contains_key(&ch) { '-' } else { ch };
                 if !kern_active
                     && std::env::var("OXI_LATINEM_DISABLE").is_err()
                     && latinem_in_scope(self.doc_body_has_real_cjk)
-                    && !kinsoku::is_cjk(ch)
-                    && char_metrics.char_widths.contains_key(&ch)
+                    && (!kinsoku::is_cjk(ch) || no_break_hyphen_em)
+                    && char_metrics.char_widths.contains_key(&latin_metric_char)
                 {
-                    char_width = char_metrics.char_width_em(ch) * font_size;
+                    char_width = char_metrics.char_width_em(latin_metric_char) * font_size;
                 }
                 // Complex-script cluster width: replace the per-codepoint value
                 // with the shaped cluster advance (0 on non-first cluster chars),
@@ -27245,6 +27807,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         current_width_tw = 0;
                         current_capw_tw = 0;
                         latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                         right_tab_slack_tw = 0;
                         center_tab_stop_tw = None;
                         compress_used = false;
@@ -27480,6 +28043,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 current_width_tw = 0;
                                 current_capw_tw = 0;
                                 latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                                 right_tab_slack_tw = 0;
                                 center_tab_stop_tw = None;
                                 compress_used = false;
@@ -27503,7 +28067,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 tab_align = ta;
                                 next_relative = np - line_start_abs;
                             }
-                            let w = (next_relative - current_width).max(char_width);
+                            // A left tab advances to its stop even when the gap is
+                            // smaller than the fallback glyph width. Inflating a short
+                            // gap overshoots the stop and can wrap a later trailing tab.
+                            let min_tab_width = if tab_align == TabStopAlignment::Left {
+                                0.0
+                            } else {
+                                char_width
+                            };
+                            let w = (next_relative - current_width).max(min_tab_width);
                             current_line.fragments.push(LineFragment {
                                 text: TAB_STRING.to_owned(),
                                 width: w,
@@ -27660,8 +28232,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     && std::env::var("OXI_S825_DISABLE").is_err()
                                 {
                                     let em_part = char_width - cs;
-                                    latin_space_credit_tw +=
-                                        pt_to_tw(em_part * 0.25 + cs.max(0.0) * 0.24);
+                                    let em_credit = if std::env::var("OXI_SPACE_CREDIT_FIXED_DISABLE").is_err() {
+                                        (em_part * 0.25 * 4096.0).round() / 4096.0
+                                    } else { em_part * 0.25 };
+                                    let credit = em_credit + cs.max(0.0) * 0.24 + latin_space_credit_remainder;
+                                    let credit_tw = pt_to_tw(credit);
+                                    latin_space_credit_tw += credit_tw;
+                                    latin_space_credit_remainder = credit - credit_tw as f32 / 20.0;
                                 } else if self.compat_mode_explicit
                                     && self.compat_mode <= 14
                                     && std::env::var("OXI_S1046_DISABLE").is_err()
@@ -29166,6 +29743,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             current_width_tw = 0;
                             current_capw_tw = 0;
                             latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                             right_tab_slack_tw = 0;
                             center_tab_stop_tw = None;
                             compress_used = false;
@@ -29205,6 +29783,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         current_width_tw = 0;
                         current_capw_tw = 0;
                         latin_space_credit_tw = 0;
+                    latin_space_credit_remainder = 0.0;
                         right_tab_slack_tw = 0;
                         center_tab_stop_tw = None;
                         compress_used = false;
@@ -30344,6 +30923,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// already pad every cell via rowbox2_border_pad) and the doc has no real
     /// CJK -> the JP corpus + S666's docGrid cell-tcBorder path are
     /// byte-identical BY CONSTRUCTION.
+    fn repeated_header_border_delta(&self, table: &Table, row_idx: usize) -> f32 {
+        if std::env::var("OXI_REPEAT_HEADER_BORDER_DISABLE").is_ok()
+            || self.doc_body_has_real_cjk || table.style.border || table.style.has_inside_h
+            || std::env::var("OXI_S870_DISABLE").is_ok() {
+            return 0.0;
+        }
+        let Some(header) = table.rows.iter().take_while(|r| r.header).last() else { return 0.0; };
+        let Some(row) = table.rows.get(row_idx) else { return 0.0; };
+        let horizontal = |r: &TableRow, bottom: bool| r.cells.iter()
+            .filter_map(|c| c.borders.as_ref())
+            .filter_map(|b| if bottom { b.bottom.as_ref() } else { b.top.as_ref() })
+            .map(|b| self.s1187_eff_bw(&b.style, b.width)).fold(0.0f32, f32::max);
+        horizontal(header, true).max(horizontal(row, false))
+            - self.s870_row_top_border(table, row_idx)
+    }
+
     fn s870_row_top_border(&self, table: &Table, row_idx: usize) -> f32 {
         if self.doc_body_has_real_cjk
             || std::env::var("OXI_S870_DISABLE").is_ok()
@@ -31715,7 +32310,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             f.text.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
                 && matches!(self.metrics_for_text(&f.text, &f.style, para_style).family.as_str(), "Symbol" | "Wingdings")
         });
-        if has_inline_symbol && !dominant_cjk_83_64 {
+        let positioned_hhea = std::env::var("OXI_POSITIONED_HHEA_DISABLE").is_err()
+            && line.fragments.iter().any(|f| f.style.position.unwrap_or(0.0) != 0.0);
+        if (has_inline_symbol || positioned_hhea) && !dominant_cjk_83_64 {
             let mut ascent = 0.0f32;
             let mut descent = 0.0f32;
             for frag in &line.fragments {
@@ -31723,8 +32320,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let fs = frag.style.font_size.unwrap_or(para_font_size);
                 let m = self.metrics_for_text(&frag.text, &frag.style, para_style);
                 let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
-                ascent = ascent.max((m.win_ascent + leading) * fs);
-                descent = descent.max(m.win_descent * fs);
+                let position = if positioned_hhea { frag.style.position.unwrap_or(0.0) } else { 0.0 };
+                ascent = ascent.max((m.win_ascent + leading) * fs + position.max(0.0));
+                descent = descent.max(m.win_descent * fs + (-position).max(0.0));
             }
             let overflow = (ascent + descent - hhea_natural_max).max(0.0);
             let factor = if matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto")) {
@@ -33993,7 +34591,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // drawn down by each row the span passes through. The span's LAST row
         // has to cover whatever is left — Word's rule, `_pb_vmergedist_gen.py`.
         let mut s1192_pending: Vec<(usize, f32)> = Vec::new();
+        // Outer rules can survive a direct override of only the side/inside rules.
+        let inherited_outer_rules = !self.doc_body_has_real_cjk && !table.style.border
+            && std::env::var("OXI_TABLE_OUTER_RULES_DISABLE").is_err();
+        let prepare_outer = |edge: &Option<BorderDef>| {
+            if !inherited_outer_rules { return None; }
+            edge.clone().map(|mut edge| {
+                if edge.style == "nil" { edge.style = "none".into(); }
+                if edge.color.is_none() { edge.color = Some("000000".into()); }
+                edge
+            })
+        };
+        let inherited_top_rule = prepare_outer(&table.style.top_border);
+        let inherited_bottom_rule = prepare_outer(&table.style.bottom_border);
         for (row_idx, row) in table.rows.iter().enumerate() {
+            let inherited_outer_page_before_row = pages.len();
+            let mut row_declared_top_edges = Vec::new();
             // S740: page-transition bookkeeping + commit of the PREVIOUS row's
             // footnote reserve. On a page push the new page starts with zero
             // table-note reserve; the previous row's notes are committed to the
@@ -34325,15 +34938,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // S1075: (previous cell paragraph's after_autospacing, its numId)
                 let mut s1075_prev: Option<(bool, Option<&str>)> = None;
                 // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
-                // container-edge suppression. See cell_autospace_effective.
+                // container-edge suppression. See cell_effective_spacing.
                 let first_para_pos = cell
                     .blocks
                     .iter()
-                    .position(|b| matches!(b, Block::Paragraph(_)));
+                    .position(Self::is_cell_spacing_paragraph);
                 let last_para_pos = cell
                     .blocks
                     .iter()
-                    .rposition(|b| matches!(b, Block::Paragraph(_)));
+                    .rposition(Self::is_cell_spacing_paragraph);
 
                 // Session 131 (2026-05-20): vertical writing — cell height
                 // along the page-y axis equals the sum of vertical-text lengths
@@ -34450,9 +35063,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     });
                                 let (cur_sb, cur_sa) = if para.style.before_autospacing
                                     || para.style.after_autospacing
+                                    || para.style.contextual_spacing
                                     || s952_tbl
                                 {
-                                    let (eff_sb, eff_sa) = self.cell_autospace_effective(
+                                    let (eff_sb, eff_sa) = self.cell_effective_spacing(
                                         para,
                                         table.style.para_style.as_ref(),
                                         Some(block_pos) == first_para_pos,
@@ -34617,8 +35231,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             };
                             // S1053: a page-relative float reserves nothing.
                             if !Self::s1053_cell_float_no_reserve(img) {
-                                cell_content_h += img_h_eff;
-                                cell_content_h_visual += img_h_eff;
+                                let (sb, sa) = self.cell_image_spacing(
+                                    img, table, row_line_pitch, &cell.blocks, block_pos,
+                                    prev_sa, s939_prev, s1075_prev,
+                                );
+                                cell_content_h += img_h_eff + sb + sa;
+                                cell_content_h_visual += img_h_eff + sb + sa;
+                                if let Some(host) = img.host_paragraph.as_deref() {
+                                    prev_sa = Some(sa);
+                                    s939_prev = Some((host.style.contextual_spacing, host.style.style_id.as_deref()));
+                                    s1075_prev = Some((host.style.after_autospacing, host.style.num_id.as_deref()));
+                                }
                             }
                         }
                         Block::Math(math_block) => {
@@ -34702,7 +35325,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // Under the hhea estimate it double-counts (+0.188/row on
                 // gen2_054), so it applies only in the tombstone regime.
                 if std::env::var("OXI_S463_DISABLE").is_err()
-                    && std::env::var("OXI_S940T").is_err()
+                    && std::env::var("OXI_S940T_DISABLE").is_ok()
                     && table.style.has_inside_h
                     && table_is_latin
                     && !self.doc_body_has_cjk
@@ -34957,6 +35580,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             } else {
                 row_height
             };
+            let row_fit_height = row_fit_height + if std::env::var("OXI_TABLE_FOOT_FIT_DISABLE").is_err()
+                && row_idx + 1 == table.rows.len()
+                && self.s1191_on() && self.s1191_table_needs_foot(table) {
+                self.s1191_foot_bw(table)
+            } else { 0.0 };
             let row_overflows = cursor.cursor_y + row_fit_height > page_bottom;
             // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
             // ANY cell's FIRST paragraph carries `<w:lastRenderedPageBreak/>`
@@ -34986,6 +35614,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // hints fired around mid-page.
             let lrpb_threshold = content_height * 0.85;
             let lrpb_row_should_break = row_has_lrpb_at_cell_start
+                && (self.doc_body_has_real_cjk || std::env::var("OXI_LATIN_ROW_CACHE_ENABLE").is_ok())
                 && has_content
                 && !row_overflows  // row would fit; LRPB hint says break anyway
                 && consumed_row > lrpb_threshold
@@ -35452,15 +36081,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // word_png doc is byte-identical (piece-1 not applied). This is A, on
             // top of the shipped B (S1024) — together A+B = the forms p63-65 fix.
             let s941_nonbinding_trh = std::env::var("OXI_S941_DISABLE").is_err()
-                && (std::env::var("OXI_S940T").is_ok()
+                && (std::env::var("OXI_S940T_DISABLE").is_err()
                     || std::env::var("OXI_S1025_DISABLE").is_err())
                 && !self.doc_body_has_real_cjk
                 && row.height_rule.as_deref() != Some("exact")
                 && row.height.map_or(false, |trh| {
-                    row_height > trh + table_grid_pitch.unwrap_or(14.0)
-                })
-                && (page_bottom - cursor.cursor_y)
-                    >= table_grid_pitch.map(|p| p * 2.2).unwrap_or(58.0);
+                    if table_grid_pitch.is_none()
+                        || (row.cells.len() > 1
+                            && std::env::var("OXI_TYPED_ROW_SINGLE_FRAGMENT_DISABLE").is_err()) {
+                        // A continuation may start here when its fragment can
+                        // honor the declared minimum, even with only one line.
+                        page_bottom - cursor.cursor_y + 0.5
+                            >= trh + self.rowbox2_trh_bw(table, row)
+                    } else {
+                        row_height > trh + table_grid_pitch.unwrap_or(14.0)
+                            && page_bottom - cursor.cursor_y
+                                >= table_grid_pitch.map(|p| p * 2.2).unwrap_or(58.0)
+                    }
+                });
             let s754_split = (std::env::var("OXI_S754_DISABLE").is_err()
                 && (row.height.is_none() || s941_nonbinding_trh)
                 && !s814_lrpb_veto
@@ -35522,6 +36160,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 .map_or(false, |block| matches!(block,
                     Block::Paragraph(para) if para.style.page_break_before));
             let needs_row_split = row_overflows
+                && !(row.header && std::env::var("OXI_HEADER_ROW_ATOMIC_DISABLE").is_err())
                 && !explicit_row_page_break
                 && !row.cant_split
                 && has_content
@@ -35618,6 +36257,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                     }
                 }
+                if s1083_moved.is_empty() && row_idx > 0 {
+                    if let Some(edge) = inherited_bottom_rule.as_ref()
+                        .filter(|e| e.style != "none" && e.width > 0.0) {
+                        let previous = &table.rows[row_idx - 1];
+                        let mut grid = previous.grid_before as usize;
+                        let mut x = table_x + col_widths.iter().take(grid).sum::<f32>();
+                        for cell in &previous.cells {
+                            let end = (grid + cell.grid_span.max(1) as usize).min(col_widths.len());
+                            let width = col_widths.get(grid..end).unwrap_or(&[]).iter().sum::<f32>();
+                            if width > 0.0 && cell.borders.as_ref().and_then(|b| b.bottom.as_ref()).is_none() {
+                                elements.push(LayoutElement::new(x, cursor.visual_y, width, 0.0,
+                                    LayoutContent::TableBorder {
+                                        x1: x, y1: cursor.visual_y, x2: x + width, y2: cursor.visual_y,
+                                        color: Some(format!("#{}", edge.color.as_deref().unwrap_or("000000").trim_start_matches('#'))),
+                                        width: edge.width, style: Some(edge.style.clone()),
+                                    }));
+                            }
+                            x += width;
+                            grid = end;
+                        }
+                    }
+                }
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
                 dbg_page_push(pages.len(), 0);
@@ -35630,25 +36291,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     page_geometry, pages.len() + 1, &mut page_top,
                     &mut content_height, &mut [],
                 );
-                cursor.set(page_top);
+                let table_restart_top = if std::env::var("OXI_TABLE_RESTART_TOP_DISABLE").is_err()
+                    && row_idx > 0
+                    && !self.doc_body_has_real_cjk
+                    && bug_a_enabled && s1083_moved.is_empty()
+                    && (table.style.border || std::env::var("OXI_TABLE_RESTART_OUTER_EDGE_DISABLE").is_err())
+                {
+                    let outer = if std::env::var("OXI_TABLE_RESTART_OUTER_EDGE_DISABLE").is_err() {
+                        table.style.top_border.as_ref().map_or_else(
+                            || if table.style.border { table.style.border_width.unwrap_or(0.4) } else { 0.0 },
+                            |edge| self.s1188_drawn(&edge.style, edge.width),
+                        )
+                    } else { table.style.border_width.unwrap_or(0.4) };
+                    page_top + outer
+                } else { page_top };
+                cursor.set(table_restart_top);
                 s1083_row_start.clear();
-                if !s1083_moved.is_empty() {
-                    let y0 = s1083_moved
-                        .iter()
-                        .map(|e| e.y)
-                        .fold(f32::INFINITY, f32::min);
-                    let dy = page_top - y0;
-                    for el in &s1083_moved {
-                        let mut cl = el.clone();
-                        cl.y += dy;
-                        if let LayoutContent::TableBorder { y1, y2, .. } = &mut cl.content {
-                            *y1 += dy;
-                            *y2 += dy;
-                        }
-                        elements.push(cl);
-                    }
-                    cursor.set(page_top + s1083_extent);
-                }
                 // S728: replay the captured tblHeader row(s) at the new page
                 // top (mid-table continuation break; NOT a widow whole-table
                 // move, NOT above a header row itself). Clones shift by
@@ -35664,14 +36322,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && !s728_hdr_elems.is_empty()
                     && !row.header
                     && !widow_break_needed
-                    && s1083_moved.is_empty()
+                    && (s1083_moved.is_empty()
+                        || (std::env::var("OXI_KEEP_REPEAT_HEADER_DISABLE").is_err()
+                            && !self.doc_body_has_real_cjk))
                 {
                     let y0 = s728_hdr_elems
                         .iter()
                         .map(|e| e.y)
                         .fold(f32::INFINITY, f32::min);
                     if y0.is_finite() {
-                        let dy = page_top - y0;
+                        let dy = table_restart_top - y0;
                         for el in &s728_hdr_elems {
                             let mut c = el.clone();
                             c.y += dy;
@@ -35681,8 +36341,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             }
                             elements.push(c);
                         }
-                        cursor.set(page_top + s728_hdr_h);
+                        cursor.set(table_restart_top + s728_hdr_h + self.repeated_header_border_delta(table, row_idx));
                     }
+                }
+                if !s1083_moved.is_empty() {
+                    let y0 = s1083_moved
+                        .iter()
+                        .map(|e| e.y)
+                        .fold(f32::INFINITY, f32::min);
+                    let dy = cursor.cursor_y - y0;
+                    for el in &s1083_moved {
+                        let mut cl = el.clone();
+                        cl.y += dy;
+                        if let LayoutContent::TableBorder { y1, y2, .. } = &mut cl.content {
+                            *y1 += dy;
+                            *y2 += dy;
+                        }
+                        elements.push(cl);
+                    }
+                    cursor.set(cursor.cursor_y + s1083_extent);
+                }
+                // The current row now starts on this page. Retain its actual
+                // start so later keepNext checks see content above a heading.
+                if s1083_on && std::env::var("OXI_TABLE_ROW_HISTORY_DISABLE").is_err() {
+                    s1083_row_start.push((row_idx, cursor.cursor_y));
                 }
             }
 
@@ -35724,6 +36406,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let is_exact_row = row.height_rule.as_deref() == Some("exact");
             let mut max_actual_cell_h: f32 = row_height;
             let elements_before_row = elements.len();
+            let mut split_valign_offsets: Vec<(usize, f32)> = Vec::new();
             // S500 (L1) FALSIFIED (2026-06-06): re-centering vAlign center/bottom cells against
             // the FINAL row height (fixing early cells centered before later/taller cells set
             // max_actual_cell_h) FIXED the synthetic repro vc_2cell_auto (-1.65->+0.10) but was
@@ -36123,15 +36806,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         .last();
                     // Cell-autospace (OXI_CELLAS): first/last Paragraph block positions for
                     // container-edge suppression of before/afterAutospacing. See
-                    // cell_autospace_effective.
+                    // cell_effective_spacing.
                     let first_para_pos = cell
                         .blocks
                         .iter()
-                        .position(|b| matches!(b, Block::Paragraph(_)));
+                        .position(Self::is_cell_spacing_paragraph);
                     let last_para_pos = cell
                         .blocks
                         .iter()
-                        .rposition(|b| matches!(b, Block::Paragraph(_)));
+                        .rposition(Self::is_cell_spacing_paragraph);
                     // S716: the post-nested-table stub paragraph is skipped entirely
                     // (no element, no content_h advance) — Word collapses it to ~0.
                     let s716_stub_render = self.nested_table_stub_pos(cell);
@@ -36234,7 +36917,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     eprintln!("[NEST_DBG] cursor_y={:.2} visual_y={:.2} elem_max={:.2} n_elems={}",
                             nested_y.cursor_y, nested_y.visual_y, emax, nested_elements.len());
                                 }
-                                for elem in nested_elements {
+                                for mut elem in nested_elements {
+                                    elem.cell_ancestor_path.insert(0, (row_idx, cell_idx, block_pos));
                                     cell_elements.push(elem);
                                 }
                                 // S756 (2026-07-06, default ON, opt-out OXI_S756_DISABLE):
@@ -36632,7 +37316,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     })
                                 };
                                 // Cell autospace override (before/afterAutospacing → 13.75,
-                                // overriding explicit, edge-suppressed). See cell_autospace_effective.
+                                // overriding explicit, edge-suppressed). See cell_effective_spacing.
                                 let s952_tbl =
                                     table.style.para_style.as_ref().map_or(false, |ts| {
                                         ts.before_autospacing || ts.after_autospacing
@@ -36640,9 +37324,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 let (effective_space_before, effective_space_after) =
                                     if para.style.before_autospacing
                                         || para.style.after_autospacing
+                                        || para.style.contextual_spacing
                                         || s952_tbl
                                     {
-                                        let (sb, sa) = self.cell_autospace_effective(
+                                        let (sb, sa) = self.cell_effective_spacing(
                                             para,
                                             table.style.para_style.as_ref(),
                                             Some(block_pos) == first_para_pos,
@@ -37632,6 +38317,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // body renderer (break_into_lines) applies this; this cell-renderer
                                     // path historically did not, causing d77a58 w_i=47 wrap mismatch
                                     // (5 lines Oxi vs 6 lines Word).
+                                    let mut cell_edge_tab_nowrap = false;
+                                    let mut cell_tab_char_pack = false;
                                     let mut prev_char_emitted: Option<char> = None;
                                     let mut prev_char_ruby = false; // S1316: the emitted char came from a ruby field
                                     // S443: the widened oikomi must fire ONLY on tab-bearing
@@ -37898,7 +38585,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // same visual line. LLA canary surfaced this as the
                                             // identical p.1 L14 mismatch across a1d6e4 / d4d126 /
                                             // de6e32 tokumei docs (S109).
-                                            if ch == '\n' || ch == '\x0B' || ch == '\x0C' {
+                                            if matches!(ch, ' ' | '\t' | '\n' | '\x0B' | '\x0C') { cell_tab_char_pack = false; }
+                                            let tab_break = ch == '\t' && p_first_line_indent < 0.0
+                                                && (!current_line.is_empty() || !buf.is_empty())
+                                                && self.cell_tab_word_overflows(para, s586_run_offset + s586_ci,
+                                                    line_x + buf_w + if is_first_line { (p_indent_left + p_first_line_indent).max(0.0) } else { p_indent_left },
+                                                    wrap_w + p_indent_left);
+                                            if tab_break && std::env::var("OXI_CELL_TAB_CHAR_PACK_DISABLE").is_err() { cell_tab_char_pack = true; }
+                                            if ch == '\n' || ch == '\x0B' || ch == '\x0C' || tab_break {
                                                 if !buf.is_empty() {
                                                     current_line.push((
                                                         buf.clone(),
@@ -37925,14 +38619,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     buf_w = 0.0;
                                                     current_line_chars.extend(buf_chars.drain(..));
                                                 }
+                                                if current_line.is_empty() && !tab_break
+                                                    && !self.doc_body_has_real_cjk
+                                                    && std::env::var("OXI_CELL_BREAK_FONT_DISABLE").is_err()
+                                                {
+                                                    current_line.push((String::new(), font_size, 0.0, bold,
+                                                        run.style.italic, run.style.underline,
+                                                        run.style.underline_style.clone(), run.style.strikethrough,
+                                                        font_family.clone(), run.style.color.clone(),
+                                                        run.style.highlight.clone().or_else(|| run.style.shading.clone()),
+                                                        cs, run.style.text_scale.unwrap_or(100.0), false,
+                                                        run.style.font_family_east_asia.clone(), false));
+                                                }
                                                 lines.push(std::mem::take(&mut current_line));
                                                 s1169_trailing_break = true;
+                                                cell_edge_tab_nowrap = false;
                                                 line_x = 0.0;
                                                 current_line_chars.clear();
                                                 is_first_line = false;
                                                 prev_char_emitted = None;
                                                 prev_char_ruby = false;
-                                                continue;
+                                                if !tab_break { continue; }
                                             }
                                             // S443 (2026-05-30, SHIP, default ON, opt-out OXI_S443_DISABLE):
                                             // TAB-STOP advancement in the CELL wrap path. The body path
@@ -37975,6 +38682,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         + 1.0)
                                                         * self.default_tab_stop
                                                 };
+                                                if std::env::var("OXI_CELL_EDGE_TAB_DISABLE").is_err()
+                                                    && !self.doc_body_has_real_cjk
+                                                    && (next_pos * 20.0).round() >= ((wrap_w + p_indent_left) * 20.0).round()
+                                                {
+                                                    cell_edge_tab_nowrap = true;
+                                                }
                                                 let tab_w = (next_pos - abs_pos).max(0.0);
                                                 buf.push(ch);
                                                 buf_w += tab_w;
@@ -38411,7 +39124,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     );
                                                 }
                                             }
-                                            let effective_wrap = if is_first_line {
+                                            let effective_wrap = if cell_edge_tab_nowrap {
+                                                f32::MAX / 4.0
+                                            } else if is_first_line {
                                                 first_line_wrap_w
                                             } else {
                                                 wrap_w
@@ -39435,7 +40150,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 && !(current_line.is_empty() && buf.is_empty())
                                             {
                                                 // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
-                                                if kinsoku::is_line_start_prohibited(ch) {
+                                                if kinsoku::is_line_start_prohibited(ch)
+                        && !(ch.is_ascii() && !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_ASCII_CELL_CLOSER_DISABLE").is_err())
+                    {
                                                     // S421 (2026-05-29): kinsoku OIKOMI (押し下げ).
                                                     // The old behavior force-fit the prohibited char
                                                     // onto the current line (S409 bug) → ed025's cell
@@ -39687,7 +40405,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                 kinsoku::is_cjk_ideograph_or_kana,
                                                             )
                                                         })));
-                                                if cellword_ok {
+                                                if cellword_ok && !cell_tab_char_pack {
                                                     // S818 (2026-07-13, Latin docs, opt-out OXI_S818_DISABLE):
                                                     // two-stage Word token wrap. Stage 1 = the token is
                                                     // WHITESPACE-delimited — Word wraps a long token (URL)
@@ -40003,6 +40721,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // vs Oxi to locate the drift source.
                                         let pprrpr_fs =
                                             para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
+                                        let pprrpr_fs = pprrpr_fs.or_else(|| {
+                                            if std::env::var("OXI_EMPTY_MARK_FAMILY_DISABLE").is_err()
+                                                && !self.doc_body_has_real_cjk
+                                                && para.style.ppr_rpr.as_ref().is_some_and(|r| r.font_family.is_some())
+                                            {
+                                                Some(self.resolve_font_size(&RunStyle::default(), &para.style))
+                                            } else { None }
+                                        });
                                         let empty_lh = if let Some(empty_fs) = pprrpr_fs {
                                             let rpr_ref = para
                                                 .style
@@ -41291,7 +42017,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         // line-top 4.2 high, a 5pt-run
                                                         // baseline 2.6 high).
                                                         let s1238_top =
-                                                            content_h + lh - oh - img.effect_extent_b;
+                                                            content_h + lh - oh - if img.data.is_empty() { img.effect_extent_b } else { 0.0 };
                                                         let s1238_content = if img.data.is_empty()
                                                             && std::env::var("OXI_S1238_DISABLE")
                                                                 .is_err()
@@ -41803,6 +42529,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 }
                             }
                             Block::Image(img) => {
+                                let (image_sb, image_sa) = self.cell_image_spacing(
+                                    img, table, row_line_pitch, &cell.blocks, block_pos,
+                                    prev_cell_sa, s939_prev_r, s1075_prev_r,
+                                );
+                                content_h += image_sb;
                                 // S533 (2026-06-10): place inline images inside table cells.
                                 // The parser forwards cell-paragraph inline images as sibling
                                 // Block::Image (S331, default ON as of S533); without this arm
@@ -41839,16 +42570,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 // S1053: a page-relative float still DRAWS (the element is
                                 // pushed above) but reserves no flow height.
                                 if !Self::s1053_cell_float_no_reserve(img) {
-                                    content_h += img_h_eff;
+                                    content_h += img_h_eff + image_sa;
                                 }
-                                prev_cell_sa = None;
-                                s939_prev_r = None;
-                                s1075_prev_r = None;
+                                prev_cell_sa = img.host_paragraph.as_ref().map(|_| image_sa);
+                                s939_prev_r = img.host_paragraph.as_ref().map(|host| (host.style.contextual_spacing, host.style.style_id.as_deref()));
+                                s1075_prev_r = img.host_paragraph.as_ref().map(|host| (host.style.after_autospacing, host.style.num_id.as_deref()));
                             }
                             _ => {}
                         } // match block
                     } // for block
                 } // if !is_vmerge_continue
+
+                if std::env::var("OXI_CELL_TEXT_CLIP_DISABLE").is_err() && !self.doc_body_has_real_cjk {
+                    for e in &mut cell_elements {
+                        if matches!(e.content, LayoutContent::Text { .. }) {
+                            let bounds = (cell_x - e.x, cell_x + cell_w - e.x);
+                            e.horizontal_clip = Some(match e.horizontal_clip {
+                                Some((l, r)) => (l.max(bounds.0), r.min(bounds.1)),
+                                None => bounds,
+                            });
+                        }
+                    }
+                }
 
                 // Track actual cell height for row_height correction.
                 // content_h is the sum of per-paragraph layout heights; elements may
@@ -42157,6 +42900,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     {
                         elem.vmerge_restart_overflow_to_next_page = true;
                     }
+                    if v_offset > 0.0 && cell.v_merge.is_none() {
+                        split_valign_offsets.push((elements.len() - elements_before_row, v_offset));
+                    }
                     elements.push(elem);
                 }
 
@@ -42164,7 +42910,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let has_cell_borders = cell.borders.as_ref().map_or(false, |b| {
                     b.top.is_some() || b.bottom.is_some() || b.left.is_some() || b.right.is_some()
                 });
-                if table.style.border || has_cell_borders {
+                if table.style.border || has_cell_borders
+                    || inherited_top_rule.is_some() || inherited_bottom_rule.is_some() {
                     let bx = cell_x;
                     let by = cursor.visual_y;
 
@@ -42238,7 +42985,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .unwrap_or(outer_width)
                     };
                     let (top_color, top_width, top_style) = resolve_border(
-                        cell_borders.and_then(|b| b.top.as_ref()),
+                        cell_borders.and_then(|b| b.top.as_ref()).or(inherited_top_rule.as_ref()),
                         if row_idx == 0 {
                             outer_width
                         } else {
@@ -42246,7 +42993,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         },
                     );
                     let (bot_color, bot_width, bot_style) = resolve_border(
-                        cell_borders.and_then(|b| b.bottom.as_ref()),
+                        cell_borders.and_then(|b| b.bottom.as_ref()).or_else(|| {
+                            if row_idx + 1 == num_rows { inherited_bottom_rule.as_ref() } else { None }
+                        }),
                         horizontal_width,
                     );
                     let (left_color, left_width, left_style) = resolve_border(
@@ -42269,9 +43018,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // right border matches Word's position (content_right + cellMar).
                     if !is_vmerge_continue
                         && top_color.is_some()
-                        && (!use_collapsed || row_idx == 0)
                     {
-                        elements.push(LayoutElement::new(
+                        let edge = LayoutElement::new(
                             bx,
                             by,
                             eff_cell_w,
@@ -42285,7 +43033,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 width: top_width,
                                 style: top_style,
                             },
-                        ));
+                        );
+                        // Collapsed borders are painted by the preceding row,
+                        // but still define this row's continuation-page edge.
+                        row_declared_top_edges.push(edge.clone());
+                        let inherited_only = cell_borders.and_then(|b| b.top.as_ref()).is_none()
+                            && inherited_top_rule.is_some();
+                        if (!use_collapsed || row_idx == 0)
+                            && (!inherited_only || row_idx == 0 || pages.len() > inherited_outer_page_before_row) {
+                            elements.push(edge);
+                        }
                     }
                     // Bottom — skip for vMerge continue cells unless next row is not continue
                     let next_is_continue = if row_idx + 1 < num_rows {
@@ -42493,7 +43250,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // e3c545 cpi=81 LRPB at y=765.62: without this pull-back, the element
                 // bottom (777.24) fits split_y=785.2 (page_bottom) and stays on current
                 // page; with pull-back, split_y becomes 765.62 → element goes overflow.
-                let row_elements = elements.split_off(elements_before_row);
+                let mut row_elements = elements.split_off(elements_before_row);
+                // A split row lays out each cell from the fragment's top.
+                // Remove alignment against the unbroken row before testing
+                // line fit and widow limits. Preserve unsplit rows as emitted.
+                let split_valign = !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_SPLIT_CELL_VALIGN_DISABLE").is_err()
+                    && row.cells.iter().all(|c| c.v_merge.is_none() && c.cell_text_boxes.is_empty());
+                if split_valign {
+                    for &(index, offset) in &split_valign_offsets {
+                        let elem = &mut row_elements[index];
+                        elem.y -= offset;
+                        if let LayoutContent::TableBorder { y1, y2, .. } = &mut elem.content {
+                            *y1 -= offset;
+                            *y2 -= offset;
+                        }
+                    }
+                }
                 // R7.70 (Day 37 session 58, 2026-05-15): pick the FIRST LRPB-marked
                 // element in document order (= cell-render order), not the min elem.y.
                 // ed025c row has 3 LRPB elements: (8) at y=761.5 (cell 0, correct
@@ -42648,18 +43421,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 _ => None,
                             })
                             .collect();
-                        let n = paras.len();
                         for (pi, para) in paras.iter().enumerate() {
                             let (sb, sa) = self.cell_para_spacing(para, tps, table_grid_pitch);
                             let sa = if para.style.before_autospacing
                                 || para.style.after_autospacing
+                                || para.style.contextual_spacing
                                 || s952_tbl
                             {
-                                self.cell_autospace_effective(
+                                self.cell_effective_spacing(
                                     para,
                                     tps,
-                                    pi == 0,
-                                    pi + 1 == n,
+                                    matches!(cell.blocks.iter().find(|b| Self::is_cell_spacing_paragraph(b)),
+                                        Some(Block::Paragraph(p)) if std::ptr::eq(p, *para)),
+                                    matches!(cell.blocks.iter().rev().find(|b| Self::is_cell_spacing_paragraph(b)),
+                                        Some(Block::Paragraph(p)) if std::ptr::eq(p, *para)),
                                     sb,
                                     sa,
                                 )
@@ -42746,20 +43521,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // page"; the remaining candidates (space before/after, lineRule
                 // atLeast, cell count, following rows) are untested. Until one of them
                 // separates the two, the n<=3 region keeps its last-line behaviour.
-                let s1246_limit: std::collections::HashMap<(usize, usize), f32> =
-                    if s819_natural_split && std::env::var("OXI_S1246_DISABLE").is_err() {
+                let mut short_widow_moves_row = false;
+                let s1246_limit: std::collections::HashMap<CellFlowKey, f32> =
+                    if s819_natural_split
+                        && self.compat_mode >= 15 && self.compat_mode_explicit
+                        && std::env::var("OXI_S1246_DISABLE").is_err()
+                    {
                         // Lines of each cell paragraph, as (top, bottom) per distinct
                         // baseline -- a line can be several elements (one run each, and
                         // a justified line is one element per word).
-                        let mut plines: std::collections::HashMap<(usize, usize), Vec<(f32, f32)>> =
+                        let mut plines: std::collections::HashMap<CellFlowKey, Vec<(f32, f32)>> =
                             Default::default();
                         for e in row_elements.iter() {
                             if !matches!(e.content, LayoutContent::Text { .. }) {
                                 continue;
                             }
-                            if let (Some(ci), Some(pi)) = (e.cell_col_index, e.cell_paragraph_index)
+                            if let Some(key) = e.cell_flow_key()
                             {
-                                let v = plines.entry((ci, pi)).or_default();
+                                let v = plines.entry(key).or_default();
                                 match v.iter_mut().find(|(t, _)| (*t - e.y).abs() < 0.1) {
                                     Some(l) => l.1 = l.1.max(e.y + e.height),
                                     None => v.push((e.y, e.y + e.height)),
@@ -42771,19 +43550,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             if lines.len() < 2 {
                                 continue;
                             }
-                            let widow_on = row
-                                .cells
-                                .get(key.0)
-                                .and_then(|c| {
-                                    c.blocks
-                                        .iter()
-                                        .filter_map(|b| match b {
-                                            Block::Paragraph(p) => Some(p),
-                                            _ => None,
-                                        })
-                                        .nth(key.1)
-                                })
-                                .map_or(false, |p| p.style.widow_control);
+                            let mut source_row = Some(row);
+                            for (depth, &(_, ci, bi)) in key.0.iter().enumerate() {
+                                source_row = source_row.and_then(|r| r.cells.get(ci))
+                                    .and_then(|c| c.blocks.get(bi))
+                                    .and_then(|b| match b {
+                                        Block::Table(t) => t.rows.get(key.0.get(depth + 1)
+                                            .map_or(key.1, |p| p.0)),
+                                        _ => None,
+                                    });
+                            }
+                            let source_cell = source_row.and_then(|r| r.cells.get(key.2));
+                            let widow_on = source_cell.and_then(|c| c.blocks.iter()
+                                .filter_map(|b| match b { Block::Paragraph(p) => Some(p), _ => None })
+                                .nth(key.3)).map_or(false, |p| p.style.widow_control);
                             if !widow_on {
                                 continue;
                             }
@@ -42796,12 +43576,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let k = lines
                                 .iter()
                                 .filter(|l| {
-                                    let extra = if s1092
+                                    let extra = if s1092 && key.0.is_empty()
                                         && s1092_last
-                                            .get(&key)
+                                            .get(&(key.2, key.3))
                                             .map_or(false, |b| (l.1 - *b).abs() < 0.01)
                                     {
-                                        *s1092_after.get(&key).unwrap_or(&0.0)
+                                        *s1092_after.get(&(key.2, key.3)).unwrap_or(&0.0)
                                     } else {
                                         0.0
                                     };
@@ -42812,14 +43592,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // keep the next paragraph's first two lines together.
                             // Moving a row's first paragraph needs a separate
                             // whole-row decision and retains its existing rule.
-                            if k == 1 && key.1 > 0
+                            // A three-line first paragraph cannot leave either
+                            // one or two lines here while keeping two on each page.
+                            if n == 3 && (k == 2 || (k == 1
+                                && std::env::var("OXI_CELL_FIRST_ORPHAN_DISABLE").is_err()))
+                                && key.3 == 0 && key.0.is_empty()
+                                && self.compat_mode >= 15 && self.compat_mode_explicit
+                                && row_height <= page_bottom - page_top
+                                && source_cell.map_or(false, |cell|
+                                    !cell.blocks.iter().any(|b| matches!(b, Block::Table(_))))
+                            {
+                                // A three-line first paragraph cannot keep two lines
+                                // on both pages. Modern Word moves the complete row.
+                                short_widow_moves_row = true;
+                            }
+                            if k == 1 && key.3 > 0
                                 // Legacy and settings-less documents allow a
                                 // lone first line in a split table paragraph.
                                 && self.compat_mode >= 15 && self.compat_mode_explicit
                                 && std::env::var("OXI_CELL_ORPHAN_DISABLE").is_err()
                                 // Nested cells reuse local paragraph indices;
                                 // their lines must not be joined to this paragraph.
-                                && row.cells.get(key.0).map_or(false, |cell|
+                                && source_cell.map_or(false, |cell|
                                     !cell.blocks.iter().any(|b| matches!(b, Block::Table(_))))
                             {
                                 out.insert(key, lines[0].0);
@@ -42831,6 +43625,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         Default::default()
                     };
+                let split_y = if short_widow_moves_row { row_top } else { split_y };
+                // If the fit rules move the entire row, it is no longer a
+                // split fragment: retain its original vertical alignment.
+                if split_valign && split_y <= row_top + 0.1 {
+                    for &(index, offset) in &split_valign_offsets {
+                        let elem = &mut row_elements[index];
+                        elem.y += offset;
+                        if let LayoutContent::TableBorder { y1, y2, .. } = &mut elem.content {
+                            *y1 += offset;
+                            *y2 += offset;
+                        }
+                    }
+                }
+
+                // Keep the declared row top edges for the continuation fragment.
+                // A full fragment still has a top edge; it is independent of
+                // whether the continuation bottom needs to be extended.
+                let split_top_edges = row_declared_top_edges;
+                let split_bottom_edges: Vec<LayoutElement> = row_elements.iter()
+                    .filter(|e| matches!(&e.content,
+                        LayoutContent::TableBorder { y1, y2, .. }
+                        if (*y1 - *y2).abs() < 0.1 && (*y1 - row_bottom).abs() <= 1.0))
+                    .cloned().collect();
                 // Partition elements: those fitting on current page vs overflow
                 let mut current_page_elems: Vec<LayoutElement> = Vec::new();
                 let mut next_page_elems: Vec<LayoutElement> = Vec::new();
@@ -42991,8 +43808,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // S1246: this paragraph may not keep a line at or
                             // below its widow limit, even though the line fits.
                             let s1246_lim = elem
-                                .cell_col_index
-                                .zip(elem.cell_paragraph_index)
+                                .cell_flow_key()
                                 .and_then(|k| s1246_limit.get(&k))
                                 .copied()
                                 .unwrap_or(f32::INFINITY);
@@ -43235,7 +44051,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // S942: the continuation band honors the atLeast trHeight
                     // (band = max(content, trH + bw); see the cursor branch).
                     let s817_close = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && (std::env::var("OXI_S940T").is_ok()
+                        && (std::env::var("OXI_S940T_DISABLE").is_err()
                             || std::env::var("OXI_S1025_DISABLE").is_err())
                         && !self.doc_body_has_real_cjk
                         && row.height_rule.as_deref() != Some("exact")
@@ -43258,25 +44074,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 if (*y1 - *y2).abs() < 0.1)
                     });
 
-                    // Template for new top border (from any vertical border).
-                    let vertical_template = next_page_elems.iter().find_map(|e| match &e.content {
-                        LayoutContent::TableBorder {
-                            y1,
-                            y2,
-                            x1,
-                            x2,
-                            color,
-                            width,
-                            style,
-                        } if (*y1 - *y2).abs() >= 0.1 => {
-                            Some((*x1, *x2, color.clone(), *width, style.clone()))
-                        }
-                        _ => None,
-                    });
-
-                    if let (Some(bi), Some((_, _, color, vw, vstyle))) =
-                        (bot_border_idx, vertical_template.clone())
-                    {
+                    if let Some(bi) = bot_border_idx {
                         if max_cont_text_bottom.is_finite() {
                             // Only apply when border is above content bottom
                             // (the broken-box-top-of-page case).
@@ -43296,62 +44094,46 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 }
                                 next_page_elems[bi].y = s817_close;
 
-                                // Collect vertical border x1/x2 range, extend y2.
-                                let mut min_vx = f32::INFINITY;
-                                let mut max_vx = f32::NEG_INFINITY;
+                                // Extend the sides to the continuation bottom.
+                                // Its top edges are repeated from their declarations below.
                                 for e in next_page_elems.iter_mut() {
-                                    if let LayoutContent::TableBorder { y1, y2, x1, x2, .. } =
+                                    if let LayoutContent::TableBorder { y1, y2, .. } =
                                         &mut e.content
                                     {
-                                        if (*y1 - *y2).abs() >= 0.1 {
-                                            if *y2 < s817_close {
-                                                *y2 = s817_close;
-                                                e.height = *y2 - *y1;
-                                            }
-                                            if *x1 < min_vx {
-                                                min_vx = *x1;
-                                            }
-                                            if *x2 < min_vx {
-                                                min_vx = *x2;
-                                            }
-                                            if *x1 > max_vx {
-                                                max_vx = *x1;
-                                            }
-                                            if *x2 > max_vx {
-                                                max_vx = *x2;
-                                            }
+                                        if (*y1 - *y2).abs() >= 0.1 && *y2 < s817_close {
+                                            *y2 = s817_close;
+                                            e.height = *y2 - *y1;
                                         }
                                     }
-                                }
-
-                                // Add top horizontal border at page_top.
-                                if min_vx.is_finite() && max_vx.is_finite() {
-                                    next_page_elems.push(LayoutElement::new(
-                                        min_vx,
-                                        page_top,
-                                        max_vx - min_vx,
-                                        0.0,
-                                        LayoutContent::TableBorder {
-                                            x1: min_vx,
-                                            y1: page_top,
-                                            x2: max_vx,
-                                            y2: page_top,
-                                            color,
-                                            width: vw,
-                                            style: vstyle,
-                                        },
-                                    ));
                                 }
                             }
                         }
                     }
                 }
 
-                // Step 2 v9 (2026-04-23): close_y = last_line.y + natural_height,
-                // gated by `close_y <= split_y - 10pt` (skip if content packs too
-                // close to page_bottom). COM-derived from 11 minimal repros
-                // C1-C11 (MS Mincho/Gothic/Meiryo × fs 10.5/12/14 × pitch 15/18).
-                // See project_z_step2_v9_* memos and ECMA-376 §17.4.33.
+                // Repeat the declared top edges even when the existing bottom
+                // already encloses the continuation text.
+                if current_page_elems.iter().any(|e| matches!(e.content, LayoutContent::Text { .. }))
+                    && next_page_elems.iter().any(|e| matches!(e.content, LayoutContent::Text { .. }))
+                {
+                    for mut edge in split_top_edges {
+                        if let LayoutContent::TableBorder { x1, x2, y1, y2, .. } = &mut edge.content {
+                            let covered = next_page_elems.iter().any(|e| matches!(&e.content,
+                                LayoutContent::TableBorder { x1: a, x2: b, y1: c, y2: d, .. }
+                                if (*c - *d).abs() < 0.1 && (*c - page_top).abs() < 0.1
+                                    && *a <= *x1 + 0.1 && *b >= *x2 - 0.1));
+                            if covered { continue; }
+                            *y1 = page_top;
+                            *y2 = page_top;
+                            edge.y = page_top;
+                            next_page_elems.push(edge);
+                        }
+                    }
+                }
+
+                // Close at the fragment content edge, including a completed
+                // cell paragraph's trailing spacing. Word retains this rule
+                // even when less than ten points remain below the last line.
                 {
                     let last_text_y = current_page_elems
                         .iter()
@@ -43385,23 +44167,36 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 }
                             }
                         }
-                        let close_y = last_text_y + max_nat;
-                        if close_y <= split_y - 10.0 {
-                            let template = next_page_elems.iter().find_map(|e| match &e.content {
-                                LayoutContent::TableBorder {
-                                    y1,
-                                    y2,
-                                    x1,
-                                    x2,
-                                    color,
-                                    width,
-                                    style,
-                                } if (*y1 - *y2).abs() < 0.1 => {
-                                    Some((*x1, *x2, color.clone(), *width, style.clone()))
-                                }
+                        let close_y = if !self.doc_body_has_real_cjk {
+                            current_page_elems.iter().filter_map(|e| {
+                                if !matches!(e.content, LayoutContent::Text { .. }) { return None; }
+                                let extra = e.cell_col_index.zip(e.cell_paragraph_index)
+                                    .filter(|key| s1092_last.get(key)
+                                        .map_or(false, |bottom| e.y + e.height >= *bottom - 0.1))
+                                    .and_then(|key| s1092_after.get(&key)).copied().unwrap_or(0.0);
+                                Some(e.y + e.height + s819_q + extra)
+                            }).fold(last_text_y + max_nat, f32::max)
+                        } else {
+                            // Exact/grid leading is part of the cell line box.
+                            // Closing at glyph height alone can strike through
+                            // the last line when its text has a leading offset.
+                            current_page_elems.iter().filter_map(|e| {
+                                matches!(e.content, LayoutContent::Text { .. })
+                                    .then_some(e.y + e.height)
+                            }).fold(last_text_y + max_nat, f32::max)
+                        };
+                        if close_y <= split_y + 0.5 {
+                            let border_style = |e: &LayoutElement| match &e.content {
+                                LayoutContent::TableBorder { x1, x2, y1, y2, color, width, style }
+                                    if (*y1 - *y2).abs() < 0.1 =>
+                                    Some((*x1, *x2, color.clone(), *width, style.clone())),
                                 _ => None,
-                            });
-                            if let Some((bx1, bx2, color, bw, bstyle)) = template {
+                            };
+                            // A top-only cell remains open below each fragment.
+                            // A continuation's top edge is not a bottom template.
+                            let templates: Vec<_> =
+                                split_bottom_edges.iter().filter_map(border_style).collect();
+                            for (bx1, bx2, color, bw, bstyle) in templates {
                                 for e in current_page_elems.iter_mut() {
                                     if let LayoutContent::TableBorder { y1, y2, .. } =
                                         &mut e.content
@@ -43538,7 +44333,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                 };
                 if s754_hdr_replay {
-                    s754_apply_hdr(&mut remaining, &s728_hdr_elems, s728_hdr_h, page_top);
+                    s754_apply_hdr(&mut remaining, &s728_hdr_elems, s728_hdr_h + self.repeated_header_border_delta(table, row_idx), page_top);
                 }
                 loop {
                     // Find the maximum Y in remaining elements.
@@ -43837,7 +44632,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     remaining = overflow;
                     // S754b: header on the next continuation page too.
                     if s754_hdr_replay {
-                        s754_apply_hdr(&mut remaining, &s728_hdr_elems, s728_hdr_h, page_top);
+                        s754_apply_hdr(&mut remaining, &s728_hdr_elems, s728_hdr_h + self.repeated_header_border_delta(table, row_idx), page_top);
                     }
                 }
 
@@ -43891,7 +44686,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 //   (b) no-border layout tables (d4d126 31x4 border=false) where the row's
                 //       bottom is similarly determined by the longest cell's content
                 let allow_fix = row.cells.len() == 1 || !table.style.border;
-                let fix_disabled = std::env::var("OXI_PATTERN_A_DISABLE").is_ok();
+                let fix_disabled = std::env::var("OXI_PATTERN_A_DISABLE").is_ok()
+                    || (std::env::var("OXI_TYPED_GRID_CONTINUATION_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && table_grid_pitch.is_some()
+                        && !page.doc_grid_no_type);
                 if !fix_disabled && allow_fix {
                     let last_cont_top = elements
                         .iter()
@@ -44019,53 +44818,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             page_top + overflow_on_next - (pages_used as f32 * content_height),
                         );
                     }
-                    // S1250 (2026-08-28, **PARKED opt-in `OXI_S1250`**, default
-                    // byte-identical):
-                    // every formula above measures TEXT. `last_cont_top` is the
-                    // last text element's top and the cursor is derived from it,
-                    // so an IMAGE sitting below the last text line of the
-                    // continuation is not counted and the next row is placed on
-                    // top of it.
-                    //
-                    // DERIVED on educational__002a301d7c46ba6e (blindC50, the
-                    // last pcd!=0 document of the EN sets). Its one table:
-                    //
-                    //     row=1  entry 263.998  h=348.003
-                    //     row=2  entry 613.000  h=386.864   <- overflows p5
-                    //     row=3  entry 154.199  h=16.000    <- p6
-                    //
-                    // Row 2 still had ~280pt to place on p6 and got 64: the
-                    // continuation's text ends at ~140 and its 226.4pt image
-                    // starts at 154.2, so `last_cont_top + lh` lands the cursor
-                    // AT the image's top. Rows 3, 4 and 5 are then drawn over the
-                    // picture (dump: image y=154.2..380.6 with text at 170.2 and
-                    // 202.2 inside it), and the page ends short -- the document's
-                    // +1. The second image on the same page, whose row does not
-                    // straddle, is placed correctly, which is what isolates this
-                    // to the continuation formula rather than to image height.
-                    //
-                    // The clamp only ever moves the cursor DOWN, and only when a
-                    // picture reaches past where the text-derived formula put it,
-                    // so a continuation carrying no image is byte-identical.
-                    // Images only: a border or a shading band spans the row box
-                    // and would re-introduce the geometry these formulas exist to
-                    // replace.
-                    //
-                    // ★PARKED, and the reason is the point. The clamp does fix the
-                    // defect -- the corpus dump goes from 1 large image with text
-                    // drawn inside it to 0 -- but the document then renders 12
-                    // pages against Word's 10, where it rendered 11 before. Two
-                    // errors were partly cancelling: the lost image height was
-                    // giving back space that something upstream over-consumes.
-                    // Shipping the half that is understood makes the page count
-                    // worse, which the Phase-1 gate rightly refuses, so the
-                    // derivation is banked behind an opt-in until the upstream
-                    // over-consumption is found. The first thread to pull: with
-                    // the clamp on, the earlier table's row 1 moves from
-                    // entry 690.3 to a fresh page at 169.6, and even WITHOUT the
-                    // clamp that row starts 252pt below the end of row 0 (418.2 +
-                    // 20.3 = 438.5 -> 690.3) -- a gap no row height explains.
-                    if std::env::var("OXI_S1250").is_ok() {
+                    // A continuation may end with an inline image below its last
+                    // text line. Keep subsequent rows below that image.
+                    if std::env::var("OXI_S1250_DISABLE").is_err() {
                         let cont_image_bottom = elements
                             .iter()
                             .filter(|e| matches!(&e.content, LayoutContent::Image { .. }))
@@ -44108,7 +44863,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // content-anchored band (27.2) started the next row 37pt
                     // early and cascaded the whole template (+the S941 flip).
                     let s942_floor = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && (std::env::var("OXI_S940T").is_ok()
+                        && (std::env::var("OXI_S940T_DISABLE").is_err()
                             || std::env::var("OXI_S1025_DISABLE").is_err())
                         && !self.doc_body_has_real_cjk
                         && row.height_rule.as_deref() != Some("exact")
@@ -44184,7 +44939,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // non-painting empty tail to the page top (administrative__
                 // 0001ce58 — clamping it to trH broke its PASS).
                 if std::env::var("OXI_S942_DISABLE").is_err()
-                    && (std::env::var("OXI_S940T").is_ok()
+                    && (std::env::var("OXI_S940T_DISABLE").is_err()
                         || std::env::var("OXI_S1025_DISABLE").is_err())
                     && !self.doc_body_has_real_cjk
                     && !s864_empty_tail_split
@@ -44541,8 +45296,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 let metrics =
                                     self.metrics_for_text(&run.text, &run.style, &p.style);
                                 for ch in run.text.chars() {
-                                    let bw =
+                                    let mut bw =
                                         self.registry.char_width_pt_with_fallback(ch, fs, metrics);
+                                    let kern_active = run.style.kern
+                                        .or_else(|| p.style.default_run_style.as_ref().and_then(|r| r.kern))
+                                        .map_or(false, |k| k > 0.0 && fs >= k);
+                                    if std::env::var("OXI_AUTOFIT_EM_MIN_DISABLE").is_err()
+                                        && !kern_active
+                                        && !self.doc_body_has_real_cjk
+                                        && !kinsoku::is_cjk(ch)
+                                        && cell_has_em_advance(metrics, ch)
+                                    {
+                                        bw = metrics.char_width_em(ch) * fs;
+                                    }
                                     if ch.is_whitespace() {
                                         cell_max = cell_max.max(seg);
                                         seg = 0.0;
@@ -44931,6 +45697,39 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // (per-cell tcMar 108, no tblCellMar) is unchanged — its
                         // per-cell value equals the default this used to assume.
                         let usable = if s1196 { cap } else { available + first_cell_inset };
+                        if std::env::var("OXI_AUTOFIT_FIXED_INSETS_DISABLE").is_err()
+                            && mins.iter().sum::<f32>() > usable
+                        {
+                            // Preserve cell insets when words must break to fit.
+                            let mut insets = vec![0.0_f32; mins.len()];
+                            for row in &table.rows {
+                                let mut col = 0;
+                                for cell in &row.cells {
+                                    let span = cell.grid_span.max(1) as usize;
+                                    if col >= insets.len() { break; }
+                                    if span == 1 {
+                                        let left = cell.margins.as_ref().and_then(|m| m.left)
+                                            .unwrap_or_else(|| tbl_pad(false));
+                                        let right = cell.margins.as_ref().and_then(|m| m.right)
+                                            .unwrap_or_else(|| tbl_pad(true));
+                                        insets[col] = insets[col].max(left + right);
+                                    }
+                                    col += span;
+                                }
+                            }
+                            let fixed: f32 = insets.iter().sum();
+                            let flexible: f32 = mins.iter().zip(&insets)
+                                .map(|(m, inset)| (m - inset).max(0.0)).sum();
+                            if usable > fixed && flexible > 0.0 {
+                                let widths: Vec<f32> = mins.iter().zip(&insets)
+                                    .map(|(m, inset)| inset + (m - inset).max(0.0)
+                                        * (usable - fixed) / flexible).collect();
+                                if std::env::var("OXI_DBG_AUTOFIT_MIN").is_ok() {
+                                    eprintln!("[AUTOFIT-FIXED-INSETS] mins={:?} widths={:?}", mins, widths);
+                                }
+                                return widths;
+                            }
+                        }
                         let mut w: Vec<f32> = table_grid_columns
                             .iter()
                             .zip(&mins)
@@ -44945,7 +45744,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .map(|(g, m)| (g - m).max(0.0))
                                 .collect();
                             let ss: f32 = slack.iter().sum();
-                            if ss > 0.01 {
+                            if ss > 0.01
+                                && !(std::env::var("OXI_AUTOFIT_INFEASIBLE_DISABLE").is_err() && deficit >= ss)
+                            {
                                 for (wi, s) in w.iter_mut().zip(&slack) {
                                     *wi -= deficit * s / ss;
                                 }
@@ -44957,6 +45758,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     *wi -= deficit * *wi / t;
                                 }
                             }
+                        }
+                        if std::env::var("OXI_DBG_AUTOFIT_MIN").is_ok() {
+                            eprintln!("[AUTOFIT-MIN] grid={:?} mins={:?} usable={} widths={:?}", table_grid_columns, mins, usable, w);
                         }
                         return w;
                     }
@@ -45018,6 +45822,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// compression) which fit more chars per line than the cell renderer actually
     /// produces. estimate under-counted → render overflowed → page cascade.
     #[allow(unused_assignments)]
+    fn cell_tab_word_overflows(&self, para: &Paragraph, pos: usize, current: f32, right: f32) -> bool {
+        if std::env::var("OXI_CELL_TAB_WORD_FIT_DISABLE").is_ok() || self.doc_body_has_real_cjk { return false; }
+        let Some(stop) = para.style.tab_stops.iter().find(|t| t.position > current + 0.01) else { return false; };
+        if stop.alignment != TabStopAlignment::Left || (stop.position * 20.0).round() >= (right * 20.0).round() { return false; }
+        let mut index = 0usize;
+        let mut width = 0.0;
+        'runs: for r in &para.runs {
+            let fs = self.resolve_font_size(&r.style, &para.style);
+            let m = self.metrics_for_text(&r.text, &r.style, &para.style);
+            for ch in r.text.chars() {
+                let at = index; index += 1;
+                if at <= pos { continue; }
+                if matches!(ch, ' ' | '\t' | '\n' | '\x0B' | '\x0C') { break 'runs; }
+                width += self.registry.char_width_pt_with_fallback(ch, fs, m)
+                    + r.style.character_spacing.unwrap_or(0.0);
+            }
+        }
+        stop.position + width > right
+    }
+
     fn count_cell_lines(
         &self,
         para: &Paragraph,
@@ -45030,11 +45854,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         first_indent_pt: f32,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
-    ) -> (usize, usize) {
+    ) -> (usize, usize, Vec<Vec<f32>>) {
         if para.runs.is_empty() {
-            return (1, 0);
+            return (1, 0, Vec::new());
         }
+        let mut cell_edge_tab_nowrap = false;
+        let mut cell_tab_char_pack = false;
         let mut lines: usize = 0;
+        let mut line_size_samples: Vec<Vec<f32>> = Vec::new();
+        let mut diagnostic_tab_sizes: Vec<f32> = Vec::new();
         // S1312: lines that carry a ruby run (banked wherever `lines` is).
         let mut ruby_lines: usize = 0;
         let mut line_has_ruby = false;
@@ -45126,6 +45954,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     buf_nonempty = false;
                 }
                 if line_x + cw > ew && line_nonempty {
+                    if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                        let mut sizes: Vec<f32> = current_line_chars.iter().map(|c| c.font_size).collect();
+                        sizes.extend(diagnostic_tab_sizes.iter().copied());
+                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
+                        line_size_samples.push(sizes);
+                    }
+                    diagnostic_tab_sizes.clear();
                     lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -45161,7 +45996,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // renderer actually produces. Otherwise estimate < render →
                 // overflow cascade (the very failure mode this function exists
                 // to prevent, per the "Fix C" doc-comment above).
-                if ch == '\n' || ch == '\x0B' || ch == '\x0C' {
+                if matches!(ch, ' ' | '\t' | '\n' | '\x0B' | '\x0C') { cell_tab_char_pack = false; }
+                let tab_break = ch == '\t' && first_indent_pt < 0.0 && (line_nonempty || buf_nonempty)
+                    && self.cell_tab_word_overflows(para, s1082_here,
+                        line_x + buf_w + if is_first_line { (indent_l_pt + first_indent_pt).max(0.0) } else { indent_l_pt },
+                        wrap_w + indent_l_pt);
+                if tab_break && std::env::var("OXI_CELL_TAB_CHAR_PACK_DISABLE").is_err() { cell_tab_char_pack = true; }
+                if ch == '\n' || ch == '\x0B' || ch == '\x0C' || tab_break {
+                    cell_edge_tab_nowrap = false;
+                    if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                        let mut sizes: Vec<f32> = current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.font_size).collect();
+                        sizes.extend(diagnostic_tab_sizes.iter().copied());
+                        if sizes.is_empty() && !tab_break && !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_CELL_BREAK_FONT_DISABLE").is_err() { sizes.push(font_size); }
+
+                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
+                        line_size_samples.push(sizes);
+                    }
+                    diagnostic_tab_sizes.clear();
                     lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -45176,7 +46028,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     prev_char_ruby = false;
                     current_line_chars.clear();
                     buf_chars.clear();
-                    continue;
+                    if !tab_break { continue; }
                 }
                 // S443 (2026-05-30, env-gated): TAB-STOP advancement in the cell
                 // line-count estimate (mirrors the render-loop fix). Must match the
@@ -45202,6 +46054,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         ((abs_pos / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop
                     };
+                    if std::env::var("OXI_CELL_EDGE_TAB_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && (next_pos * 20.0).round() >= ((wrap_w + indent_l_pt) * 20.0).round()
+                    {
+                        cell_edge_tab_nowrap = true;
+                    }
+                    diagnostic_tab_sizes.push(font_size);
                     buf_w += (next_pos - abs_pos).max(0.0);
                     buf_nonempty = true;
                     line_nonempty = true;
@@ -45378,7 +46237,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                 };
                 let cw = cw + auto_space_extra;
-                let effective_wrap = if is_first_line {
+                let effective_wrap = if cell_edge_tab_nowrap {
+                    f32::MAX / 4.0
+                } else if is_first_line {
                     first_line_wrap_w
                 } else {
                     wrap_w
@@ -45592,7 +46453,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     would_overflow_natural
                 };
                 if !is_space && would_overflow && !(!line_nonempty && !buf_nonempty) {
-                    if kinsoku::is_line_start_prohibited(ch) {
+                    if kinsoku::is_line_start_prohibited(ch)
+                        && !(ch.is_ascii() && !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_ASCII_CELL_CLOSER_DISABLE").is_err())
+                    {
                         buf_w += cw;
                         buf_nonempty = true;
                         buf_chars.push(crate::layout::jc_both_compress::CharContext {
@@ -45604,6 +46468,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         line_nonempty = true;
                 line_has_ruby |= s1312_run_ruby;
                         current_line_chars.extend(buf_chars.drain(..));
+                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                            let mut sizes: Vec<f32> = current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.font_size).collect();
+                            sizes.extend(diagnostic_tab_sizes.iter().copied());
+                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
+                            line_size_samples.push(sizes);
+                        }
+                        diagnostic_tab_sizes.clear();
                         lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -45626,7 +46497,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // render site (estimate==render line counts).
                     let s818_cell =
                         !self.doc_body_has_real_cjk && std::env::var("OXI_S818_DISABLE").is_err();
-                    if std::env::var("OXI_CELLWORD_DISABLE").is_err()
+                    if std::env::var("OXI_CELLWORD_DISABLE").is_err() && !cell_tab_char_pack
                         && (if s818_cell {
                             !is_break_space(ch) // S1241
                         } else {
@@ -45698,6 +46569,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             }
                         }
                         if let Some(carry) = stage_carry {
+                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                                let mut sizes: Vec<f32> = current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.font_size).collect();
+                                sizes.extend(diagnostic_tab_sizes.iter().copied());
+                                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
+                                line_size_samples.push(sizes);
+                            }
+                            diagnostic_tab_sizes.clear();
                             lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -45737,6 +46615,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             buf_nonempty = false;
                             current_line_chars.extend(buf_chars.drain(..));
                         }
+                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                            let mut sizes: Vec<f32> = current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.font_size).collect();
+                            sizes.extend(diagnostic_tab_sizes.iter().copied());
+                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
+                            line_size_samples.push(sizes);
+                        }
+                        diagnostic_tab_sizes.clear();
                         lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -45768,12 +46653,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             }
         }
         if line_nonempty {
+            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                let mut sizes: Vec<f32> = current_line_chars.iter().map(|c| c.font_size).collect();
+                sizes.extend(diagnostic_tab_sizes.iter().copied());
+                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
+                line_size_samples.push(sizes);
+            }
+            diagnostic_tab_sizes.clear();
             lines += 1;
             if line_has_ruby {
                 ruby_lines += 1;
             }
         }
-        (lines.max(1), ruby_lines)
+        (lines.max(1), ruby_lines, line_size_samples)
     }
 
     /// Session 131 (2026-05-20): vertical-writing helpers.
@@ -46100,7 +46992,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         grid_pitch: Option<f32>,
         s1179_body: bool,
     ) -> f32 {
-        let ext = img.height;
+        let ext = img.height + if s1179_body && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+            img.effect_extent_b.max(0.0) + img.effect_extent_t.max(0.0)
+        } else { 0.0 };
         if std::env::var("OXI_S971_DISABLE").is_ok() {
             return ext;
         }
@@ -46373,6 +47268,45 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         need.max(0.0)
     }
 
+    fn is_cell_spacing_paragraph(block: &Block) -> bool {
+        matches!(block, Block::Paragraph(_))
+            || matches!(block, Block::Image(image) if image.host_paragraph.is_some())
+    }
+
+    fn cell_image_spacing(
+        &self,
+        img: &crate::ir::Image,
+        table: &Table,
+        grid_pitch: Option<f32>,
+        blocks: &[Block],
+        block_pos: usize,
+        prev_sa: Option<f32>,
+        prev_context: Option<(bool, Option<&str>)>,
+        prev_auto: Option<(bool, Option<&str>)>,
+    ) -> (f32, f32) {
+        if Self::s1053_cell_float_no_reserve(img) { return (0.0, 0.0); }
+        let Some(host) = img.host_paragraph.as_deref() else { return (0.0, 0.0); };
+        let (sb, sa) = self.cell_para_spacing(host, table.style.para_style.as_ref(), grid_pitch);
+        let is_para = Self::is_cell_spacing_paragraph;
+        let (sb, sa) = self.cell_effective_spacing(
+            host, table.style.para_style.as_ref(),
+            !blocks[..block_pos].iter().any(is_para),
+            !blocks[block_pos + 1..].iter().any(is_para), sb, sa,
+        );
+        let collapse = if std::env::var("OXI_S427_DISABLE").is_err() {
+            prev_sa.map_or(0.0, |prev| prev.min(sb))
+        } else { 0.0 };
+        let contextual = self.s939_cell_ctx_credit(
+            prev_sa, prev_context.map_or(false, |p| p.0),
+            prev_context.and_then(|p| p.1), &host.style, sb,
+        );
+        let list = self.s1075_cell_list_credit(
+            prev_sa, prev_auto.map_or(false, |p| p.0),
+            prev_auto.and_then(|p| p.1), &host.style, sb,
+        );
+        (sb - collapse - contextual - list, sa)
+    }
+
     fn estimate_table_row_natural_h(
         &self,
         row: &TableRow,
@@ -46385,6 +47319,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         table_grid_pitch: Option<f32>,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
+    ) -> f32 {
+        self.estimate_table_row_natural_h_with_border_padding(
+            row, col_widths, default_pad_l, default_pad_r, default_pad_t,
+            default_pad_b, table, table_grid_pitch, grid_char_pitch,
+            grid_char_cw_ratio, true,
+        )
+    }
+
+    fn estimate_table_row_natural_h_with_border_padding(
+        &self,
+        row: &TableRow,
+        col_widths: &[f32],
+        default_pad_l: f32,
+        default_pad_r: f32,
+        default_pad_t: f32,
+        default_pad_b: f32,
+        table: &Table,
+        table_grid_pitch: Option<f32>,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+        include_border_padding: bool,
     ) -> f32 {
         let mut row_height: f32 = 0.0;
         let mut grid_idx = row.grid_before as usize;
@@ -46422,7 +47377,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 .as_ref()
                 .and_then(|m| m.bottom)
                 .unwrap_or(default_pad_b);
-            if self.rowbox2_pad_on() {
+            if include_border_padding && self.rowbox2_pad_on() {
                 // ROWBOX2: generalized Round30 (see the first-pass site).
                 pad_t += self.rowbox2_border_pad(table, cell);
             } else if pad_t == 0.0 && table.style.border {
@@ -46462,15 +47417,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // S1075: (previous cell paragraph's after_autospacing, its numId)
             let mut s1075_prev_e: Option<(bool, Option<&str>)> = None;
             // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
-            // container-edge suppression. See cell_autospace_effective.
+            // container-edge suppression. See cell_effective_spacing.
             let first_para_pos = cell
                 .blocks
                 .iter()
-                .position(|b| matches!(b, Block::Paragraph(_)));
+                .position(Self::is_cell_spacing_paragraph);
             let last_para_pos = cell
                 .blocks
                 .iter()
-                .rposition(|b| matches!(b, Block::Paragraph(_)));
+                .rposition(Self::is_cell_spacing_paragraph);
             // S716: the post-nested-table stub paragraph contributes no height.
             let s716_stub_nat = self.nested_table_stub_pos(cell);
             let s1311_tail_nat = self.s1311_hidemark_tail_pos(cell);
@@ -46537,9 +47492,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .map_or(false, |ts| ts.before_autospacing || ts.after_autospacing);
                         let (cur_sb, cur_sa) = if para.style.before_autospacing
                             || para.style.after_autospacing
+                            || para.style.contextual_spacing
                             || s952_tbl
                         {
-                            let (eff_sb, eff_sa) = self.cell_autospace_effective(
+                            let (eff_sb, eff_sa) = self.cell_effective_spacing(
                                 para,
                                 table.style.para_style.as_ref(),
                                 Some(block_pos) == first_para_pos,
@@ -46639,9 +47595,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // the row height diverges from the placed lines
                         // (the S716/S751 three-pass lesson).
                         if !Self::s1053_cell_float_no_reserve(img) {
-                            cell_content_h += img_h_eff;
+                            let (sb, sa) = self.cell_image_spacing(
+                                img, table, table_grid_pitch, &cell.blocks, block_pos,
+                                prev_sa, s939_prev_e, s1075_prev_e,
+                            );
+                            cell_content_h += img_h_eff + sb + sa;
+                            prev_sa = img.host_paragraph.as_ref().map(|_| sa);
+                            s939_prev_e = img.host_paragraph.as_ref().map(|host| (host.style.contextual_spacing, host.style.style_id.as_deref()));
+                            s1075_prev_e = img.host_paragraph.as_ref().map(|host| (host.style.after_autospacing, host.style.num_id.as_deref()));
                         }
-                        prev_sa = None;
                     }
                     _ => {}
                 }
@@ -46951,6 +47913,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // the cell branch below, where the wrap widths are in scope.
             let mut s1099_first_fits = false;
             let mut s1312_ruby_lines: usize = 0;
+            let mut cell_line_sizes: Vec<Vec<f32>> = Vec::new();
             let line_count = if in_cell {
                 // first line wrap width: same indent math as render (mod.rs:4461)
                 let first_line_wrap_w = if first_indent < 0.0 {
@@ -47046,7 +48009,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         .sum();
                     w > 0.0 && w < first_line_wrap_w
                 });
-                let (s1312_n, s1312_r) = self.count_cell_lines(
+                let (s1312_n, s1312_r, sizes) = self.count_cell_lines(
                     para,
                     effective_width,
                     first_line_wrap_w,
@@ -47056,6 +48019,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     gcr_for_count,
                 );
                 s1312_ruby_lines = s1312_r;
+                cell_line_sizes = sizes;
                 s1312_n
             } else {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para
@@ -47154,7 +48118,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         )
                     } else if !self.doc_body_has_real_cjk
                         && !metrics.is_cjk_83_64_font()
-                        && std::env::var("OXI_S940T").is_ok()
+                        && std::env::var("OXI_S940T_DISABLE").is_err()
                     {
                         // S940: Latin cell single-spacing text line estimate =
                         // hhea natural (matches the S815 render path; the
@@ -47303,6 +48267,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                 }
             }
+            // An object-only body line has the object's height, plus the
+            // auto-spacing leading already used by the body emitter (S875).
+            // Keep-next lookahead must reserve that same indivisible line.
+            if !in_cell
+                && line_count == 1
+                && !self.doc_body_has_real_cjk
+                && matches!(eff_lr, None | Some("auto"))
+                && std::env::var("OXI_BODY_OBJECT_ESTIMATE_DISABLE").is_err()
+                && para.runs.iter().all(|r| {
+                    r.text.chars().all(|c| c == '\u{FFFC}' || c == '\t' || c == ' ')
+                })
+            {
+                let object_h = para.runs.iter()
+                    .filter(|r| r.style.inline_object_image.is_some())
+                    .filter_map(|r| r.style.inline_object_extent.map(|(_, h)| {
+                        h + if std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                            r.style.inline_object_image.as_ref().map_or(0.0, |im| im.effect_extent_b.max(0.0) + im.effect_extent_t.max(0.0))
+                        } else { 0.0 }
+                    }))
+                    .fold(0.0_f32, f32::max);
+                if object_h > 0.0 {
+                    let factor = eff_ls.unwrap_or(1.0).max(1.0);
+                    let extra = max_line_height * (1.0 - 1.0 / factor);
+                    max_line_height = object_h + extra;
+                }
+            }
             // S1099 (2026-08-08, default ON, opt-out `OXI_S1099_DISABLE`): the "max_lh x
             // line_count" model over-counts when the TALLEST run is a single
             // LEADING word -- Word takes the max PER LINE, so such a run only
@@ -47348,6 +48338,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             } else {
                 max_line_height * line_count as f32
             };
+            // Use the runs present on each counted line for ordinary Latin text.
+            // A size shared by different runs uses their largest existing line height;
+            // this preserves a conservative estimate without inventing run identity.
+            let per_line_eligible = in_cell && !self.doc_body_has_real_cjk
+                && !snap_in_cell && para.style.list_marker.is_none()
+                && std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err()
+                && cell_line_sizes.len() == line_count
+                && para.runs.iter().all(|r| r.ruby.is_none() && !r.style.combine
+                    && r.style.inline_object_extent.is_none()
+                    && r.style.vertical_align.is_none() && r.text.is_ascii());
+            let mut measured_height = 0.0_f32;
+            let mut measured_valid = per_line_eligible;
+            if per_line_eligible {
+                for sizes in &cell_line_sizes {
+                    let lh = s1099_lhs.iter().filter(|(ri, _)| {
+                        let fs = self.resolve_font_size(&para.runs[*ri].style, &para.style);
+                        sizes.iter().any(|size| (*size - fs).abs() < 0.001)
+                    }).map(|(_, lh)| *lh).fold(0.0_f32, f32::max);
+                    if lh <= 0.0 { measured_valid = false; break; }
+                    measured_height += lh;
+                }
+            }
+            let s1099_h = if measured_valid { measured_height } else { s1099_h };
             if std::env::var("OXI_DUMP_TABLE").is_ok() {
                 let first_run_fs = self.resolve_font_size(
                     para.runs
@@ -47788,7 +48801,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// paragraphs (0.787 → 0.899). Honest netting: no PASS↔FAIL anywhere,
     /// JP SSIM wash ≈ −0.0001 net, a real EN pagination gain. See
     /// [[cell_autospacing_amount]], [[tokumei_form_family_ssim]].
-    fn cell_autospace_effective(
+    fn cell_effective_spacing(
         &self,
         para: &Paragraph,
         tbl_ps: Option<&ParagraphStyle>,
@@ -47797,6 +48810,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         est_sb: f32,
         est_sa: f32,
     ) -> (f32, f32) {
+        // Contextual spacing compares the final paragraph with the cell-end
+        // mark's built-in Normal style. A different paragraph style retains
+        // its after spacing, even if based on Normal or flagged as default.
+        // Word probes distinguish style identity from its ID: renaming the
+        // Normal ID keeps suppression, renaming its display name removes it.
+        let same_end_style = para.style.style_id.as_deref()
+            .or(self.cell_default_style_id.as_deref())
+            .is_some_and(|id| self.cell_end_style_id.as_deref() == Some(id));
+        let est_sa = if is_last && para.style.contextual_spacing && same_end_style {
+            0.0
+        } else {
+            est_sa
+        };
         // S952 (2026-07-20, opt-out OXI_S952_DISABLE): a TABLE STYLE's pPr
         // before/afterAutospacing applies to the cell paragraphs with the S882
         // model — it OVERRIDES the paragraph's DIRECT before/after (AUTO

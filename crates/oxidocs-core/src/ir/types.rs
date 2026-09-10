@@ -819,6 +819,15 @@ pub struct CellMargins {
     pub right: Option<f32>,
 }
 
+impl CellMargins {
+    pub(crate) fn inherit_missing(&mut self, parent: &Self) {
+        self.top = self.top.or(parent.top);
+        self.bottom = self.bottom.or(parent.bottom);
+        self.left = self.left.or(parent.left);
+        self.right = self.right.or(parent.right);
+    }
+}
+
 fn default_one() -> u32 {
     1
 }
@@ -905,6 +914,9 @@ pub struct Image {
     /// line_bottom − this (kyotei row1: 30.8 − 1.5 = Word's 29.5 ± 0.2).
     #[serde(default)]
     pub effect_extent_b: f32,
+    /// Extra space above the visible image in its flow box, in points.
+    #[serde(default)]
+    pub effect_extent_t: f32,
 }
 
 /// Image crop rectangle (percentages from each edge)
@@ -965,6 +977,9 @@ pub enum WrapType {
 pub struct TextBox {
     /// Content paragraphs inside the text box
     pub blocks: Vec<Block>,
+    /// Whether the object participates in its host text line.
+    #[serde(default)]
+    pub inline: bool,
     /// Width in points
     pub width: f32,
     /// Height in points
@@ -1096,6 +1111,12 @@ pub enum PathSeg {
 /// A geometric shape (DrawingML or VML)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
+    /// Text-wrap contour in normalized shape coordinates; may extend outside the shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrap_polygon: Vec<(f32, f32)>,
+    /// How surrounding text flows around this floating shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap_type: Option<WrapType>,
     /// Shape type (e.g. "rect", "ellipse", "roundRect", "line", "arrow", etc.)
     pub shape_type: String,
     /// Width in points
@@ -1799,6 +1820,15 @@ impl Default for ParagraphStyle {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TableStyle {
+    /// Default row cohesion inherited from this table style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_cant_split: Option<bool>,
+    /// Display name of a table style definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Whether the style is user-defined rather than built in.
+    #[serde(default)]
+    pub is_custom: bool,
     pub border: bool,
     /// True iff `<w:tblBorders>` was directly in this table's `<w:tblPr>`,
     /// not inherited from a `<w:tblStyle>`. Used to gate the b35-style
@@ -2129,8 +2159,14 @@ pub struct StyleSheet {
 /// A named style definition with inheritance
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StyleDefinition {
+    /// Whether this is a user-defined rather than built-in style.
+    #[serde(default)]
+    pub is_custom: bool,
     /// Style ID
     pub style_id: String,
+    /// Human-readable style name, independent of its document-local ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// Parent style ID (w:basedOn)
     #[serde(default)]
     pub based_on: Option<String>,

@@ -115,7 +115,7 @@ def aggregate_dump(dump: dict) -> dict:
                 base_key = (pi, cpi, cri, cci)
                 key = base_key
                 instance = 0
-                while key in groups and not el.get("vert"):
+                while key in groups and not el.get("vert") and (cpi is not None or cri is not None or cci is not None):
                     existing_y = groups[key]["y_min"]
                     if abs(el["y"] - existing_y) <= 60:
                         break  # close enough — same cell
@@ -154,7 +154,7 @@ def aggregate_dump(dump: dict) -> dict:
             # column, columns right to left, then the next horizontal band.
             # Coordinate sorting loses that order when the first column is
             # indented or a column contains several run-sized elements.
-            if slot["text_parts"] and all(p[3] for p in slot["text_parts"]):
+            if (slot["para_idx"] is not None and slot["cell_para_idx"] is None and slot["cell_row_idx"] is None and slot["cell_col_idx"] is None) or (slot["text_parts"] and all(p[3] for p in slot["text_parts"])):
                 pass
             else:
                 slot["text_parts"].sort(key=lambda yxt: (yxt[0], yxt[1]))

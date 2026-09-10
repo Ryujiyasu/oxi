@@ -1,0 +1,77 @@
+[
+  {
+    "name": "government_plain_terminal",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha gov-",
+      "ernment"
+    ]
+  },
+  {
+    "name": "government_comma_terminal",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha gov-",
+      "ernment,"
+    ]
+  },
+  {
+    "name": "government_period_terminal",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha gov-",
+      "ernment."
+    ]
+  },
+  {
+    "name": "information_plain_terminal",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha infor-",
+      "mation"
+    ]
+  },
+  {
+    "name": "information_comma_terminal",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha infor-",
+      "mation,"
+    ]
+  },
+  {
+    "name": "information_period_terminal",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha infor-",
+      "mation."
+    ]
+  },
+  {
+    "name": "government_plain_following",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha gov-",
+      "ernment alpha-beta",
+      "\"gamma\" end."
+    ]
+  },
+  {
+    "name": "government_comma_following",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha gov-",
+      "ernment, alpha-",
+      "beta \"gamma\" end."
+    ]
+  },
+  {
+    "name": "government_period_following",
+    "width": 92.97265625,
+    "lines": [
+      "alpha alpha gov-",
+      "ernment. alpha-",
+      "beta \"gamma\" end."
+    ]
+  }
+]

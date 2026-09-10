@@ -1,0 +1,56 @@
+[
+  {
+    "name": "depth0_widow0",
+    "pages": {
+      "LEAD": 1,
+      "ALPHA": 1,
+      "BETA": 1,
+      "GAMMA": 2
+    }
+  },
+  {
+    "name": "depth0_widow1",
+    "pages": {
+      "LEAD": 1,
+      "ALPHA": 1,
+      "BETA": 2,
+      "GAMMA": 2
+    }
+  },
+  {
+    "name": "depth1_widow0",
+    "pages": {
+      "LEAD": 1,
+      "ALPHA": 1,
+      "BETA": 1,
+      "GAMMA": 2
+    }
+  },
+  {
+    "name": "depth1_widow1",
+    "pages": {
+      "LEAD": 1,
+      "ALPHA": 1,
+      "BETA": 1,
+      "GAMMA": 2
+    }
+  },
+  {
+    "name": "depth2_widow0",
+    "pages": {
+      "LEAD": 1,
+      "ALPHA": 1,
+      "BETA": 1,
+      "GAMMA": 2
+    }
+  },
+  {
+    "name": "depth2_widow1",
+    "pages": {
+      "LEAD": 1,
+      "ALPHA": 1,
+      "BETA": 1,
+      "GAMMA": 2
+    }
+  }
+]

@@ -86,6 +86,7 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                         let mut style_id = None;
                         let mut style_type = None;
                         let mut is_default = false;
+                        let mut is_custom = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
@@ -93,6 +94,7 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                                 "styleId" => style_id = Some(val),
                                 "type" => style_type = Some(val),
                                 "default" => is_default = val == "1",
+                                "customStyle" => is_custom = matches!(val.as_str(), "1" | "true" | "on"),
                                 _ => {}
                             }
                         }
@@ -107,11 +109,13 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                                 styles.default_table_style_id = Some(id.clone());
                             }
                             if typ == "paragraph" || typ == "character" {
-                                let (pstyle, based_on, align) = parse_style_definition(&mut reader, theme)?;
+                                let (pstyle, based_on, align, display_name) = parse_style_definition(&mut reader, theme)?;
                                 styles.styles.insert(
                                     id.clone(),
                                     StyleDefinition {
+                                        is_custom,
                                         style_id: id,
+                                        display_name,
                                         based_on,
                                         paragraph: pstyle,
                                         alignment: align,
@@ -119,7 +123,8 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                                     },
                                 );
                             } else if typ == "table" {
-                                let (tbl_style, cond_fmts) = parse_table_style_definition(&mut reader)?;
+                                let (mut tbl_style, cond_fmts) = parse_table_style_definition(&mut reader)?;
+                                tbl_style.is_custom = is_custom;
                                 if !cond_fmts.is_empty() {
                                     styles.table_conditional_formats.insert(id.clone(), cond_fmts);
                                 }
@@ -1188,11 +1193,12 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
 fn parse_style_definition(
     reader: &mut Reader<&[u8]>,
     theme: &ThemeColors,
-) -> Result<(ParagraphStyle, Option<String>, Option<Alignment>), ParseError> {
+) -> Result<(ParagraphStyle, Option<String>, Option<Alignment>, Option<String>), ParseError> {
     let mut style = ParagraphStyle::default();
     let mut run_style = RunStyle::default();
     let mut has_run_style = false;
     let mut based_on: Option<String> = None;
+    let mut display_name = None;
     let mut alignment: Option<Alignment> = None;
     let mut depth = 0;
     let mut in_rpr = false;
@@ -1202,6 +1208,13 @@ fn parse_style_definition(
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if depth == 0 && local == "name" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            display_name = Some(attr.unescape_value().unwrap_or_default().into_owned());
+                        }
+                    }
+                }
                 match local.as_str() {
                     "pBdr" if !in_rpr && !in_num_pr => {
                         style.borders = Some(super::ooxml::parse_paragraph_borders(reader)?);
@@ -1278,6 +1291,13 @@ fn parse_style_definition(
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
+                if depth == 0 && local == "name" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            display_name = Some(attr.unescape_value().unwrap_or_default().into_owned());
+                        }
+                    }
+                }
                 if in_num_pr {
                     match local.as_str() {
                         "numId" => {
@@ -1827,7 +1847,7 @@ fn parse_style_definition(
         style.default_run_style = Some(run_style);
     }
 
-    Ok((style, based_on, alignment))
+    Ok((style, based_on, alignment, display_name))
 }
 
 /// Resolve table style basedOn chains.
@@ -1849,6 +1869,10 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                         if child.border_width.is_none() { child.border_width = parent.border_width; }
                         if child.border_style.is_none() { child.border_style = parent.border_style; }
                     }
+                    if std::env::var("OXI_TABLE_STYLE_OUTER_EDGES_DISABLE").is_err() {
+                        if child.top_border.is_none() { child.top_border = parent.top_border.clone(); }
+                        if child.bottom_border.is_none() { child.bottom_border = parent.bottom_border.clone(); }
+                    }
                     if child.inside_horizontal_border.is_none() {
                         child.has_inside_h = parent.has_inside_h;
                         child.inside_horizontal_border = parent.inside_horizontal_border;
@@ -1857,8 +1881,12 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                         child.has_inside_v = parent.has_inside_v;
                         child.inside_vertical_border = parent.inside_vertical_border;
                     }
-                    if child.default_cell_margins.is_none() {
-                        child.default_cell_margins = parent.default_cell_margins;
+                    if let Some(parent) = &parent.default_cell_margins {
+                        if let Some(margins) = &mut child.default_cell_margins {
+                            margins.inherit_missing(parent);
+                        } else {
+                            child.default_cell_margins = Some(parent.clone());
+                        }
                     }
                     // S1160: tblInd follows basedOn too. 34140's tables are
                     // styled a7, which declares no tblInd but is basedOn a1,
@@ -1893,6 +1921,30 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "name" if depth == 0 => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                style.display_name = Some(attr.unescape_value().unwrap_or_default().into_owned());
+                            }
+                        }
+                    }
+                    "trPr" if depth == 0 => {
+                        let mut row_depth = 0usize;
+                        loop {
+                            match reader.read_event()? {
+                                Event::Empty(re) | Event::Start(re) if row_depth == 0 && local_name(re.name().as_ref()) == "cantSplit" => {
+                                    style.row_cant_split = Some(!re.attributes().flatten().any(|a|
+                                        local_name(a.key.as_ref()) == "val"
+                                            && matches!(a.value.as_ref(), b"0" | b"false" | b"off")));
+                                }
+                                Event::Start(_) => row_depth += 1,
+                                Event::End(re) if row_depth == 0 && local_name(re.name().as_ref()) == "trPr" => break,
+                                Event::End(_) => row_depth = row_depth.saturating_sub(1),
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
+                    }
                     "pPr" if depth == 0 && !in_tbl_pr => {
                         // Table style base paragraph properties
                         let mut ps = crate::ir::ParagraphStyle::default();
@@ -2076,6 +2128,13 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "name" if depth == 0 => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                style.display_name = Some(attr.unescape_value().unwrap_or_default().into_owned());
+                            }
+                        }
+                    }
                     "basedOn" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
@@ -2106,13 +2165,14 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                         if in_borders =>
                     {
                         let mut is_none = false;
+                        let mut edge_style = String::from("single");
                         let mut border_color = None;
                         let mut border_sz = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
-                                "val" => { if val == "none" || val == "nil" { is_none = true; } }
+                                "val" => { edge_style = val.to_string(); if val == "none" || val == "nil" { is_none = true; } }
                                 "color" => { border_color = Some(if val == "auto" { "000000".to_string() } else { val.to_string() }); }
                                 "sz" => { border_sz = val.parse::<f32>().ok().map(|v| v / 8.0); }
                                 _ => {}
@@ -2125,6 +2185,17 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                             if style.border_color.is_none() { style.border_color = border_color.clone(); }
                             if style.border_width.is_none() { style.border_width = border_sz; }
                             style.border_style = Some("single".to_string());
+                        }
+                        if std::env::var("OXI_TABLE_STYLE_OUTER_EDGES_DISABLE").is_err()
+                            && (local == "top" || local == "bottom") {
+                            let border = BorderDef {
+                                style: edge_style,
+                                width: border_sz.unwrap_or(0.5),
+                                color: border_color.clone(),
+                                space: 0.0,
+                            };
+                            if local == "top" { style.top_border = Some(border); }
+                            else { style.bottom_border = Some(border); }
                         }
                         if local == "insideH" || local == "insideV" {
                             let border = BorderDef {

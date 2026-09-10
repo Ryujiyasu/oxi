@@ -1,0 +1,665 @@
+[
+  {
+    "name": "explicit_top",
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 3.0,
+      "bottom": 6.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 123.260009765625
+      }
+    ]
+  },
+  {
+    "name": "child_top_bottom",
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 3.0,
+      "bottom": 4.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 121.34002685546875
+      }
+    ]
+  },
+  {
+    "name": "child_zero_left",
+    "padding": {
+      "left": 0.0,
+      "right": 18.0,
+      "top": 3.0,
+      "bottom": 4.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 72.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 72.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 72.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 121.34002685546875
+      }
+    ]
+  },
+  {
+    "name": "cell_zero_left",
+    "padding": {
+      "left": 0.0,
+      "right": 18.0,
+      "top": 3.0,
+      "bottom": 4.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 72.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 72.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 72.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 121.34002685546875
+      }
+    ]
+  },
+  {
+    "name": "default_none",
+    "padding": {
+      "left": 5.400000095367432,
+      "right": 5.400000095367432,
+      "top": 0.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 77.42400360107422,
+        "y": 80.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 77.42400360107422,
+        "y": 91.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 77.42400360107422,
+        "y": 102.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 114.260009765625
+      }
+    ]
+  },
+  {
+    "name": "default_top",
+    "padding": {
+      "left": 5.400000095367432,
+      "right": 5.400000095367432,
+      "top": 3.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 77.42400360107422,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 77.42400360107422,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 77.42400360107422,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 117.260009765625
+      }
+    ]
+  },
+  {
+    "name": "default_zero_left",
+    "padding": {
+      "left": 0.0,
+      "right": 5.400000095367432,
+      "top": 3.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 72.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa lambda",
+        "x": 72.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "mu",
+        "x": 72.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 117.260009765625
+      }
+    ]
+  },
+  {
+    "name": "default_left9",
+    "padding": {
+      "left": 9.0,
+      "right": 5.400000095367432,
+      "top": 0.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 81.02400207519531,
+        "y": 80.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 81.02400207519531,
+        "y": 91.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 81.02400207519531,
+        "y": 102.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 114.260009765625
+      }
+    ]
+  },
+  {
+    "name": "modified_default_none",
+    "padding": {
+      "left": 5.400000095367432,
+      "right": 5.400000095367432,
+      "top": 0.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 77.42400360107422,
+        "y": 80.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 77.42400360107422,
+        "y": 91.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 77.42400360107422,
+        "y": 102.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 114.260009765625
+      }
+    ]
+  },
+  {
+    "name": "modified_default_top",
+    "padding": {
+      "left": 5.400000095367432,
+      "right": 5.400000095367432,
+      "top": 3.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 77.42400360107422,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 77.42400360107422,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 77.42400360107422,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 117.260009765625
+      }
+    ]
+  },
+  {
+    "name": "modified_default_zero_left",
+    "padding": {
+      "left": 0.0,
+      "right": 5.400000095367432,
+      "top": 3.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 72.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa lambda",
+        "x": 72.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "mu",
+        "x": 72.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 117.260009765625
+      }
+    ]
+  },
+  {
+    "name": "modified_default_left9",
+    "padding": {
+      "left": 9.0,
+      "right": 5.400000095367432,
+      "top": 0.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 81.02400207519531,
+        "y": 80.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 81.02400207519531,
+        "y": 91.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 81.02400207519531,
+        "y": 102.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 114.260009765625
+      }
+    ]
+  },
+  {
+    "name": "explicit_normal",
+    "padding": {
+      "left": 5.400000095367432,
+      "right": 5.400000095367432,
+      "top": 0.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 77.42400360107422,
+        "y": 80.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 77.42400360107422,
+        "y": 91.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 77.42400360107422,
+        "y": 102.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 114.260009765625
+      }
+    ]
+  },
+  {
+    "name": "explicit_normal_top",
+    "padding": {
+      "left": 5.400000095367432,
+      "right": 5.400000095367432,
+      "top": 3.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 77.42400360107422,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 77.42400360107422,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 77.42400360107422,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 117.260009765625
+      }
+    ]
+  },
+  {
+    "name": "explicit_parent_none",
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 2.0,
+      "bottom": 6.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 82.34002685546875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 93.6199951171875
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 104.9000244140625
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 122.29998779296875
+      }
+    ]
+  },
+  {
+    "name": "implicit_custom_flag",
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 3.0,
+      "bottom": 6.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 123.260009765625
+      }
+    ]
+  },
+  {
+    "name": "implicit_custom_setting",
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 3.0,
+      "bottom": 6.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 83.29998779296875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 94.58001708984375
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 105.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 123.260009765625
+      }
+    ]
+  },
+  {
+    "name": "id_normal_name_other",
+    "style_id": "TableNormal",
+    "display_name": "MarginBase",
+    "custom": false,
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 2.0,
+      "bottom": 6.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 82.34002685546875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 93.6199951171875
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 104.9000244140625
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 122.29998779296875
+      }
+    ]
+  },
+  {
+    "name": "id_other_name_normal",
+    "style_id": "BaseMargins",
+    "display_name": "Normal Table",
+    "custom": false,
+    "padding": {
+      "left": 5.400000095367432,
+      "right": 5.400000095367432,
+      "top": 0.0,
+      "bottom": 0.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta epsilon",
+        "x": 77.42400360107422,
+        "y": 80.29998779296875
+      },
+      {
+        "text": "zeta eta theta iota kappa",
+        "x": 77.42400360107422,
+        "y": 91.58001708984375
+      },
+      {
+        "text": "lambda mu",
+        "x": 77.42400360107422,
+        "y": 102.97998046875
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 114.260009765625
+      }
+    ]
+  },
+  {
+    "name": "normal_custom",
+    "style_id": "TableNormal",
+    "display_name": "Normal Table",
+    "custom": true,
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 2.0,
+      "bottom": 6.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 82.34002685546875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 93.6199951171875
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 104.9000244140625
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 122.29998779296875
+      }
+    ]
+  },
+  {
+    "name": "other_normal_custom",
+    "style_id": "BaseMargins",
+    "display_name": "Normal Table",
+    "custom": true,
+    "padding": {
+      "left": 12.0,
+      "right": 18.0,
+      "top": 2.0,
+      "bottom": 6.0
+    },
+    "lines": [
+      {
+        "text": "alpha beta gamma delta",
+        "x": 84.02400207519531,
+        "y": 82.34002685546875
+      },
+      {
+        "text": "epsilon zeta eta theta iota",
+        "x": 84.02400207519531,
+        "y": 93.6199951171875
+      },
+      {
+        "text": "kappa lambda mu",
+        "x": 84.02400207519531,
+        "y": 104.9000244140625
+      },
+      {
+        "text": "AFTER",
+        "x": 72.02400207519531,
+        "y": 122.29998779296875
+      }
+    ]
+  }
+]

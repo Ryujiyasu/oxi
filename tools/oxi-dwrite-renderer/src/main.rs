@@ -2042,13 +2042,16 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             let pi_json = el.paragraph_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             let ri_json = el.run_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             let co_json = el.char_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            let cpi_json = el.cell_paragraph_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            let cri_json = el.cell_row_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            let cci_json = el.cell_col_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             // Session 73 Phase B: emit text_y_off for Y-convention refactor.
             // See memory/session71_y_convention_refactor_design.md.
             // S724: emit "vert": true for vertical text (see GDI dump).
             let vert_json = if vert { ", \"vert\": true" } else { "" };
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"text_y_off\": {:.3}{}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, el.text_y_off, vert_json).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json).unwrap();
         }
         out.push_str("\n    ]}");
     }

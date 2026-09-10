@@ -1,0 +1,202 @@
+[
+  {
+    "name": "legacy_lines3_free40_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "legacy_lines3_free40_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "legacy_lines3_free55_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 1,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "legacy_lines3_free55_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 1,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "legacy_lines4_free40_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "legacy_lines4_free40_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "legacy_lines4_free55_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 1,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "legacy_lines4_free55_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 1,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines3_free40_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines3_free40_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 2,
+      "LINE0": 2,
+      "LINE1": 2,
+      "LINE2": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines3_free55_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 1,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines3_free55_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 1,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines4_free40_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines4_free40_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines4_free55_widow0",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 1,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  },
+  {
+    "name": "modern_lines4_free55_widow1",
+    "pages": 2,
+    "labels": {
+      "LABEL": 1,
+      "LINE0": 1,
+      "LINE1": 1,
+      "LINE2": 2,
+      "LINE3": 2,
+      "NEXT": 2,
+      "END": 2
+    }
+  }
+]

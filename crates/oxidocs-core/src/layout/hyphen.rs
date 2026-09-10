@@ -106,13 +106,22 @@ fn patterns() -> &'static Patterns {
     })
 }
 
-/// Byte offsets inside `word` after which a hyphen may be placed, ascending.
-///
-/// The word is matched lowercased and wrapped in the `.` boundary markers the
-/// pattern file uses. Only pure-alphabetic words are hyphenated — a token
-/// carrying digits or punctuation is left alone, which is also what Word does
-/// with the corpus's `04_205_0104_6_1`-style codes.
+fn lexical_core(word: &str) -> &str {
+    word.trim_end_matches(['.', ',', ';', ':', '!', '?', '"', '\'',
+        '\u{201d}', '\u{2019}', ')', ']', '}', '\u{2026}'])
+}
+
+/// Whether the token has an alphabetic core followed by sentence punctuation.
+pub fn is_lexical_word(word: &str) -> bool {
+    let core = lexical_core(word);
+    !core.is_empty() && core.chars().all(|c| c.is_alphabetic())
+}
+
+/// Ascending UTF-8 byte offsets where a hyphen may be inserted.
+/// Terminal sentence punctuation is excluded from pattern matching; digits
+/// and internal punctuation leave the token unhyphenated.
 pub fn break_offsets(word: &str) -> Vec<usize> {
+    let word = lexical_core(word);
     let chars: Vec<char> = word.chars().collect();
     if chars.len() < LEFT_MIN + RIGHT_MIN || !chars.iter().all(|c| c.is_alphabetic()) {
         return Vec::new();

@@ -1,0 +1,150 @@
+[
+  {
+    "name": "base",
+    "places": [
+      {
+        "i": 1,
+        "text": "ALPHA\u000bBETA\r",
+        "page": 1,
+        "y": 36.0,
+        "font": "Tahoma",
+        "size": 12.0
+      },
+      {
+        "i": 2,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 65.25,
+        "font": "Cambria",
+        "size": 10.5
+      },
+      {
+        "i": 3,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 36.75,
+        "font": "Cambria",
+        "size": 10.5
+      },
+      {
+        "i": 4,
+        "text": "FOLLOW\r",
+        "page": 1,
+        "y": 77.25,
+        "font": "Tahoma",
+        "size": 12.0
+      }
+    ]
+  },
+  {
+    "name": "no_theme",
+    "places": [
+      {
+        "i": 1,
+        "text": "ALPHA\u000bBETA\r",
+        "page": 1,
+        "y": 36.0,
+        "font": "Tahoma",
+        "size": 12.0
+      },
+      {
+        "i": 2,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 65.25,
+        "font": "\u6e38\u660e\u671d",
+        "size": 10.5
+      },
+      {
+        "i": 3,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 36.75,
+        "font": "\u6e38\u660e\u671d",
+        "size": 10.5
+      },
+      {
+        "i": 4,
+        "text": "FOLLOW\r",
+        "page": 1,
+        "y": 82.5,
+        "font": "Tahoma",
+        "size": 12.0
+      }
+    ]
+  },
+  {
+    "name": "no_settings",
+    "places": [
+      {
+        "i": 1,
+        "text": "ALPHA\u000bBETA\r",
+        "page": 1,
+        "y": 36.0,
+        "font": "Tahoma",
+        "size": 12.0
+      },
+      {
+        "i": 2,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 65.25,
+        "font": "Cambria",
+        "size": 10.5
+      },
+      {
+        "i": 3,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 36.75,
+        "font": "Cambria",
+        "size": 10.5
+      },
+      {
+        "i": 4,
+        "text": "FOLLOW\r",
+        "page": 1,
+        "y": 77.25,
+        "font": "Tahoma",
+        "size": 12.0
+      }
+    ]
+  },
+  {
+    "name": "bare",
+    "places": [
+      {
+        "i": 1,
+        "text": "ALPHA\u000bBETA\r",
+        "page": 1,
+        "y": 36.0,
+        "font": "Tahoma",
+        "size": 12.0
+      },
+      {
+        "i": 2,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 65.25,
+        "font": "\u6e38\u660e\u671d",
+        "size": 10.5
+      },
+      {
+        "i": 3,
+        "text": "\r\u0007",
+        "page": 1,
+        "y": 36.75,
+        "font": "\u6e38\u660e\u671d",
+        "size": 10.5
+      },
+      {
+        "i": 4,
+        "text": "FOLLOW\r",
+        "page": 1,
+        "y": 82.5,
+        "font": "Tahoma",
+        "size": 12.0
+      }
+    ]
+  }
+]

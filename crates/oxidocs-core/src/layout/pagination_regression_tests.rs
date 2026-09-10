@@ -31,9 +31,9 @@ fn section_parity_and_number_restart_have_distinct_padding_rules() {
 }
 
 #[test]
-fn document_break_count_distrust_preserves_locally_valid_table_hint() {
+fn document_break_count_distrust_preserves_measured_table_pagination() {
     let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/table_row_cached_break.docx"));
+        "/../../tests/fixtures/table_row_cached_break_explicit_tail.docx"));
     let doc = crate::parser::parse_docx(bytes).unwrap();
     let engine = LayoutEngine::for_document(&doc);
     let trusted = engine.layout_pass(&doc);
@@ -41,7 +41,8 @@ fn document_break_count_distrust_preserves_locally_valid_table_hint() {
     engine.lrpb_count_distrust.set(true);
     let distrusted = engine.layout_pass(&doc);
     assert_eq!(distrusted.pages.len(), trusted.pages.len());
-    assert!(distrusted.pages[1].elements.iter().any(|e| {
+    // Word keeps both rows on page one; only the trailing paragraph overflows.
+    assert!(distrusted.pages[0].elements.iter().any(|e| {
         matches!(&e.content, LayoutContent::Text { text, .. } if text.contains("Second"))
     }));
 }
@@ -189,7 +190,7 @@ fn text_balance_preserves_order_across_existing_columns() {
     elements.push(text_row(100.0, 0.0, 10.0, 4));
     elements.push(text_row(100.0, 10.0, 10.0, 5));
     assert_eq!(
-        LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]),
+        LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0], &[], 0.0, 14, None),
         Some(30.0)
     );
     assert_eq!(
@@ -217,7 +218,7 @@ fn text_balance_uses_row_advances_and_keeps_ruby_with_base() {
     ruby.flow_line_offset = -6.0;
     elements.push(ruby);
     assert_eq!(
-        LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]),
+        LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0], &[], 0.0, 14, None),
         Some(30.0)
     );
     assert_eq!((elements[1].x, elements[1].y), (100.0, 0.0));
@@ -227,7 +228,7 @@ fn text_balance_uses_row_advances_and_keeps_ruby_with_base() {
 #[test]
 fn text_balance_does_not_split_a_hanging_line_at_the_column_boundary() {
     let mut elements = vec![text_row(90.0, 0.0, 10.0, 0), text_row(110.0, 0.0, 10.0, 0)];
-    assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]).is_none());
+    assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0], &[], 0.0, 14, None).is_none());
     assert_eq!((elements[0].y, elements[1].y), (0.0, 0.0));
 }
 
@@ -235,7 +236,7 @@ fn text_balance_does_not_split_a_hanging_line_at_the_column_boundary() {
 fn text_balance_leaves_table_content_for_table_path() {
     let mut elements = vec![text_row(0.0, 0.0, 10.0, 0), text_row(0.0, 10.0, 10.0, 1)];
     elements[1].cell_paragraph_index = Some(0);
-    assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]).is_none());
+    assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0], &[], 0.0, 14, None).is_none());
     assert_eq!(elements[1].y, 10.0);
 }
 
@@ -247,7 +248,7 @@ fn text_balance_keeps_page_continuation_before_later_paragraphs() {
         text_row(0.0, 30.0, 10.0, 4),
     ];
     let before: Vec<_> = elements.iter().map(|e| (e.x, e.y)).collect();
-    assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0]).is_none());
+    assert!(LayoutEngine::rebalance_text_columns(&mut elements, 0.0, &[0.0, 100.0], &[], 0.0, 14, None).is_none());
     assert_eq!(elements.iter().map(|e| (e.x, e.y)).collect::<Vec<_>>(), before);
 }
 
@@ -362,14 +363,14 @@ fn modern_justified_hanging_preserves_decimal_paren_exclusion() {
 }
 
 #[test]
-fn top_margins_retain_precision_and_cjk_layout_keeps_legacy_origins() {
+fn top_margins_retain_precision_in_latin_and_cjk_layout() {
     let cases: &[(&[u8], &[f32])] = &[
         (include_bytes!("../../../../tests/fixtures/top_margin_precision/topmargin.docx"),
             &[56.5, 56.7, 57.0, 118.5, 118.8, 119.0]),
         (include_bytes!("../../../../tests/fixtures/top_margin_precision/topmargin_cjk.docx"),
-            &[56.5, 56.5, 57.0, 118.5, 119.0, 119.0]),
+            &[56.5, 56.7, 57.0, 118.5, 118.8, 119.0]),
         (include_bytes!("../../../../tests/fixtures/top_margin_precision/topmargin_cjk_box.docx"),
-            &[56.5, 56.5, 57.0, 118.5, 119.0, 119.0]),
+            &[56.5, 56.7, 57.0, 118.5, 118.8, 119.0]),
     ];
     let declared = [56.5, 56.7, 57.0, 118.5, 118.8, 119.0];
     for (case, (bytes, expected)) in cases.iter().enumerate() {
@@ -385,7 +386,7 @@ fn top_margins_retain_precision_and_cjk_layout_keeps_legacy_origins() {
                 LayoutContent::Text { text, .. } if text.starts_with("TOPMARK_"))).unwrap();
             assert!((marker.y - top).abs() < 0.001, "case {case}: {} vs {top}", marker.y);
         }
-        // Rendering compatibility must not alter the source geometry.
+        // Layout must not alter the source geometry.
         for (page, top) in doc.pages.iter().zip(declared) {
             assert!((page.margin.top - top).abs() < 0.001, "case {case}");
         }
@@ -1093,5 +1094,846 @@ fn keep_lines_fits_the_last_line_before_trailing_spacing() {
         for (label, position) in labels {
             assert_eq!(actual.get(label).copied(), position["page"].as_u64().map(|n| n as usize), "{name}: {label}");
         }
+    }
+}
+
+#[test]
+fn cell_image_paragraph_spacing_contributes_to_footer_extent() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_image_spacing");
+    for mode in ["direct", "style"] {
+        for font in [9, 11] {
+            let mut positions = Vec::new();
+            for gap in [0, 2] {
+                let name = format!("{mode}_font{font}_gap{gap}");
+                let doc = crate::parser::parse_docx(
+                    &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+                ).unwrap();
+                let layout = LayoutEngine::for_document(&doc).layout(&doc);
+                assert_eq!(layout.pages.len(), 1, "{name}");
+                let text_y = |label: &str| layout.pages[0].elements.iter().find_map(|e| {
+                    matches!(&e.content, LayoutContent::Text { text, .. } if text == label).then_some(e.y)
+                }).unwrap();
+                let image_y = layout.pages[0].elements.iter().find_map(|e| {
+                    matches!(&e.content, LayoutContent::Image { .. }).then_some(e.y)
+                }).unwrap();
+                positions.push((text_y("BEFORE"), text_y("AFTER"), image_y));
+            }
+            // Fresh Word exports: the two 2pt margins grow the footer stack
+            // by 4.104pt; the anchored footer end stays fixed and the picture
+            // moves upward by 2pt, including when spacing comes from a style.
+            assert!((positions[0].0 - positions[1].0 - 4.104).abs() < 0.2, "{mode}/{font}: {positions:?}");
+            assert!((positions[0].1 - positions[1].1).abs() < 0.03, "{mode}/{font}: {positions:?}");
+            assert!((positions[0].2 - positions[1].2 - 2.0).abs() < 0.2, "{mode}/{font}: {positions:?}");
+        }
+    }
+}
+
+#[test]
+fn minimum_row_height_allows_fitting_continuation_fragments() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/row_split_minimum");
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in expected.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        // This matrix checks row-fragment placement. Word also emits a trailing
+        // empty page in three short-row cases; that separate end-paragraph
+        // pagination difference is not covered by this regression test.
+        let labels = case["labels"].as_object().unwrap();
+        let mut actual = std::collections::HashMap::new();
+        for (page_idx, page) in layout.pages.iter().enumerate() {
+            for element in &page.elements {
+                if let LayoutContent::Text { text, .. } = &element.content {
+                    if labels.contains_key(text.trim()) {
+                        actual.insert(text.trim().to_owned(), page_idx + 1);
+                    }
+                }
+            }
+        }
+        for (label, position) in labels {
+            assert_eq!(actual.get(label).copied(), position["page"].as_u64().map(|n| n as usize), "{name}: {label}");
+        }
+    }
+}
+
+#[test]
+fn footer_cell_top_border_is_counted_once() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_image_spacing");
+    for gap in [0, 2] {
+        let mut positions = Vec::new();
+        for mode in ["direct", "border"] {
+            let doc = crate::parser::parse_docx(&std::fs::read(
+                fixtures.join(format!("{mode}_font9_gap{gap}.docx")),
+            ).unwrap()).unwrap();
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            let text_y = |label: &str| layout.pages[0].elements.iter().find_map(|e| {
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == label).then_some(e.y)
+            }).unwrap();
+            positions.push((text_y("BEFORE"), text_y("AFTER")));
+        }
+        assert!((positions[0].0 - positions[1].0 - 1.0).abs() < 0.2, "gap{gap}: {positions:?}");
+        assert!((positions[0].1 - positions[1].1).abs() < 0.03, "gap{gap}: {positions:?}");
+    }
+}
+
+#[test]
+fn cell_image_spacing_is_shared_within_a_paragraph() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_image_spacing");
+    for (mode, growth) in [("same", 4.104_f32), ("separate", 6.0_f32)] {
+        let mut positions = Vec::new();
+        for gap in [0, 2] {
+            let doc = crate::parser::parse_docx(&std::fs::read(
+                fixtures.join(format!("multi_{mode}_gap{gap}.docx")),
+            ).unwrap()).unwrap();
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            assert_eq!(layout.pages.len(), 1);
+            let y = |label: &str| layout.pages[0].elements.iter().find_map(|e| {
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == label).then_some(e.y)
+            }).unwrap();
+            positions.push((y("BEFORE"), y("AFTER")));
+        }
+        assert!((positions[0].0 - positions[1].0 - growth).abs() < 0.2, "{mode}: {positions:?}");
+        assert!((positions[0].1 - positions[1].1).abs() < 0.03, "{mode}: {positions:?}");
+    }
+}
+
+#[test]
+fn empty_header_mark_uses_its_inherited_paragraph_font() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/header_inherited_mark");
+    let mut body_y = Vec::new();
+    for font in ["TimesNewRoman", "Calibri"] {
+        let mut ys = Vec::new();
+        for explicit in [0, 1] {
+            let doc = crate::parser::parse_docx(&std::fs::read(
+                fixtures.join(format!("{font}_explicit{explicit}.docx")),
+            ).unwrap()).unwrap();
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            assert_eq!(layout.pages.len(), 1);
+            ys.push(layout.pages[0].elements.iter().find_map(|e| {
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == "BODY").then_some(e.y)
+            }).unwrap());
+        }
+        // Word's BODY baseline is identical for inherited and direct marks.
+        assert!((ys[0] - ys[1]).abs() < 0.03, "{font}: {ys:?}");
+        body_y.push(ys[0]);
+    }
+    // Word: Calibri adds 0.84pt over the Times New Roman header mark.
+    assert!((body_y[1] - body_y[0] - 0.84).abs() < 0.15, "{body_y:?}");
+}
+
+#[test]
+fn modern_short_cell_widow_moves_the_whole_row() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/short_cell_widow");
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in expected.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(
+            fixtures.join(format!("{name}.docx")),
+        ).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), case["pages"].as_u64().unwrap() as usize, "{name}");
+        let labels = case["labels"].as_object().unwrap();
+        let mut actual = std::collections::HashMap::new();
+        for (i, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    for token in text.split_whitespace() {
+                        if labels.contains_key(token) { actual.insert(token.to_owned(), i + 1); }
+                    }
+                }
+            }
+        }
+        for (label, page) in labels {
+            assert_eq!(actual.get(label).copied(), page.as_u64().map(|p| p as usize), "{name}: {label}");
+        }
+    }
+}
+
+#[test]
+fn legacy_cjk_cell_lines_do_not_gain_modern_widow_control() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cjk_cell_leading");
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in expected.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(
+            fixtures.join(format!("{name}.docx")),
+        ).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), case["pages"].as_u64().unwrap() as usize, "{name}");
+        let labels = case["labels"].as_object().unwrap();
+        let mut actual = std::collections::HashMap::new();
+        for (i, page) in layout.pages.iter().enumerate() {
+            let mut lines = std::collections::BTreeMap::<i32, String>::new();
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    lines.entry((e.y * 100.0).round() as i32).or_default().push_str(text);
+                }
+            }
+            for line in lines.values() {
+                for label in labels.keys() {
+                    if line.contains(label.as_str()) { actual.insert(label.clone(), i + 1); }
+                }
+            }
+        }
+        for (label, position) in labels {
+            assert_eq!(actual.get(label).copied(), position["page"].as_u64().map(|p| p as usize), "{name}: {label}");
+        }
+    }
+}
+
+#[test]
+fn cjk_exact_lines_preserve_fractional_top_origins_with_each_grid_mode() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cjk_top_origin");
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in expected.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(
+            fixtures.join(format!("{name}.docx")),
+        ).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        let mut ys: Vec<f32> = layout.pages[0].elements.iter().filter_map(|e|
+            matches!(&e.content, LayoutContent::Text { text, .. } if !text.is_empty())
+                .then_some(e.y)
+        ).collect();
+        ys.sort_by(f32::total_cmp);
+        ys.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+        let top = case["top"].as_f64().unwrap() as f32;
+        assert_eq!(ys.len(), 2, "{name}");
+        assert!((ys[0] - top).abs() < 0.001, "{name}: {} vs {top}", ys[0]);
+        assert!((ys[1] - ys[0] - 18.0).abs() < 0.001, "{name}");
+    }
+}
+
+#[test]
+fn fixed_image_top_bottom_bands_displace_intersecting_paragraphs() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/fixed_image_band");
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    let cases = expected.as_array().unwrap();
+    let reference = cases.iter().find(|c| c["name"] == "page_y2_fill0").unwrap();
+    let baseline_offset = reference["labels"]["MARK"]["baseline"].as_f64().unwrap() as f32 - 72.0;
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(
+            fixtures.join(format!("{name}.docx")),
+        ).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        for (label, position) in case["labels"].as_object().unwrap() {
+            let element = layout.pages[0].elements.iter().find(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+            ).unwrap();
+            let expected_y = position["baseline"].as_f64().unwrap() as f32 - baseline_offset;
+            assert!((element.y - expected_y).abs() < 0.15,
+                "{name}: {label} {} vs {expected_y}", element.y);
+        }
+    }
+}
+
+#[test]
+fn contextual_cell_tail_suppresses_after_spacing_for_text_and_images() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_contextual_tail");
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    let mut measured = std::collections::HashMap::new();
+    for case in expected.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(
+            fixtures.join(format!("{name}.docx")),
+        ).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        let y = layout.pages[0].elements.iter().find(|e|
+            matches!(&e.content, LayoutContent::Text { text, .. } if text == "AFTER")
+        ).unwrap().y;
+        measured.insert(name.to_owned(), (y, case["after_baseline"].as_f64().unwrap() as f32));
+    }
+    for (name, (actual, word)) in &measured {
+        let kind = name.split('_').next().unwrap();
+        let reference = &measured[&format!("{kind}_ctx0_after0_other0")];
+        assert!(((actual - reference.0) - (word - reference.1)).abs() < 0.15,
+            "{name}: Oxi delta {} vs Word {}", actual - reference.0, word - reference.1);
+    }
+}
+
+#[test]
+fn split_row_borders_close_both_cells_near_the_page_bottom() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/row_split_minimum");
+    // Centers of the horizontal rules in fresh Word PDF exports. The
+    // one-line fragment also includes the completed LABEL cell's 2pt after.
+    for (name, bottom) in [
+        ("lines6_height0_free22", 214.32_f32),
+        ("lines6_height0_free40", 217.32_f32),
+        ("lines6_height30_free40", 217.32_f32),
+    ] {
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 2, "{name}");
+        for (page, expected_y) in [(0, bottom), (1, 20.28)] {
+            for x in [100.0_f32, 260.0] {
+                assert!(layout.pages[page].elements.iter().any(|e| matches!(&e.content,
+                    LayoutContent::TableBorder { x1, x2, y1, y2, .. }
+                    if (*y1 - *y2).abs() < 0.1 && (*y1 - expected_y).abs() < 0.8
+                        && *x1 <= x && *x2 >= x)),
+                    "{name}: page {} missing rule at x={x}, y={expected_y}", page + 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn cjk_split_row_border_encloses_the_full_line_box() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cjk_split_border");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 2, "{name}");
+        let edges = case["pages"][0]["horizontal_y"].as_array().unwrap();
+        let bottom = (edges[edges.len()-1].as_f64().unwrap()
+            + edges[edges.len()-2].as_f64().unwrap()) as f32 / 2.0;
+        assert!(layout.pages[0].elements.iter().any(|e| matches!(&e.content,
+            LayoutContent::TableBorder { x1, x2, y1, y2, .. }
+                if (*y1-*y2).abs()<0.1 && (*y1-bottom).abs()<0.8
+                    && *x1 < 100.0 && *x2 > 100.0)), "{name}: bottom={bottom}");
+        for (i, page) in layout.pages.iter().enumerate() {
+            let expected = case["pages"][i]["text"].as_str().unwrap()
+                .lines().filter(|s| s.contains("\u{65e5}\u{672c}")).count();
+            let actual = page.elements.iter().filter(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text.contains("\u{65e5}\u{672c}"))).count();
+            assert_eq!(actual, expected, "{name}: page {}", i+1);
+        }
+    }
+}
+
+#[test]
+fn split_cells_repeat_only_their_declared_horizontal_edges() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/declared_fragment_edges");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["doc"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(fixtures.join(name)).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let pages = case["pages"].as_array().unwrap();
+        assert_eq!(layout.pages.len(), pages.len(), "{name}");
+        for (i, page) in layout.pages.iter().enumerate() {
+            let mut actual: Vec<f32> = page.elements.iter().filter_map(|e| match &e.content {
+                LayoutContent::TableBorder { x1, x2, y1, y2, .. }
+                    if (*y1 - *y2).abs() < 0.1 && *x1 < 100.0 && *x2 > 100.0 => Some(*y1),
+                _ => None,
+            }).collect();
+            actual.sort_by(f32::total_cmp);
+            let mut expected: Vec<f32> = pages[i]["horizontal"].as_array().unwrap().iter()
+                .map(|r| ((r[1].as_f64().unwrap() + r[3].as_f64().unwrap()) / 2.0) as f32)
+                .collect();
+            expected.sort_by(f32::total_cmp);
+            assert_eq!(actual.len(), expected.len(), "{name}: page {}", i + 1);
+            for (a, b) in actual.iter().zip(expected.iter()) {
+                // Allow the existing sub-point cell-origin difference; edge presence is exact.
+                assert!((a - b).abs() < 1.0, "{name}: page {}: {a} vs {b}", i + 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn collapsed_row_top_is_repeated_unless_the_cell_suppresses_it() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/collapsed_fragment_top");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 2, "{name}");
+        for x in [100.0_f32, 260.0] {
+            let expected = case["pages"][1]["horizontal"].as_array().unwrap().iter().any(|r|
+                r[0].as_f64().unwrap() < x as f64 && r[2].as_f64().unwrap() > x as f64
+                    && r[1].as_f64().unwrap() < 21.0);
+            let actual = layout.pages[1].elements.iter().any(|e| matches!(&e.content,
+                LayoutContent::TableBorder { x1, x2, y1, y2, .. }
+                    if (*y1 - *y2).abs() < 0.1 && (*y1 - 20.28).abs() < 0.8
+                        && *x1 < x && *x2 > x));
+            assert_eq!(actual, expected, "{name}: continuation top at x={x}");
+        }
+    }
+}
+
+#[test]
+fn footer_inline_images_keep_word_positions_and_line_spacing() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/footer_images");
+    let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(fixtures.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        let actual: Vec<_> = layout.pages[0].elements.iter().filter(|e| matches!(&e.content, LayoutContent::Image { .. })).collect();
+        let expected = case["images"].as_array().unwrap();
+        assert_eq!(actual.len(), expected.len(), "{name}");
+        for (image, bbox) in actual.iter().zip(expected) {
+            let coords = [image.x, image.y, image.x + image.width, image.y + image.height];
+            for (axis, value) in coords.iter().enumerate() {
+                let word = bbox[axis].as_f64().unwrap() as f32;
+                assert!((value - word).abs() < 0.05, "{name} axis {axis}: {value} vs Word {word}");
+            }
+        }
+    }
+}
+
+#[test]
+fn oversized_first_line_does_not_create_an_empty_page() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/oversized_first_line");
+    let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(fixtures.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), case["pages"].as_u64().unwrap() as usize, "{name}");
+        for (text, expected) in case["positions"].as_object().unwrap() {
+            let actual: Vec<usize> = layout.pages.iter().enumerate().filter_map(|(i,p)|
+                p.elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { text: actual_text, .. } if actual_text == text)).then_some(i+1)).collect();
+            let word: Vec<usize> = expected.as_array().unwrap().iter().map(|p| p.as_u64().unwrap() as usize).collect();
+            assert_eq!(actual, word, "{name}: {text}");
+        }
+    }
+}
+
+#[test]
+fn short_left_tab_gaps_land_on_the_word_tab_stop() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/short_tab_gap");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let text = layout.pages[0].elements.iter().find(|e|
+            matches!(&e.content, LayoutContent::Text { text, .. } if text == "X")
+        ).unwrap();
+        let word_x = case["x"].as_f64().unwrap() as f32;
+        assert!((text.x - word_x).abs() < 0.05, "{name}: {} vs Word {word_x}", text.x);
+    }
+}
+
+#[test]
+fn continuous_section_boundaries_keep_word_spacing() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/continuous_section_spacing");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let text_position = |wanted: &str| {
+            layout.pages.iter().enumerate().find_map(|(i, p)| {
+                p.elements.iter().find_map(|e| match &e.content {
+                    LayoutContent::Text { text, .. } if text == wanted => Some((i + 1, e.y)),
+                    _ => None,
+                })
+            }).unwrap()
+        };
+        match case["kind"].as_str().unwrap() {
+            "gap" => {
+                let (pre_page, pre_y) = text_position("PRE");
+                let (item_page, item_y) = text_position("ITEM00");
+                assert_eq!(pre_page, item_page, "{name}");
+                let expected = case["gap"].as_f64().unwrap() as f32;
+                assert!((item_y - pre_y - expected).abs() < 0.1, "{name}: first gap");
+                if let Some(expected) = case["right_gap"].as_f64() {
+                    let right_y = layout.pages[0].elements.iter().filter_map(|e| {
+                        match &e.content {
+                            LayoutContent::Text { text, .. }
+                                if text.starts_with("ITEM") && e.x > 200.0 => Some(e.y),
+                            _ => None,
+                        }
+                    }).reduce(f32::min).unwrap();
+                    assert!((right_y - pre_y - expected as f32).abs() < 0.1,
+                        "{name}: common column origin");
+                }
+            }
+            "page_top" => {
+                let (page, y) = text_position("ITEM00");
+                assert_eq!(page, case["page"].as_u64().unwrap() as usize, "{name}");
+                let expected = doc.pages[0].margin.top + case["before"].as_f64().unwrap() as f32;
+                assert!((y - expected).abs() < 0.1, "{name}: {y} vs {expected}");
+            }
+            "image" => {
+                let actual: Vec<_> = layout.pages.iter().enumerate().flat_map(|(i, p)| {
+                    p.elements.iter().filter_map(move |e| {
+                        matches!(&e.content, LayoutContent::Image { .. })
+                            .then_some((i + 1, [e.x, e.y, e.x + e.width, e.y + e.height]))
+                    })
+                }).collect();
+                let expected = case["images"].as_array().unwrap();
+                assert_eq!(actual.len(), expected.len(), "{name}");
+                for ((page, bbox), word) in actual.iter().zip(expected) {
+                    assert_eq!(*page, word["page"].as_u64().unwrap() as usize, "{name}");
+                    for (axis, value) in bbox.iter().enumerate() {
+                        let expected = word["bbox"][axis].as_f64().unwrap() as f32;
+                        assert!((value - expected).abs() < 0.05, "{name}: image axis {axis}");
+                    }
+                }
+            }
+            kind => panic!("unknown fixture kind: {kind}"),
+        }
+    }
+}
+
+
+#[test]
+fn hidden_paragraph_keeps_follow_the_leading_paragraph() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/hidden_paragraph_keep");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (needle, key) in [("HEAD", "head_page"), ("NEXT", "next_page")] {
+            let page = layout.pages.iter().position(|page| page.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(needle))
+            )).unwrap() + 1;
+            assert_eq!(page, case[key].as_u64().unwrap() as usize, "{name}: {needle}");
+        }
+    }
+}
+
+#[test]
+fn partial_table_margins_inherit_each_missing_edge() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/table_margin_inheritance");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let table = doc.pages.iter().flat_map(|p| &p.blocks).find_map(|b|
+            if let crate::ir::Block::Table(t) = b { Some(t) } else { None }
+        ).unwrap();
+        let defaults = table.style.default_cell_margins.as_ref().unwrap();
+        let cell = &table.rows[0].cells[0];
+        let local = cell.margins.as_ref();
+        for (edge, actual) in [
+            ("left", local.and_then(|m| m.left).or(defaults.left)),
+            ("right", local.and_then(|m| m.right).or(defaults.right)),
+            ("top", local.and_then(|m| m.top).or(defaults.top)),
+            ("bottom", local.and_then(|m| m.bottom).or(defaults.bottom)),
+        ] {
+            let expected = case["padding"][edge].as_f64().unwrap() as f32;
+            assert!((actual.unwrap() - expected).abs() < 0.001, "{name}: {edge}");
+        }
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: Vec<(f32, String)> = Vec::new();
+        for element in &layout.pages[0].elements {
+            if let LayoutContent::Text { text, .. } = &element.content {
+                if let Some((_, line)) = lines.iter_mut().find(|(y, _)| (element.y - *y).abs() < 0.01) {
+                    line.push_str(text);
+                } else {
+                    lines.push((element.y, text.clone()));
+                }
+            }
+        }
+        lines.sort_by(|a,b| a.0.total_cmp(&b.0));
+        let actual: Vec<_> = lines.iter().map(|(_, line)| line.trim_end()).collect();
+        let expected: Vec<_> = case["lines"].as_array().unwrap().iter()
+            .map(|l| l["text"].as_str().unwrap()).collect();
+        assert_eq!(actual, expected, "{name}: Word line breaks");
+    }
+}
+
+#[test]
+fn floating_shape_contours_preserve_word_page_breaks() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/shape_wrap_pagination");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let actual: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, page)| {
+            page.elements.iter().find(|e| e.paragraph_index == Some(1))
+                .map(|e| (i + 1, e.y))
+        }).collect();
+        assert_eq!(actual.len(), 1, "{name}: target paragraph must occur once");
+        assert_eq!(actual[0].0, case["page"].as_u64().unwrap() as usize, "{name}");
+        assert!((actual[0].1 - case["y"].as_f64().unwrap() as f32).abs() < 0.8,
+            "{name}: paragraph position");
+    }
+}
+
+#[test]
+fn nested_table_paragraphs_have_independent_widow_control() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/nested_paragraph_identity");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["pages"].as_object().unwrap() {
+            let actual: Vec<_> = layout.pages.iter().enumerate().filter_map(|(i, page)|
+                page.elements.iter().any(|e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text.contains(label)))
+                    .then_some(i + 1)
+            ).collect();
+            assert_eq!(actual, vec![expected.as_u64().unwrap() as usize], "{name}: {label}");
+        }
+    }
+}
+
+#[test]
+fn table_continuation_keeps_following_rows_below_images() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/table_image_continuation");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["text"].as_object().unwrap() {
+            let (pi, element) = layout.pages.iter().enumerate().find_map(|(pi, p)|
+                p.elements.iter().find(|e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text.contains(label)))
+                    .map(|e| (pi, e))
+            ).unwrap();
+            assert_eq!(pi + 1, expected["page"].as_u64().unwrap() as usize, "{name}: {label}");
+            if label == "FOLLOW" {
+                let image_bottom = layout.pages[pi].elements.iter().filter_map(|e|
+                    matches!(e.content, LayoutContent::Image { .. }).then_some(e.y + e.height)
+                ).fold(f32::NEG_INFINITY, f32::max);
+                assert!(image_bottom.is_finite() && element.y >= image_bottom - 0.01,
+                    "{name}: following row overlaps image");
+                assert!((element.y + element.text_y_off - expected["y"].as_f64().unwrap() as f32).abs() < 0.8,
+                    "{name}: following text differs from Word");
+            }
+        }
+    }
+}
+
+#[test]
+fn word_flow_footnote_boundaries_preserve_body_and_notes() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/footnote_flow_boundary");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["places"].as_object().unwrap() {
+            let actual: Vec<_> = layout.pages.iter().enumerate().flat_map(|(i, page)|
+                page.elements.iter().filter_map(move |e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text.contains(label))
+                    .then_some(i + 1))
+            ).collect();
+            assert_eq!(actual, vec![expected["page"].as_u64().unwrap() as usize],
+                "{name}: {label} must be present exactly once on its Word page");
+        }
+    }
+}
+
+#[test]
+fn word_flow_hyphenation_keeps_punctuation_and_following_tokens() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/hyphen_terminal_punctuation");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: Vec<(usize, f32, String)> = Vec::new();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    if let Some((_, _, line)) = lines.iter_mut().find(|(p, y, _)|
+                        *p == pi && (e.y - *y).abs() < 0.01) {
+                        line.push_str(text);
+                    } else {
+                        lines.push((pi, e.y, text.clone()));
+                    }
+                }
+            }
+        }
+        lines.sort_by(|a,b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let actual: Vec<_> = lines.iter().map(|(_, _, text)| text.trim_end()).collect();
+        let expected: Vec<_> = case["lines"].as_array().unwrap().iter()
+            .map(|line| line.as_str().unwrap()).collect();
+        assert_eq!(actual, expected, "{name}: Word line breaks and complete text");
+    }
+}
+
+#[test]
+fn word_autofit_infeasible_preserves_cell_insets() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/autofit_infeasible");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let engine = LayoutEngine::for_document(&doc);
+        let page = &doc.pages[0];
+        let table = page.blocks.iter().find_map(|b| match b {
+            Block::Table(table) => Some(table), _ => None,
+        }).unwrap();
+        let width = page.size.width - page.margin.left - page.margin.right;
+        let actual = engine.resolve_table_col_widths_n(table, width, false);
+        let expected = case["widths"].as_array().unwrap();
+        assert_eq!(actual.len(), expected.len(), "{name}");
+        for (column, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            let expected = expected.as_f64().unwrap() as f32;
+            assert!(*actual > 0.0 && (*actual - expected).abs() <= 0.05,
+                "{name} column {column}: actual={actual}, Word={expected}");
+        }
+    }
+}
+
+#[test]
+fn word_autofit_application_defaults_preserve_theme_inheritance() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/application_font_defaults");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let actual: Vec<_> = layout.pages.iter().flat_map(|page| page.elements.iter())
+            .filter(|e| matches!(&e.content, LayoutContent::Text { text, .. } if text == "FOLLOW"))
+            .map(|e| e.y).collect();
+        let expected = case["places"].as_array().unwrap().iter()
+            .find(|p| p["text"].as_str().unwrap().trim() == "FOLLOW")
+            .unwrap()["y"].as_f64().unwrap() as f32;
+        assert_eq!(actual.len(), 1, "{name}: FOLLOW must occur once");
+        assert!((actual[0] - expected).abs() < 0.1,
+            "{name}: actual={}, Word={expected}", actual[0]);
+    }
+}
+
+
+#[test]
+fn text_balance_grid_keeps_the_word_column_boundary_at_fractional_origins() {
+    // A double-height heading followed by 24 grid rows. Word keeps twelve
+    // rows on the left, including when the band follows one-column text.
+    for top in [65.2, 265.2, 277.5] {
+        let mut y = top;
+        let mut rows: Vec<_> = (0..25).map(|i| {
+            let height = if i == 0 { 40.55 } else { 20.55 };
+            let row = text_row(0.0, y, height, i);
+            y += height;
+            row
+        }).collect();
+        LayoutEngine::rebalance_text_columns(
+            &mut rows, top, &[0.0, 100.0], &[], 0.0, 14, Some(20.55),
+        ).unwrap();
+        assert_eq!(rows.iter().filter(|row| row.x == 0.0).count(), 12,
+            "Word column boundary at band origin {top}");
+        assert!((rows[12].y - top).abs() < 0.001);
+        assert_eq!(rows.iter().map(|row| row.paragraph_index.unwrap()).collect::<Vec<_>>(),
+            (0..25).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn text_balance_grid_does_not_pull_a_tall_last_line_into_the_wrong_column() {
+    // Word's ten-line controls use five left rows at the normal grid height,
+    // but six when the final line requires two grid slots. Without an active
+    // grid, even a smaller increase in the final line retains six left rows.
+    for (pitch, height, last_height, expected) in [
+        (Some(20.55), 20.55, 20.55, 5),
+        (Some(20.55), 20.55, 40.65, 6),
+        (None, 9.941, 11.93, 6),
+    ] {
+        let mut rows: Vec<_> = (0..10).map(|i| {
+            text_row(0.0, i as f32 * height,
+                if i == 9 { last_height } else { height }, i)
+        }).collect();
+        LayoutEngine::rebalance_text_columns(
+            &mut rows, 0.0, &[0.0, 100.0], &[], 0.0, 14, pitch,
+        ).unwrap();
+        assert_eq!(rows.iter().filter(|row| row.x == 0.0).count(), expected,
+            "active grid {pitch:?}, final height {last_height}");
     }
 }

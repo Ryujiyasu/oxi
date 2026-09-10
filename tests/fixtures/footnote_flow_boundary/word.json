@@ -1,0 +1,898 @@
+[
+  {
+    "name": "Times_New_Roman_line1_delta-0.4_own",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 180.5380096435547
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 194.33999633789062
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 50.287994384765625
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_line1_delta0.4_own",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 50.287994384765625
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 64.08799743652344
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 77.88800048828125
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_line2_delta-0.4_own",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 2,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 64.08799743652344
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 91.71800231933594
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 119.3179931640625
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_line2_delta0.4_own",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 2,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 64.08799743652344
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 91.71800231933594
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 119.3179931640625
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Calibri_line1_delta-0.4_own",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 182.95001220703125
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 196.39199829101562
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 51.6199951171875
+      }
+    }
+  },
+  {
+    "name": "Calibri_line1_delta0.4_own",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 51.6199951171875
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 65.05999755859375
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 78.5
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Calibri_line2_delta-0.4_own",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 2,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 65.05999755859375
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 91.97000122070312
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 118.72999572753906
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Calibri_line2_delta0.4_own",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 2,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 65.05999755859375
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 91.97000122070312
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 118.72999572753906
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_sep10_delta-0.4_separator",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "separator_height": 10,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 184.4980010986328
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 198.3000030517578
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 50.287994384765625
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_sep10_delta0.4_separator",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "separator_height": 10,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 50.287994384765625
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 64.08799743652344
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 77.88800048828125
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_sep18_delta-0.4_separator",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "separator_height": 18,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 176.57798767089844
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 190.37998962402344
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 50.287994384765625
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_sep18_delta0.4_separator",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "separator_height": 18,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 50.287994384765625
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 64.08799743652344
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 77.88800048828125
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Calibri_sep10_delta-0.4_separator",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "separator_height": 10,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 186.91000366210938
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 200.3520050048828
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 51.6199951171875
+      }
+    }
+  },
+  {
+    "name": "Calibri_sep10_delta0.4_separator",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "separator_height": 10,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 51.6199951171875
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 65.05999755859375
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 78.5
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Calibri_sep18_delta-0.4_separator",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "separator_height": 18,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 178.989990234375
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 192.4320068359375
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 51.6199951171875
+      }
+    }
+  },
+  {
+    "name": "Calibri_sep18_delta0.4_separator",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "separator_height": 18,
+    "delta": 0.4,
+    "places": {
+      "HEAD": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 51.6199951171875
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 65.05999755859375
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 78.5
+      },
+      "NOTEONE": {
+        "page": 2,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 2,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 2,
+        "y": 250.6439971923828
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_line1_delta-0.4_prior",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 180.5380096435547
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 194.33999633789062
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 50.287994384765625
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_line1_delta0.4_prior",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 1,
+    "delta": 0.4,
+    "places": {
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "HEAD": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 50.287994384765625
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 64.08799743652344
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 77.88800048828125
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_line2_delta-0.4_prior",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 2,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 166.7379913330078
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 194.33999633789062
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 64.08799743652344
+      }
+    }
+  },
+  {
+    "name": "Times_New_Roman_line2_delta0.4_prior",
+    "font": "Times New Roman",
+    "size": 12,
+    "multiple": 2,
+    "delta": 0.4,
+    "places": {
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "HEAD": {
+        "page": 2,
+        "y": 36.48799133300781
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 64.08799743652344
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 91.71800231933594
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 119.3179931640625
+      }
+    }
+  },
+  {
+    "name": "Calibri_line1_delta-0.4_prior",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 182.95001220703125
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 196.39199829101562
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 51.6199951171875
+      }
+    }
+  },
+  {
+    "name": "Calibri_line1_delta0.4_prior",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 1,
+    "delta": 0.4,
+    "places": {
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "HEAD": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 51.6199951171875
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 65.05999755859375
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 78.5
+      }
+    }
+  },
+  {
+    "name": "Calibri_line2_delta-0.4_prior",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 2,
+    "delta": -0.4,
+    "places": {
+      "HEAD": {
+        "page": 1,
+        "y": 169.510009765625
+      },
+      "REFERENCE": {
+        "page": 1,
+        "y": 196.39199829101562
+      },
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 65.05999755859375
+      }
+    }
+  },
+  {
+    "name": "Calibri_line2_delta0.4_prior",
+    "font": "Calibri",
+    "size": 11,
+    "multiple": 2,
+    "delta": 0.4,
+    "places": {
+      "NOTEONE": {
+        "page": 1,
+        "y": 222.6840057373047
+      },
+      "NOTETWO": {
+        "page": 1,
+        "y": 236.60400390625
+      },
+      "NOTETHREE": {
+        "page": 1,
+        "y": 250.6439971923828
+      },
+      "HEAD": {
+        "page": 2,
+        "y": 38.18000793457031
+      },
+      "REFERENCE": {
+        "page": 2,
+        "y": 65.05999755859375
+      },
+      "TAILONE": {
+        "page": 2,
+        "y": 91.97000122070312
+      },
+      "TAILTWO": {
+        "page": 2,
+        "y": 118.72999572753906
+      }
+    }
+  }
+]
