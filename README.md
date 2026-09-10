@@ -306,11 +306,27 @@ const layout = layout_document(bytes); // positioned elements for canvas renderi
 
 ## Quick Start
 
-### Prerequisites
-- Rust 1.93+
-- wasm-pack 0.14+
+### Install it
 
-### Build & Test
+```bash
+npm install @oxidocs/wasm            # the engine, for a browser
+cargo install oxidocs-cli            # the command-line tool
+```
+
+Or download a desktop installer for Windows, macOS or Linux from
+[Releases](https://github.com/Ryujiyasu/oxi/releases). Installed apps update
+themselves from that feed.
+
+The engine crates are on crates.io under the `oxidocs-` prefix: `oxidocs` (the
+facade), `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`,
+`oxihanko`, `oxivba-core`.
+
+### Build it yourself
+
+**Prerequisites:**
+Rust 1.93+ and wasm-pack 0.14+.
+
+**Build and test:**
 
 ```bash
 cargo build                          # Build all crates
@@ -318,7 +334,7 @@ cargo test                           # Run tests
 cargo clippy                         # Lint
 ```
 
-### Build Wasm & Run Demo
+**Build the wasm and serve the demo:**
 
 ```bash
 cd crates/oxidocs-wasm
