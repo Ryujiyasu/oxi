@@ -103,7 +103,12 @@ writeFileSync(
 // binary hides in: follow the documented step alone and the desktop app keeps
 // running whatever engine `docs/` happened to hold, with nothing to say so. So
 // the two are held against each other here.
+//
+// Only `docs/` is tracked — `web/`'s copy is a build artifact and a fresh
+// checkout has none, which is the state every CI runner is in. So a missing
+// copy is not a fault; a copy that disagrees is.
 for (const name of ['oxidocs_wasm.js', 'oxidocs_wasm_bg.wasm']) {
+  if (!existsSync(join(site, name))) continue;
   const theirs = readFileSync(join(docs, name));
   const ours = readFileSync(join(site, name));
   if (!theirs.equals(ours)) {
