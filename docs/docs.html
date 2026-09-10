@@ -34,7 +34,8 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 
 /* Title bar */
 .tb{display:flex;align-items:center;height:44px;background:#fff;color:var(--txt);padding:0 14px;font-size:13px;user-select:none;flex-shrink:0}
-.tb .logo{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#333;margin-right:16px;letter-spacing:.2px}
+.tb .logo{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#333;margin-right:16px;letter-spacing:.2px;text-decoration:none}
+.tb .logo:hover{opacity:.72}
 .logo-mark{width:22px;height:22px;border-radius:5px;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
 .tb .dn{font-size:13px;color:#333;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #saveState{margin-left:6px;font-size:12px;line-height:1}
@@ -45,6 +46,10 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .tb .ra button svg{width:16px;height:16px;vertical-align:middle}
 .tb .ra button{background:none;border:none;color:#444;cursor:pointer;padding:5px 9px;border-radius:4px;font-size:12.5px}
 .tb .ra button:hover{background:#F0F0F0}
+.tb .ra button:disabled{opacity:.45;cursor:default}
+.tb .ra button:disabled:hover{background:none}
+.tb .ra button:not(:disabled):active{background:#E4E4E4}
+.tb .ra button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .tb .ra{display:flex;gap:2px;align-items:center}
 /* Mode toggle */
 .mode-toggle{display:flex;border:1px solid #D1D1D1;background:#fff;border-radius:5px;overflow:hidden}
@@ -112,6 +117,10 @@ mark.oxi-cmt.resolved{background:transparent;border-bottom:2px dotted #bbb}
 /* Buttons */
 .rb{background:none;border:1px solid transparent;cursor:pointer;padding:3px 5px;border-radius:3px;color:var(--txt);display:inline-flex;align-items:center;justify-content:center;min-width:24px;min-height:24px;font:inherit;font-size:13px;line-height:1}
 .rb:hover{background:var(--hover);border-color:transparent}
+.rb:disabled{opacity:.45;cursor:default}
+.rb:disabled:hover{background:none}
+.rb:not(:disabled):active{background:var(--accent-l)}
+.rb:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .rb.active{background:var(--accent-l);border-color:transparent;color:var(--accent)}
 .rb svg{width:16px;height:16px;pointer-events:none}
 .rb.lg{flex-direction:column;justify-content:flex-start;gap:4px;padding:7px 9px 5px;min-width:54px;font-size:11px;line-height:1.25;text-align:center}
@@ -254,7 +263,7 @@ input[type="file"]{display:none}
 
 <!-- Title bar -->
 <div class="tb">
-  <span class="logo"><span class="logo-mark">O</span><span>Oxidocs</span></span>
+  <a class="logo" href="./index.html" title="Oxi"><span class="logo-mark">O</span><span>Oxidocs</span></a>
   <span class="dn" id="docName" data-i18n="newDoc">New Document</span>
   <span id="saveState"></span>
   <div class="tb-center">
@@ -2362,7 +2371,12 @@ function computeDiff(original, current) {
 }
 
 // ---- Save / Export ----
-function dl(d, name, mime) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([d],{type:mime})); a.download = name; a.click(); URL.revokeObjectURL(a.href); }
+function dl(d, name, mime) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([d],{type:mime})); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+  // Saving is the sign that someone is using this for real work, which is
+  // what the rating card waits for. It is counted in one place for all three
+  // editors; nothing is sent by saying so.
+  window.dispatchEvent(new Event('oxi:saved'));
+}
 $('btnSave').addEventListener('click', () => {
   syncDocx();
   dl(currentDocx, (fileName||'doc')+'.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');

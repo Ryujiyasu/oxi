@@ -37,6 +37,11 @@ fn a_sheet(name: &str) -> Sheet {
         comments: Vec::new(),
         auto_filter: None,
         unsupported_elements: Vec::new(),
+        hyperlinks: Vec::new(),
+        protected: false,
+        form_controls: Vec::new(),
+        validations: Vec::new(),
+        conditional_rules: Vec::new(),
         tab_color: None,
         origin_id: None,
     };

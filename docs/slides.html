@@ -40,7 +40,9 @@ body {
   background: #fff; padding: 0 14px; font-size: 13px; user-select: none;
   border-bottom: 1px solid var(--border);
 }
-.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px }
+.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px;
+  color: inherit; text-decoration: none }
+.logo:hover { opacity: .72 }
 .logo-mark {
   width: 22px; height: 22px; border-radius: 5px; background: var(--accent); color: #fff;
   display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
@@ -52,6 +54,12 @@ body {
   border-radius: 5px; padding: 5px 12px; cursor: pointer; text-decoration: none;
 }
 .tb button:hover, .tb a.btn:hover { background: var(--accent-l); border-color: var(--accent) }
+.tb button:disabled { opacity: .45; cursor: default }
+.tb button:disabled:hover { background: #fff; border-color: var(--border) }
+.tb button:not(:disabled):active { background: var(--accent-l); border-color: var(--accent) }
+.tb button:focus-visible, .tb a.btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px
+}
 .tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
 .tb button.primary:hover { background: var(--accent-h) }
 .lang { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden }
@@ -170,9 +178,10 @@ body.presenting #presrail { display: block }
 <body>
 
 <div class="tb">
-  <span class="logo"><span class="logo-mark">O</span><span>Oxislides</span></span>
+  <a class="logo" href="./index.html" title="Oxi"><span class="logo-mark">O</span><span>Oxislides</span></a>
   <span class="dn" id="docName" data-i18n="noFile">No presentation open</span>
   <span class="sp"></span>
+  <button id="btnNew" data-i18n="fresh" hidden>New</button>
   <button id="btnOpen" data-i18n="open">Open</button>
   <button id="btnPresent" data-i18n="present" disabled>Present</button>
   <button id="btnEdit" data-i18n="edit" hidden>Edit</button>
@@ -245,7 +254,7 @@ const I18N = {
     note: 'Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
     loading: 'Loading the engine…', parsing: 'Parsing…',
     prev: 'Previous', next: 'Next', present: 'Present', close: 'Close',
-    edit: 'Edit', editing: 'Done editing', save: 'Save a copy',
+    fresh: 'New', edit: 'Edit', editing: 'Done editing', save: 'Save a copy',
     fBold: 'Bold', fItalic: 'Italic', fUnder: 'Underline', fSize: 'Size',
     fColor: 'Colour', fHint: 'Select text, then apply a style',
     fPos: 'Shape',
@@ -265,7 +274,7 @@ const I18N = {
     note: 'Oxi はオープンソースです。このページの描画エンジンは PowerPoint 自身の出力とスライド単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
     prev: '前へ', next: '次へ', present: 'プレゼン開始', close: '閉じる',
-    edit: '編集', editing: '編集を終える', save: '保存',
+    fresh: '新規', edit: '編集', editing: '編集を終える', save: '保存',
     fBold: '太字', fItalic: '斜体', fUnder: '下線', fSize: 'サイズ',
     fColor: '色', fHint: '文字を選んでから書式を適用',
     fPos: '図形',
@@ -278,7 +287,20 @@ const I18N = {
     failed: 'プレゼンテーションを開けませんでした: ',
   },
 };
-let lang = (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+
+/** The language the person last chose, which the document editor beside this
+ *  one has always remembered under the same key. */
+function heldLang() {
+  try {
+    const held = localStorage.getItem('oxi-lang');
+    if (held === 'en' || held === 'ja') return held;
+  } catch { /* a private window has no store, and that is not an error */ }
+  return (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+}
+function keepLang(picked) {
+  try { localStorage.setItem('oxi-lang', picked); } catch { /* nothing to do */ }
+}
+let lang = heldLang();
 const t = k => I18N[lang][k];
 
 function applyLang() {
@@ -295,8 +317,13 @@ function applyLang() {
   document.getElementById('langJa').className = lang === 'ja' ? 'on' : '';
   if (pres) render();
 }
-document.getElementById('langEn').onclick = () => { lang = 'en'; applyLang(); };
-document.getElementById('langJa').onclick = () => { lang = 'ja'; applyLang(); };
+for (const picked of ['en', 'ja']) {
+  document.getElementById(picked === 'en' ? 'langEn' : 'langJa').onclick = () => {
+    lang = picked;
+    keepLang(picked);
+    applyLang();
+  };
+}
 
 const msgEl = document.getElementById('msg');
 function say(text, isErr) {
@@ -945,6 +972,20 @@ const fileIn = document.getElementById('fileIn');
 fileIn.onchange = () => { if (fileIn.files[0]) openFile(fileIn.files[0]); };
 document.getElementById('btnOpen').onclick = () => fileIn.click();
 document.getElementById('btnChoose').onclick = () => fileIn.click();
+// A deck of one empty slide, carrying the master, layouts and theme a real
+// file has, so a new presentation is one a person can start typing into. The
+// app shows it; the site keeps the sample instead, having nothing else to show
+// a visitor who arrived empty-handed.
+const btnNew = document.getElementById('btnNew');
+if (document.documentElement.dataset.host === 'desktop') {
+  btnNew.hidden = false;
+  btnSample.hidden = true;
+  btnNew.onclick = async () => {
+    const r = await fetch('./blank.pptx');
+    if (!r.ok) { say(t('failed') + r.status, true); return; }
+    open('Presentation1.pptx', new Uint8Array(await r.arrayBuffer()));
+  };
+}
 btnSample.onclick = async () => {
   const r = await fetch('./showcase.pptx');
   if (!r.ok) { say(t('failed') + r.status, true); return; }
@@ -961,6 +1002,13 @@ document.addEventListener('drop', e => {
 });
 document.addEventListener('keydown', e => {
   if (!pres) return;
+  // Ctrl+S saves, the way the document editor beside this one already did.
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    const button = document.getElementById('btnSave');
+    if (button && !button.hidden) button.click();
+    return;
+  }
   if (presenting) {
     if (e.key === 'Escape') { stopPresenting(); e.preventDefault(); return; }
     if (e.key === ' ' || e.key === 'n') { go(1); e.preventDefault(); return; }
@@ -1524,6 +1572,10 @@ document.getElementById('btnSave').onclick = async () => {
       type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
     const a = document.createElement('a');
     a.href = url; a.download = name;
+  // Saving is the sign that someone is using this for real work, which is
+  // what the rating card waits for. It is counted in one place for all three
+  // editors; nothing is sent by saying so.
+  window.dispatchEvent(new Event('oxi:saved'));
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
     // The page now shows what the saved file holds, so further edits stack on

@@ -37,6 +37,20 @@ pub use oxicells_calc::{
     ReferenceShift, ShiftAxis,
 };
 
+/// The workbook put to the engine once, for a caller with many expressions to
+/// work out over the same book.
+///
+/// `evaluate_expression` assembles the book on every call, which is right for
+/// the odd expression a macro evaluates and wrong for a conditional format,
+/// which asks the same question of every cell in a range.
+pub fn assemble_for_evaluation(
+    sheets: &[Sheet],
+    names: &[(String, String)],
+    external: &[crate::ir::ExternalBook],
+) -> oxicells_calc::Workbook {
+    assemble_with_links(sheets, names, external, None)
+}
+
 /// Recalculate every formula in a single sheet, overwriting cached values.
 ///
 /// Cross-sheet references cannot resolve here and become `#REF!`; use
@@ -422,6 +436,11 @@ mod tests {
             drawings: Vec::new(),
             comments: Vec::new(),
             unsupported_elements: vec![],
+            hyperlinks: vec![],
+            protected: false,
+            form_controls: Vec::new(),
+            validations: Vec::new(),
+            conditional_rules: Vec::new(),
             tab_color: None,
             origin_id: None,
         }

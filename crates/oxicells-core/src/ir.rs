@@ -156,6 +156,25 @@ pub struct Sheet {
     /// The filter a sheet is under, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_filter: Option<AutoFilter>,
+    /// The links its cells carry, each already resolved to where it goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hyperlinks: Vec<Hyperlink>,
+    /// Whether the sheet is protected — `<sheetProtection sheet="1">`, and not
+    /// merely the presence of that element, which Excel also writes to record
+    /// the options of a sheet whose protection is off. Six of the seven
+    /// protected-looking workbooks in the sweep are the second kind.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub protected: bool,
+    /// The buttons and tick boxes on the grid, from the same legacy drawing
+    /// that carries the notes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub form_controls: Vec<FormControl>,
+    /// What its ranges will accept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validations: Vec<DataValidation>,
+    /// The rules that change how its ranges look, lowest priority first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditional_rules: Vec<ConditionalRule>,
     /// Unsupported elements found in this sheet (e.g. "Chart", "PivotTable", "Drawing")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_elements: Vec<String>,
@@ -472,6 +491,160 @@ pub struct Comment {
     /// once the box has been dragged away.
     #[serde(default)]
     pub cell: (u32, u32),
+    /// Whether the workbook pins the note open. A pinned note is drawn as its
+    /// box; one left closed is drawn only as the red corner Excel puts on the
+    /// cell, which is all Excel itself shows until the pointer arrives.
+    #[serde(default = "yes")]
+    pub visible: bool,
+}
+
+/// A note is pinned open unless something says otherwise, which is what every
+/// `Comment` built before this field existed meant.
+fn yes() -> bool {
+    true
+}
+
+/// The parts of a look that a conditional format puts over a cell's own.
+///
+/// A differential format states only what it changes, which is why every field
+/// is optional: a rule that turns text red says nothing about the fill, and the
+/// cell keeps the fill it already had.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DiffStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+}
+
+/// A rule that changes how a range looks when what it tests comes out true.
+///
+/// Excel keeps these on the sheet rather than on the cells, and applies them in
+/// `priority` order over whatever the cell already wears.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConditionalRule {
+    /// Excel's own word: `expression`, `cellIs`, `containsText`, `beginsWith`,
+    /// `duplicateValues`, and the rest.
+    pub kind: String,
+    /// For `cellIs`: `equal`, `between`, `greaterThan` and so on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    /// What `containsText` and its relatives look for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The rule's own formulas, in the order the file writes them. They are
+    /// written for the top-left cell of the first range and are relative to it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub formulas: Vec<String>,
+    /// Lower runs first. Excel writes it on every rule.
+    #[serde(default)]
+    pub priority: i32,
+    /// Whether a match stops the rules below it from being tried.
+    #[serde(default)]
+    pub stop_if_true: bool,
+    /// The ranges the rule covers, `(start_row, start_col, end_row, end_col)`
+    /// counted from zero.
+    pub ranges: Vec<(u32, u32, u32, u32)>,
+    /// The look it puts on, already resolved from the `dxfId` it names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<DiffStyle>,
+}
+
+/// A rule about what a range of cells will accept.
+///
+/// Only one kind of rule is drawn: a `list` puts an arrow on the cell the
+/// cursor is in, and that arrow is the whole of what Excel shows. The rest
+/// decide what a typed value is allowed to be, and show nothing until it is
+/// not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataValidation {
+    /// Excel's own word: `list`, `whole`, `decimal`, `date`, `time`,
+    /// `textLength`, `custom`. Absent in the file means `any`, which allows
+    /// everything and is kept as `any` rather than as nothing.
+    pub kind: String,
+    /// `between`, `notBetween`, `equal`, `greaterThan` and the rest. Only the
+    /// numeric and date kinds use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    /// The ranges the rule covers, each `(start_row, start_col, end_row,
+    /// end_col)` counted from zero.
+    pub ranges: Vec<(u32, u32, u32, u32)>,
+    /// For a list, either the items spelled out — `"Yes,No"` — or a reference
+    /// to the cells holding them. For the others, the bound being tested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula1: Option<String>,
+    /// The second bound, where the operator takes two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula2: Option<String>,
+    /// Whether an empty cell passes the rule.
+    #[serde(default)]
+    pub allow_blank: bool,
+    /// Whether the in-cell arrow is drawn for a list.
+    ///
+    /// The file's own attribute is `showDropDown`, and it means the opposite
+    /// of what it reads like: Excel writes `1` when the person turned the
+    /// in-cell dropdown OFF. This field is already the right way round.
+    #[serde(default = "yes")]
+    pub in_cell_dropdown: bool,
+    /// What Excel says when a value is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// What it says while the cell is selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+/// A button, tick box or other control sitting on the grid.
+///
+/// These share a part with a sheet's notes — the legacy VML drawing — which is
+/// why a sheet can hold a hundred of them and not a single note. Excel draws
+/// them over the cells the way it draws a shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormControl {
+    /// Excel's own word for what it is: `Button`, `Checkbox`, `Radio`, `Drop`,
+    /// `List`, `Spin`, `Scroll`, `GBox`, `Label`. Kept as the file spells it,
+    /// because the file's vocabulary is the one that will grow.
+    pub kind: String,
+    pub from: Anchor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<Anchor>,
+    /// The caption written on it, where it has one. A tick box put beside a
+    /// cell usually has none, and takes its meaning from the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Whether a tick box or radio button is set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checked: bool,
+}
+
+/// A link a cell carries.
+///
+/// How a link looks is already settled before this: Excel dresses the cell
+/// through the Hyperlink named style, which the cell holds like any other
+/// style, so it is blue and underlined without anything here. What a style
+/// cannot say is where the link goes, and that is the whole of this.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hyperlink {
+    /// The cell the link sits on, counted from zero, as `(row, col)`. A link
+    /// stated over a range is kept at the range's top-left.
+    pub cell: (u32, u32),
+    /// A URL, or — when `internal` — a place in this workbook, spelled the way
+    /// the file spells it: `Sheet2!A1`, or a defined name.
+    pub target: String,
+    /// Whether the target is somewhere else in this same workbook.
+    #[serde(default)]
+    pub internal: bool,
+    /// What Excel shows while the pointer rests on the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
 }
 
 /// One step of a shape's own outline, in the space the path states.
@@ -881,4 +1054,12 @@ pub struct CellStyle {
     pub diagonal_up: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub diagonal_down: bool,
+    /// Whether the cell may still be typed into once its sheet is protected.
+    ///
+    /// Excel locks every cell by default and a form unlocks the few it wants
+    /// filled in, so the negative is what is held here: a style built from its
+    /// own default is a locked one, which is what Excel means by silence.
+    /// It decides nothing on an unprotected sheet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlocked: bool,
 }

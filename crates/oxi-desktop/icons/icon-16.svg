@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- The 16px cut. Every edge lands on a whole pixel, so the grid stays a grid
+       instead of becoming four grey smudges: the rules are 1px on the pixel
+       boundary, the four cells are 5x5 each, and the tile goes edge to edge
+       because a border costs more than it is worth at this size. The inked cell
+       of the master is dropped — at 16px it only lowers contrast. -->
+  <rect width="16" height="16" rx="3.5" fill="#C7462F"/>
+  <g fill="#FFFFFF">
+    <rect x="2" y="2" width="13" height="1"/>
+    <rect x="2" y="14" width="13" height="1"/>
+    <rect x="2" y="3" width="1" height="11"/>
+    <rect x="14" y="3" width="1" height="11"/>
+    <rect x="8" y="2" width="1" height="13"/>
+    <rect x="2" y="8" width="13" height="1"/>
+  </g>
+</svg>

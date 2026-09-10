@@ -82,10 +82,26 @@ fn main() {
         }
     }
 
+    // What did reach the IR of the three kinds the sheet also names in its own
+    // XML. A sheet that names a drawing and carries none is a gap; one that
+    // names a drawing and carries it is a report that has gone stale.
+    let drawings: usize = book.sheets.iter().map(|s| s.drawings.len()).sum();
+    let tables: usize = book.sheets.iter().map(|s| s.tables.len()).sum();
+    let comments: usize = book.sheets.iter().map(|s| s.comments.len()).sum();
+
+    // A sweep line that cannot be traced back to the workbook it came from is
+    // half a measurement, so the line says which file it is.
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|name| name.to_string_lossy().replace('"', "'"))
+        .unwrap_or_default();
+
     let unread: Vec<String> = unread.into_iter().collect();
     println!(
-        "{{\"sheets\":{},\"rows\":{},\"cells\":{},\"formulas\":{},\"merges\":{},\
-         \"frozen\":{},\"styled\":{},\"wrapped\":{},\"dated\":{},\"unread\":{}}}",
+        "{{\"file\":\"{name}\",\
+         \"sheets\":{},\"rows\":{},\"cells\":{},\"formulas\":{},\"merges\":{},\
+         \"frozen\":{},\"styled\":{},\"wrapped\":{},\"dated\":{},\
+         \"drawings\":{drawings},\"tables\":{tables},\"comments\":{comments},\"unread\":{}}}",
         book.sheets.len(),
         rows,
         cells,

@@ -4,6 +4,7 @@ export const memory: WebAssembly.Memory;
 export const break_slide_paragraph: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: any) => [number, number, number];
 export const build_docx: (a: any) => [number, number, number, number];
 export const build_docx_with_template: (a: any, b: number, c: number) => [number, number, number, number];
+export const conditional_formats: (a: any, b: number) => [number, number, number];
 export const create_blank_docx: () => [number, number];
 export const create_pdf: (a: number, b: number, c: number, d: number) => [number, number];
 export const docx_to_pdf: (a: number, b: number) => [number, number, number, number];
@@ -28,6 +29,7 @@ export const pdf_verify_signatures: (a: number, b: number) => [number, number, n
 export const preview_hanko: (a: number, b: number) => [number, number];
 export const read_macro_safety: (a: number, b: number) => [number, number, number];
 export const recalculate_spreadsheet: (a: any, b: number, c: number) => [number, number, number];
+export const rename_sheet: (a: any, b: number, c: number, d: number) => [number, number, number];
 export const run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
 export const set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
 export const shift_band: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number];

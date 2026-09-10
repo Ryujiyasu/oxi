@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Oxi's mark: the cell grid that Japanese layout is set on, which is also a
+       spreadsheet's cells. One cell is inked, the way a manuscript sheet shows a
+       character set into it. This file is the master every size is cut from;
+       tools/make-icons.mjs turns it into the PNGs and the .ico. -->
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="#C7462F"/>
+  <rect x="66" y="66" width="56" height="56" rx="7" fill="#FFFFFF" opacity=".46"/>
+  <g stroke="#FFFFFF" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M62 62 h132 v132 h-132 z"/>
+    <path d="M128 62 V194"/>
+    <path d="M62 128 H194"/>
+  </g>
+</svg>

@@ -211,6 +211,11 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
             drawings: Vec::new(),
             comments: Vec::new(),
         unsupported_elements: vec![],
+        hyperlinks: vec![],
+        protected: false,
+        form_controls: Vec::new(),
+        validations: Vec::new(),
+        conditional_rules: Vec::new(),
         tab_color: None,
         origin_id: None,
     }

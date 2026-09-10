@@ -96,3 +96,6 @@ AGENTS_STATE.json
 editors/vscode/media/
 editors/vscode/node_modules/
 editors/vscode/*.vsix
+
+# wrangler keeps its local state beside the Worker it deploys.
+services/feedback/.wrangler/
