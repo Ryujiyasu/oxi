@@ -3,10 +3,11 @@ name = "oxihanko"
 version = "0.8.0"
 edition = "2021"
 license = "MPL-2.0"
+repository = "https://github.com/Ryujiyasu/oxi"
 description = "Japanese digital stamp (hanko/inkan) generator and PDF signer for Oxi"
 
 [dependencies]
-oxipdf-core = { path = "../oxipdf-core" }
+oxipdf-core = { version = "0.8.0", path = "../oxipdf-core" }
 thiserror = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

@@ -3,6 +3,7 @@ name = "oxipdf-core"
 version = "0.8.0"
 edition = "2021"
 license = "MPL-2.0"
+repository = "https://github.com/Ryujiyasu/oxi"
 description = "Core PDF processing engine for Oxi"
 
 [dependencies]

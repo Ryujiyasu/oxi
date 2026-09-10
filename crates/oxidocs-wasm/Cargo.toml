@@ -4,19 +4,19 @@ version = "0.8.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "WebAssembly bindings for Oxidocs — Word-compatible .docx parsing, layout, rendering and PDF export"
-repository = "https://gitlab.com/Ryujiyasu/oxi"
+repository = "https://github.com/Ryujiyasu/oxi"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-oxidocs-core = { path = "../oxidocs-core" }
-oxicells-core = { path = "../oxicells-core", optional = true }
-oxicells-calc = { path = "../oxicells-calc", optional = true }
-oxivba-core = { path = "../oxivba-core", optional = true }
-oxislides-core = { path = "../oxislides-core", optional = true }
-oxipdf-core = { path = "../oxipdf-core" }
-oxihanko = { path = "../oxihanko", optional = true }
+oxidocs-core = { version = "0.8.0", path = "../oxidocs-core" }
+oxicells-core = { version = "0.8.0", path = "../oxicells-core", optional = true }
+oxicells-calc = { version = "0.8.0", path = "../oxicells-calc", optional = true }
+oxivba-core = { version = "0.8.0", path = "../oxivba-core", optional = true }
+oxislides-core = { version = "0.8.0", path = "../oxislides-core", optional = true }
+oxipdf-core = { version = "0.8.0", path = "../oxipdf-core" }
+oxihanko = { version = "0.8.0", path = "../oxihanko", optional = true }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 serde = { version = "1", features = ["derive"] }

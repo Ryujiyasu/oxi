@@ -3,6 +3,7 @@ name = "oxivba-core"
 version = "0.8.0"
 edition = "2021"
 license = "MPL-2.0"
+repository = "https://github.com/Ryujiyasu/oxi"
 description = "VBA source analysis: lexer, parser, and static diagnostics"
 
 # Zero dependencies, for the same reasons as oxicells-calc: this has to stay

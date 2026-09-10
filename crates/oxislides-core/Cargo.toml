@@ -3,10 +3,11 @@ name = "oxislides-core"
 version = "0.8.0"
 edition = "2021"
 license = "MPL-2.0"
+repository = "https://github.com/Ryujiyasu/oxi"
 description = "Core presentation processing engine for OxiSlides (.pptx)"
 
 [dependencies]
-oxidocs-common = { path = "../oxidocs-common" }
+oxidocs-common = { version = "0.8.0", path = "../oxidocs-common" }
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }

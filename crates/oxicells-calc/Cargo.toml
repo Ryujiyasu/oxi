@@ -3,6 +3,7 @@ name = "oxicells-calc"
 version = "0.8.0"
 edition = "2021"
 license = "MPL-2.0"
+repository = "https://github.com/Ryujiyasu/oxi"
 description = "Excel-compatible formula recalculation engine: tokenizer, AST, dependency graph, topological recalc"
 
 # Zero dependencies by design.
