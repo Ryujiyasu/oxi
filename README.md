@@ -14,6 +14,24 @@ Word (.docx) layout is scored against Microsoft Word page by page, PowerPoint (.
 
 ---
 
+## What It Looks Like
+
+Three editors over one engine, recorded from the assembled desktop build — the same files the installer ships. Nothing is staged: each clip opens a real file and the numbers on screen are the engine's own.
+
+**Oxidocs — .docx**
+
+![A .docx opening in Oxidocs and scrolling, laid out by the engine that is scored against Word](docs/img/oxi-docs.gif)
+
+**Oxicells — .xlsx**
+
+![A workbook opening in Oxicells; a formula typed into an empty cell reproduces the sheet's own total](docs/img/oxi-cells.gif)
+
+**Oxislides — .pptx**
+
+![A deck opening in Oxislides, moving slide to slide, then a title edited in place and realigned](docs/img/oxi-slides.gif)
+
+---
+
 ## Why Now
 
 Europe is actively dismantling its Microsoft Office dependency in 2026:
