@@ -615,6 +615,29 @@ export function rename_sheet(workbook, index, new_name) {
 }
 
 /**
+ * The height Excel gives a row whose tallest font is this one, in 96-dpi
+ * pixels, or nothing for a font that has never been measured.
+ *
+ * The same measured table the native renderer draws with — a row height is
+ * not derivable from a font's own metrics, so the numbers were read off Excel
+ * and stand as data. The browser cannot measure a row the way Excel does and
+ * was declining to try, which meant a sheet whose file records no row height
+ * (openpyxl and every other writer that leaves the cache out) drew every row
+ * at the default and clipped its own title.
+ *
+ * `size` is in points.
+ * @param {string} face
+ * @param {number} size
+ * @returns {number | undefined}
+ */
+export function row_height_px(face, size) {
+    const ptr0 = passStringToWasm0(face, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.row_height_px(ptr0, len0, size);
+    return ret === 0xFFFFFF ? undefined : ret;
+}
+
+/**
  * Execute VBA source against an OxiCells workbook IR.
  * @param {any} workbook
  * @param {string} source
