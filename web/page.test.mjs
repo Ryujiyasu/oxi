@@ -151,6 +151,12 @@ globalThis.document = {
   addEventListener: (kind) => hung.push(kind),
   body: element('body'),
   activeElement: null,
+  // The page asks the root element which host it is running in, and walks
+  // marked elements to put the chrome into a language. A stub that answers
+  // neither of those stops the page on its first line, which is what it did.
+  documentElement: element('html'),
+  querySelector: () => null,
+  querySelectorAll: () => [],
 };
 globalThis.window = { addEventListener: (kind) => hung.push(kind), devicePixelRatio: 1 };
 globalThis.performance = { now: () => 0 };

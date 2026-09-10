@@ -63,6 +63,9 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'pasteGrid', 'clearSelection', 'goTo', 'contentOf', 'selectionText', 'fieldOf',
   'asGrid', 'change', 'restore', 'undo', 'redo', 'remember', 'edited',
   'markSaved', 'markSteps', 'put', 'heldAt',
+  // put() asks these before it writes: a protected sheet and a validated
+  // range both refuse a value, and the page refuses it in one place.
+  'ruleAt', 'allows', 'listItems',
   'takeColumn', 'takeRow', 'takeAll',
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
@@ -139,6 +142,10 @@ let step = null;
 const DEPTH = 100;
 const describe = () => {};
 const saveButton = { disabled: true, textContent: '' };
+// markSaved() writes the word for "save" in whichever language the page is set
+// to. Nothing here reads that word — only whether the button is live — so the
+// lookup just has to answer, and the page keeps its own dictionary.
+const t = (key) => (key === 'saveSome' ? (n) => String(n) : key);
 const backButton = { disabled: true };
 const onButton = { disabled: true };
 let anyFormulas = false;
@@ -148,6 +155,10 @@ let beyondValues = false;
 // Here it only has to be visible when a formula is carried across.
 const translate_formula = (text, rows, cols) =>
   text.slice(1) + '[' + rows + ',' + cols + ']';
+// Which cells a conditional rule catches is worked out by the engine whenever
+// the workbook changes, and change() asks for it after every edit. Nothing here
+// reads the answer, so it only has to not happen.
+const markConditional = () => {};
 // Working out formulas is the engine's job and has its own test; here it only
 // has to not happen, so that what a cell holds is exactly what was typed.
 const recompute = () => {};
