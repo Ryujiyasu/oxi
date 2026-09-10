@@ -61,10 +61,10 @@ def make_demo_docx():
     # Key points as bullet list
     for point in [
         '100% クライアントサイド処理 — データはブラウザの外に出ない',
-        '官公庁ファイル 90 件のパース成功率 100%',
+        'ゴールデンテスト 504 ファイルのパース成功率 100%',
         'デジタル判子 (印鑑) 生成と PAdES 電子署名',
         '日本語組版: 禁則処理 (JIS X 4051) 対応',
-        'WASM バイナリサイズ: 約 1.4 MB',
+        'Word / PowerPoint との一致率は毎版ブラインド 50 件で計測',
     ]:
         p = doc.add_paragraph(point, style='List Bullet')
 
@@ -91,13 +91,13 @@ def make_demo_docx():
                 run.bold = True
 
     data = [
-        ('oxi-common', '共通 OOXML ユーティリティ (ZIP, XML)'),
+        ('oxidocs-common', '共通 OOXML ユーティリティ (ZIP, XML)'),
         ('oxidocs-core', '.docx エンジン — パーサー, IR, レイアウト'),
         ('oxicells-core', '.xlsx エンジン — パーサー, IR, エディタ'),
         ('oxislides-core', '.pptx エンジン — パーサー, IR, エディタ'),
         ('oxipdf-core', 'PDF 1.7 エンジン — パーサー, 署名, 生成'),
         ('oxihanko', '判子 (SVG) 生成 + PAdES 署名'),
-        ('oxi-wasm', 'WebAssembly バインディング'),
+        ('oxidocs-wasm', 'WebAssembly バインディング'),
     ]
     for i, (crate, role) in enumerate(data):
         table.rows[i + 1].cells[0].text = crate
@@ -142,14 +142,14 @@ def make_demo_docx():
     doc.add_heading('4. ロードマップ', level=1)
 
     doc.add_paragraph(
-        '現在 v1 (基盤) フェーズが完了し、v2 (コラボレーション) に向けて開発中です。'
+        'ブラウザ版とデスクトップ版 (Windows / macOS / Linux) を配布しています。'
     )
 
     for item in [
-        'v1 (現在): OOXML パース/レンダリング/編集, PDF, 判子',
-        'v2: CRDT リアルタイム共同編集, AI アシスト, E2E 暗号化',
-        'v3: プラグインシステム, デスクトップ/モバイルアプリ (Tauri)',
-        'v4: エンタープライズ — コンプライアンス, 業界特化',
+        '出荷済み: OOXML パース/レンダリング/編集, PDF, 判子, 数式エンジン, VBA',
+        '出荷済み: デスクトップアプリ (Tauri), VS Code 拡張, CLI',
+        '進行中: レイアウト一致率の底上げ (Word 実測との画素比較)',
+        '検討中: リアルタイム共同編集, プラグイン',
     ]:
         doc.add_paragraph(item, style='List Bullet')
 
@@ -159,8 +159,8 @@ def make_demo_docx():
     doc.add_heading('5. ライセンス', level=1)
 
     doc.add_paragraph(
-        'MIT License — すべてのソースコードはオープンソースで提供されます。'
-        'サードパーティクレートはすべて MIT 互換ライセンスです。'
+        'エンジン本体は MPL-2.0、バインディングは MIT または Apache-2.0 です。'
+        '依存クレートはすべて MPL-2.0 互換ライセンスに限っています。'
     )
 
     # -- Footer-like --
