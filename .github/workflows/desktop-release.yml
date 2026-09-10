@@ -35,6 +35,29 @@ jobs:
             args: ''
             rust_targets: ''
     runs-on: ${{ matrix.platform }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      # The updater key was generated with an empty password on purpose
+      # (the key material itself is the secret).
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+      # Where a rating goes when someone chooses to send one. Not a secret —
+      # it is a public endpoint, and it ends up in the shipped page either
+      # way. Set it as a repository variable; leave it unset and the rating
+      # card is left out of the build entirely.
+      OXI_FEEDBACK_ENDPOINT: ${{ vars.OXI_FEEDBACK_ENDPOINT }}
+      # macOS refuses to open an app from an unidentified developer, and
+      # unlike Windows it does not offer a way past it that an ordinary
+      # person will find. These sign the app and send it to Apple to be
+      # notarised. Names are Tauri's, and a wrong one does not fail the
+      # build — it produces an unsigned app — so the artifact is checked
+      # afterwards rather than the configuration being trusted.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,30 +81,28 @@ jobs:
           workspaces: crates/oxi-desktop
 
       - name: Build and attach to a draft release
+        id: build
+        # Apple's timestamp service is reached over the network while the
+        # app is being signed, and a runner that cannot reach it fails with
+        # "A timestamp was expected but was not found". Nothing about that
+        # is specific to the code — it took out the arm64 half of v0.8.2
+        # while the x86_64 half of the same release signed cleanly — so it
+        # is tried once more rather than costing a whole release.
+        continue-on-error: true
         uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # The updater key was generated with an empty password on purpose
-          # (the key material itself is the secret).
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-          # Where a rating goes when someone chooses to send one. Not a secret —
-          # it is a public endpoint, and it ends up in the shipped page either
-          # way. Set it as a repository variable; leave it unset and the rating
-          # card is left out of the build entirely.
-          OXI_FEEDBACK_ENDPOINT: ${{ vars.OXI_FEEDBACK_ENDPOINT }}
-          # macOS refuses to open an app from an unidentified developer, and
-          # unlike Windows it does not offer a way past it that an ordinary
-          # person will find. These sign the app and send it to Apple to be
-          # notarised. Names are Tauri's, and a wrong one does not fail the
-          # build — it produces an unsigned app — so the artifact is checked
-          # afterwards rather than the configuration being trusted.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: crates/oxi-desktop
+          tauriScript: tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Oxi Desktop ${{ github.ref_name }}'
+          releaseBody: 'Installers for Windows / macOS / Linux. Installed apps update automatically from this release feed.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Build it again, once
+        if: steps.build.outcome == 'failure'
+        uses: tauri-apps/tauri-action@v0
         with:
           projectPath: crates/oxi-desktop
           tauriScript: tauri
