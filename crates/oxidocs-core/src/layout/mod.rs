@@ -4741,8 +4741,15 @@ impl LayoutEngine {
             if plain_balance && compat_mode >= 15 {
                 // The final paragraph's spacing participates in the fit of
                 // the last line start, then follows the right-hand fragment.
+                //
+                // The row that REACHES the half stays on the left, it does not
+                // move to the right: Word puts n/2 + 1 rows in the left column
+                // of an evenly-sized run, not n/2. Measured 2026-09-11 on
+                // `tests/fixtures/column_split` — 25 probes, 6 to 14 rows, last
+                // row swept from 10pt to 12pt, compat 14 and 15 — where Word
+                // was one row ahead of this engine on every single one.
                 let line_start = sum - row.3;
-                if line_start + tail_gap.max(0.0) < (total + tail_gap.max(0.0)) * 0.5 - 0.001 {
+                if line_start + tail_gap.max(0.0) <= (total + tail_gap.max(0.0)) * 0.5 + 0.001 {
                     best = (cost, i + 1);
                 } else { break; }
             } else if (has_fixed_prefix || plain_balance) && std::env::var("OXI_BALANCE_LEFT_CEILING_DISABLE").is_err() {
