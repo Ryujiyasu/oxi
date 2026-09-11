@@ -3432,14 +3432,14 @@ impl LayoutEngine {
         } else {
             self.default_font_size
         };
-        // Word auto-shrinks superscript/subscript to 2/3 of base size
-        // when no explicit font_size is set on the run.
+        // Word shrinks a superscript/subscript (S1359) — here for the run
+        // that states no size of its own.
         if run_style.font_size.is_none() {
             if matches!(
                 run_style.vertical_align,
                 Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)
             ) {
-                return (base * 2.0 / 3.0 * 2.0).round() / 2.0; // round to 0.5pt
+                return Self::vertical_align_font_size(base);
             }
         }
         base
@@ -4696,6 +4696,32 @@ impl LayoutEngine {
     /// rows splits 13 grid rows against 13 with twelve rows on the left, and
     /// ten rows whose last takes two slots tie at 6-5 against 5-6 and Word
     /// keeps six on the left.
+    /// The size a super- or subscript is SET at.
+    ///
+    /// S1359 (2026-09-11, default ON, opt-out OXI_S1359_DISABLE): Word takes
+    /// 0.65 of the base and rounds to the nearest half point. Measured by
+    /// putting the same glyph at the base size and again raised and comparing
+    /// the two BOXES, not the size the PDF reports, which is itself rounded
+    /// (`_pb_superscript_size.py`). 21 base sizes from 8 to 96pt all follow,
+    /// and the ratio is identical in Calibri, Times New Roman, Arial and
+    /// Georgia, so it is a constant rather than a font's own table.
+    ///
+    /// It replaces FOUR sites that did not agree with each other: the glyph
+    /// was drawn at 0.583 of the base while its WIDTH, its line height and the
+    /// no-explicit-size path all used two thirds rounded to the half point. So
+    /// a superscript was measured at one size and drawn at another. Two thirds
+    /// and 0.65 land on the same half point for 9 of the 21 bases and differ
+    /// on the other 12 — every one of which Word decides the 0.65 way (8pt
+    /// gives 5.0 not 5.5, 24pt gives 15.5 not 16.0, 72pt gives 47.0 not 48.0).
+    ///
+    /// The opt-out restores two thirds rounded, which is what three of the
+    /// four sites did; nothing restores the 0.583, which no measurement ever
+    /// supported.
+    fn vertical_align_font_size(base: f32) -> f32 {
+        let ratio = if std::env::var("OXI_S1359_DISABLE").is_ok() { 2.0 / 3.0 } else { 0.65 };
+        ((base * ratio) * 2.0).round() / 2.0
+    }
+
     fn balance_split_grid(
         rows: &[(usize, f32, Vec<usize>, f32, f32)],
         pitch: f32,
@@ -5098,7 +5124,7 @@ impl LayoutEngine {
                     if std::env::var("OXI_VERTICAL_SCRIPTS_DISABLE").is_err() && run.style.font_size.is_some()
                         && matches!(run.style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
                     {
-                        rfs = (rfs * 2.0 / 3.0 * 2.0).round() / 2.0;
+                        rfs = Self::vertical_align_font_size(rfs);
                     }
                     self.metrics_for_text(&run.text, &run.style, &para.style)
                         .word_line_height_no_grid(rfs)
@@ -22571,7 +22597,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // its unshrunk size would move every other fragment.
                         let fs = match f.style.vertical_align {
                             Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript) => {
-                                base * 0.583
+                                Self::vertical_align_font_size(base)
                             }
                             _ => base,
                         };
@@ -22581,6 +22607,38 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     })
                     .fold(0.0_f32, f32::max)
             };
+            // S1360 (2026-09-11, default ON, opt-out OXI_S1360_DISABLE):
+            // a raised run grows the
+            // line's ASCENT, and the glyphs have to come down with it.
+            //
+            // S655 already grows the line — `_pb_exactline_super` gives the
+            // second line height 20.648 against the first's 14.648, the 6pt of
+            // a `w:position` raise — but the line still hands the renderer the
+            // same glyph top, so every baseline on it sits 5.94pt above Word's.
+            // The growth belongs above the baseline: drop the line by it, and
+            // the raised run's own offset then puts it back where it was.
+            // No corpus document reaches this (the A/B changed 0 bytes), so the
+            // claim rests on the probe alone, which is what it was measured on.
+            let line_ascent_growth: f32 = if std::env::var("OXI_S1360_DISABLE").is_err() {
+                let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                line.fragments
+                    .iter()
+                    .enumerate()
+                    .filter(|(fi, f)| !Self::s1045_skip(s1045_ma, *fi, f, para_font_size))
+                    .map(|(_, f)| {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        let raised = if std::env::var("OXI_S655_DISABLE").is_err() {
+                            f.style.position.map_or(0.0, |p| p.max(0.0))
+                        } else {
+                            0.0
+                        };
+                        raised + self.emphasis_above_pt(f, fs).filter(|v| *v > 0.0).unwrap_or(0.0)
+                    })
+                    .fold(0.0_f32, f32::max)
+            } else {
+                0.0
+            };
+
             // Two fragments SET at different sizes. Same-size lines place the
             // same either way, so this keeps the change off every line the
             // probes did not speak about.
@@ -22589,7 +22647,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let base = f.style.font_size.unwrap_or(para_font_size);
                     match f.style.vertical_align {
                         Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript) => {
-                            base * 0.583
+                            Self::vertical_align_font_size(base)
                         }
                         _ => base,
                     }
@@ -22686,18 +22744,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let base_font_size = frag.style.font_size.unwrap_or(para_font_size);
                 // Round 29: superscript/subscript rendering. Word default for
                 // <w:vertAlign w:val="superscript"/> and "subscript":
-                //   - font size = base * 0.583... (≈58%)
+                //   - font size = `vertical_align_font_size` (S1359)
                 //   - vertical offset = +/- (base_size * 0.333) from baseline
                 //     (negative = up for superscript, positive = down for subscript)
+                //
+                // The RISE is font-dependent and this constant is not: measured
+                // at a 96pt base it is 0.334 of the size in Calibri, 0.354 in
+                // Times New Roman, 0.349 in Arial and 0.266 in Georgia
+                // (`_pb_superscript_size.py`). 0.333 suits the first three and
+                // misses Georgia by 6.4pt at that size. Left alone here — it is
+                // its own derivation, and the size was the tenth-sized error.
                 let (resolved_font_size, vert_offset) = match frag.style.vertical_align {
                     Some(VerticalAlign::Superscript) => {
-                        let fs = base_font_size * 0.583;
+                        let fs = Self::vertical_align_font_size(base_font_size);
                         // Raise the glyph: smaller font's baseline shifts up
                         // by ~1/3 of the original font size.
                         (fs, -(base_font_size * 0.333))
                     }
                     Some(VerticalAlign::Subscript) => {
-                        let fs = base_font_size * 0.583;
+                        let fs = Self::vertical_align_font_size(base_font_size);
                         (fs, base_font_size * 0.083)
                     }
                     _ => (base_font_size, 0.0),
@@ -22776,7 +22841,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // probes actually measured is a LATIN line carrying two
                 // different font SIZES, so that is all this claims: a
                 // same-size line is left exactly where it was.
-                let baseline_adjust = baseline_adjust
+                let baseline_adjust = baseline_adjust + line_ascent_growth
                     + if std::env::var("OXI_S1358_DISABLE").is_err()
                         && line_max_render_ascent > 0.0
                         && !self.doc_body_has_real_cjk
@@ -26248,7 +26313,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     style.vertical_align,
                     Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)
                 ) {
-                (font_size * 2.0 / 3.0 * 2.0).round() / 2.0
+                Self::vertical_align_font_size(font_size)
             } else {
                 font_size
             };
