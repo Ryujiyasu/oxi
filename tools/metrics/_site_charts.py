@@ -5,7 +5,7 @@ The site carries, per language, a bar chart of per-engine means and one scatter
 plot per competitor (a dot per document, Oxi on the vertical axis). Both had the
 values baked in as literal SVG, so a new measurement leaves them stating the old
 set's numbers under the new set's heading. This regenerates them from
-`ssim_blindC50/_result.json`.
+`ssim_blindD50/_result.json`.
 
 Only the data-bearing parts are touched: the `<circle>` rows and the chart
 title inside each scatter, and the value/label/width of each bar row. Grid
@@ -24,8 +24,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 FILES = [REPO / "docs" / "index.html", REPO / "docs" / "ja" / "index.html"]
 RESULTS = {
-    "en": REPO / "pipeline_data" / "en_benchmark" / "ssim_blindC50" / "_result.json",
-    "ja": REPO / "pipeline_data" / "ja_benchmark" / "ssim_blindC50" / "_result.json",
+    "en": REPO / "pipeline_data" / "en_benchmark" / "ssim_blindD50" / "_result.json",
+    "ja": REPO / "pipeline_data" / "ja_benchmark" / "ssim_blindD50" / "_result.json",
 }
 # Chart label -> key in _result.json
 LABEL_TO_KEY = {
