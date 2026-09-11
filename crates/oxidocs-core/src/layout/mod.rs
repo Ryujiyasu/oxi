@@ -4688,7 +4688,45 @@ impl LayoutEngine {
     /// from the smallest row or from the document's default line, because in
     /// all of them those are the same 11.5pt; the median is the one that
     /// stays right when a run holds one odd row either way.
-    fn balance_split(rows: &[(usize, f32, Vec<usize>, f32, f32)], total: f32) -> (f32, usize) {
+    /// The same question on a docGrid, where Word counts ROWS, not points.
+    ///
+    /// A row takes `ceil(height / pitch)` grid rows, and Word splits where the
+    /// two counts are closest, taking the larger left column on a tie. Both
+    /// recorded measurements follow: a 40.55pt heading (two grid rows) over 24
+    /// rows splits 13 grid rows against 13 with twelve rows on the left, and
+    /// ten rows whose last takes two slots tie at 6-5 against 5-6 and Word
+    /// keeps six on the left.
+    fn balance_split_grid(
+        rows: &[(usize, f32, Vec<usize>, f32, f32)],
+        pitch: f32,
+    ) -> (f32, usize) {
+        // The epsilon is load-bearing: a row that IS one grid row arrives as
+        // a difference of two accumulated f32 tops, so it can be 20.550003
+        // against a 20.55 pitch and ceil() calls it two rows.
+        let slots = |r: &(usize, f32, Vec<usize>, f32, f32)| {
+            (((r.3 + r.4) / pitch - 0.001).ceil() as i32).max(1)
+        };
+        let total: i32 = rows.iter().map(slots).sum();
+        let mut left = 0;
+        let mut best = (i32::MAX, 1usize);
+        for (i, row) in rows.iter().enumerate().take(rows.len() - 1) {
+            left += slots(row);
+            let cost = (left - (total - left)).abs();
+            // `<=` keeps the LATER split on a tie, which is the larger left.
+            if cost <= best.0 {
+                best = (cost, i + 1);
+            }
+        }
+        let height: f32 = rows.iter().take(best.1).map(|r| r.3 + r.4).sum();
+        let all: f32 = rows.iter().map(|r| r.3 + r.4).sum();
+        (height.max(all - height), best.1)
+    }
+
+    fn balance_split(
+        rows: &[(usize, f32, Vec<usize>, f32, f32)],
+        total: f32,
+        slack: f32,
+    ) -> (f32, usize) {
         let height = |r: &(usize, f32, Vec<usize>, f32, f32)| r.3 + r.4;
         let mut sorted: Vec<f32> = rows.iter().map(height).collect();
         sorted.sort_by(f32::total_cmp);
@@ -4708,7 +4746,7 @@ impl LayoutEngine {
                 left = height(&rows[0]);
                 split = 1;
             }
-            if total - left <= limit + 0.001 {
+            if total - left <= limit + slack {
                 return (left.max(total - left), split);
             }
             limit += step;
@@ -4828,7 +4866,21 @@ impl LayoutEngine {
                 // never a rule, only that tie seen from one side. Levelling
                 // WITHOUT the mark got 18 — half a line is the whole margin.
                 let _ = (tail_gap, cost, i, row);
-                best = Self::balance_split(&rows, total);
+                // On a GRID the remainder is allowed to overhang by half a
+                // row before the height grows. `text_balance_grid_keeps_the_
+                // word_column_boundary_at_fractional_origins` is Word on a
+                // 40.55pt heading over 24 grid rows: the right column ends up
+                // 0.275pt taller than the left and Word leaves it there, where
+                // the same 0.29pt overhang off a grid moves a row across
+                // (`col_8lines_last21hp`). The slack is the one the compat<15
+                // arm already carried; the probes that pinned this rule are all
+                // grid-free, so they say nothing about it either way.
+                let grid = active_grid_pitch
+                    .filter(|p| *p > 0.0 && std::env::var("OXI_COL_SPLIT_GRID_DISABLE").is_err());
+                best = match grid {
+                    Some(pitch) => Self::balance_split_grid(&rows, pitch),
+                    None => Self::balance_split(&rows, total, 0.001),
+                };
                 break;
             } else if (has_fixed_prefix || plain_balance) && std::env::var("OXI_BALANCE_LEFT_CEILING_DISABLE").is_err() {
                 if sum + if plain_balance && compat_mode < 15 { active_grid_pitch.map_or(0.01, |pitch| pitch * 0.5) } else { 0.01 } >= total - sum {
@@ -22497,6 +22549,67 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .fold(0.0_f32, f32::max)
             };
 
+            // S1358 (2026-09-11, default ON, opt-out OXI_S1358_DISABLE):
+            // the same maximum, but
+            // in the ascent the RENDERER actually places a baseline at
+            // (`baseline_ascent`, S1264/S1265). `line_max_ascent` above is
+            // Word's ascent, which governs the line's HEIGHT; the two differ
+            // on 6 of 23 faces, so a shift computed from the wrong one moves
+            // the glyphs off the baseline it was meant to reach.
+            let line_max_render_ascent: f32 = if line.fragments.is_empty() {
+                0.0
+            } else {
+                let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                line.fragments
+                    .iter()
+                    .enumerate()
+                    .filter(|(fi, f)| !Self::s1045_skip(s1045_ma, *fi, f, para_font_size))
+                    .map(|(_, f)| {
+                        let base = f.style.font_size.unwrap_or(para_font_size);
+                        // The size the fragment is actually SET at: a super- or
+                        // subscript is drawn smaller, and anchoring the line to
+                        // its unshrunk size would move every other fragment.
+                        let fs = match f.style.vertical_align {
+                            Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript) => {
+                                base * 0.583
+                            }
+                            _ => base,
+                        };
+                        self.metrics_for_text(&f.text, &f.style, &para.style)
+                            .baseline_ascent()
+                            * fs
+                    })
+                    .fold(0.0_f32, f32::max)
+            };
+            // Two fragments SET at different sizes. Same-size lines place the
+            // same either way, so this keeps the change off every line the
+            // probes did not speak about.
+            let line_has_mixed_sizes = {
+                let set_size = |f: &LineFragment| {
+                    let base = f.style.font_size.unwrap_or(para_font_size);
+                    match f.style.vertical_align {
+                        Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript) => {
+                            base * 0.583
+                        }
+                        _ => base,
+                    }
+                };
+                let mut seen: Option<f32> = None;
+                line.fragments.iter().any(|f| {
+                    if f.text.is_empty() {
+                        return false;
+                    }
+                    let fs = set_size(f);
+                    match seen {
+                        None => {
+                            seen = Some(fs);
+                            false
+                        }
+                        Some(first) => (fs - first).abs() > 0.01,
+                    }
+                })
+            };
+
             // R-10: track whether any fragment on this line came from a
             // revision-bearing source run; if so we emit one change-bar at
             // the line's left margin after the fragment loop finishes.
@@ -22636,6 +22749,45 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 } else {
                     0.0
                 };
+                // S1358 (2026-09-11, default ON, opt-out OXI_S1358_DISABLE):
+                // put every fragment of a line on ONE baseline.
+                //
+                // The note above says Word does not do this for body text, and
+                // it is wrong. It was taken on gen2_001, where every fragment
+                // of a line is the same size — and at one size, top-aligning
+                // and baseline-aligning are the same picture. With two sizes
+                // they are not: `_pb_exactline_latin.py EL_MIXED=20` puts a
+                // 9pt run and a 20pt run on one line, and Word's PDF gives
+                // BOTH spans origin 89.78. This engine draws them 10.36pt
+                // apart, because the line hands the renderer one glyph top and
+                // the renderer adds each font's own ascent to it.
+                //
+                // The shift is in `baseline_ascent`, the ascent the renderer
+                // places a baseline at — not `word_ascent_pt`, which governs
+                // the line's height and differs on 6 of 23 faces.
+                //
+                // SCOPE, and why it is this narrow. The unscoped form measured
+                // net −0.1839 on the corpus (52 documents worse, 20 better),
+                // and the losses are Japanese: nedocontract −0.0339,
+                // kyotei36spec −0.0281, roudoujoken −0.0105. The CJK vertical
+                // stack (S455/S457/S614/S629) is calibrated ON TOP of the
+                // top-aligned convention, so moving a CJK fragment off it
+                // breaks a compensation rather than fixing an error. What the
+                // probes actually measured is a LATIN line carrying two
+                // different font SIZES, so that is all this claims: a
+                // same-size line is left exactly where it was.
+                let baseline_adjust = baseline_adjust
+                    + if std::env::var("OXI_S1358_DISABLE").is_err()
+                        && line_max_render_ascent > 0.0
+                        && !self.doc_body_has_real_cjk
+                        && line_has_mixed_sizes
+                    {
+                        (line_max_render_ascent
+                            - frag_metrics.baseline_ascent() * resolved_font_size)
+                            .max(0.0)
+                    } else {
+                        0.0
+                    };
                 let _ = line_max_ascent;
 
                 // Session 75 Phase D (2026-05-17): y is LINE BOX TOP, renderer adds
@@ -33566,7 +33718,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let m = self.metrics_for_para_mark_g(&rpr, para_style, true);
                             consider(fs, m);
                         } else {
-                            for f in &line.fragments {
+                            // S1357 (2026-09-11, default ON, opt-out
+                            // OXI_S1357_DISABLE): the conversion from "the
+                            // baseline sits at 0.8 x the line" to a glyph top
+                            // goes through a font's ascent, and it has to be
+                            // the ascent of a font that DRAWS something.
+                            // S1045 already keeps an oversized edge space out
+                            // of the line's HEIGHT; left in here it walked off
+                            // with the baseline instead. One trailing 36pt
+                            // space on a 12pt exact line put this engine's
+                            // glyphs 23.68pt ABOVE the line top, where Word
+                            // does not move them at all —
+                            // `_pb_exactline_latin.py EL_BIG_SPACE=36`, whose
+                            // Word baselines are identical with and without
+                            // the space at every line height measured.
+                            let bounds = if std::env::var("OXI_S1357_DISABLE").is_err() {
+                                self.s1045_height_drivers(&line.fragments, para_font_size)
+                            } else {
+                                None
+                            };
+                            for (i, f) in line.fragments.iter().enumerate() {
+                                if Self::s1045_skip(bounds, i, f, para_font_size) {
+                                    continue;
+                                }
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
                                 let m = self.metrics_for_text(&f.text, &f.style, para_style);
                                 consider(fs, m);
@@ -49095,7 +49269,7 @@ mod tests {
                 .iter()
                 .map(|&h| (0usize, 0.0f32, Vec::new(), h, 0.0f32))
                 .collect();
-            LayoutEngine::balance_split(&rows, heights.iter().sum()).1
+            LayoutEngine::balance_split(&rows, heights.iter().sum(), 0.001).1
         };
         let run = |n: usize, tall_at: Option<usize>| {
             let heights: Vec<f32> = (0..n)
