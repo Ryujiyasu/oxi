@@ -67,10 +67,17 @@ def para(text: str, half: int) -> str:
         f'</w:rPr><w:t xml:space="preserve">{text}</w:t></w:r></w:p>')
 
 
-def document(count: int, last_half: int) -> str:
+def document(count: int, last_half: int, tall_at: int = -1) -> str:
+    """`tall_at` is which line carries `last_half`; -1 means the last one.
+
+    Sweeping the position as well as the size is the only way to tell what
+    "tall" is measured against — the line before it, the average, or the grid.
+    A rule that only ever saw a tall LAST line cannot distinguish those.
+    """
     lines = []
+    where = count - 1 if tall_at < 0 else tall_at
     for i in range(count):
-        half = last_half if i == count - 1 else BASE_HALF
+        half = last_half if i == where else BASE_HALF
         lines.append(para(f"L{i + 1}", half))
     # One two-column section, evenly spaced, on a page big enough that the
     # whole run fits on one page — the split is then purely the balancer's.
@@ -87,7 +94,13 @@ def document(count: int, last_half: int) -> str:
         '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" '
         'w:header="0" w:footer="0" w:gutter="0"/>'
         '</w:sectPr></w:pPr></w:p>')
-    body = "".join(lines) + two_col + (
+    # The one-column section needs real content: the engine only notices a
+    # column run ending when something flows into the next one, so a section
+    # that holds nothing leaves the two-column run unbalanced and the question
+    # unanswered. Word balances either way, which is what made the empty
+    # version look like an engine bug rather than a probe bug.
+    after = para("after", BASE_HALF)
+    body = "".join(lines) + two_col + after + (
         '<w:sectPr><w:type w:val="continuous"/>'
         '<w:cols w:num="1" w:space="360"/>'
         '<w:pgSz w:w="11906" w:h="16838"/>'
@@ -98,13 +111,39 @@ def document(count: int, last_half: int) -> str:
             f'<w:body>{body}</w:body></w:document>')
 
 
-def write(path: Path, count: int, last_half: int, compat: int) -> None:
+def prefixed(count: int, prefix_lines: int, compat: int) -> str:
+    """The same run, but with full-width lines above it on the same page.
+
+    A column run rarely starts at the top of a page — a heading or a lead
+    paragraph usually sits above it, and the engine takes a different arm when
+    it does. Whether the height Word halves is the RUN or what is left of the
+    PAGE cannot be read off a run that starts at the top, because there the
+    two are the same.
+    """
+    before = "".join(para(f"P{i + 1}", BASE_HALF) for i in range(prefix_lines))
+    one_col = (
+        '<w:p><w:pPr><w:sectPr>'
+        '<w:type w:val="continuous"/>'
+        '<w:cols w:num="1" w:space="360"/>'
+        '<w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" '
+        'w:header="0" w:footer="0" w:gutter="0"/>'
+        '</w:sectPr></w:pPr></w:p>')
+    body = document(count, BASE_HALF)
+    at = body.index("<w:body>") + len("<w:body>")
+    return body[:at] + before + one_col + body[at:]
+
+
+def write(path: Path, count: int, last_half: int, compat: int, tall_at: int = -1,
+          prefix_lines: int = 0) -> None:
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", CONTENT_TYPES)
         z.writestr("_rels/.rels", ROOT_RELS)
         z.writestr("word/_rels/document.xml.rels", DOC_RELS)
         z.writestr("word/settings.xml", settings(compat))
-        z.writestr("word/document.xml", document(count, last_half))
+        z.writestr("word/document.xml",
+                   prefixed(count, prefix_lines, compat) if prefix_lines
+                   else document(count, last_half, tall_at))
 
 
 def main() -> int:
@@ -117,6 +156,20 @@ def main() -> int:
                 name = f"col_{count}lines_last{half}hp_compat{compat}.docx"
                 write(where / name, count, half, compat)
                 made += 1
+    # The same tall line, moved: if Word is looking at the last line
+    # specifically, only the last position changes the split.
+    for count in (8, 10, 12):
+        for half in (24,):
+            for at in range(count):
+                name = f"pos_{count}lines_tall{half}hp_at{at}_compat15.docx"
+                write(where / name, count, half, 15, at)
+                made += 1
+    # A run that does NOT start at the top of the page.
+    for count in (8, 10):
+        for lines in (1, 2, 3, 5):
+            write(where / f"pre_{count}lines_prefix{lines}_compat15.docx",
+                  count, BASE_HALF, 15, prefix_lines=lines)
+            made += 1
     print(f"{made} documents in {where}")
     print("each is one two-column section: N lines at 10pt, the last one swept")
     return 0

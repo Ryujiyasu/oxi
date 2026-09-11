@@ -4660,6 +4660,62 @@ impl LayoutEngine {
 
     /// Balance text in flow order, retaining variable row advances and annotations.
     /// Tables and other non-text content continue through the existing table path.
+    /// Where Word breaks a balanced two-column run.
+    ///
+    /// Word does not pick the split that levels the two columns, and it does
+    /// not keep the row that reaches the half. It sets a column HEIGHT and
+    /// fills against it: the height starts at half the run, the left column
+    /// takes whole rows greedily while they fit, and if the remainder will
+    /// not fit in the same height the height grows by one row and the fill
+    /// runs again.
+    ///
+    /// That is what makes a 0.575pt tall last row move a whole row across
+    /// while a 2.3pt tall row in the middle moves nothing: the first changes
+    /// whether the remainder fits, the second does not.
+    ///
+    /// Measured 2026-09-11 on `tests/fixtures/column_split` — 25 size probes
+    /// (6 to 14 rows, last row swept 10pt to 12pt) and 30 position probes
+    /// (one tall row swept through the run), read back through Word COM by
+    /// `_col_split_word.py` and `_col_split_geom.py`. All 55 follow from this.
+    /// Two earlier readings did not: "the row reaching the half stays left"
+    /// got 27 of the 30 position probes, and levelling got 18.
+    ///
+    /// The geometry also says the section-ending ¶ mark takes NO line of its
+    /// own — it rides at the end of the last row of the right column — so it
+    /// is absent here on purpose.
+    ///
+    /// The step is the MEDIAN row height. The probes cannot separate that
+    /// from the smallest row or from the document's default line, because in
+    /// all of them those are the same 11.5pt; the median is the one that
+    /// stays right when a run holds one odd row either way.
+    fn balance_split(rows: &[(usize, f32, Vec<usize>, f32, f32)], total: f32) -> (f32, usize) {
+        let height = |r: &(usize, f32, Vec<usize>, f32, f32)| r.3 + r.4;
+        let mut sorted: Vec<f32> = rows.iter().map(height).collect();
+        sorted.sort_by(f32::total_cmp);
+        let step = sorted[sorted.len() / 2].max(0.01);
+
+        let mut limit = total * 0.5;
+        for _ in 0..=rows.len() {
+            let mut left = 0.0;
+            let mut split = 0usize;
+            for (i, row) in rows.iter().enumerate().take(rows.len() - 1) {
+                if left + height(row) > limit + 0.001 { break; }
+                left += height(row);
+                split = i + 1;
+            }
+            // A row taller than the whole limit still has to go somewhere.
+            if split == 0 {
+                left = height(&rows[0]);
+                split = 1;
+            }
+            if total - left <= limit + 0.001 {
+                return (left.max(total - left), split);
+            }
+            limit += step;
+        }
+        (total, rows.len() - 1)
+    }
+
     fn rebalance_text_columns(elements: &mut [LayoutElement], top: f32, xs: &[f32], blocks: &[Block], tail_gap: f32, compat_mode: u32, active_grid_pitch: Option<f32>) -> Option<f32> {
         if xs.len() != 2 { return None; }
         let prefix_table = std::env::var("OXI_PREFIX_TABLE_BALANCE_DISABLE").is_err();
@@ -4730,28 +4786,50 @@ impl LayoutEngine {
             }
         }
         if rows.len() < 2 { return None; }
+        if std::env::var("OXI_DBG_COL").is_ok() {
+            eprintln!("[BALANCE_IN] tail_gap={:.3} rows={:?}", tail_gap,
+                rows.iter().map(|r| (r.3, r.4)).collect::<Vec<_>>());
+        }
         let mode_balance = std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err();
         let plain_balance = mode_balance && !has_fixed_prefix;
         let total: f32 = rows.iter().map(|r| r.3 + r.4).sum();
         let mut sum = 0.0;
         let mut best = (f32::INFINITY, 1usize);
+        // Word's answers do not depend on the compatibility mode: the same 55
+        // probes were measured at compat 14 and at 15 and every one matched.
+        // This engine used to take a different arm below 15, and that arm got
+        // the same three wrong that the old compat-15 rule did.
+        let word_balance = plain_balance
+            && (compat_mode >= 15 || std::env::var("OXI_COL_SPLIT_COMPAT14_DISABLE").is_err());
         for (i, row) in rows.iter().enumerate().take(rows.len() - 1) {
             sum += row.3 + row.4;
             let cost = sum.max(total - sum);
-            if plain_balance && compat_mode >= 15 {
+            if word_balance {
                 // The final paragraph's spacing participates in the fit of
                 // the last line start, then follows the right-hand fragment.
                 //
-                // The row that REACHES the half stays on the left, it does not
-                // move to the right: Word puts n/2 + 1 rows in the left column
-                // of an evenly-sized run, not n/2. Measured 2026-09-11 on
-                // `tests/fixtures/column_split` — 25 probes, 6 to 14 rows, last
-                // row swept from 10pt to 12pt, compat 14 and 15 — where Word
-                // was one row ahead of this engine on every single one.
-                let line_start = sum - row.3;
-                if line_start + tail_gap.max(0.0) <= (total + tail_gap.max(0.0)) * 0.5 + 0.001 {
-                    best = (cost, i + 1);
-                } else { break; }
+                // Word levels the two columns: it takes the split whose
+                // TALLER column is shortest, and on a tie it takes the one
+                // with fewer rows on the left. The section-ending ¶ mark
+                // counts, at the foot of the right column — S945 keeps it out
+                // of the flow, but the balancer still sees it, and leaving it
+                // out moves the decision by half a line.
+                //
+                // Measured 2026-09-11 on `tests/fixtures/column_split`: 25
+                // size probes (6 to 14 rows, last row 10pt to 12pt) and 30
+                // position probes (one tall row swept through the run). All
+                // 55 follow from this and nothing else does — an equal run
+                // ties and takes n/2, a taller last row breaks the tie to
+                // n/2 + 1, and a tall row sitting exactly at n/2 ties again
+                // because it straddles the half by t/2 on either side.
+                //
+                // Two earlier readings were wrong. "The row that reaches the
+                // half stays left" got 27 of the 30 position probes and was
+                // never a rule, only that tie seen from one side. Levelling
+                // WITHOUT the mark got 18 — half a line is the whole margin.
+                let _ = (tail_gap, cost, i, row);
+                best = Self::balance_split(&rows, total);
+                break;
             } else if (has_fixed_prefix || plain_balance) && std::env::var("OXI_BALANCE_LEFT_CEILING_DISABLE").is_err() {
                 if sum + if plain_balance && compat_mode < 15 { active_grid_pitch.map_or(0.01, |pitch| pitch * 0.5) } else { 0.01 } >= total - sum {
                     best = (cost, i + 1);
@@ -12038,6 +12116,37 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // following column-section (heterogeneous path) starts below it.
             if heterogeneous {
                 section_max_y = section_max_y.max(cursor.cursor_y);
+            }
+        }
+
+        // S1352 (2026-09-11, default ON, opt-out OXI_COL_TRAILING_BALANCE_DISABLE):
+        // a column run closed by a section that holds NOTHING still balances.
+        // The balance above fires when a block belonging to the next run comes
+        // past; when that run is empty no such block ever comes, and the run
+        // was left filled down the left column instead. Word balances it:
+        // `end_8lines_emptyafter` splits 4/4 where this engine had all 8 left.
+        //
+        // A run that is closed by no section at all is NOT balanced — Word
+        // fills it — which is why this asks for a later run to exist rather
+        // than simply balancing whatever is left (`end_8lines_nothingafter`).
+        if num_columns == 2
+            && active_run_idx + 1 < col_runs.len()
+            && col_runs[active_run_idx + 1].1 != num_columns
+            && std::env::var("OXI_S750_DISABLE").is_err()
+            && std::env::var("OXI_TEXT_BALANCE_DISABLE").is_err()
+            && std::env::var("OXI_COL_TRAILING_BALANCE_DISABLE").is_err()
+        {
+            if let Some(bottom) = Self::rebalance_text_columns(
+                &mut elements,
+                col_band_top,
+                &col_x_positions,
+                &page.blocks,
+                if std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err() { pending_section_gap } else { 0.0 },
+                self.compat_mode,
+                if page.doc_grid_no_type { None } else { page.grid_line_pitch },
+            ) {
+                cursor.set(bottom);
+                section_max_y = section_max_y.max(bottom);
             }
         }
 
@@ -48969,6 +49078,47 @@ mod pagination_regression_tests;
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    /// Where Word breaks a balanced two-column run, as measured.
+    ///
+    /// The numbers are Word's, off `tests/fixtures/column_split`: a run of
+    /// equal 10pt lines (11.5pt each) with at most one taller row. Word gives
+    /// the same answers at compat 14 and at 15. `_col_split_sweep.py` drives
+    /// the same 110 probes through the renderer; this pins the arithmetic so
+    /// the rule cannot drift without a test going red.
+    #[test]
+    fn column_split_follows_word() {
+        const BASE: f32 = 11.499_023;
+        const TALL: f32 = 13.798_828; // a 12pt line
+        let split = |heights: &[f32]| {
+            let rows: Vec<(usize, f32, Vec<usize>, f32, f32)> = heights
+                .iter()
+                .map(|&h| (0usize, 0.0f32, Vec::new(), h, 0.0f32))
+                .collect();
+            LayoutEngine::balance_split(&rows, heights.iter().sum()).1
+        };
+        let run = |n: usize, tall_at: Option<usize>| {
+            let heights: Vec<f32> = (0..n)
+                .map(|i| if Some(i) == tall_at { TALL } else { BASE })
+                .collect();
+            split(&heights)
+        };
+
+        // An evenly sized run splits in half.
+        for n in [6, 8, 10, 12, 14] {
+            assert_eq!(run(n, None), n / 2, "{n} equal rows");
+        }
+        // One taller row moves the split by one — but only when it sits
+        // strictly past the middle. At the middle itself it does not.
+        for (n, boundary) in [(8usize, 4usize), (10, 5), (12, 6)] {
+            for at in 0..n {
+                let want = if at > boundary { n / 2 + 1 } else { n / 2 };
+                assert_eq!(run(n, Some(at)), want, "{n} rows, tall at {at}");
+            }
+        }
+        // A row taller than the whole limit still has to land somewhere.
+        assert_eq!(split(&[400.0, BASE, BASE]), 1);
+    }
 
     /// S99/S100 LayoutCursor invariants (Phase A1).
     /// Future Phase B will allow cursor_y and visual_y to diverge.

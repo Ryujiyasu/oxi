@@ -49,12 +49,13 @@ def oxi_split(path: Path) -> tuple[int, int] | None:
         if not dump.is_file():
             return None
         data = json.loads(dump.read_text(encoding="utf-8"))
-    xs = []
-    for page in data.get("pages", {}).values() if isinstance(data.get("pages"), dict) \
-            else data.get("pages", []):
-        for rec in (page if isinstance(page, list) else page.get("records", [])):
-            if rec.get("text"):
-                xs.append(round(float(rec.get("x", 0)), 1))
+    # The dump names these "elements". Guessing at "records" here made every
+    # engine column read as "-" while the Word half looked perfectly healthy,
+    # which is the quiet way for a comparison tool to stop comparing.
+    xs = [round(float(e["x"]), 1)
+          for page in data.get("pages", [])
+          for e in page.get("elements", [])
+          if e.get("type") == "text" and e.get("text")]
     if not xs:
         return None
     left = min(xs)
@@ -87,9 +88,11 @@ def main() -> int:
         app.Quit()
 
     print("\nwhere Word moves the split, per line count and compat mode:")
+    # Only the size sweep is summarised this way; the other families are named
+    # differently and used to crash this on their way past.
     seen = {}
     for name, got, _mine in rows:
-        if not got:
+        if not got or not name.startswith("col_"):
             continue
         bits = name.split("_")
         count = int(bits[1].replace("lines", ""))
