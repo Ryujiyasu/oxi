@@ -28,6 +28,7 @@ SETS = {
     "blindB50": ("_final_blindB50.json", "p1_blindB50"),
     "blindC50": ("_final_blindC50.json", "p1_blindC50"),
     "next50": ("_final_next50.json", "p1_next50"),
+    "blindD50": ("_final_blindD50.json", "p1_blindD50"),
 }
 SET = ""
 for a in sys.argv[1:]:
