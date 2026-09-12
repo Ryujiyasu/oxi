@@ -33476,6 +33476,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // apparent per-band-shift "drift" is partly best-shift over-fit + the
                 // rasterizer AA floor (body-aligned bands ~0.96, not 0.99). EVERY
                 // non-SSIM vertical measurement (COM/PDF/SSE/band-pitch) has misled here.
+                // S1362 ATTEMPTED + REVERTED (2026-09-12): the half-point snap
+                // here is NOT Word's, and removing it put every measured body
+                // pitch on Word — Arial, Times New Roman and MS Mincho all
+                // within 0.005pt, measured as the span over 40 lines so no
+                // single rounding can hide in it:
+                //     MS Mincho  9pt  Word 11.6756   83/64 = 11.6719
+                //               10pt       12.9710           12.9688
+                //               12pt       15.5656           15.5625
+                //               16pt       20.7558           20.7500
+                // The snap was read off Information(6), which is itself
+                // quantised to 0.75pt, so it recorded the instrument.
+                //
+                // It is reverted anyway because it is one half of a
+                // COMPENSATING PAIR: `footer_spacing/empty.docx` (a recorded
+                // Word measurement) moves 11 pages to 10 without it. That
+                // document's body line comes out 11.25 where its own hhea is
+                // 11.50 — a 0.75 floor on the `snapToGrid` path with no grid —
+                // and this snap was rounding that back up to 11.5. Removing one
+                // half exposes the other. Both have to go together, and the
+                // 0.75 floor is not found yet.
                 let s_dbg_ret = if grid_pitch.is_none() || s611_no_type_round {
                     (tw / 10.0).round() * 10.0 / 20.0
                 } else {
