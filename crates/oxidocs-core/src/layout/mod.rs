@@ -19177,7 +19177,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let s1363_site2 = std::env::var("OXI_S1363_DISABLE").is_err();
                     let s1363_box_of = |m: &FontMetrics, fs: f32| -> f32 {
                         if m.is_cjk_83_64_font() {
-                            (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0)
+                            Self::s1367_cjk_box(m, fs)
                         } else {
                             m.natural_line_height_hhea(fs)
                         }
@@ -19215,6 +19215,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         {
                             no_grid_max = no_grid_max.max(font_size * 1448.0 / 1000.0);
                             no_grid_raw_max = no_grid_raw_max.max(font_size * 1448.0 / 1000.0);
+                            // S1363: the embedded face's own box is the box.
+                            s1363_box_max = s1363_box_max.max(font_size * 1448.0 / 1000.0);
                         }
                     }
                     // S805: exact hhea natural (asc+desc+lineGap, no GDI px
@@ -19379,13 +19381,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             no_grid_raw_max = raw;
                         }
                         if s1363_site2 {
-                            let b = match &s1119_faces {
+                            let mut b = match &s1119_faces {
                                 Some(fs_list) => fs_list
                                     .iter()
                                     .map(|f| s1363_box_of(f, fs))
                                     .fold(0.0f32, f32::max),
                                 None => s1363_box_of(m, fs),
                             };
+                            // The S612ZC circled-number box of the embedded
+                            // face (aiguideline): the basis takes it like `h`.
+                            if std::env::var("OXI_S612ZC_DISABLE").is_err()
+                                && m.family == "Zen Old Mincho"
+                                && frag.text.chars().any(|c| matches!(c as u32, 0x2460..=0x2473))
+                            {
+                                b = b.max(fs * 1448.0 / 1000.0);
+                            }
                             if b > s1363_box_max {
                                 s1363_box_max = b;
                             }
@@ -32380,6 +32390,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         max_ink
     }
 
+    /// S1367 (2026-09-13, default ON, opt-out OXI_S1367_DISABLE): the CJK line
+    /// box is `floor(winAscent + winDescent, in font units, x 1.3) / unitsPerEm
+    /// x size`. The 83/64 the engine has carried since the first MS Mincho
+    /// measurements is this law seen through a 256-unit font: floor(256 x 1.3)
+    /// = 332 = 83 x 4. A 2048-unit font does not land on 83/64. MEASURED
+    /// (`_pb_line_pitch.py` ratio_* arms, Word PDF, 30-line span / size):
+    ///     Yu Mincho 8..18pt   1.67306 .. 1.67339   floor(2636 x 1.3)/2048 = 1.67285
+    ///     Yu Gothic 10.5/12   1.67314 / 1.67339    (same win sum, same value)
+    ///     MS Gothic 10.5/12   1.29718 / 1.29710    floor(256 x 1.3)/256  = 1.29688
+    /// The +0.0003..0.0004 both families sit above the law is the span
+    /// instrument's own bias (it shows on MS Mincho, whose 83/64 is not in
+    /// doubt). 83/64 under-measured every 游 line by 0.22% -- 0.047pt at 12pt,
+    /// -1.4pt over e3c545's page. Meiryo (win 3072) reads 1.9507 against
+    /// 1.9497, still open; it is not in the corpus at a no-grid single line.
+    fn s1367_cjk_box(m: &FontMetrics, fs: f32) -> f32 {
+        if std::env::var("OXI_S1367_DISABLE").is_ok() {
+            return (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0);
+        }
+        let upm = m.units_per_em.max(1) as f32;
+        let win_units = ((m.win_ascent + m.win_descent) * upm + 0.5).floor();
+        (win_units * 1.3).floor() / upm * fs
+    }
+
     fn line_height_for_line_inner(
         &self,
         line: &Line,
@@ -32414,7 +32447,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let s1363_box = |m: &FontMetrics, fs: f32| -> (f32, f32) {
             let win = m.win_ascent + m.win_descent;
             let total = if m.is_cjk_83_64_font() {
-                win * fs * (83.0 / 64.0)
+                Self::s1367_cjk_box(m, fs)
             } else {
                 m.natural_line_height_hhea(fs)
             };
@@ -34637,7 +34670,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let m = self.metrics_for_para_mark(&rpr_ref, para_style);
                         m.word_line_height_table_cell(para_font_size)
                     };
-                    let raw = (line_height - centering_height).max(0.0) / 2.0;
+                    // S1366 (2026-09-13, OPT-IN `OXI_S1366=1` -- the PDF says factor-invariant, the word_png pixels say x1.15 sits 1pt lower; held until a pixel capture of the probe decides): a
+                    // CJK no-grid line's glyph does not move with the line-spacing
+                    // multiplier -- the extra leading goes BELOW it, exactly as
+                    // S1047 measured for Latin. Word PDF (`_pb_line_pitch.py`
+                    // pitch2_* arms, first-line bbox top, margin 56.7):
+                    //     MS Mincho 10.5   x1.0 58.13   x1.5 58.13
+                    //     Yu Mincho 10.5   x1.0 59.83   x1.5 59.95  (one 0.12 quantum)
+                    // Centring on the MULTIPLIED height put probemult_mult15's
+                    // glyphs 3.36pt low on every line (word_png ink tops: Word
+                    // 72.96 / Oxi 76.32, constant over 34 lines) -- the offset the
+                    // old too-short pitch happened to cancel mid-page. Centre on
+                    // the single-spacing height instead.
+                    let s1366_base = if std::env::var("OXI_S1366").is_ok()
+                        && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
+                    {
+                        let f = para_style.line_spacing.unwrap_or(1.0);
+                        if f > 0.0 { line_height / f } else { line_height }
+                    } else {
+                        line_height
+                    };
+                    let raw = (s1366_base - centering_height).max(0.0) / 2.0;
                     // S328/S329 (2026-05-26) — see comments above (LM1/LM2 branch).
                     let use_floor = std::env::var("OXI_S328_FLOOR_CENTER")
                         .map(|v| v != "0" && v != "false")
