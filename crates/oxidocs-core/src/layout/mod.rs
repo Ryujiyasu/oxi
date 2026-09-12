@@ -32205,6 +32205,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     ) -> f32 {
         let mut max_ascent: f32 = 0.0;
         let mut max_descent: f32 = 0.0;
+        // The tallest single fragment, kept beside the separate folds so the
+        // two readings can be compared (S1361 below).
+        let mut max_box: f32 = 0.0;
         if line.fragments.is_empty() {
             let font_size = para_style
                 .ppr_rpr
@@ -32260,7 +32263,37 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 if des > max_descent {
                     max_descent = des;
                 }
+                if asc + des > max_box {
+                    max_box = asc + des;
+                }
             }
+        }
+        // S1361 (2026-09-12, default ON, opt-out OXI_S1361_DISABLE): a line is
+        // as tall as its TALLEST FRAGMENT, not as tall as the deepest descent
+        // under the highest ascent. Folding the two separately lets a line take
+        // a CJK face's ascent and a Latin face's descent at once and come out
+        // taller than either font would ever draw.
+        //
+        // MEASURED (`_pb_line_pitch.py`, MS Mincho 10pt east-asian + Arial
+        // ascii, no grid, single):
+        //     line             Word    whole box   separate folds
+        //     CJK only        12.96      12.97          --
+        //     + Arial 10pt    12.96      12.97        13.26
+        //     + Arial 14pt    16.08      16.10        15.64
+        // Word follows the whole box in both directions — it does not grow when
+        // the Latin descent is deeper, and it does not shrink when the Latin box
+        // is taller overall. Pure-Latin lines already matched (11.52 / 13.80 /
+        // 16.08 against Arial's own hhea box) and are untouched by this.
+        //
+        // It matters because almost no Japanese paragraph is free of digits or
+        // Latin: the separate fold cost +0.5pt on EVERY such line, about 4%,
+        // which is more than a line per page.
+        //
+        // The same mixing was noted at S620 and dismissed there on a 0.1pt
+        // reading of one gen2 cohort; the arms above are 0.5pt and say which
+        // way Word goes.
+        if std::env::var("OXI_S1361_DISABLE").is_err() && max_box > 0.0 {
+            return max_box;
         }
         max_ascent + max_descent
     }
@@ -32665,7 +32698,35 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             hhea_natural_max += overflow / factor;
         }
 
-        let run_base = max_ascent + max_descent;
+        // S1361 (2026-09-12, default ON, opt-out OXI_S1361_DISABLE): a line is
+        // as tall as its TALLEST FRAGMENT. Folding ascent and descent
+        // separately lets a line take one face's ascent under another's
+        // descent and come out taller than either font ever draws.
+        //
+        // MEASURED (`_pb_line_pitch.py`, MS Mincho 10pt east-asian + Arial
+        // ascii, no grid, single spacing):
+        //     line              Word    tallest box   separate folds
+        //     CJK only         12.96       12.97           --
+        //     + Arial 10pt     12.96       12.97         13.26
+        //     + Arial 14pt     16.08       16.10         15.64
+        // Word follows the tallest box BOTH ways — it does not grow when the
+        // Latin descent is deeper, and it does not shrink when the Latin box is
+        // taller overall. Pure-Latin lines already agreed (11.52 / 13.80 /
+        // 16.08 = Arial's own hhea box) and do not move.
+        //
+        // `max_combined` was already being accumulated here for the
+        // dominant-face test; it just never reached the height.
+        //
+        // It matters because a Japanese paragraph almost always carries digits
+        // or Latin somewhere: the separate fold cost +0.5pt on every such line,
+        // about 4%, which is more than one line per page. The same mixing was
+        // noted at S620 and dismissed on a 0.1pt reading of one cohort; these
+        // arms are 0.5pt and say which way Word goes.
+        let run_base = if std::env::var("OXI_S1361_DISABLE").is_err() && max_combined > 0.0 {
+            max_combined
+        } else {
+            max_ascent + max_descent
+        };
 
         // For LayoutMode=0 (no grid, grid_pitch=None), use direct font metrics formula.
         // COM-confirmed (2026-04-06): LayoutMode=0 uses floor(win_sum*fontSize*20/10)*10/20
