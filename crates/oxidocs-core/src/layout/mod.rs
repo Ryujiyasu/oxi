@@ -19164,6 +19164,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 if grid_pitch.is_none() {
                     let mut no_grid_max: f32 = 0.0;
                     let mut no_grid_raw_max: f32 = 0.0;
+                    // S1363, second site: the cursor advance of a no-grid
+                    // paragraph comes from THIS basis, not from
+                    // `line_height_for_line_inner`, and it folded ascent and
+                    // descent separately from the pixel-rounded components --
+                    // the same pair of errors. Word (`_pb_line_pitch.py`, span
+                    // over 30 lines): MS Mincho 10pt x1.15 = 14.920 = 12.971 x
+                    // 1.15; a Latin line carrying kanji numerals takes the
+                    // Mincho box too (Calibri 11 + numerals: 14.27 = 11 x 83/64,
+                    // x1.15 = 16.41), where the separate fold gave 15.25 / 17.53.
+                    // The tallest fragment's exact box, nothing mixed.
+                    let s1363_site2 = std::env::var("OXI_S1363_DISABLE").is_err();
+                    let s1363_box_of = |m: &FontMetrics, fs: f32| -> f32 {
+                        if m.is_cjk_83_64_font() {
+                            (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0)
+                        } else {
+                            m.natural_line_height_hhea(fs)
+                        }
+                    };
+                    let mut s1363_box_max: f32 = 0.0;
                     // Empty paragraphs: compute no_grid from para mark font
                     // (matching line_height_for_line_inner's empty-para logic).
                     if first_line.fragments.is_empty() {
@@ -19183,6 +19202,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         );
                         no_grid_max = m.word_line_height_no_grid(font_size);
                         no_grid_raw_max = (m.win_ascent + m.win_descent) * font_size;
+                        if s1363_site2 {
+                            s1363_box_max = s1363_box_of(m, font_size);
+                        }
                         // S612z-empty (2026-06-26): empty Zen Old Mincho para → embedded
                         // ¶ box 17.376@12pt (1.448em), not the body fallback 15.56 (rt.pdf
                         // empty-spacer = 17.40). This is the cumulative-LM0 advance basis
@@ -19252,6 +19274,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, true);
                         if !m.is_cjk_83_64_font() {
                             s805_hhea_max = m.natural_line_height_hhea(font_size);
+                        }
+                        if s1363_site2 && s902_all_ws {
+                            // Whitespace-only runs do not drive the height; the
+                            // mark's box replaces whatever the fragment loop
+                            // would have folded (it is skipped there anyway).
+                            s1363_box_max = s1363_box_of(m, font_size);
                         }
                     }
                     for frag in &first_line.fragments {
@@ -19350,6 +19378,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if raw > no_grid_raw_max {
                             no_grid_raw_max = raw;
                         }
+                        if s1363_site2 {
+                            let b = match &s1119_faces {
+                                Some(fs_list) => fs_list
+                                    .iter()
+                                    .map(|f| s1363_box_of(f, fs))
+                                    .fold(0.0f32, f32::max),
+                                None => s1363_box_of(m, fs),
+                            };
+                            if b > s1363_box_max {
+                                s1363_box_max = b;
+                            }
+                        }
                     }
                     if has_latin {
                         if let Some(frag) = first_line.fragments.first() {
@@ -19367,7 +19407,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                         }
                     }
-                    if is_multiple_spacing
+                    if s1363_site2 && s1363_box_max > 0.0 {
+                        s1363_box_max
+                    } else if is_multiple_spacing
                         && (first_line.fragments.is_empty() || s902_all_ws)
                         && s805_hhea_max > 0.0
                         && std::env::var("OXI_S910_DISABLE").is_err()
@@ -32350,7 +32392,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     ) -> f32 {
         let _default_style = RunStyle::default();
 
-        // S1363 (2026-09-12, OPT-IN `OXI_S1363=1`) — the no-grid line is the
+        // S1363 (2026-09-12, default ON, opt-out `OXI_S1363_DISABLE`) — the no-grid line is the
         // font's own box, measured exactly. Two roundings stand between the
         // engine and Word on this path and they cancel each other, which is why
         // S1362 could not remove either one alone:
@@ -32366,7 +32408,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // New Roman 10pt = 11.5033 = their hhea box. So take the exact box on
         // both sides and drop both roundings together.
         let s1363_exact =
-            grid_pitch.is_none() && !in_table_cell && std::env::var("OXI_S1363").is_ok();
+            grid_pitch.is_none() && !in_table_cell && std::env::var("OXI_S1363_DISABLE").is_err();
         // The exact natural box of one fragment, split ascent/descent by the
         // font's own win ratio (only the sum reaches the line height).
         let s1363_box = |m: &FontMetrics, fs: f32| -> (f32, f32) {
@@ -45970,7 +46012,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // paragraph reads as ONE unbreakable segment and its
                         // min-content comes out enormous. Every JP table would
                         // fire on that artefact.
-                        let take = if s1078_broad {
+                        // S1364: Word lays the same table out on the tcW pitch
+                        // (144pt) with Latin, a fullwidth colon, or kanji in
+                        // the cells (Cell.Width 144.0 in every arm); only the
+                        // min-content test is script-blind, not the rule.
+                        // S1364 (2026-09-12, default ON, opt-out `OXI_S1364_DISABLE`): MEASURED with
+                        // Word COM `Cell.Width` on every table whose tcW sum
+                        // differs from its grid:
+                        //   technical__002351b53 / __00332445  grid 1440x3, tcW
+                        //     2880x3 (= the 8640tw text width)   -> Word 2880x3
+                        //   3a4f t1-t11   grid 8244, tcW 8452-8458 (> text width)
+                        //                                        -> Word 8244
+                        //   tokyoshugyo t4-t37  grid 8510, tcW 8702-8708
+                        //                                        -> Word 8510
+                        // An autofit table takes its preferred widths when they
+                        // fit the text column, and its grid when they do not.
+                        // The fit test is what keeps every JP form byte-identical
+                        // (their tcW overshoots the column by ~10pt); the
+                        // Latin-only narrow test was standing in for it.
+                        let s1364_fit = std::env::var("OXI_S1364_DISABLE").is_err()
+                            && ws.iter().sum::<f32>()
+                                <= content_width - table.style.indent.unwrap_or(0.0) + 0.01;
+                        let take = if s1078_broad || s1364_fit {
                             true
                         } else if self.doc_body_has_real_cjk {
                             false
@@ -49066,7 +49129,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         style: &ParagraphStyle,
         table_para_style: Option<&ParagraphStyle>,
     ) -> (Option<f32>, Option<f32>) {
-        if self.doc_body_has_real_cjk || std::env::var("OXI_S936_DISABLE").is_ok() {
+        // S1364 (2026-09-12, default ON, opt-out `OXI_S1364_DISABLE`): the script of the document
+        // is not what decides this. A no-tblStyle table with docDefaults
+        // after=200 keeps the 10pt in Word whether the cells hold Latin, a
+        // fullwidth colon, or kanji (`_pb_cell_docdefaults_after` A/B/C: rows
+        // 24.84 / 26.40 / 26.40 = line + 10 in all three). The CJK gate made
+        // technical__002351b53effa5d7 (SimSun body, "文本" in one cell) reset
+        // the 10pt on every row of its coordinate table, -19pt over 3 rows.
+        let s1364 = std::env::var("OXI_S1364_DISABLE").is_err();
+        if (self.doc_body_has_real_cjk && !s1364) || std::env::var("OXI_S936_DISABLE").is_ok() {
             return (None, None);
         }
         // S1000 (2026-07-25, default ON, opt-out OXI_S1000_DISABLE): the S936

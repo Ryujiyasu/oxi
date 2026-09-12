@@ -3192,6 +3192,52 @@ fn parse_paragraph_with_inline_images_impl(
                 if depth == 0 {
                     let local = local_name(e.name().as_ref());
                     match local.as_str() {
+                        // S1365 (2026-09-12, default ON, opt-out OXI_S1365_DISABLE):
+                        // a `<w:br/>` written directly under `<w:p>` -- outside
+                        // any run, which the schema does not allow -- is still a
+                        // line break to Word. MEASURED (`tests/fixtures/bare_br`,
+                        // Word PDF): `text <w:br/> text` gives the same two
+                        // lines as the run-level form, two bare breaks give an
+                        // empty line between, and the control without a break
+                        // stays on one line. reports__00352896d2e2050a writes
+                        // its URL after a bare break; dropping it joined the URL
+                        // to the previous line and took one line off page 1.
+                        // Append to the previous run so the break keeps that
+                        // run's style, exactly as a run-level break would.
+                        "br" if std::env::var("OXI_S1365_DISABLE").is_err() => {
+                            let mut br_type = None;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "type" {
+                                    br_type = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                            let ch = match br_type.as_deref() {
+                                Some("page") => '\x0C',
+                                Some("column") => '\x0B',
+                                _ => '\n',
+                            };
+                            if let Some(last_run) = runs.last_mut() {
+                                last_run.text.push(ch);
+                            } else {
+                                runs.push(Run {
+                                    text: ch.to_string(),
+                                    style: RunStyle::default(),
+                                    url: None,
+                                    footnote_ref: None,
+                                    endnote_ref: None,
+                                    comment_range_start: Vec::new(),
+                                    comment_range_end: Vec::new(),
+                                    comment_references: Vec::new(),
+                                    tracked_change: None,
+                                    rpr_change: None,
+                                    ruby: None,
+                                    bookmark_name: None,
+                                    is_math: false,
+                                    field_type: None,
+                                    has_last_rendered_page_break: false,
+                                });
+                            }
+                        }
                         "commentRangeStart" => {
                             for attr in e.attributes().flatten() {
                                 let key = local_name(attr.key.as_ref());
