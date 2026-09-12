@@ -11732,8 +11732,16 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                 _ => {}
                             }
                         }
-                        // Only apply grid for "lines" or "linesAndChars" types
-                        if (grid_type == "lines" || grid_type == "linesAndChars") && line_pitch > 0
+                        // Only apply grid for "lines" or "linesAndChars" types.
+                        // S1368 (2026-09-13, default ON, opt-out OXI_S1368_DISABLE):
+                        // `snapToChars` is the same lines-and-characters grid with
+                        // the snap forced on; it was dropped altogether, so its
+                        // two corpus documents laid 40 characters on a 20-character
+                        // line (creative__285f61cb: Word 2/6/2 lines, Oxi 1/3/1).
+                        let s1368_snap = grid_type == "snapToChars"
+                            && std::env::var("OXI_S1368_DISABLE").is_err();
+                        if (grid_type == "lines" || grid_type == "linesAndChars" || s1368_snap)
+                            && line_pitch > 0
                         {
                             grid_line_pitch = Some(line_pitch as f32 / 20.0);
                         } else if grid_type.is_empty() && line_pitch > 0 {
@@ -11774,7 +11782,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                         //          charsLine = floor(contentWidth / raw_pitch)
                         //          actual_pitch = contentWidth / charsLine
                         // charSpace unit: 1/4096 of a point (ECMA-376 §17.6.5)
-                        if grid_type == "linesAndChars" {
+                        if grid_type == "linesAndChars" || s1368_snap {
                             doc_grid_lines_and_chars = true;
                             // charGrid raw_pitch uses the document's default font size.
                             // This comes from Normal style's sz, or rPrDefault sz, or 10.5pt fallback.
