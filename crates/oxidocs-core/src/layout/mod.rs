@@ -32350,6 +32350,40 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     ) -> f32 {
         let _default_style = RunStyle::default();
 
+        // S1363 (2026-09-12, OPT-IN `OXI_S1363=1`) — the no-grid line is the
+        // font's own box, measured exactly. Two roundings stand between the
+        // engine and Word on this path and they cancel each other, which is why
+        // S1362 could not remove either one alone:
+        //   * `word_ascent_pt` / `word_descent_pt` round each component to a
+        //     96-DPI device pixel (0.75pt). Arial 10pt: 9.05 -> 9.00 and
+        //     2.12 -> 2.25, so the box comes out 11.25 where the font's own
+        //     hhea box is 11.499.
+        //   * the tail then rounds the result to the half point, which put that
+        //     11.25 back at 11.50 and hid the first error.
+        // Word does neither (`_pb_line_pitch.py`, span over 40 lines so no
+        // single rounding can hide in it): MS Mincho 9/10/12/16pt = 11.6756 /
+        // 12.9710 / 15.5656 / 20.7558 = win x 83/64 exactly, Arial and Times
+        // New Roman 10pt = 11.5033 = their hhea box. So take the exact box on
+        // both sides and drop both roundings together.
+        let s1363_exact =
+            grid_pitch.is_none() && !in_table_cell && std::env::var("OXI_S1363").is_ok();
+        // The exact natural box of one fragment, split ascent/descent by the
+        // font's own win ratio (only the sum reaches the line height).
+        let s1363_box = |m: &FontMetrics, fs: f32| -> (f32, f32) {
+            let win = m.win_ascent + m.win_descent;
+            let total = if m.is_cjk_83_64_font() {
+                win * fs * (83.0 / 64.0)
+            } else {
+                m.natural_line_height_hhea(fs)
+            };
+            if win > 0.0 {
+                let a = total * m.win_ascent / win;
+                (a, total - a)
+            } else {
+                (total, 0.0)
+            }
+        };
+
         let mut max_ascent: f32 = 0.0;
         let mut max_descent: f32 = 0.0;
         // S611 (2026-06-18): track whether the line's HEIGHT is driven by a CJK
@@ -32459,6 +32493,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
                 max_descent = h - max_ascent;
+            } else if s1363_exact {
+                let (a, d) = s1363_box(metrics, font_size);
+                max_ascent = a;
+                max_descent = d;
             } else {
                 max_ascent = metrics.word_ascent_pt(font_size);
                 max_descent = metrics.word_descent_pt(font_size);
@@ -32579,6 +32617,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent),
                         h * metrics.win_descent / (metrics.win_ascent + metrics.win_descent),
                     )
+                } else if s1363_exact {
+                    s1363_box(metrics, font_size)
                 } else {
                     (
                         metrics.word_ascent_pt(font_size),
@@ -33496,7 +33536,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // and this snap was rounding that back up to 11.5. Removing one
                 // half exposes the other. Both have to go together, and the
                 // 0.75 floor is not found yet.
-                let s_dbg_ret = if grid_pitch.is_none() || s611_no_type_round {
+                let s_dbg_ret = if s1363_exact {
+                    // S1363: the box above is already Word's own value.
+                    spaced
+                } else if grid_pitch.is_none() || s611_no_type_round {
                     (tw / 10.0).round() * 10.0 / 20.0
                 } else {
                     (tw / 10.0).ceil() * 10.0 / 20.0
