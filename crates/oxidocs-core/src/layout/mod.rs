@@ -15435,6 +15435,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let s813 = !self.doc_body_has_real_cjk && std::env::var("OXI_S813_DISABLE").is_err();
             let mut s813_first = true;
             let mut s813_prev_sa: Option<f32> = None;
+            // S1392 (2026-09-13, opt-out OXI_S1392_DISABLE): contextualSpacing
+            // suppresses the after/before gap between two header paragraphs of
+            // the same style, as in the body. educational__00387690038d6d9a:
+            // two Lucida Sans 11 header lines, after=240 + contextualSpacing on
+            // both -- Word body top 67.8 (28.8 + 13.5 + 0 + 13.5 + 12), Oxi
+            // 80.8 with the 12pt gap kept; the +12 (with +5 of row drift)
+            // pushed the page-1 table's last row to page 2.
+            let mut s1392_prev: Option<(bool, Option<String>)> = None;
             if std::env::var("OXI_DBG_HDR").is_ok() {
                 eprintln!(
                     "[DBG_HDR] blocks.len()={} blocktypes={:?}",
@@ -15723,13 +15731,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if s813 && (s1014_hdr || !para.style.has_direct_spacing) {
                         let sb = para.style.space_before.unwrap_or(0.0);
                         let sa = para.style.space_after.unwrap_or(0.0);
+                        let s1392_collapse = std::env::var("OXI_S1392_DISABLE").is_err()
+                            && s1392_prev.as_ref().map_or(false, |(ctx, sid)| {
+                                (*ctx || para.style.contextual_spacing) && *sid == para.style.style_id
+                            });
                         if s813_first {
                             hdr_h += sb.max(0.0);
                         } else if let Some(prev) = s813_prev_sa {
-                            hdr_h += prev.max(sb);
+                            if !s1392_collapse {
+                                hdr_h += prev.max(sb);
+                            }
                         }
                         s813_prev_sa = Some(sa);
                         s813_first = false;
+                        s1392_prev = Some((para.style.contextual_spacing, para.style.style_id.clone()));
                     } else {
                         hdr_h += para.style.space_after.unwrap_or(0.0);
                         s813_prev_sa = None;
@@ -15751,8 +15766,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let one =
                             self.estimate_para_height(para, 1.0e6, None, None, false, None, None);
                         if one > 0.1 {
-                            let extra_lines = ((est / one).round() as i32 - 1).max(0);
-                            hdr_h += extra_lines as f32 * lh;
+                            // S1391 (2026-09-13, opt-out OXI_S1391_DISABLE): a forced
+                            // line break (`<w:br/>`) makes the infinite-width estimate
+                            // itself several lines, so est/one alone loses them.
+                            // policies__0066a548f46e098c: two Lato-14 header paragraphs
+                            // of two lines each priced as one line apiece -- header
+                            // 52 where its own rendered text reached 108, and the body
+                            // table started 23pt above Word's.
+                            // (the estimate carries the paragraph's before/after, so
+                            // take them out before dividing by the line -- a 12pt after
+                            // on a 14pt line is not a second line)
+                            let one_lines = if std::env::var("OXI_S1391_DISABLE").is_err() && lh > 0.1 {
+                                let sp = para.style.space_before.unwrap_or(0.0).max(0.0)
+                                    + para.style.space_after.unwrap_or(0.0).max(0.0);
+                                (((one - sp).max(lh) / lh).round() as i32).max(1)
+                            } else {
+                                1
+                            };
+                            let extra_lines = ((est / one).round() as i32 * one_lines - 1).max(0);
+                            if std::env::var("OXI_S1391_DISABLE").is_err() && one_lines > 1 && lh > 0.1 {
+                                // The lines after a forced break keep their OWN height
+                                // (policies: Lato 14 + br + Calibri 11 = 18.13 + 13.4, not
+                                // 2 x 18.13): take the estimate's extra height as is.
+                                let sp = para.style.space_before.unwrap_or(0.0).max(0.0)
+                                    + para.style.space_after.unwrap_or(0.0).max(0.0);
+                                hdr_h += (est - sp - lh).max(0.0);
+                            } else {
+                                hdr_h += extra_lines as f32 * lh;
+                            }
                             if std::env::var("OXI_DBG_HDR").is_ok() {
                                 let txt: String = para
                                     .runs
