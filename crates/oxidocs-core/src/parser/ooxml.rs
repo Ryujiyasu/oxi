@@ -5924,6 +5924,19 @@ fn parse_run(
             // `field.contains("SEQ")` so an instruction ARGUMENT or another field name
             // containing those letters cannot be captured.
             field_type = Some(FieldType::Cached);
+        } else if field
+            .split_whitespace()
+            .next()
+            .map_or(false, |name| name.eq_ignore_ascii_case("ADDIN"))
+            && std::env::var("OXI_S1393_DISABLE").is_err()
+        {
+            // S1393 (2026-09-13): an add-in field (Mendeley `ADDIN CSL_CITATION`,
+            // EndNote `ADDIN EN.CITE`, Zotero `ADDIN ZOTERO_ITEM`) is a cached
+            // result Word shows as is; Oxi cleared it. educational__0036ed4b1b0fd13d
+            // opens three paragraphs with citations -- each lost a line's worth
+            // of text and wrapped one line short (page 2 ran 34pt ahead by its
+            // foot, 71 paragraphs a page early).
+            field_type = Some(FieldType::Cached);
         } else if field.contains("TOC") || field.contains("HYPERLINK") {
             // Table of contents / hyperlink fields — Oxi can't regenerate them, so
             // KEEP the cached result (Word's rendered ToC / link text). Marking the
