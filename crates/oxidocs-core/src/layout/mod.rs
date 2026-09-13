@@ -29173,8 +29173,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // placed at the line end where Word wraps the compound).
                     // S783's fill-to-hyphen stays for the proportional class
                     // it was derived on (nyserda 'Other Co-'/'funding').
+                    // S1399 (2026-09-14, opt-out OXI_S1399_DISABLE): the hyphen is a
+                    // real word boundary in a CJK-body doc TOO. MEASURED
+                    // (`_pb_urlbreak_gen.py`, Word COM per-char Information(6),
+                    // MS Gothic 10.5 on a lines grid, «#　» + token): a 13-chunk
+                    // «abcdefgh-…» token fills line 1 up to the 9th hyphen; the
+                    // real URL fills line 1 to «notepad-plus-» with or without a
+                    // kanji paragraph beside it; slash / dot / underscore tokens
+                    // wrap WHOLE and margin-break (the tokyoshugyo URL model,
+                    // which S783 mistook for a hyphen rule). technical__b80f6caa:
+                    // the URL took 3 lines instead of 2, +18pt, one paragraph over.
+                    let s1399 = std::env::var("OXI_S1399_DISABLE").is_err();
                     let s783_hyphen_flush = ch == '-'
-                        && !self.doc_body_has_real_cjk
+                        && (s1399 || !self.doc_body_has_real_cjk)
                         && std::env::var("OXI_S783_DISABLE").is_err()
                         && !(c14_active
                             && c14_space_tw > 0
