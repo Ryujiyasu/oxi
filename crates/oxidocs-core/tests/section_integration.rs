@@ -9,7 +9,7 @@
 //! Parser code paths tested:
 //! - [parser/ooxml.rs:5571](crates/oxidocs-core/src/parser/ooxml.rs#L5571)
 //!   `<w:pgSz>`: parses width/height in twentieths-of-a-pt; swaps width/height
-//!   when `orient="landscape"` AND width<height.
+//!   never: `w:w`/`w:h` are literal (S1369, Word-measured).
 //! - [parser/ooxml.rs:5596](crates/oxidocs-core/src/parser/ooxml.rs#L5596)
 //!   `<w:pgMar>`: parses top/bottom/left/right margins.
 //! - [parser/ooxml.rs:5766](crates/oxidocs-core/src/parser/ooxml.rs#L5766)
@@ -55,18 +55,18 @@ fn v1_a4_portrait_has_595_by_841_with_72pt_margins() {
 }
 
 #[test]
-fn v1_a4_landscape_swaps_width_and_height() {
-    // Word stores landscape as orient="landscape" with the raw width
-    // attribute still being the SMALLER dimension. The parser must swap
-    // so width > height for landscape display.
+fn v1_a4_landscape_keeps_the_declared_width_and_height() {
+    // S1369: `w:w`/`w:h` are the page dimensions and `w:orient` is a label.
+    // Word opens this fixture (w=11906 h=16838 orient="landscape") at
+    // 595.3 x 841.9 -- PageSetup and the exported PDF page rect agree -- and
+    // reports Orientation=1 without turning the page. The earlier test
+    // asserted the swap the engine used to perform.
     let Some(doc) = load("v1_a4_landscape.docx") else { return };
     let p = &doc.pages[0];
-    assert!((p.size.width - 841.9).abs() < 0.1,
-        "landscape width should be the larger dimension, got {}", p.size.width);
-    assert!((p.size.height - 595.3).abs() < 0.1,
-        "landscape height should be the smaller dimension, got {}", p.size.height);
-    assert!(p.size.width > p.size.height,
-        "landscape ⇒ width > height invariant");
+    assert!((p.size.width - 595.3).abs() < 0.2,
+        "width is w:w as written, got {}", p.size.width);
+    assert!((p.size.height - 841.9).abs() < 0.2,
+        "height is w:h as written, got {}", p.size.height);
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn all_four_fixtures_parse_with_expected_section_shape() {
     let cases: &[(&str, f32, f32, u32)] = &[
         // (filename, width_pt, height_pt, expected_columns_num)
         ("v1_a4_portrait.docx",   595.3, 841.9, 1),
-        ("v1_a4_landscape.docx",  841.9, 595.3, 1),
+        ("v1_a4_landscape.docx",  595.3, 841.9, 1),
         ("v1_custom_margins.docx", 595.3, 841.9, 1),
         ("v1_two_columns.docx",   595.3, 841.9, 2),
     ];

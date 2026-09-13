@@ -2281,6 +2281,9 @@ pub struct LayoutEngine {
     s1318_floor_slack: std::cell::Cell<f32>,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
+    /// S1370: the face a CJK character takes when its eastAsia font is
+    /// Latin-only (theme minor Jpan, else 游明朝).
+    cjk_substitute_face: String,
     /// docDefaults East-Asian language is CJK (ja/zh/ko) — drives S763c ambiguous
     /// curly-quote font choice.
     doc_east_asia_lang_cjk: bool,
@@ -2723,6 +2726,7 @@ impl LayoutEngine {
             s1318_floor_slack: std::cell::Cell::new(0.0),
             default_font_family: None,
             default_font_family_east_asia: None,
+            cjk_substitute_face: "Yu Mincho".to_string(),
             doc_east_asia_lang_cjk: false,
             doc_latin_lang_cjk: false,
             registry: FontMetricsRegistry::load(),
@@ -2840,6 +2844,11 @@ impl LayoutEngine {
             .doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_family_east_asia.clone());
+        let cjk_substitute_face = doc
+            .styles
+            .cjk_substitute_face
+            .clone()
+            .unwrap_or_else(|| "Yu Mincho".to_string());
         // S763c: the docDefaults East-Asian language (default en-US per OOXML)
         // decides Word's ambiguous curly-quote font. A CJK lang (ja/zh/ko) keeps
         // quotes in the eastAsia font; a Latin lang renders them in the Latin font.
@@ -2892,6 +2901,7 @@ impl LayoutEngine {
             s1318_floor_slack: std::cell::Cell::new(0.0),
             default_font_family,
             default_font_family_east_asia,
+            cjk_substitute_face,
             doc_east_asia_lang_cjk,
             doc_latin_lang_cjk,
             registry: FontMetricsRegistry::load(),
@@ -3679,20 +3689,21 @@ impl LayoutEngine {
             has_quote
         };
         if has_cjk {
+            let cjk_script = text.chars().any(Self::s1370_is_cjk_script);
             // Prefer East Asian font for CJK text: run → paragraph → docDefaults
             if let Some(ref ff) = run_style.font_family_east_asia {
                 // S634: substitute MS Mincho when the explicit eastAsia font is
                 // Latin-only (no CJK glyphs) — matches Word's font-linking.
-                return Some(self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia));
+                return Some(self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia, cjk_script));
             }
             if let Some(ref drs) = para_style.default_run_style {
                 if let Some(ref ff) = drs.font_family_east_asia {
-                    return Some(ff.as_str());
+                    return Some(self.cjk_ea_family(ff.as_str(), false, cjk_script));
                 }
             }
             // Fall back to document-level default East Asian font (from docDefaults/theme)
             if let Some(ref ff) = self.default_font_family_east_asia {
-                return Some(ff.as_str());
+                return Some(self.cjk_ea_family(ff.as_str(), false, cjk_script));
             }
         }
         self.resolve_font_family(run_style, para_style)
@@ -3911,7 +3922,7 @@ impl LayoutEngine {
                 })
                 .or(self.default_font_family_east_asia.as_deref());
             if let Some(ff) = ea {
-                return self.registry.get(self.cjk_ea_family(ff, true));
+                return self.registry.get(self.cjk_ea_family(ff, true, false));
             }
         }
         if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
@@ -4029,15 +4040,71 @@ impl LayoutEngine {
     /// baseline) for CJK text. Scoped to `has_explicit_east_asia` so theme-resolved
     /// fonts (e3c545 majorEastAsia) and CJK-capable Unicode fonts (Arial Unicode MS)
     /// are untouched. Opt-out OXI_S634_DISABLE.
-    fn cjk_ea_family<'a>(&self, ff: &'a str, has_explicit: bool) -> &'a str {
-        if has_explicit
-            && crate::font::is_latin_only_font(ff)
-            && std::env::var("OXI_S634_DISABLE").is_err()
+    /// `cjk_script`: the text being priced holds a character of a CJK
+    /// script (Han, kana, Hangul, CJK punctuation, fullwidth forms). Word's
+    /// substitute face appears only where the Latin face has no glyph; a
+    /// symbol Calibri does have (■ ● → ① × ○ • ½) stays in Calibri, so the
+    /// substitution is keyed to the script, not to `kinsoku::is_cjk`'s
+    /// wider class. MEASURED (Calibri doc, Word PDF span fonts): ■●→①×○“•½–
+    /// Calibri; 〒～ｱあ漢　： YuMincho-Regular; ☐✓ SegoeUISymbol; ※ MS-Mincho.
+    /// A paragraph mark or a symbol-only run therefore keeps the declared face.
+    fn cjk_ea_family<'a>(&'a self, ff: &'a str, has_explicit: bool, cjk_script: bool) -> &'a str {
+        // S1370 (2026-09-13, default ON, opt-out OXI_S1370_DISABLE): a CJK
+        // character whose eastAsia font has no CJK glyphs is drawn by Word in
+        // the theme's minor Jpan face, or 游明朝 when the package has no
+        // theme -- whether the Latin-only face is explicit on the run or
+        // inherited from docDefaults, and whatever the eastAsia lang says.
+        // MEASURED (Word PDF span fonts, `_pb_line_pitch` styles shape):
+        //   eastAsia = Times New Roman / Arial / Calibri / Century,
+        //   lang eastAsia en-GB / ja-JP / en-US       -> YuMincho-Regular, 1em
+        //   + theme part with minor Jpan = ＭＳ 明朝  -> MS-Mincho
+        // S634 substituted MS Mincho and only for an EXPLICIT run font, so an
+        // inherited Times New Roman priced kana with proportional fallback
+        // widths (レ 6.75pt where Word draws 9.96) and a Latin line height.
+        //
+        // S1371 (same measurement set): a face the machine does not have at
+        // all (Kozuka Gothic Std R in correspondence__0b6522, listed in the
+        // fontTable) draws its CJK in 游ゴシック -- 7 of 7 fontTable shapes
+        // (family swiss/roman/modern, real or zero sig, charset 80/00, with
+        // and without notTrueType) gave YuGothic-Regular. Without any
+        // fontTable entry Word fell to MS Mincho instead; a docx Word wrote
+        // always carries the entry, so the entry-present arm is the rule.
+        if cjk_script
+            && std::env::var("OXI_S1371_DISABLE").is_err()
+            && !crate::font::is_latin_only_font(ff)
+            && !self.registry.supports_family(ff)
+            && crate::font::runtime::resolve(ff, false, false).is_none()
         {
-            "MS Mincho"
-        } else {
-            ff
+            return "Yu Gothic";
         }
+        if crate::font::is_latin_only_font(ff) {
+            if cjk_script && std::env::var("OXI_S1370_DISABLE").is_err() {
+                return self.cjk_substitute_face.as_str();
+            }
+            if has_explicit && std::env::var("OXI_S634_DISABLE").is_err() {
+                return "MS Mincho";
+            }
+        }
+        ff
+    }
+
+    /// S1370: a character of a CJK script proper -- the ones a Latin face
+    /// cannot draw, which Word hands to the substitute face.
+    fn s1370_is_cjk_script(c: char) -> bool {
+        matches!(
+            c as u32,
+            0x3000..=0x303F   // CJK symbols and punctuation (incl. U+3000, 〒)
+                | 0x3040..=0x30FF // hiragana, katakana
+                | 0x3100..=0x312F // bopomofo
+                | 0x3130..=0x318F // Hangul compatibility jamo
+                | 0x31F0..=0x31FF // katakana extensions
+                | 0x3400..=0x4DBF // CJK ext A
+                | 0x4E00..=0x9FFF // CJK unified
+                | 0xAC00..=0xD7AF // Hangul syllables
+                | 0xF900..=0xFAFF // CJK compatibility
+                | 0xFF00..=0xFFEF // fullwidth / halfwidth forms
+                | 0x20000..=0x2FA1F // CJK ext B..
+        )
     }
 
     fn metrics_for_cjk(
@@ -4046,7 +4113,7 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
     ) -> Option<&FontMetrics> {
         if let Some(ref ff) = run_style.font_family_east_asia {
-            let ff = self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia);
+            let ff = self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia, false);
             return Some(self.registry.get(ff));
         }
         if let Some(ref drs) = para_style.default_run_style {

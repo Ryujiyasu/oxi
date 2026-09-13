@@ -2154,6 +2154,10 @@ pub struct StyleSheet {
     /// Font table from word/fontTable.xml: font_name -> FontInfo
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub font_table: HashMap<String, FontInfo>,
+    /// S1370: the face Word draws a CJK character in when the run's eastAsia
+    /// font cannot -- the theme's minor Jpan font, else Word's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cjk_substitute_face: Option<String>,
 }
 
 /// A named style definition with inheritance

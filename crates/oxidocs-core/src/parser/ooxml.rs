@@ -1137,7 +1137,13 @@ impl OoxmlParser {
 
     fn parse_styles_with_theme(&mut self, theme: &ThemeColors) -> Result<StyleSheet, ParseError> {
         match self.read_part("word/styles.xml") {
-            Ok(xml) => parse_styles(&xml, theme),
+            // S1370 (2026-09-13, default ON, opt-out OXI_S1370_DISABLE): see
+            // LayoutEngine::cjk_ea_family. The theme's minor Jpan face when the
+            // theme declares one; the layout falls back to Word's default 游明朝.
+            Ok(xml) => parse_styles(&xml, theme).map(|mut s| {
+                s.cjk_substitute_face = theme.minor_font_jpan.clone();
+                s
+            }),
             Err(ParseError::MissingPart(_)) => Ok(StyleSheet::default()),
             Err(e) => Err(e),
         }
@@ -11623,9 +11629,18 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                 _ => {}
                             }
                         }
-                        // Landscape: ensure width > height
+                        // S1369 (2026-09-13, default ON, opt-out OXI_S1369_DISABLE):
+                        // `w:w` / `w:h` ARE the page width and height; `w:orient` is
+                        // a label. MEASURED (`tests/fixtures/page_orient`, Word
+                        // PageSetup + PDF page rect): w=10080 h=12240 renders 504x612
+                        // with orient=landscape, portrait, or absent (Orientation
+                        // reports 1 for landscape but the page does not turn), and
+                        // w=12240 h=10080 renders 612x504. educational__00395fc1555f9d29
+                        // (10080x12240 landscape) was laid out 612pt wide, every line
+                        // 108pt too long -- Word 5 lines, Oxi 4 on its first slip.
                         if orient.as_deref() == Some("landscape")
                             && page_size.width < page_size.height
+                            && std::env::var("OXI_S1369_DISABLE").is_ok()
                         {
                             std::mem::swap(&mut page_size.width, &mut page_size.height);
                         }
