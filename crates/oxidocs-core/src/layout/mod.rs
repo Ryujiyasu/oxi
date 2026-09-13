@@ -39609,10 +39609,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         let s344_skip = s344_fs_gate
                                                             && !para.style.snap_to_grid
                                                             && font_size >= default_fs;
+                                                        // S1374 (2026-09-13, default ON, opt-out
+                                                        // OXI_S1374_DISABLE): no charSpace, no
+                                                        // character cell -- the body rule (S466 /
+                                                        // S1315) applied to cells. MEASURED: BIZ
+                                                        // UDP明朝 8pt, 22 chars, linesAndChars
+                                                        // linePitch=325 without charSpace: Word
+                                                        // 147.0pt in a cell and in the body; the
+                                                        // cell walk here widened every character
+                                                        // to 8.0 (168.0) and wrapped
+                                                        // forms__00830ac053a2c57a's cells.
+                                                        let s1374_no_cell = char_space_pt.abs() < 0.01
+                                                            && std::env::var("OXI_S1374_DISABLE").is_err();
                                                         if !(h6_skip
                                                             || h7_skip
                                                             || h8_skip
-                                                            || s344_skip)
+                                                            || s344_skip
+                                                            || s1374_no_cell)
                                                         {
                                                             cw = if char_space_pt >= 0.0
                                                                 && !s1210
@@ -46836,7 +46849,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // skip compression unless fs < default_fs.
                             let s344_skip =
                                 s344_fs_gate && !para.style.snap_to_grid && font_size >= default_fs;
-                            if !(h6_skip || h7_skip || h8_skip || s344_skip) {
+                            // S1374: see the estimate site -- no charSpace, no cell.
+                            let s1374_no_cell = char_space_pt.abs() < 0.01
+                                && std::env::var("OXI_S1374_DISABLE").is_err();
+                            if !(h6_skip || h7_skip || h8_skip || s344_skip || s1374_no_cell) {
                                 cw = if char_space_pt >= 0.0 && !s1210 {
                                     font_size * pitch / default_fs
                                 } else {
