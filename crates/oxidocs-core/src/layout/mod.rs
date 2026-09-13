@@ -3657,8 +3657,30 @@ impl LayoutEngine {
         // quote-as-Latin rule regressed db9ca −0.0094) keeps eastAsia; a
         // Latin-only eastAsia (nyserda/health_form "Times New Roman") or an
         // absent one goes Latin. is_latin_only_font = the S634 discriminator.
+        // S1398 (2026-09-14, opt-out OXI_S1398_DISABLE): in a LATIN-body doc
+        // an unhinted fragment of ambiguous-class characters only (quotes,
+        // dashes, ellipsis, arrows, math operators -- the `is_q` set) is Latin
+        // REGARDLESS of the eastAsia font's kind or the eastAsia language.
+        // S763b/S763c below (db9ca, a CJK-body doc) keep deciding CJK-body
+        // docs; this never reaches them. MEASURED, Word COM:
+        // `_pb_sqrt_ea_gen.py` (rPrDefault minorEastAsia + empty-ea theme with
+        // Jpan 游明朝, lang ja-JP): a lone √ or → in Arial 10 lines at 12.0 =
+        // Arial, with an explicit eastAsia="游明朝" too, and with lang en-US;
+        // `_pb_dash_ea_gen.py`: a lone-run – or ’ in Calibri 11 lines at 13.5
+        // under the theme shape, literal 游明朝 AND literal ＭＳ Ｐゴシック.
+        // Only w:hint="eastAsia" moves them to the eastAsia face (18.0), as a
+        // kanji does. educational__003299ba4bee5126: √ cells in a 20-row table
+        // (+13pt) and lone-quote fragments in body lines (+5/line) priced at
+        // 游明朝 once S1397 replaced the "MS Mincho" stand-in that hid this.
+        let s1398 = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S1398_DISABLE").is_err()
+            && has_quote
+            && !has_real_cjk
+            && !run_style.east_asia_hint;
         let has_cjk = if has_real_cjk {
             true
+        } else if s1398 {
+            false
         } else if s1081_latin_ctx && s763 {
             false
         } else if has_quote && s763 {

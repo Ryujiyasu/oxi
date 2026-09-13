@@ -23,6 +23,11 @@ pub struct ThemeColors {
     /// empty-`<a:ea>` suppression above. Word substitutes THIS face for a
     /// CJK character whose eastAsia font has no CJK glyphs.
     pub minor_font_jpan: Option<String>,
+    /// S1397: the minorFont's `<a:ea typeface=""/>` was EXPLICITLY empty, so
+    /// `minor_font_ea` above is the S327 stand-in ("MS Mincho"), not a theme
+    /// face. A consumer that has a literal rPrDefault eastAsia takes that
+    /// (S323's d1e8ac8 law); one that has none takes the Jpan script face.
+    pub minor_ea_empty: bool,
     /// Major complex-script (Bidi) font — non-empty `<a:cs>` else the locale's
     /// supplemental `<a:font script="Arab">` (S987: `*Bidi` theme tokens resolve
     /// here, not to the Latin major/minor font).
@@ -448,6 +453,7 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     // the open question; until that compensating partner is pinned, "disagrees
     // with Word" and "shipping it helps" are different claims.
     theme.minor_font_jpan = jpan_minor.clone();
+    theme.minor_ea_empty = ea_empty_minor;
     if std::env::var("OXI_S1297").is_ok() {
         if let Some(j) = jpan_major {
             theme.major_font_ea = Some(j);

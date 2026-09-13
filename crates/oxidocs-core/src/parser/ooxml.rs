@@ -3683,6 +3683,9 @@ fn parse_paragraph_with_inline_images_impl(
             if !para_rs.has_explicit_east_asia && doc_rs.has_explicit_east_asia {
                 para_rs.has_explicit_east_asia = true;
             }
+            if !para_rs.east_asia_hint && doc_rs.east_asia_hint {
+                para_rs.east_asia_hint = true;
+            }
             if para_rs.color.is_none() {
                 para_rs.color = doc_rs.color.clone();
             }
@@ -4481,6 +4484,9 @@ fn parse_paragraph_properties(
                                                     ppr_rpr.font_family_east_asia = Some(v);
                                                     ppr_rpr.has_explicit_east_asia = true;
                                                 }
+                                                "hint" => {
+                                                    ppr_rpr.east_asia_hint = v == "eastAsia";
+                                                }
                                                 // S877 (default ON, opt-out OXI_S877_DISABLE):
                                                 // theme-referenced mark fonts (the main run
                                                 // parser's resolution, mirrored). Literal
@@ -4504,10 +4510,7 @@ fn parse_paragraph_properties(
                                                         && std::env::var("OXI_S877_DISABLE")
                                                             .is_err()
                                                     {
-                                                        if let Some(f) =
-                                                            super::styles::resolve_theme_font_pub(
-                                                                &v, theme,
-                                                            )
+                                                        if let Some(f) = s1397_minor_ea(&v, theme, None)
                                                         {
                                                             ppr_rpr.font_family_east_asia = Some(f);
                                                             ppr_rpr.east_asia_from_theme = true;
@@ -9452,6 +9455,8 @@ fn parse_run_properties(
                             style.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                             style.has_explicit_east_asia = true;
+                        } else if key == "hint" {
+                            style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                         } else if key == "cs" {
                             style.font_family_cs =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -9466,7 +9471,10 @@ fn parse_run_properties(
                         } else if key == "eastAsiaTheme" {
                             if style.font_family_east_asia.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                let font = super::styles::resolve_theme_font_pub(&val, &ctx.theme);
+                                let lit = styles.doc_default_run_style.as_ref()
+                                    .filter(|d| !d.east_asia_from_theme)
+                                    .and_then(|d| d.font_family_east_asia.as_deref());
+                                let font = s1397_minor_ea(&val, &ctx.theme, lit);
                                 if let Some(f) = font {
                                     style.font_family_east_asia = Some(f);
                                     style.east_asia_from_theme = true;
@@ -9591,6 +9599,8 @@ fn parse_run_properties(
                                 style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                                 style.has_explicit_east_asia = true;
+                            } else if key == "hint" {
+                                style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                             } else if key == "cs" {
                                 style.font_family_cs =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -9606,8 +9616,10 @@ fn parse_run_properties(
                             } else if key == "eastAsiaTheme" {
                                 if style.font_family_east_asia.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
-                                    let font =
-                                        super::styles::resolve_theme_font_pub(&val, &ctx.theme);
+                                    let lit = styles.doc_default_run_style.as_ref()
+                                        .filter(|d| !d.east_asia_from_theme)
+                                        .and_then(|d| d.font_family_east_asia.as_deref());
+                                    let font = s1397_minor_ea(&val, &ctx.theme, lit);
                                     if let Some(f) = font {
                                         style.font_family_east_asia = Some(f);
                                         style.east_asia_from_theme = true;
@@ -12573,6 +12585,30 @@ fn parse_twips_measure(val: &str) -> Result<f32, ()> {
         _ => return Err(()),
     };
     Ok(n * per_unit)
+}
+
+/// S1397 (2026-09-13, opt-out OXI_S1397_DISABLE): `minorEastAsia` against a
+/// theme whose `<a:ea>` is explicitly empty. Word falls back to the rPrDefault's
+/// LITERAL eastAsia face when there is one (S323: d1e8ac8, Font.NameFarEast =
+/// ＭＳ 明朝); when the rPrDefault is itself a theme reference the only face
+/// left is the minorFont's Jpan script entry. legal__05cb4a0abb24c0fd and
+/// legal__05c84880c1bed3a7 (theme minor 游明朝, rPrDefault eastAsiaTheme):
+/// Word's lines are 17.56 = 游明朝 10.5pt, Oxi priced ＭＳ 明朝 13.6 -- every
+/// page ran ~120pt ahead.
+fn s1397_minor_ea(theme_val: &str, theme: &super::theme::ThemeColors, doc_default_literal: Option<&str>) -> Option<String> {
+    let resolved = super::styles::resolve_theme_font_pub(theme_val, theme);
+    if std::env::var("OXI_S1397_DISABLE").is_ok()
+        || !theme_val.starts_with("minor")
+        || !theme_val.contains("EastAsia")
+        || !theme.minor_ea_empty
+    {
+        return resolved;
+    }
+    // "No font": leave the slot unset so the paragraph style's or the
+    // docDefaults' literal is inherited (the docDefaults itself resolves the
+    // reference to the Jpan face at the end of the chain, styles.rs).
+    let _ = doc_default_literal;
+    None
 }
 
 fn parse_tracked_change_runs(

@@ -15,6 +15,36 @@ fn resolve_theme_font(theme_val: &str, theme: &ThemeColors) -> Option<String> {
     resolve_theme_font_pub(theme_val, theme)
 }
 
+/// S1397 (2026-09-13, opt-out OXI_S1397_DISABLE): `minorEastAsia` against a
+/// theme whose `<a:ea>` is explicitly empty resolves to the rPrDefault's
+/// LITERAL eastAsia face when the sheet has one (S323's d1e8ac8 law), else to
+/// the minorFont's Jpan script entry -- never to the S327 "MS Mincho" stand-in
+/// when a Jpan face exists. See ooxml.rs `s1397_minor_ea` (the run-level twin).
+thread_local! {
+    /// S1397: set while the rPrDefault's rPr is being parsed -- the end of the
+    /// inheritance chain, where an empty-ea theme reference finally takes the
+    /// Jpan face.
+    pub static S1397_IN_RPR_DEFAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn s1397_minor_ea_styles(theme: &ThemeColors, theme_val: &str) -> Option<String> {
+    let stand_in = theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone());
+    // Only a real `minorEastAsia` reference is the empty-ea case; `minorHAnsi`
+    // on the eastAsia slot (administrative__0006985eb4430ed5) keeps the old path.
+    if std::env::var("OXI_S1397_DISABLE").is_ok() || !theme.minor_ea_empty || !theme_val.contains("EastAsia") {
+        return stand_in;
+    }
+    // MEASURED (Word COM Font.Name on legal__0676305da359ec39: runs with
+    // eastAsiaTheme=minorEastAsia, theme ea empty, Normal eastAsia=新細明體 ->
+    // PMingLiU; legal__05cb4a0abb24c0fd: same theme shape, no literal anywhere
+    // -> 游明朝, the Jpan face). The empty slot is "no font": the next literal
+    // in the chain wins, and only the chain's end takes the script face.
+    if S1397_IN_RPR_DEFAULT.with(|c| c.get()) {
+        return theme.minor_font_jpan.clone().or(stand_in);
+    }
+    None
+}
+
 /// Public version of resolve_theme_font for use from ooxml.rs
 pub fn resolve_theme_font_pub(theme_val: &str, theme: &ThemeColors) -> Option<String> {
     if theme_val.contains("EastAsia") {
@@ -74,7 +104,10 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                         in_ppr_default = true;
                     }
                     "rPr" if in_rpr_default => {
-                        let run_style = parse_run_properties_block(&mut reader, theme)?;
+                        S1397_IN_RPR_DEFAULT.with(|c| c.set(true));
+                        let run_style = parse_run_properties_block(&mut reader, theme);
+                        S1397_IN_RPR_DEFAULT.with(|c| c.set(false));
+                        let run_style = run_style?;
                         styles.doc_default_run_style = Some(run_style);
                     }
                     "pPr" if in_ppr_default => {
@@ -386,6 +419,9 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if !child.has_explicit_east_asia && parent.has_explicit_east_asia {
         child.has_explicit_east_asia = true;
     }
+    if !child.east_asia_hint && parent.east_asia_hint {
+        child.east_asia_hint = true;
+    }
     if child.font_size.is_none() {
         child.font_size = parent.font_size;
     }
@@ -505,13 +541,15 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                             rs.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                             rs.has_explicit_east_asia = true;
+                        } else if key == "hint" {
+                            rs.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                         } else if key == "eastAsiaTheme" {
                             if rs.font_family_east_asia.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 let font = if val.starts_with("major") {
                                     theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                                 } else {
-                                    theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
+                                    s1397_minor_ea_styles(theme, &val)
                                 };
                                 if let Some(f) = font {
                                     rs.font_family_east_asia = Some(f);
@@ -782,13 +820,15 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                     rs.font_family_east_asia =
                         Some(String::from_utf8_lossy(&attr.value).to_string());
                     rs.has_explicit_east_asia = true;
+                } else if key == "hint" {
+                    rs.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                 } else if key == "eastAsiaTheme" {
                     if rs.font_family_east_asia.is_none() {
                         let val = String::from_utf8_lossy(&attr.value);
                         let font = if val.starts_with("major") {
                             theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                         } else {
-                            theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
+                            s1397_minor_ea_styles(theme, &val)
                         };
                         if let Some(f) = font {
                             rs.font_family_east_asia = Some(f);
@@ -1266,13 +1306,15 @@ fn parse_style_definition(
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                                 run_style.has_explicit_east_asia = true;
                                 has_run_style = true;
+                            } else if key == "hint" {
+                                run_style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                             } else if key == "eastAsiaTheme" {
                                 if run_style.font_family_east_asia.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
                                     let font = if val.starts_with("major") {
                                         theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                                     } else {
-                                        theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
+                                        s1397_minor_ea_styles(theme, &val)
                                     };
                                     if let Some(f) = font {
                                         run_style.font_family_east_asia = Some(f);
@@ -1447,13 +1489,15 @@ fn parse_style_definition(
                                         Some(String::from_utf8_lossy(&attr.value).to_string());
                                     run_style.has_explicit_east_asia = true;
                                     has_run_style = true;
+                                } else if key == "hint" {
+                                    run_style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                                 } else if key == "eastAsiaTheme" {
                                     if run_style.font_family_east_asia.is_none() {
                                         let val = String::from_utf8_lossy(&attr.value);
                                         let font = if val.starts_with("major") {
                                             theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                                         } else {
-                                            theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
+                                            s1397_minor_ea_styles(theme, &val)
                                         };
                                         if let Some(f) = font {
                                             run_style.font_family_east_asia = Some(f);

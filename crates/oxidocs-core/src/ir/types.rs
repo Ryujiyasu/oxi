@@ -450,6 +450,12 @@ pub struct RunStyle {
     /// runtime-saved equivalent: only docs with explicit eastAsia widen).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_explicit_east_asia: bool,
+    /// S1398: `<w:rFonts w:hint="eastAsia"/>` on this run (or inherited). Word
+    /// routes EAW-Ambiguous symbols (U+2190..U+22FF) to the eastAsia face only
+    /// under this hint; without it they take the Latin face whatever the
+    /// eastAsia font or language says (`_pb_sqrt_ea_gen.py`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub east_asia_hint: bool,
     /// S1302: the East Asian family came from a THEME token
     /// (`w:eastAsiaTheme`), not from a literal `w:eastAsia`. Word measures a ¶
     /// mark's line with the ASCII font when the East Asian slot is only a theme
@@ -647,6 +653,7 @@ impl Default for RunStyle {
             font_family_east_asia: None,
             font_family_cs: None,
             has_explicit_east_asia: false,
+            east_asia_hint: false,
             east_asia_from_theme: false,
             ruby_spread: false,
             ruby_field: false,
