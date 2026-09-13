@@ -597,6 +597,14 @@ impl FontMetrics {
                     | "BIZ UDゴシック"
                     | "BIZ UDPゴシック"
                     | "BIZ UD明朝 Medium"
+                    // S1373 (2026-09-13): the PROPORTIONAL Mincho was missing from
+                    // this list while its Gothic sibling was in. Word PDF, 10.5pt
+                    // single: BIZ UDP明朝 Medium / BIZ UD明朝 Medium / BIZ UDPゴシック
+                    // all 13.649 = floor(2048 x 1.3)/2048 x 10.5 (the S1367 law);
+                    // the engine laid forms__00830ac053a2c57a's 1111 runs at 1.0em.
+                    | "BIZ UDP明朝 Medium"
+                    | "BIZ UDPMincho Medium"
+                    | "BIZ UDMincho Medium"
                     | "HG丸ｺﾞｼｯｸM-PRO"
                     | "HGP創英角ｺﾞｼｯｸUB"
                     | "HGPｺﾞｼｯｸE"
@@ -728,7 +736,7 @@ impl FontMetricsRegistry {
             // S1142: the .otf / cloud-font sweep (see add_twcen_metrics.py).
             "Montserrat", "Merriweather", "Nunito", "Roboto", "Source Sans Pro",
             "Avenir Next LT Pro", "PMingLiU", "Batang",
-            "UD デジタル 教科書体 N-R", "UD デジタル 教科書体 NP-R", "UD デジタル 教科書体 NK-R", "UD デジタル 教科書体 N-B", "UD デジタル 教科書体 NP-B", "UD デジタル 教科書体 NK-B", "BIZ UDゴシック", "BIZ UDPゴシック", "BIZ UD明朝 Medium",
+            "UD デジタル 教科書体 N-R", "UD デジタル 教科書体 NP-R", "UD デジタル 教科書体 NK-R", "UD デジタル 教科書体 N-B", "UD デジタル 教科書体 NP-B", "UD デジタル 教科書体 NK-B", "BIZ UDゴシック", "BIZ UDPゴシック", "BIZ UD明朝 Medium", "BIZ UDP明朝 Medium", "BIZ UDPMincho Medium", "BIZ UDMincho Medium",
             "HG丸ｺﾞｼｯｸM-PRO", "HGP創英角ｺﾞｼｯｸUB", "HGPｺﾞｼｯｸE", "HGP行書体", "HGS明朝E", "HG創英角ﾎﾟｯﾌﾟ体", "HGP創英角ﾎﾟｯﾌﾟ体", "MS UI Gothic",
         ];
 

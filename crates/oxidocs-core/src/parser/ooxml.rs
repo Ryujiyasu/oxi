@@ -12842,8 +12842,18 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     // with a registry-vs-installed audit.
     if std::env::var("OXI_S1133_DISABLE").is_err() {
         for (name, info) in &document.styles.font_table {
+            // S1372 (2026-09-13, opt-out OXI_S1372_DISABLE): "the registry does
+            // not support it" has to include the runtime (system / Office
+            // cloud cache) faces, exactly as the Monotype Sorts arm above
+            // does. `FontMetricsRegistry::load()` holds the 15 measured
+            // tables only, so every installed `roman` family the tables lack
+            // -- Lucida Bright in creative__01cdf604 -- was aliased to Cambria
+            // even though the layout resolves it at runtime. Word set that
+            // paragraph in Lucida Bright (PDF span font), 3 lines to Oxi's 2.
             if info.family.as_deref() == Some("roman")
                 && !registry.supports_family(name)
+                && (std::env::var("OXI_S1372_DISABLE").is_ok()
+                    || crate::font::runtime::resolve(name, false, false).is_none())
                 && !registry.get(name).is_cjk_83_64_font()
                 && !alias.contains_key(name)
             {
