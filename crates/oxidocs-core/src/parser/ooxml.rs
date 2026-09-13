@@ -5723,6 +5723,19 @@ fn parse_run(
                     // rendering the hyphen on break needs the hyphenation
                     // feature; zero-width is the dominant fidelity term).
                     // Opt-out OXI_S747_DISABLE.
+                    // S1390 (2026-09-13, opt-out OXI_S1390_DISABLE): a literal
+                    // newline inside `w:t` is whitespace to Word, not a break.
+                    // reports__003d0c861f04b959 writes "LF NBSP LF" between
+                    // question and answer; Word keeps them on one line (132pt
+                    // paragraph), Oxi broke twice per pair (203pt, +1 page).
+                    let content: std::borrow::Cow<str> =
+                        if (content.contains('\n') || content.contains('\r'))
+                            && std::env::var("OXI_S1390_DISABLE").is_err()
+                        {
+                            std::borrow::Cow::Owned(content.replace(['\n', '\r'], " "))
+                        } else {
+                            content
+                        };
                     if content.contains('\u{ad}') && std::env::var("OXI_S747_DISABLE").is_err() {
                         text.push_str(&content.replace('\u{ad}', ""));
                     } else {
@@ -8939,6 +8952,15 @@ fn parse_ole_object(
     // for a future cell-inline route discriminator; NOT consumed yet (routing
     // unchanged), so this step is byte-identical for every doc, OFF and ON.
     let mut prog_id: Option<String> = None;
+    // S1389 (2026-09-13): a `w:object` picture positioned absolutely with a
+    // w10:wrap is a FLOAT, like the same VML under `w:pict` (S566).
+    // correspondence__00595cd73be1bcd0's first-page header holds a 133pt
+    // letterhead this way (margin-top 42.75, width 505 > the column, wrap
+    // square); Word starts the body at the float's bottom, 175.5.
+    let mut s1389_abs = false;
+    let mut s1389_ml: f32 = 0.0;
+    let mut s1389_mt: f32 = 0.0;
+    let mut s1389_wrap: Option<WrapType> = None;
     // S851: whether an <o:OLEObject> child was seen. A real OLE embed
     // (Equation.3, Visio, …) has one; a bare form-field picture (the
     // MassHealth PA-form field underlines) does NOT — the discriminator for
@@ -8971,8 +8993,26 @@ fn parse_ole_object(
                                         width = parse_css_length(w.trim());
                                     } else if let Some(h) = part.strip_prefix("height:") {
                                         height = parse_css_length(h.trim());
+                                    } else if part.starts_with("position:absolute") {
+                                        s1389_abs = true;
+                                    } else if let Some(ml) = part.strip_prefix("margin-left:") {
+                                        s1389_ml = parse_css_length(ml.trim());
+                                    } else if let Some(mt) = part.strip_prefix("margin-top:") {
+                                        s1389_mt = parse_css_length(mt.trim());
                                     }
                                 }
+                            }
+                        }
+                    }
+                    "wrap" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "type" {
+                                s1389_wrap = Some(match attr.value.as_ref() {
+                                    b"square" => WrapType::Square,
+                                    b"tight" | b"through" => WrapType::Tight,
+                                    b"topAndBottom" => WrapType::TopAndBottom,
+                                    _ => WrapType::None,
+                                });
                             }
                         }
                     }
@@ -8982,6 +9022,19 @@ fn parse_ole_object(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    // S1389: `<w10:wrap type="..."/>` is an EMPTY element.
+                    "wrap" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "type" {
+                                s1389_wrap = Some(match attr.value.as_ref() {
+                                    b"square" => WrapType::Square,
+                                    b"tight" | b"through" => WrapType::Tight,
+                                    b"topAndBottom" => WrapType::TopAndBottom,
+                                    _ => WrapType::None,
+                                });
+                            }
+                        }
+                    }
                     // v:imagedata — the preview image of the OLE object
                     "imagedata" => {
                         for attr in e.attributes().flatten() {
@@ -9037,8 +9090,25 @@ fn parse_ole_object(
             height,
             alt_text: Some("OLE Object".to_string()),
             content_type,
-            position: None,
-            wrap_type: None,
+            position: if s1389_abs && std::env::var("OXI_S1389_DISABLE").is_err() {
+                Some(FloatingPosition {
+                    x: s1389_ml,
+                    y: s1389_mt,
+                    h_relative: Some("text".to_string()),
+                    v_relative: Some("text".to_string()),
+                    h_align: None,
+                    v_align: None,
+                    dist_l: None,
+                    dist_r: None,
+                })
+            } else {
+                None
+            },
+            wrap_type: if s1389_abs && std::env::var("OXI_S1389_DISABLE").is_err() {
+                Some(s1389_wrap.unwrap_or(WrapType::None))
+            } else {
+                None
+            },
             crop: None,
             anchor_block_index: 0,
             relative_height: 0,
@@ -11647,12 +11717,12 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
                                 "w" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         page_size.width = v / 20.0;
                                     }
                                 }
                                 "h" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         page_size.height = v / 20.0;
                                     }
                                 }
@@ -11687,7 +11757,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
                                 "top" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         // S1267 (2026-09-01, default ON, opt-out
                                         // OXI_S1267_DISABLE): a NEGATIVE top margin
                                         // means "the body starts |top| below the page
@@ -11702,6 +11772,9 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                         // body to y=0, putting the whole first page of
                                         // correspondence__04a3e3e17960b59a (the JA
                                         // blind floor doc, 0.459) 14.2pt too high.
+                                        if std::env::var("OXI_DBG_PGMAR").is_ok() {
+                                            eprintln!("[PGMAR] top raw={:?} twips={}", val, v);
+                                        }
                                         if s1267 && v < 0.0 {
                                             margin.top = to_pt(-v);
                                             margin_top_negative = true;
@@ -11711,7 +11784,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                     }
                                 }
                                 "bottom" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         // Bottom margin: exact twips (no 10tw rounding).
                                         // Word rounds top margin to 10tw for content start Y,
                                         // but uses exact bottom margin for page break limit.
@@ -11724,27 +11797,27 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                     }
                                 }
                                 "left" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         margin.left = to_pt(v);
                                     }
                                 }
                                 "right" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         margin.right = to_pt(v);
                                     }
                                 }
                                 "gutter" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         gutter = to_pt(v);
                                     }
                                 }
                                 "header" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         header_distance = Some(to_pt(v));
                                     }
                                 }
                                 "footer" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_twips_measure(&val) {
                                         footer_distance = Some(to_pt(v));
                                     }
                                 }
@@ -12466,6 +12539,29 @@ fn collect_note_refs(
 }
 
 /// Parse runs inside w:ins or w:del (tracked changes)
+/// S1386 (2026-09-13): a `ST_SignedTwipsMeasure` may carry a unit
+/// (`10mm`, `1.5cm`, `0.5in`, `12pt`, `2pc`); Word reads it, `parse::<f32>`
+/// did not. reports__003d0c861f04b959 declares `w:top="10mm"` on every
+/// margin: Word 28.5pt, Oxi fell to the 72pt default and paged early.
+fn parse_twips_measure(val: &str) -> Result<f32, ()> {
+    let v = val.trim();
+    if let Ok(n) = v.parse::<f32>() {
+        return Ok(n);
+    }
+    let split = v.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let unit = &v[split.len()..];
+    let n: f32 = split.trim().parse().map_err(|_| ())?;
+    let per_unit = match unit {
+        "mm" => 1440.0 / 25.4,
+        "cm" => 1440.0 / 2.54,
+        "in" => 1440.0,
+        "pt" => 20.0,
+        "pc" | "pi" => 240.0,
+        _ => return Err(()),
+    };
+    Ok(n * per_unit)
+}
+
 fn parse_tracked_change_runs(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,

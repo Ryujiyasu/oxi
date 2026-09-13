@@ -6829,6 +6829,37 @@ cells={} pitch={:.2} text={:?}",
                 Default::default()
             };
         // resolved bands: (page_idx, top, bottom, x0, x1)
+        // S1387 (2026-09-13, default ON, opt-out OXI_S1387_DISABLE): a PAGE-
+        // relative wrapSquare / wrapTight text box is a side band at its
+        // absolute y, registered when its anchor block is laid out. The band
+        // consumer already moves a line below a band whose lane is under
+        // 30pt. reports__0045b085cb32ceba: a 472.5pt-wide box (page y 103.5,
+        // h 333) in a 451pt column -- Word starts the next paragraph at
+        // 441.75, below the box; Oxi laid it at 108 through the box.
+        let s1387_tbs: std::collections::HashMap<usize, Vec<usize>> =
+            if s758_on && std::env::var("OXI_S1387_DISABLE").is_err() {
+                let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+                for (ti, tb) in page.text_boxes.iter().enumerate() {
+                    if std::env::var("OXI_DBG1387").is_ok() {
+                        eprintln!("[S1387] tb#{} wrap={:?} pos={:?} anchor={} w={:.1} h={:.1}", ti, tb.wrap_type,
+                            tb.position.as_ref().map(|p| (p.v_relative.clone(), p.y, p.h_relative.clone(), p.x)), tb.anchor_block_index, tb.width, tb.height);
+                    }
+                    // Only a box that CLOSES the column (width within 30pt of it,
+                    // the S1389 test): ukframework's 393pt tight cover box in a
+                    // 451pt column left a lane and Word kept its empty anchor
+                    // paragraph at the page top; a band there added a page.
+                    let s1387_col_w = page.size.width - page.margin.left - page.margin.right;
+                    if matches!(tb.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight))
+                        && tb.width >= s1387_col_w - 30.0
+                        && tb.position.as_ref().map_or(false, |tp| tp.v_relative.as_deref() == Some("page"))
+                    {
+                        m.entry(tb.anchor_block_index).or_default().push(ti);
+                    }
+                }
+                m
+            } else {
+                Default::default()
+            };
         let mut s758_bands: Vec<(usize, f32, f32, f32, f32, bool)> = Vec::new();
         // S847 (2026-07-14): CONSECUTIVE paragraphs sharing an IDENTICAL
         // page-anchored framePr form ONE text frame — Word stacks them
@@ -7228,6 +7259,35 @@ cells={} pitch={:.2} text={:?}",
                 }
                 v
             };
+                // The anchor paragraph must carry visible text: ukframework's cover
+                // box (lanes 4 / 8pt) hangs off an EMPTY paragraph that Word leaves
+                // at the page top, unmoved (the S1195 empty-beside-float rule);
+                // reports__0045b085's box hangs off its title. Hypothesis until a
+                // probe separates "empty anchor" from "lane closed".
+                let s1387_anchor_visible = matches!(&page.blocks[block_idx], Block::Paragraph(p)
+                    if p.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace())));
+                if let Some(tis) = s1387_tbs.get(&block_idx).filter(|_| s1387_anchor_visible) {
+                    for &ti in tis {
+                        let tb = &page.text_boxes[ti];
+                        if let Some(tp) = tb.position.as_ref() {
+                            let x0 = match (tp.h_relative.as_deref(), tp.h_align.as_deref()) {
+                                (_, Some("right")) => page.margin.left + total_content_width - tb.width,
+                                (_, Some("center")) => page.margin.left + (total_content_width - tb.width) * 0.5,
+                                (_, Some("left")) => page.margin.left,
+                                (Some("page"), _) => tp.x,
+                                _ => page.margin.left + tp.x,
+                            };
+                            let dl = tp.dist_l.unwrap_or(9.0);
+                            let dr = tp.dist_r.unwrap_or(9.0);
+                            let nb = (current_page_idx, tp.y, tp.y + tb.height, x0 - dl, x0 + tb.width + dr,
+                                      tb.wrap_type == Some(crate::ir::WrapType::Tight));
+                            if std::env::var("OXI_DBG1387").is_ok() {
+                                eprintln!("[S1387] blk={} band={:?}", block_idx, nb);
+                            }
+                            s758_bands.push(nb);
+                        }
+                    }
+                }
             if !s758_srcs.is_empty() {
                 // Co-anchored floats share the origin from before a
                 // top-and-bottom float reserved space in the text flow.
@@ -15194,13 +15254,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             return 0.0;
         }
         let header_y = page.header_distance.unwrap_or(36.0);
+        // S1389: a square/tight float that leaves no lane (width within 30pt of
+        // the column) closes the column like topAndBottom. MEASURED
+        // (`_pb_hdrsquare_gen.py`, Word COM): 505pt square float at 42.75, h
+        // 133 in a 454pt column -> body 175.5 (VML and DrawingML alike, and
+        // topAndBottom); a 200pt square float -> body 35.25 (the top margin).
+        let column_w = page.size.width - page.margin.left - page.margin.right;
         blocks
             .iter()
             .filter_map(|b| match b {
-                Block::Image(img) if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom) => {
+                Block::Image(img)
+                    if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                        || (std::env::var("OXI_S1389_DISABLE").is_err()
+                            && matches!(img.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight))
+                            && img.width >= column_w - 30.0) =>
+                {
                     img.position.as_ref().and_then(|p| match p.v_relative.as_deref() {
                         Some("page") => Some(p.y + img.height),
                         Some("paragraph") => Some(header_y + p.y + img.height),
+                        Some("text") if std::env::var("OXI_S1389_DISABLE").is_err() => Some(header_y + p.y + img.height),
                         _ => None,
                     })
                 }
