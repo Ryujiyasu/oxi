@@ -67,6 +67,12 @@ def normalize_text(s: str) -> str:
     # 4+ keeps a literal English ellipsis '...' intact; both sides normalize
     # through the same function so match behavior elsewhere is unchanged.
     s = re.sub(r"\.{4,}", " ", s)
+    # S1377 (2026-09-13): a `<w:sym>` character. Word Range.Text returns "("
+    # (chr 40) for every symbol-font character; Oxi's dump carries the PUA
+    # code (U+F0xx). forms__00447890: 15 of 22 matchable paragraphs open with
+    # a Wingdings 3 check box and fell out of the matcher (match_rate 0.32,
+    # low_match FAIL at score 1.0). Both sides through the same map.
+    s = re.sub(r"[\uf000-\uf0ff]", "(", s)
     # S823: strip ToC TAIL decorations entirely so a ToC entry and its BODY
     # heading normalize to the SAME text and the page-radius tie-break pairs
     # each with its own page (ukframework 'Introduction and background':
