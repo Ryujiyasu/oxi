@@ -15352,12 +15352,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // ukrisk / legal__00081e80 (each 1 empty) stay collapsed; S1050's
             // watermark-host paragraphs stay ink (their VML runs are empty).
             let s1064 = !self.doc_body_has_real_cjk && std::env::var("OXI_S1064_DISABLE").is_err();
-            let s1064_multi = s1064
+            // S1395 (2026-09-13, opt-out OXI_S1395_DISABLE): in a JAPANESE document
+            // an empty header paragraph reserves its line even when it is the
+            // header's only paragraph. MEASURED (`_pb_jphdr_empty_gen.py`, Word
+            // COM, header distance 42.55): one empty paragraph -> body 58.5 (mark
+            // 11pt) / 57.75 (10.5pt) / 57.0 (no grid); two -> 72.75; the S1064
+            // Latin ladder collapsed the n=1 case to the margin instead.
+            // forms__009bbe8a5704589a: Word 58.5, Oxi 42.55 -> every page ran a
+            // line ahead and an empty paragraph crossed the page boundary.
+            let s1395 = self.doc_body_has_real_cjk && std::env::var("OXI_S1395_DISABLE").is_err();
+            let s1064_multi = (s1064
                 && blocks
                     .iter()
                     .filter(|b| matches!(b, Block::Paragraph(_)))
                     .count()
-                    >= 2;
+                    >= 2)
+                || s1395;
             let s843_has_ink = blocks.iter().any(|b| match b {
                 Block::Paragraph(p) => {
                     p.runs.iter().any(|r| !r.text.trim().is_empty())
@@ -18249,7 +18259,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Greenfield-dormant: 0/177 baseline docs use w:ruby, so this is
         // 0.0 for all baseline paragraphs. Used at last-line cursor advance
         // and gates ruby-annotation emission below.
-        let ruby_para_expansion_pt = ruby::paragraph_ruby_expansion_pt(&para.runs, para_font_size);
+        let ruby_para_expansion_pt = self.s1396_ruby_expansion(para, para_font_size);
 
         // Round 7.7: ruby atomic-wrap budget (conservative).
         // When a run has ruby_w > base_w (V2 case "とくてい" 22pt over
@@ -32795,6 +32805,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// doubt). 83/64 under-measured every 游 line by 0.22% -- 0.047pt at 12pt,
     /// -1.4pt over e3c545's page. Meiryo (win 3072) reads 1.9507 against
     /// 1.9497, still open; it is not in the corpus at a no-grid single line.
+    /// S1396 (2026-09-13, default ON, opt-out OXI_S1396_DISABLE): an EXACT
+    /// line does not grow for ruby -- the exact box clips the ruby text, as it
+    /// clips an inline object (S1320). forms__009bbe8a5704589a: a cell
+    /// paragraph `line=320 exact` carrying ふりがな ruby over 氏名 sits in a
+    /// 20pt row in Word (16 + cell margins), Oxi grew it to 36.5 -- twice per
+    /// page, +33pt, an empty paragraph across the page boundary.
+    fn s1396_ruby_expansion(&self, para: &Paragraph, fs: f32) -> f32 {
+        if std::env::var("OXI_S1396_DISABLE").is_err()
+            && para.style.line_spacing_rule.as_deref() == Some("exact")
+        {
+            return 0.0;
+        }
+        ruby::paragraph_ruby_expansion_pt(&para.runs, fs)
+    }
+
     fn s1367_cjk_box(m: &FontMetrics, fs: f32) -> f32 {
         if std::env::var("OXI_S1367_DISABLE").is_ok() {
             return (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0);
@@ -32885,9 +32910,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // SPACE run, 8pt mark) renders ~9.2 in Word vs Oxi 13.8 = the +4.6
         // jump before SECTION TWO. Latin scope; cells keep the CELLPAIR
         // calibration (in_table_cell excluded).
+        // S1394 (2026-09-13, opt-out OXI_S1394_DISABLE): the all-whitespace
+        // line is an empty line in a JAPANESE document too. The Latin-scope
+        // gate below sent a U+3000-only paragraph through the fragment fold,
+        // which priced the full-width space in the East Asian face (ＭＳ 明朝
+        // 11pt: 14.27) where Word prices the glyphless line like an empty
+        // paragraph, in the ASCII face (Century 11pt: 13.22 -> COM 13.5).
+        // policies__060b605eaef40085: two such lines, +1.5pt, the page's last
+        // paragraph a page late. (S1305's snap-off ASCII preference then
+        // applies; a snapped line keeps the S583 grid calibration.)
+        let s1394 = std::env::var("OXI_S1394_DISABLE").is_err();
         let s902_all_ws = !line.fragments.is_empty()
             && !in_table_cell
-            && !self.doc_body_has_real_cjk
+            && (!self.doc_body_has_real_cjk || s1394)
             && line.fragments.iter().all(|f| f.text.trim().is_empty())
             && std::env::var("OXI_S902_DISABLE").is_err();
 
@@ -42210,7 +42245,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             && line.iter().any(|t| t.15)
                                         {
                                             let s1312_fs = self.resolve_font_size(&RunStyle::default(), &para.style);
-                                            lh += ruby::paragraph_ruby_expansion_pt(&para.runs, s1312_fs);
+                                            lh += self.s1396_ruby_expansion(para, s1312_fs);
                                         }
 
                                         // S1125 (2026-08-15, opt-out OXI_S1125_DISABLE): a CELL
@@ -48838,7 +48873,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // estimate_para_height is called for table cell content.
         // COM-confirmed: table cells use no-grid line height (grid snap disabled inside cells).
         // Use COM table with grid_pitch=None to get no_grid value.
-        if para.runs.is_empty() {
+        // S1394b: the estimate's twin of S1394 -- a JAPANESE body paragraph whose
+        // runs are all whitespace (a lone U+3000) is an empty line here too,
+        // priced in the ASCII face unless it is grid-snapped (the render-side
+        // S1305 rule). Cells keep their own whitespace calibration (S1080 etc.).
+        let s1394_ws = std::env::var("OXI_S1394_DISABLE").is_err()
+            && self.doc_body_has_real_cjk
+            && !in_cell
+            && !para.runs.is_empty()
+            && para.runs.iter().all(|r| r.text.trim().is_empty());
+        if para.runs.is_empty() || s1394_ws {
             // Use pPr/rPr font for empty paragraph height
             let empty_fs = para
                 .style
@@ -48853,7 +48897,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // theme marks, bypassing the Latin hhea arm below.
             let s940_mark_ascii =
                 !self.doc_body_has_real_cjk && std::env::var("OXI_S940_DISABLE").is_err();
-            let metrics = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii);
+            let s1394_ascii = s1394_ws && !(para.style.snap_to_grid && grid_pitch.is_some());
+            let metrics = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii || s1394_ascii);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             // S943 (bundle member with S940): an auto-rule MULTIPLE (line=276)
             // Latin empty takes hhea × factor — the bare rule test routed
@@ -49517,7 +49562,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // bearing paragraphs (V1-V10 fixtures), it adds the calibrated
             // expansion to make pagination match Word's larger paragraph box.
             let para_default_pt = self.resolve_font_size(&RunStyle::default(), &para.style);
-            let ruby_exp = ruby::paragraph_ruby_expansion_pt(&para.runs, para_default_pt);
+            let ruby_exp = self.s1396_ruby_expansion(para, para_default_pt);
             if ruby_exp > 0.0 {
                 // S654 (coverage): mirror the render-side ruby grid-snap so the
                 // page-break estimate matches. In a typed docGrid the ruby line
