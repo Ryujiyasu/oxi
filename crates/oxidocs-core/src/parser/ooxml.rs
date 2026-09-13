@@ -2950,6 +2950,8 @@ fn parse_paragraph_with_inline_images_impl(
                             pair_id,
                         };
                         let end_tag = local.clone();
+                        let s1383_keep = matches!(change_type, "insert" | "moveTo")
+                            && std::env::var("OXI_S1383_DISABLE").is_err();
                         let tracked_runs = parse_tracked_change_runs(
                             reader,
                             ctx,
@@ -2959,7 +2961,29 @@ fn parse_paragraph_with_inline_images_impl(
                             allow_inline_flow,
                             in_cell,
                         )?;
-                        runs.extend(tracked_runs);
+                        for (run, dr) in tracked_runs {
+                            runs.push(run);
+                            if !s1383_keep {
+                                continue;
+                            }
+                            if let Some(drawing) = dr {
+                                if let Some(image) = drawing.image {
+                                    if std::env::var("OXI_S854_DISABLE").is_err()
+                                        && image.position.is_none()
+                                    {
+                                        inline_img_runs.push((runs.len() - 1, image));
+                                    } else {
+                                        images.push(image);
+                                    }
+                                }
+                                if let Some(shape) = drawing.shape {
+                                    found_shapes.push(shape);
+                                }
+                                if let Some(tb) = drawing.text_box {
+                                    found_text_boxes.push(tb);
+                                }
+                            }
+                        }
                     }
                     // mc:AlternateContent at paragraph level
                     // OOXML spec (ECMA-376 Part 3): process mc:Choice only, skip mc:Fallback.
@@ -10749,7 +10773,14 @@ fn parse_table_row(
                         }
                     }
                     "tblHeader" => {
-                        header = true;
+                        // S1384 (2026-09-13): `<w:tblHeader w:val="0"/>` is NOT a
+                        // header row (ECMA-376 on/off). technical__00afb3e6b2bb1a5a
+                        // writes it on every row of its spec table, so every row was
+                        // "atomic" and its 56pt last row moved whole where Word keeps
+                        // the first line on page 1 (needs_row_split's header veto).
+                        header = std::env::var("OXI_S1384_DISABLE").is_ok()
+                            || !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val"
+                                && matches!(a.value.as_ref(), b"0" | b"false" | b"off"));
                     }
                     "cantSplit" => {
                         cant_split = std::env::var("OXI_TABLE_ROW_STYLE_DISABLE").is_ok()
@@ -12227,6 +12258,20 @@ fn parse_header_footer_xml(
                         let image_only = !pr.inline_images.is_empty()
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && std::env::var("OXI_S742_DISABLE").is_err();
+                        // S1385: a header's image-only paragraph keeps its host
+                        // (runs cleared, the S971 shape) so the layout can price the
+                        // image LINE -- multiplier leading included -- as the body does.
+                        if image_only && std::env::var("OXI_S1385_DISABLE").is_err() {
+                            let mut h = pr.paragraph.clone();
+                            h.runs.clear();
+                            for block in pr.inline_images.iter_mut() {
+                                if let Block::Image(img) = block {
+                                    if img.host_paragraph.is_none() {
+                                        img.host_paragraph = Some(Box::new(h.clone()));
+                                    }
+                                }
+                            }
+                        }
                         if !image_only {
                             blocks.push(Block::Paragraph(pr.paragraph));
                         }
@@ -12429,7 +12474,7 @@ fn parse_tracked_change_runs(
     tc: TrackedChange,
     allow_inline_flow: bool,
     in_cell: bool,
-) -> Result<Vec<Run>, ParseError> {
+) -> Result<Vec<(Run, Option<DrawingResult>)>, ParseError> {
     let mut runs = Vec::new();
     let mut depth = 0;
 
@@ -12438,7 +12483,13 @@ fn parse_tracked_change_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (parsed_runs, _dr) =
+                    // S1383 (2026-09-13): the run's drawing is returned with it,
+                    // as parse_hyperlink_runs does (S1184). It was discarded
+                    // here, so a picture inside <w:ins> vanished: legal__
+                    // 001beddecffec9b6's company-seal picture (51.8pt, a
+                    // tracked insert replacing a tracked delete) left a 52pt
+                    // hole in Word's page 55 that Oxi packed away.
+                    let (parsed_runs, mut dr) =
                         parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                     // R62 (2026-04-29): parser stores tracked_change ONLY.
                     // Visual styling (underline/strikethrough + author-palette
@@ -12449,7 +12500,7 @@ fn parse_tracked_change_runs(
                     // landed and required compensating strip helpers.
                     for mut run in parsed_runs {
                         run.tracked_change = Some(tc.clone());
-                        runs.push(run);
+                        runs.push((run, dr.take()));
                     }
                 } else {
                     depth += 1;

@@ -5631,7 +5631,7 @@ cells={} pitch={:.2} text={:?}",
             s755_first_hdr
         };
         let header_bottom = self.s755_header_bottom(s755_first_hdr, page);
-        let mut start_y = page.body_start_y(header_bottom);
+        let mut start_y = page.body_start_y(header_bottom, self.s1381_header_band(s755_first_hdr, page));
 
         // §11.2.2 LM2 unified P0 formula (Round 23, COM-confirmed 2026-04-08).
         // In linesAndChars (LM2) mode, the FIRST body paragraph is allocated a
@@ -5746,14 +5746,14 @@ cells={} pitch={:.2} text={:?}",
         // construction. Page 1 = the (start_y, content_height) just computed.
         let s755_geom: Option<S755Geom> = if s755_on && (page.title_pg || page.even_odd_hf) {
             let hb_odd = self.s755_header_bottom(&page.header, page);
-            let sy_odd = page.body_start_y(hb_odd);
+            let sy_odd = page.body_start_y(hb_odd, self.s1381_header_band(&page.header, page));
             let (fr_odd, _) = self.s755_footer_geom(&page.footer, page);
             let ch_odd = page.size.height - sy_odd - fr_odd;
             let (sy_even, ch_even) = if page.even_odd_hf {
                 // Absent even reference with the flag set = BLANK even header
                 // (ECMA-376), like the titlePg first-page rule.
                 let hb = self.s755_header_bottom(&page.header_even, page);
-                let sy = page.body_start_y(hb);
+                let sy = page.body_start_y(hb, self.s1381_header_band(&page.header_even, page));
                 let (fr, _) = self.s755_footer_geom(&page.footer_even, page);
                 (sy, page.size.height - sy - fr)
             } else {
@@ -5791,7 +5791,7 @@ cells={} pitch={:.2} text={:?}",
                         rp.header_distance = *hd;
                         rp.footer_distance = *fd;
                         let geom = |hdr: &[Block], ftr: &[Block]| {
-                            let sy = rp.body_start_y(self.s755_header_bottom(hdr, &rp));
+                            let sy = rp.body_start_y(self.s755_header_bottom(hdr, &rp), self.s1381_header_band(hdr, &rp));
                             let (mut fr, _) = self.s755_footer_geom(ftr, &rp);
                             // A zero footer distance pins the footer to the physical
                             // page edge. Word then lets body flow use the bottom margin
@@ -6837,6 +6837,8 @@ cells={} pitch={:.2} text={:?}",
         // DECLARED (x, y): (decl_x, decl_y, first_fx, running_bottom_y). Reset
         // when a non-frame block intervenes or the declared key changes.
         let mut s847_frame: Option<(f32, f32, f32, f32)> = None;
+        // S1379: the running yAlign frame group -- (declared x, yAlign, group top).
+        let mut s1379_group: Option<(f32, String, f32)> = None;
         // S898b: a wrap="notBeside" page-anchored frame group excludes the
         // body from its whole vertical extent — the flow resumes below the
         // STACKED frame bottom (00054c43: Commonwealth letterhead frame
@@ -6965,18 +6967,16 @@ cells={} pitch={:.2} text={:?}",
                     // snapshot keeps the page-START state (first write wins).
                     {
                         let map = Self::s1174_map();
-                        let hb_odd = self
-                            .s755_header_bottom(&Self::s1174_substitute(&page.header, &map), page);
-                        let sy_odd = page.body_start_y(hb_odd);
+                        let hdr_sub = Self::s1174_substitute(&page.header, &map);
+                        let hb_odd = self.s755_header_bottom(&hdr_sub, page);
+                        let sy_odd = page.body_start_y(hb_odd, self.s1381_header_band(&hdr_sub, page));
                         let (fr_odd, _) = self
                             .s755_footer_geom(&Self::s1174_substitute(&page.footer, &map), page);
                         let ch_odd = page.size.height - sy_odd - fr_odd;
                         let (sy_even, ch_even) = if page.even_odd_hf {
-                            let hb = self.s755_header_bottom(
-                                &Self::s1174_substitute(&page.header_even, &map),
-                                page,
-                            );
-                            let sy = page.body_start_y(hb);
+                            let hdr_even_sub = Self::s1174_substitute(&page.header_even, &map);
+                            let hb = self.s755_header_bottom(&hdr_even_sub, page);
+                            let sy = page.body_start_y(hb, self.s1381_header_band(&hdr_even_sub, page));
                             let (fr, _) = self.s755_footer_geom(
                                 &Self::s1174_substitute(&page.footer_even, &map),
                                 page,
@@ -8128,19 +8128,148 @@ cells={} pitch={:.2} text={:?}",
                     // narrowed to x1≈333 beside it; Oxi laid it in-flow full-width
                     // → −1×3). The vAnchor="text" frames keep the existing
                     // in-flow path (probexframes PASSES with it).
+                    // S1379 (2026-09-13, default ON, opt-out OXI_S1379_DISABLE): a
+                    // framePr paragraph with yAlign=top|bottom is a fixed frame on
+                    // the margin box (vAnchor absent or "margin") or on the page
+                    // (vAnchor="page"); consecutive same-key frame paragraphs form
+                    // ONE group, stacked at the line pitch with no inset, whose top
+                    // sits on the reference top (yAlign=top) or whose bottom sits on
+                    // the reference bottom (yAlign=bottom). The body flow never
+                    // moves. MEASURED (`_pb_frame_ybottom_gen.py`, Word COM + PDF,
+                    // three 9pt Calibri frame paragraphs, A4 margins 72/72):
+                    //   yAlign=bottom hAnchor=page x=8971  737.25/748.5/759.0 @448.5
+                    //                                      (bottom 770 = margin bottom)
+                    //   + vAnchor=page                    809.25/820.5/831.0 (page bottom 842)
+                    //   yAlign=top                        72.0/83.25/93.75 (margin top)
+                    //   hAnchor=margin x=2000             same y, x = 72 + 100
+                    //   one paragraph                     759.0
+                    //   body lines 72/85.5/99/... in every arm (no flow consumption).
+                    // Real witness: correspondence__0059143bed49147b, a 19-paragraph
+                    // address column in the right margin (Word 612..792 @448.5);
+                    // Oxi laid it in the body flow and every body line sat 189pt low.
+                    let s1379_fp = |fp: &crate::ir::FrameProperties| -> bool {
+                        std::env::var("OXI_S1379_DISABLE").is_err()
+                            && fp.drop_cap.is_none()
+                            && fp.wrap.as_deref() != Some("none")
+                            && matches!(fp.y_align.as_deref(), Some("top") | Some("bottom"))
+                            && matches!(fp.v_anchor.as_deref(), None | Some("margin") | Some("page"))
+                    };
+                    let s1379 = para.style.frame_pr.as_ref().map_or(false, |fp| s1379_fp(fp));
                     if std::env::var("OXI_S758_DISABLE").is_err()
-                        && para.style.frame_pr.as_ref().map_or(false, |fp| {
-                            fp.drop_cap.is_none()
-                                && fp.v_anchor.as_deref() == Some("page")
-                                && fp.wrap.as_deref() != Some("none")
-                        })
+                        && (s1379
+                            || para.style.frame_pr.as_ref().map_or(false, |fp| {
+                                fp.drop_cap.is_none()
+                                    && fp.v_anchor.as_deref() == Some("page")
+                                    && fp.wrap.as_deref() != Some("none")
+                            }))
                     {
                         let fp = para.style.frame_pr.as_ref().unwrap();
                         // S847: match the group on the DECLARED (x, y). A
                         // continuation paragraph inherits the FIRST para's fx
                         // (its own hAnchor is often omitted → mis-computed) and
                         // starts at the previous frame para's bottom.
-                        let fy_decl = fp.y;
+                        let fx0_decl = if fp.h_anchor.as_deref() == Some("page") {
+                            fp.x
+                        } else {
+                            page.margin.left + fp.x
+                        };
+                        let fy_decl = if s1379 {
+                            let ya = fp.y_align.as_deref().unwrap_or("").to_string();
+                            match s1379_group {
+                                Some((gx, ref ga, t))
+                                    if s847_frame.is_some()
+                                        && (gx - fp.x).abs() < 0.1
+                                        && *ga == ya =>
+                                {
+                                    t
+                                }
+                                _ => {
+                                    // Dry-run every consecutive same-key member for
+                                    // the group height, then anchor the group.
+                                    let (ref_top, ref_bottom) =
+                                        if fp.v_anchor.as_deref() == Some("page") {
+                                            (0.0, page.size.height)
+                                        } else {
+                                            (page.margin.top, page.size.height - page.margin.bottom)
+                                        };
+                                    let mut h_total = 0.0f32;
+                                    let mut j = block_idx;
+                                    while let Some(Block::Paragraph(q)) = page.blocks.get(j) {
+                                        let n = match q.style.frame_pr.as_ref() {
+                                            Some(n)
+                                                if s1379_fp(n)
+                                                    && (n.x - fp.x).abs() < 0.1
+                                                    && n.y_align == fp.y_align
+                                                    && n.h_anchor == fp.h_anchor
+                                                    && n.v_anchor == fp.v_anchor =>
+                                            {
+                                                n
+                                            }
+                                            _ => break,
+                                        };
+                                        let qw = n.width.unwrap_or(content_width * 0.3).max(20.0);
+                                        let mut dcy = LayoutCursor::new(0.0);
+                                        let empty_fn_dry = std::collections::HashMap::new();
+                                        let _ = self.layout_paragraph(
+                                            q,
+                                            fx0_decl,
+                                            &mut dcy,
+                                            qw,
+                                            page.size.height,
+                                            0.0,
+                                            page,
+                                            &mut Vec::new(),
+                                            &mut Vec::new(),
+                                            grid_pitch,
+                                            None,
+                                            false,
+                                            None,
+                                            None,
+                                            false,
+                                            false,
+                                            0.0,
+                                            Some(j),
+                                            None,
+                                            None,
+                                            false,
+                                            false,
+                                            None,
+                                            0.0,
+                                            &empty_fn_dry,
+                                            1,
+                                            0,
+                                            &[],
+                                            0.0,
+                                            false,
+                                            false,
+                                            None,  // S755
+                                            None,  // S758
+                                            None,  // S-TWOSEG
+                                            false, // S835
+                                            0.0,
+                                            None,  // S900
+                                            None,  // S903
+                                            false, // S916
+                                        );
+                                        h_total += dcy.cursor_y.max(0.0);
+                                        j += 1;
+                                    }
+                                    let t = if ya == "top" {
+                                        ref_top
+                                    } else {
+                                        (ref_bottom - h_total).max(ref_top)
+                                    };
+                                    if std::env::var("OXI_DBG1379").is_ok() {
+                                        eprintln!("[S1379] blk={}..{} yalign={} ref=({:.1},{:.1}) h={:.2} top={:.2}",
+                                            block_idx, j, ya, ref_top, ref_bottom, h_total, t);
+                                    }
+                                    s1379_group = Some((fp.x, ya, t));
+                                    t
+                                }
+                            }
+                        } else {
+                            fp.y
+                        };
                         // S847 (opt-in OXI_S847=1, default OFF = byte-identical):
                         // consecutive same-(x,y) page frames stack vertically
                         // (Word groups them into one frame; continuations
@@ -8157,6 +8286,7 @@ cells={} pitch={:.2} text={:?}",
                         // the true group bottom), so grouping is default-ON for
                         // them; other page frames keep the S847 opt-in hold.
                         let s847_on = std::env::var("OXI_S847").is_ok()
+                            || s1379
                             || (std::env::var("OXI_S898_DISABLE").is_err()
                                 && fp.wrap.as_deref() == Some("notBeside"));
                         let (fx, fy) = match s847_frame {
@@ -8177,13 +8307,14 @@ cells={} pitch={:.2} text={:?}",
                             }
                         };
                         let fw = fp.width.unwrap_or(content_width * 0.3).max(20.0);
-                        let mut fcy = LayoutCursor::new(fy + 3.0);
+                        let (inset_x, inset_y) = if s1379 { (0.0, 0.0) } else { (1.5, 3.0) };
+                        let mut fcy = LayoutCursor::new(fy + inset_y);
                         let empty_fn_frame = std::collections::HashMap::new();
                         let (frame_els, _, _) = self.layout_paragraph(
                             para,
-                            fx + 1.5,
+                            fx + inset_x,
                             &mut fcy,
-                            (fw - 3.0).max(10.0),
+                            (fw - 2.0 * inset_x).max(10.0),
                             page.size.height,
                             fy,
                             page,
@@ -8254,6 +8385,7 @@ cells={} pitch={:.2} text={:?}",
                     }
                     // S847: a non-frame block breaks the consecutive-frame run.
                     s847_frame = None;
+                    s1379_group = None;
                     // S898b: the first normal block after a notBeside frame
                     // group resumes BELOW the stacked frame bottom.
                     if let Some(b) = s898_notbeside_bottom.take() {
@@ -15051,6 +15183,32 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         m
     }
 
+    /// S1381: the bottom of the header's wrapTopAndBottom float band, in page
+    /// coordinates. Page-relative anchors sit at their declared y (S1010);
+    /// a paragraph-relative anchor hangs off its host paragraph, whose top is
+    /// the header distance for the header's leading paragraph (the only shape
+    /// measured: reports__003862302b660a86 and the probe both anchor in the
+    /// header's first paragraph). 0.0 when the header has no such float.
+    fn s1381_header_band(&self, blocks: &[Block], page: &Page) -> f32 {
+        if std::env::var("OXI_S1381_DISABLE").is_ok() {
+            return 0.0;
+        }
+        let header_y = page.header_distance.unwrap_or(36.0);
+        blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Image(img) if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom) => {
+                    img.position.as_ref().and_then(|p| match p.v_relative.as_deref() {
+                        Some("page") => Some(p.y + img.height),
+                        Some("paragraph") => Some(header_y + p.y + img.height),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .fold(0.0f32, f32::max)
+    }
+
     fn s755_header_bottom(&self, blocks: &[Block], page: &Page) -> f32 {
         if !blocks.is_empty() {
             // S843 (2026-07-14, opt-out OXI_S843_DISABLE): an INK-FREE header
@@ -15171,6 +15329,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     .is_some_and(|p| p.v_relative.as_deref() == Some("page")) =>
                         {
                             img.position.as_ref().map(|p| p.y + img.height)
+                        }
+                        // S1381: a paragraph-relative band hangs off the header's
+                        // leading paragraph (header distance); see s1381_header_band.
+                        Block::Image(img)
+                            if std::env::var("OXI_S1381_DISABLE").is_err()
+                                && img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                                && img
+                                    .position
+                                    .as_ref()
+                                    .is_some_and(|p| p.v_relative.as_deref() == Some("paragraph")) =>
+                        {
+                            img.position.as_ref().map(|p| header_y + p.y + img.height)
                         }
                         _ => None,
                     })
@@ -15578,7 +15748,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // S759: a FLOATING image (position Some) is page-absolute —
                     // it must NOT push the body down; only inline images add height.
                     if std::env::var("OXI_S742_DISABLE").is_err() && img.position.is_none() {
-                        hdr_h += img.height;
+                        // S1385 (2026-09-13, default ON, opt-out OXI_S1385_DISABLE):
+                        // the header's inline image line is priced like the body's
+                        // (s971 / S1179): under a multiplied line spacing the line is
+                        // the image plus the multiplier's extra leading, not the bare
+                        // image. technical__00afb3e6b2bb1a5a: a 71.625pt logo in a
+                        // Montserrat-10 line=276 header paragraph -- Word body top
+                        // 109.5 = 36 + 71.625 + 0.15 x 12.19; Oxi 107.63, and the
+                        // 1.9pt let a second line into the spec table's split row.
+                        if std::env::var("OXI_S1385_DISABLE").is_err() && !self.doc_body_has_real_cjk {
+                            hdr_h += self.s971_image_line_h(img, hdr_cw, page.grid_line_pitch, true);
+                        } else {
+                            hdr_h += img.height;
+                        }
                     }
                     if std::env::var("OXI_DBG_HDR").is_ok() {
                         eprintln!(
@@ -32992,6 +33174,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 if grid_no_type && std::env::var("OXI_S667_DISABLE").is_err() {
                     return fallback;
                 }
+                // S1378 (2026-09-13, default ON, opt-in OXI_LM0_TABLE=1 restores):
+                // the LM0 table is not Word's line. Times New Roman 12pt reads
+                // 14.0 where Word's single line is 13.80 (hhea; the ESTIMATE
+                // already uses 13.80 and matches Word's 20.7 at line=360), and
+                // the table climbs to 60.0 at 25pt against a 28.75 line -- it
+                // was never a line height. technical__00ac06fef95cc36c: the
+                // 21.0 render line against the 20.698 advance tipped a 6-row
+                // column balance from 3/3 to 4/2 (the balancer steps its limit
+                // by one row, so 0.3pt on the last row is a whole row).
+                if std::env::var("OXI_LM0_TABLE").is_err() {
+                    return fallback;
+                }
                 self.registry
                     .lm0_lineauto_base(family, font_size)
                     .unwrap_or(fallback)
@@ -36833,6 +37027,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 .and_then(|cell| cell.blocks.first())
                 .map_or(false, |block| matches!(block,
                     Block::Paragraph(para) if para.style.page_break_before));
+            if std::env::var("OXI_DBG754").is_ok() && row_overflows {
+                eprintln!("[DBG754] gates row={} s754_split={} nonbind_trh={} cant={} content={} single={} lrpb_mid={} widow={} chain={} img={} minreq={} min={:?} explicit_pb={} hdr={} cur={:.2} pbot={:.2} rh={:.2} trH={:?}",
+                    row_idx, s754_split, s941_nonbinding_trh, row.cant_split, has_content, is_single_cell_row,
+                    has_lrpb_mid_row, widow_break_needed, s1247_chain_row, image_atomic_push,
+                    minimum_requires_page, minimum_row_height, explicit_row_page_break, row.header,
+                    cursor.cursor_y, page_bottom, row_height, row.height);
+            }
             let needs_row_split = row_overflows
                 && !(row.header && std::env::var("OXI_HEADER_ROW_ATOMIC_DISABLE").is_err())
                 && !explicit_row_page_break
@@ -41455,6 +41656,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // AND excludes the calibrated gen2/golden inherited-font
                                             // cells: explicit ASCII rFonts, no explicit eastAsia,
                                             // single/auto rule, Latin body.
+                                            // S1382 (2026-09-13, default ON, opt-out OXI_S1382_DISABLE):
+                                            // the mark's EXPLICIT eastAsia face does not change the
+                                            // line either. MEASURED (`_pb_markea_latin_gen.py`, Word
+                                            // COM, an empty Arial-10 paragraph in the body and in a
+                                            // cell, mark eastAsia = Times New Roman / ＭＳ 明朝 /
+                                            // Yu Mincho / none): 23.25 in every arm, both places --
+                                            // Arial's line. The estimate (S940E) already took the
+                                            // ASCII face; only this actual consumer kept the eastAsia
+                                            // gate, so reports__003862302b660a86's rows with an
+                                            // empty Arial/eastAsia=TNR paragraph rendered 24.97
+                                            // against Word's 23.5 and the estimate's 24.5 -- the
+                                            // last row of its floating table missed page 2 by 1.4pt.
+                                            let s1382 = std::env::var("OXI_S1382_DISABLE").is_err()
+                                                && !self.doc_body_has_real_cjk;
                                             let s989_ascii = std::env::var("OXI_S989_DISABLE")
                                                 .is_err()
                                                 && (!self.doc_body_has_real_cjk || s1376_mark)
@@ -41465,7 +41680,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 && effective_line_spacing
                                                     .map_or(true, |f| (f - 1.0).abs() <= 0.01)
                                                 && rpr_ref.font_family.is_some()
-                                                && (rpr_ref.font_family_east_asia.is_none() || s1376_mark);
+                                                && (rpr_ref.font_family_east_asia.is_none() || s1376_mark || s1382);
                                             let empty_metrics = self.metrics_for_para_mark_g(
                                                 &rpr_ref,
                                                 &para.style,
@@ -48816,8 +49031,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // model below can be corrected when the tallest run provably sits on
             // the FIRST line only. See the fold at the `height +=` site.
             let mut s1099_lhs: Vec<(usize, f32)> = Vec::new();
+            // S1380 (2026-09-13, default ON, opt-out OXI_S1380_DISABLE): the
+            // S1298 rule reaching the cell ESTIMATE -- a run with no text at all
+            // does not size a line that has visible text. technical__00afb3e6:
+            // every cell paragraph ends in `<w:r><w:rPr><w:rtl/></w:rPr></w:r>`
+            // (Google-Docs export), which inherits docDefaults Arial 11 and
+            // priced 14.55 into a 7pt Montserrat line (Word PDF: 9.84); the
+            // render already excluded it, so the vAlign=bottom cell dropped its
+            // text 4.7pt and the next 15 rows sat 3.3pt low -- the last row
+            // slipped to page 2.
+            let s1380_visible = std::env::var("OXI_S1380_DISABLE").is_err()
+                && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace()));
             for (s1099_ri, run) in para.runs.iter().enumerate() {
                 if s986_skip_anchor && run.bookmark_name.is_some() && run.text.is_empty() {
+                    continue;
+                }
+                if s1380_visible && run.text.is_empty() && run.style.inline_object_extent.is_none() {
                     continue;
                 }
                 if cellpair_ws_est && run.text.trim().is_empty() {

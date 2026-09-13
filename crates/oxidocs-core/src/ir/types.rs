@@ -2104,11 +2104,23 @@ impl Page {
     /// overlap it. Measured in tools/metrics/_pb_negtop_gen.py -- growing the
     /// header from 1 to 6 lines moves the first body baseline 71.04 -> 102.26
     /// -> 148.94 at top=+284, and leaves it at 27.12 at top=-284.
-    pub fn body_start_y(&self, header_bottom: f32) -> f32 {
+    /// S1381 (2026-09-13, default ON, opt-out `OXI_S1381_DISABLE`): a
+    /// wrapTopAndBottom float anchored in the header is a physical band the
+    /// body starts below EVEN under a negative (pinned) top margin -- the pin
+    /// ignores the header's text height, not a float's wrap. Measured in
+    /// tools/metrics/_pb_hdrfloat_para_gen.py (a 100.5pt shape anchored in
+    /// the header's only paragraph at -35.45pt, so it spans 0..100.5):
+    ///   top=-1438 paragraph-relative   body 100.5
+    ///   top=+1438 paragraph-relative   body 100.5
+    ///   top=-1438 page-relative y=0    body 100.5
+    ///   top=-1438 / +1438 no float     body 72.0
+    /// `band_bottom` is the header's float band (see s1381_header_band).
+    pub fn body_start_y(&self, header_bottom: f32, band_bottom: f32) -> f32 {
+        let band = if std::env::var("OXI_S1381_DISABLE").is_err() { band_bottom } else { 0.0 };
         if self.margin_top_negative && std::env::var("OXI_S1267_DISABLE").is_err() {
-            self.margin.top
+            self.margin.top.max(band)
         } else {
-            self.margin.top.max(header_bottom)
+            self.margin.top.max(header_bottom).max(band)
         }
     }
 }
