@@ -19997,8 +19997,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // have no ink to anchor, so Word uses their full box. Discriminator =
             // empty para. GATE: Phase-1 55/57 → 56/57 (roudoujoken FAIL→PASS), 0
             // PASS→FAIL, mean 0.9980; only kyotei (multi-col residual) still fails.
+            // S1375 (see the S739 site below): an empty line whose NEXT block is
+            // an empty section-end paragraph is judged by its natural height,
+            // not by its full grid box -- Word keeps it down to `natural`
+            // remaining (8pt: 10.35 kept / 9.85 pushed; full box 16.25 would
+            // push at 16). forms__00830ac053a2c57a p6.
+            let s1375_before_section_end = std::env::var("OXI_S1375_DISABLE").is_err()
+                && body_para_index
+                    .and_then(|bi| page.blocks.get(bi + 1))
+                    .map_or(false, |b| matches!(b, Block::Paragraph(n)
+                        if n.style.page_section_break
+                            && n.runs.iter().all(|r| r.text.is_empty())));
             let s562b_empty_full = std::env::var("OXI_S562B_DISABLE").is_err()
-                && para.runs.iter().all(|r| r.text.is_empty());
+                && para.runs.iter().all(|r| r.text.is_empty())
+                && !s1375_before_section_end;
             // S576 (2026-06-15, default ON, opt-out OXI_S576_DISABLE): the
             // page-bottom break-fit measures the GLYPH INK (≈ em), not the
             // line-SPACING box. natural_lh is win_sum*83/64 = 1.297*em for CJK
@@ -20502,8 +20514,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // 238 SSIM sentinel documents BYTE-IDENTICAL — no corpus page
                 // currently sits off-slot at the centered-box boundary, which
                 // is why the gate could survive this long.
+                // S1375 (2026-09-13, default ON, opt-out OXI_S1375_DISABLE): the
+                // last line before an EMPTY SECTION-END paragraph is kept by the
+                // natural (Day-33) test, not the centred one. MEASURED
+                // (`tests/fixtures/empty_edge`, linesAndChars 325, 8pt): with a
+                // plain MARK following, the probe is pushed once less than
+                // ~13.5pt remains (the centred value 13.31); with an empty
+                // sectPr paragraph following -- plain, after a table, framed or
+                // not -- it is kept down to 10.35pt left and pushed at 9.85
+                // (natural 10.38). forms__00830ac053a2c57a's page 6 ends in
+                // such a pair: the centred test pushed the empty line to a
+                // blank page 7 and the section start to page 8.
                 let s739_centered = if std::env::var("OXI_S739_DISABLE").is_err()
                     && s739_edge
+                    && !s1375_before_section_end
                     && !page.doc_grid_no_type
                     && para.style.snap_to_grid
                     && grid_pitch.map_or(false, |p| p > 0.0)
@@ -20558,6 +20582,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .min(effective_lh);
                 centered_box_is_threshold = s739_centered > 0.0
                     && (v - s739_centered).abs() < 1e-6;
+                if std::env::var("OXI_DBG_PB").is_ok() {
+                    let head: String = lines.get(line_idx).map(|l| l.fragments.iter().flat_map(|f| f.text.chars()).take(16).collect()).unwrap_or_default();
+                    eprintln!("[PB] cy={:.2} bottom={:.2} eff={:.2} nat={:.2} ink={:.2} c739={:.2} v={:.2} sect_end_next={} bi={:?} «{}»",
+                        cursor.cursor_y, page_top + content_height, effective_lh, natural_lh, ink_lh, s739_centered, v, s1375_before_section_end, body_para_index, head);
+                }
                 v
             };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
@@ -35684,6 +35713,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // never executed). S151 default ON since 2026-05-21.
                             cell_content_h += para_h;
                             cell_content_h_visual += para_h_visual;
+                            if std::env::var("OXI_DBG_CELLPARA").is_ok() {
+                                let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
+                                eprintln!("[CELLPARA] para_h={:.3} visual={:.3} render={:.3} center_extra={:.3} cum={:.3} cum_visual={:.3} «{}»", para_h, para_h_visual, para_h_center, center_extra, cell_content_h, cell_content_h_visual, head);
+                            }
                             // S753: vert-cell paragraph spacing maps to the WIDTH
                             // direction (each paragraph is a new column) — no height
                             // bookkeeping.
@@ -41375,11 +41408,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // vs Oxi to locate the drift source.
                                         let pprrpr_fs =
                                             para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
+                                        // S1376 (2026-09-13, default ON, opt-out OXI_S1376_DISABLE):
+                                        // the mark's own rFonts decide an empty cell line in a
+                                        // Japanese document too. forms__00830ac053a2c57a: five
+                                        // empties per answer box carry rFonts BIZ UDP明朝 (no
+                                        // w:sz) -- Word sets each at one 16.25 cell (COM: BIZ
+                                        // UDP明朝 10.5, adjustLineHeightInTable); the CJK gate
+                                        // sent them to the document default 游明朝 (17.57 > pitch
+                                        // -> two cells), 213.5pt boxes against Word's 114.
+                                        // Probe: 游明朝 10.5 empties in such a cell ARE two cells
+                                        // in Word (32.46), so it is the mark's face that counts.
+                                        // S1376b: the mark is priced in its ASCII face (the S1300
+                                        // law), not the inherited eastAsia face. 1636d28e2c46: five
+                                        // marks carry rFonts ascii=Century with eastAsia inherited
+                                        // (ＭＳ 明朝); Word (COM Font.Name Century 10.5) sets each at
+                                        // one 13.6 cell, the eastAsia reading is 13.62 -> two cells.
+                                        let s1376_mark = pprrpr_fs.is_none()
+                                            && std::env::var("OXI_EMPTY_MARK_FAMILY_DISABLE").is_err()
+                                            && (!self.doc_body_has_real_cjk
+                                                || std::env::var("OXI_S1376_DISABLE").is_err())
+                                            && para.style.ppr_rpr.as_ref().is_some_and(|r| r.font_family.is_some());
                                         let pprrpr_fs = pprrpr_fs.or_else(|| {
-                                            if std::env::var("OXI_EMPTY_MARK_FAMILY_DISABLE").is_err()
-                                                && !self.doc_body_has_real_cjk
-                                                && para.style.ppr_rpr.as_ref().is_some_and(|r| r.font_family.is_some())
-                                            {
+                                            if s1376_mark {
                                                 Some(self.resolve_font_size(&RunStyle::default(), &para.style))
                                             } else { None }
                                         });
@@ -41407,7 +41457,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // single/auto rule, Latin body.
                                             let s989_ascii = std::env::var("OXI_S989_DISABLE")
                                                 .is_err()
-                                                && !self.doc_body_has_real_cjk
+                                                && (!self.doc_body_has_real_cjk || s1376_mark)
                                                 && matches!(
                                                     effective_line_rule,
                                                     None | Some("auto")
@@ -41415,7 +41465,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 && effective_line_spacing
                                                     .map_or(true, |f| (f - 1.0).abs() <= 0.01)
                                                 && rpr_ref.font_family.is_some()
-                                                && rpr_ref.font_family_east_asia.is_none();
+                                                && (rpr_ref.font_family_east_asia.is_none() || s1376_mark);
                                             let empty_metrics = self.metrics_for_para_mark_g(
                                                 &rpr_ref,
                                                 &para.style,
@@ -41762,6 +41812,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             } else {
                                                 lh += (ascent + descent - natural_max).max(0.0);
                                             }
+                                        }
+                                        if std::env::var("OXI_DBG_CELLLH").is_ok() {
+                                            let fams: Vec<String> = line.iter().map(|f| format!("{}@{}", f.8.as_deref().unwrap_or("-"), f.1)).collect();
+                                            let head: String = line.iter().flat_map(|f| f.0.chars()).take(10).collect();
+                                            eprintln!("[CELLLH] lh={:.3} ls={:?} lr={:?} pitch={:?} snap={} n={} {:?} «{}»",
+                                                lh, effective_line_spacing, effective_line_rule, row_line_pitch, para.style.snap_to_grid, line.len(), fams, head);
                                         }
                                         if lh == 0.0 {
                                             // whitespace-only line: fall back to all fragments
@@ -48538,6 +48594,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             } else {
                 self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true)
             };
+            if std::env::var("OXI_DBG_CELLEMPTY").is_ok() {
+                eprintln!("[CELLEMPTY] fam={} fs={:.2} cjk={} snap_in_cell={} use_render_lh={} grid={:?} ls={:?} lr={:?} h_added={:.3}",
+                    metrics.family, empty_fs, metrics.is_cjk_83_64_font(), snap_in_cell, use_render_lh, grid_pitch, eff_ls, eff_lr, h_added);
+            }
             if std::env::var("OXI_DUMP_TABLE").is_ok() {
                 let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
                 eprintln!(
