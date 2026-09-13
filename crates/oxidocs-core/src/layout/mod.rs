@@ -24278,8 +24278,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // Continue the run if the ideal is still in sync with the cursor
                     // (within half a pitch); otherwise (first line / after a non-LM2
                     // paragraph moved the cursor / new page) resync to the cursor.
+                    // S1400 (2026-09-14, opt-out OXI_S1400_DISABLE): the ideal
+                    // stream re-syncs to the cursor whenever the cursor moved by
+                    // more than device-snap noise -- a paragraph's space-before
+                    // is a REAL move, not rounding. The half-pitch window let a
+                    // 9pt before (180tw < 193tw) be discarded: the line landed
+                    // back on the pre-spacing lattice, 2 cells - 9 = 29.7 where
+                    // Word gives before + 2 cells = 47.7 (`_pb_emptybefore_grid_gen.py`,
+                    // 9 arms: linesAndChars with/without charSpace, lang en-US /
+                    // ja-JP, empty / text lines, all 48/48/47.25 by Info6;
+                    // the type=lines arm never took this path and matched).
+                    // policies__07543a6b9776a1cf: three such empties on the
+                    // cover, -28.5pt, two paragraphs pulled up from page 2.
+                    let s1400_tol = if std::env::var("OXI_S1400_DISABLE").is_err() { 12.0 } else { pitch * 0.5 };
                     let ideal0 = if cursor.lm2_ideal_y > 0.0
-                        && (cursor.lm2_ideal_y - cur_f).abs() < pitch * 0.5
+                        && (cursor.lm2_ideal_y - cur_f).abs() < s1400_tol
                     {
                         cursor.lm2_ideal_y
                     } else {
@@ -24375,8 +24388,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let raw = if s1319 {
                             let pitch_f = pitch_tw_i as f32;
                             let cur_f = cur_tw as f32;
+                            // S1400: same re-sync window as the empty branch above.
+                            let s1400_tol = if std::env::var("OXI_S1400_DISABLE").is_err() { 12.0 } else { pitch_f * 0.5 };
                             let ideal0 = if cursor.lm2_ideal_y > 0.0
-                                && (cursor.lm2_ideal_y - cur_f).abs() < pitch_f * 0.5
+                                && (cursor.lm2_ideal_y - cur_f).abs() < s1400_tol
                             {
                                 cursor.lm2_ideal_y
                             } else {
