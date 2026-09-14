@@ -439,6 +439,7 @@ unsafe fn render_page_elements(
                 render_text(
                     rt, dwrite_factory,
                     snap_x, glyph_top_y, el.width, el.height,
+                    el.baseline_offset.map(|b| el.y + b),
                     text, fam,
                     *font_size, *bold, *italic, color.as_deref(),
                     *strikethrough, *double_strikethrough, is_double_underline,
@@ -1280,6 +1281,7 @@ unsafe fn render_text(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     x_pt: f32, y_pt: f32, w_pt: f32, h_pt: f32,
+    baseline_pt: Option<f32>,
     text: &str,
     font_family: &str,
     font_size_pt: f32,
@@ -1349,6 +1351,14 @@ unsafe fn render_text(
         } else {
             y_pt
         }
+    };
+
+    let y_pt = if !is_vertical {
+        baseline_pt.map(|b| b + 1.0
+            - font_ascent_pt(dwrite_factory, font_family, font_size_pt, bold, italic))
+            .unwrap_or(y_pt)
+    } else {
+        y_pt
     };
 
     // Highlight background covers the element rect before glyphs are drawn.
@@ -2049,9 +2059,13 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             // See memory/session71_y_convention_refactor_design.md.
             // S724: emit "vert": true for vertical text (see GDI dump).
             let vert_json = if vert { ", \"vert\": true" } else { "" };
+            let source_json = el.source_text.as_ref().map(|text| {
+                format!(", \"source_text\": {}, \"source_char_len\": {}",
+                    serde_json::to_string(text).unwrap(), el.source_char_len.unwrap_or(0))
+            }).unwrap_or_default();
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}{}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json).unwrap();
         }
         out.push_str("\n    ]}");
     }

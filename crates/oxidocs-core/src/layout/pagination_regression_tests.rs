@@ -1937,3 +1937,41 @@ fn text_balance_grid_does_not_pull_a_tall_last_line_into_the_wrong_column() {
             "active grid {pitch:?}, final height {last_height}");
     }
 }
+
+
+#[test]
+fn case_expansion_fragments_retain_original_character_spans() {
+    let map = CaseSourceMap::uppercase("aßZ");
+    assert_eq!(map.fragment(0, "ASS"), Some((0, 2, "aß".into())));
+    assert_eq!(map.fragment(1, "SS"), Some((1, 1, "ß".into())));
+    assert_eq!(map.fragment(2, "S"), Some((1, 1, String::new())));
+    assert_eq!(map.fragment(3, "Z"), Some((2, 1, "Z".into())));
+    assert_eq!(map.fragment(0, "AX"), None);
+    assert_eq!(map.fragment(usize::MAX, "S"), None);
+}
+
+#[test]
+fn merged_cell_coordinates_do_not_use_available_height_as_page_stride() {
+    for source_page in [0, 3] {
+        let mut flow = MergedCellTextFlow {
+            identity: std::sync::Arc::new(()), key: 0, start_row: 0,
+            source_page, origin: 80.0, page_top: 10.0, page_height: 100.0,
+            coordinate_stride: 400.0, header: 0.0, pad_top: 0.0, pad_bottom: 0.0,
+            content_height: 50.0, element_count: 2,
+            paragraphs: vec![MergedCellFlowParagraph {
+                lines: vec![
+                    MergedCellFlowLine { y: 0.0, fit: 20.0, elements: vec![(0, 0.0)] },
+                    MergedCellFlowLine { y: 30.0, fit: 20.0, elements: vec![(1, 30.0)] },
+                ], keep_lines: false, before: 0.0, after: 0.0,
+            }], cuts: std::collections::BTreeMap::new(),
+        };
+        let (positions, end) = flow.paginate();
+        assert_eq!(positions, vec![Some((source_page, 80.0)), Some((source_page + 1, 10.0))]);
+        assert_eq!(end - (source_page + 1) as f32 * 400.0, 30.0);
+        flow.cuts.insert(source_page, (90.0, 40.0));
+        flow.cuts.insert(source_page + 1, (70.0, 10.0));
+        let (positions, end) = flow.paginate();
+        assert_eq!(positions, vec![Some((source_page + 1, 40.0)), Some((source_page + 2, 10.0))]);
+        assert_eq!(end - (source_page + 2) as f32 * 400.0, 30.0);
+    }
+}

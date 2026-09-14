@@ -140,7 +140,11 @@ def aggregate_dump(dump: dict) -> dict:
                 # memory/session71_y_convention_refactor_design.md.
                 "text_y_off_at_ymin": el.get("text_y_off", 0.0),
             })
-            slot["text_parts"].append((el["y"], el["x"], el.get("text", ""), bool(el.get("vert"))))
+            # Case conversion changes painted glyphs, not the source paragraph identity.
+            text = el.get("source_text")
+            if not isinstance(text, str):
+                text = el.get("text", "")
+            slot["text_parts"].append((el["y"], el["x"], text, bool(el.get("vert"))))
             if el["y"] < slot["y_min"]:
                 slot["y_min"] = el["y"]
                 slot["text_y_off_at_ymin"] = el.get("text_y_off", 0.0)

@@ -1191,6 +1191,8 @@ pub fn slide_family_measurable(family: &str) -> bool {
 
 #[derive(Serialize)]
 struct LayoutElementJs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline_offset: Option<f32>,
     x: f32,
     y: f32,
     width: f32,
@@ -1287,6 +1289,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                 elements: page.elements.into_iter().map(|elem| {
                     match elem.content {
                     oxidocs_core::layout::LayoutContent::WatermarkText { text, color, font_family, .. } => LayoutElementJs {
+                        baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "watermark".into(),
                             text: Some(text), font_size: None, font_family, bold: None, italic: None,
@@ -1298,6 +1301,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                         oxidocs_core::layout::LayoutContent::Text {
                             text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, is_vertical, ..
                         } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "text".into(),
                             text: Some(text),
@@ -1320,6 +1324,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                         oxidocs_core::layout::LayoutContent::Image { data, content_type, .. } => {
                             let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
                             LayoutElementJs {
+                                baseline_offset: elem.baseline_offset,
                                 x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                                 kind: "image".into(),
                                 text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1331,6 +1336,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             }
                         },
                         oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, .. } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: width, height: elem.height,
                             kind: "border".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1340,6 +1346,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2), paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::CellShading { color } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "shading".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1349,6 +1356,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, corner_radius, .. } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "shading".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1360,6 +1368,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::ClipStart => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "clip_start".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1369,6 +1378,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::ClipEnd => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: 0.0, y: 0.0, width: 0.0, height: 0.0,
                             kind: "clip_end".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1378,6 +1388,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "preset_shape".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1391,6 +1402,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                         // serialised to LayoutElementJs — JS consumers can
                         // detect presence and render placeholders until R-05g.
                         oxidocs_core::layout::LayoutContent::Balloon { .. } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "balloon".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1400,6 +1412,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "balloon_connector".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1412,6 +1425,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                         // balloon variants — segment payload not serialised to
                         // JS yet (the browser editor skips unknown kinds).
                         oxidocs_core::layout::LayoutContent::VectorPath { fill, .. } => LayoutElementJs {
+                            baseline_offset: elem.baseline_offset,
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "vector_path".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1478,6 +1492,7 @@ pub fn edit_text_and_relayout(paragraph_index: usize, run_index: usize, new_text
 fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
     match elem.content {
         oxidocs_core::layout::LayoutContent::WatermarkText { text, color, font_family, .. } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
             kind: "watermark".into(),
             text: Some(text), font_size: None, font_family, bold: None, italic: None,
@@ -1489,6 +1504,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
         oxidocs_core::layout::LayoutContent::Text {
             text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, is_vertical, ..
         } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
             kind: "text".into(),
             text: Some(text), font_size: Some(font_size), font_family,
@@ -1505,6 +1521,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
         oxidocs_core::layout::LayoutContent::Image { data, content_type, .. } => {
             let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
             LayoutElementJs {
+                baseline_offset: elem.baseline_offset,
                 x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                 kind: "image".into(),
                 text: None, font_size: None, font_family: None, bold: None, italic: None,
@@ -1515,6 +1532,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             }
         },
         oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, .. } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width, height: elem.height, kind: "border".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color, highlight: None,
@@ -1523,6 +1541,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             paragraph_index: None, run_index: None, char_offset: None,
         },
         oxidocs_core::layout::LayoutContent::CellShading { color } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "shading".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: Some(color), highlight: None,
@@ -1530,6 +1549,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
         },
         oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, corner_radius, .. } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "shading".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None,
@@ -1539,6 +1559,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
         },
         oxidocs_core::layout::LayoutContent::ClipStart => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "clip_start".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
@@ -1546,6 +1567,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
         },
         oxidocs_core::layout::LayoutContent::ClipEnd => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: 0.0, y: 0.0, width: 0.0, height: 0.0, kind: "clip_end".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
@@ -1553,6 +1575,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
         },
         oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "preset_shape".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
@@ -1563,6 +1586,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
         // serialised yet (deferred to R-05g once JS consumers actually use
         // it).
         oxidocs_core::layout::LayoutContent::Balloon { .. } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "balloon".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
@@ -1570,6 +1594,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
         },
         oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "balloon_connector".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
@@ -1578,6 +1603,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
         },
         // S1120 custGeom paths: stub kind string (segments not serialised yet)
         oxidocs_core::layout::LayoutContent::VectorPath { fill, .. } => LayoutElementJs {
+            baseline_offset: elem.baseline_offset,
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "vector_path".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: fill, highlight: None,
@@ -1642,7 +1668,7 @@ fn layout_to_pdf(
 
                     contents.push(ContentElement::Text(TextSpan {
                         x: elem.x as f64,
-                        y: elem.y as f64,
+                        y: (elem.y + elem.baseline_offset.unwrap_or(0.0)) as f64,
                         text: text.clone(),
                         font_name,
                         font_size: *font_size as f64,

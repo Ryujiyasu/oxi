@@ -260,6 +260,9 @@ pub struct Page {
     /// where Word advances the 3194 sections at 11.78.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grid_char_runs: Vec<(usize, Option<i32>)>,
+    /// Per-section character-grid quantization. True reserves whole grid cells.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grid_char_quantized_runs: Vec<(usize, Option<bool>)>,
     /// S732 (2026-07-03): how this section STARTS relative to the previous
     /// one — "evenPage"/"oddPage" force the section onto the next even/odd
     /// physical page, inserting a BLANK page when the parity mismatches
@@ -438,6 +441,9 @@ pub struct RunStyle {
     /// East Asian font family (w:rFonts eastAsia) for CJK characters
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family_east_asia: Option<String>,
+    /// Preferred script slot for ambiguous symbols; None inherits the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_hint_east_asia: Option<bool>,
     /// Complex-script font family (w:rFonts cs) — the face Word uses for a
     /// complex script (Devanagari and its kin). Drives the Devanagari line box
     /// and shaping font; absent for the Latin/CJK corpus.
@@ -647,6 +653,7 @@ impl Default for RunStyle {
             font_family_east_asia: None,
             font_family_cs: None,
             has_explicit_east_asia: false,
+            font_hint_east_asia: None,
             east_asia_from_theme: false,
             ruby_spread: false,
             ruby_field: false,
@@ -845,6 +852,9 @@ pub struct Image {
     /// Text wrapping mode
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrap_type: Option<WrapType>,
+    /// Text-wrap contour in normalized image coordinates; may extend outside the image.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrap_polygon: Vec<(f32, f32)>,
     /// Crop percentages (a:srcRect) — top, right, bottom, left as 0-100%
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop: Option<ImageCrop>,
@@ -975,6 +985,10 @@ pub enum WrapType {
 /// A text box (from w:txbxContent or wps:txbx)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextBox {
+    /// Upright vertical text, with columns progressing from right to left.
+    /// Independent of the containing section's writing direction.
+    #[serde(default)]
+    pub vertical_text: bool,
     /// Content paragraphs inside the text box
     pub blocks: Vec<Block>,
     /// Whether the object participates in its host text line.
@@ -1486,6 +1500,9 @@ pub struct ParagraphStyle {
     /// Word resets inherited spacing to Single/0 inside table cells.
     #[serde(default)]
     pub has_direct_spacing: bool,
+    /// Alignment was assigned on this paragraph, rather than inherited.
+    #[serde(default)]
+    pub has_direct_alignment: bool,
     /// S855 (2026-07-15): True when the DIRECT pPr `<w:spacing>` set before/after
     /// (or beforeLines/afterLines/*Autospacing) — as opposed to setting ONLY the
     /// line multiplier. A direct line-only `<w:spacing w:line=…>` sets
@@ -1756,6 +1773,7 @@ impl Default for ParagraphStyle {
             space_before: None,
             space_after: None,
             has_direct_spacing: false,
+            has_direct_alignment: false,
             has_direct_before_after: false,
             has_direct_tabs_or_ind: false,
             has_direct_before: false,
@@ -2204,6 +2222,9 @@ pub struct FontInfo {
     /// Character set: "00" (ANSI), "80" (ShiftJIS), "02" (Symbol), etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charset: Option<String>,
+    /// Supported code pages, first 32 bits of the font signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_page_range: Option<u32>,
     /// Font family: "roman", "swiss", "modern", "decorative", "script", "auto"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,

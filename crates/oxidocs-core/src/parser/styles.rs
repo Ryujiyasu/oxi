@@ -383,6 +383,9 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     }
     // §4.6.3: explicit eastAsia attribute is inherited (sticky once set anywhere
     // up the chain). Theme fallback never sets it.
+    if child.font_hint_east_asia.is_none() {
+        child.font_hint_east_asia = parent.font_hint_east_asia;
+    }
     if !child.has_explicit_east_asia && parent.has_explicit_east_asia {
         child.has_explicit_east_asia = true;
     }
@@ -501,6 +504,8 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                                     rs.font_family = Some(f);
                                 }
                             }
+                        } else if key == "hint" {
+                            rs.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
                         } else if key == "eastAsia" {
                             rs.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -508,7 +513,9 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                         } else if key == "eastAsiaTheme" {
                             if rs.font_family_east_asia.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                let font = if val.starts_with("major") {
+                                let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                                    resolve_theme_font(&val, theme)
+                                } else if val.starts_with("major") {
                                     theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                                 } else {
                                     theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
@@ -778,6 +785,8 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                             rs.font_family = Some(f);
                         }
                     }
+                } else if key == "hint" {
+                    rs.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
                 } else if key == "eastAsia" {
                     rs.font_family_east_asia =
                         Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -785,7 +794,9 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 } else if key == "eastAsiaTheme" {
                     if rs.font_family_east_asia.is_none() {
                         let val = String::from_utf8_lossy(&attr.value);
-                        let font = if val.starts_with("major") {
+                        let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                                    resolve_theme_font(&val, theme)
+                                } else if val.starts_with("major") {
                             theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                         } else {
                             theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
@@ -1261,6 +1272,9 @@ fn parse_style_definition(
                                         has_run_style = true;
                                     }
                                 }
+                            } else if key == "hint" {
+                                run_style.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
+                                has_run_style = true;
                             } else if key == "eastAsia" {
                                 run_style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -1269,7 +1283,9 @@ fn parse_style_definition(
                             } else if key == "eastAsiaTheme" {
                                 if run_style.font_family_east_asia.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
-                                    let font = if val.starts_with("major") {
+                                    let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                                    resolve_theme_font(&val, theme)
+                                } else if val.starts_with("major") {
                                         theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                                     } else {
                                         theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
@@ -1442,6 +1458,9 @@ fn parse_style_definition(
                                             has_run_style = true;
                                         }
                                     }
+                                } else if key == "hint" {
+                                    run_style.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
+                                    has_run_style = true;
                                 } else if key == "eastAsia" {
                                     run_style.font_family_east_asia =
                                         Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -1450,7 +1469,9 @@ fn parse_style_definition(
                                 } else if key == "eastAsiaTheme" {
                                     if run_style.font_family_east_asia.is_none() {
                                         let val = String::from_utf8_lossy(&attr.value);
-                                        let font = if val.starts_with("major") {
+                                        let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                                    resolve_theme_font(&val, theme)
+                                } else if val.starts_with("major") {
                                             theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
                                         } else {
                                             theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())

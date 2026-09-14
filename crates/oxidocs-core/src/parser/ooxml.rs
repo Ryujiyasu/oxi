@@ -187,10 +187,19 @@ impl OoxmlParser {
 
     pub fn parse(mut self) -> Result<Document, ParseError> {
         // Parse theme first — needed for font resolution in styles
-        let theme = match self.read_part("word/theme/theme1.xml") {
+        let mut theme = match self.read_part("word/theme/theme1.xml") {
             Ok(xml) => parse_theme(&xml),
             Err(_) => ThemeColors::default(),
         };
+        if std::env::var("OXI_DRAWING_THEME_MAP").is_ok() {
+            let settings = self.read_part("word/settings.xml").ok();
+            theme.apply_color_mapping(settings.as_deref());
+        }
+        if std::env::var_os("OXI_THEME_FONT_LANGUAGE").is_some() {
+            if let Ok(settings) = self.read_part("word/settings.xml") {
+                theme.apply_font_language(&settings);
+            }
+        }
         let mut styles = self.parse_styles_with_theme(&theme)?;
         // An unstyled, unthemed package inherits the reference application's
         // Japanese defaults, as sectionless page setup does. Hosts may override
@@ -556,6 +565,8 @@ impl OoxmlParser {
                 // S1336: parallel per-section character-grid run.
                 last.grid_char_runs
                     .push((last.blocks.len(), section.properties.grid_char_space_raw));
+                last.grid_char_quantized_runs
+                    .push((last.blocks.len(), section.properties.doc_grid_lines_and_chars.then_some(section.properties.grid_char_quantized)));
                 // S730: the paragraph that ENDED the previous section (it
                 // carries the in-body sectPr and is the last block merged so
                 // far) is a CONTINUOUS section-break mark — Word renders it
@@ -706,6 +717,7 @@ impl OoxmlParser {
                     vertical_runs,
                     grid_runs,
                     grid_char_runs,
+                    grid_char_quantized_runs: vec![(0, section.properties.doc_grid_lines_and_chars.then_some(section.properties.grid_char_quantized))],
                     section_start_type: section.properties.section_type.clone(),
                     header_distance: section.properties.header_distance,
                     footer_distance: section.properties.footer_distance,
@@ -1163,6 +1175,15 @@ impl OoxmlParser {
             match reader.read_event() {
                 Ok(Event::Start(e)) => {
                     let local = local_name(e.name().as_ref());
+                    if local == "sig" {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "csb0" {
+                                current_info.code_page_range = u32::from_str_radix(
+                                    &String::from_utf8_lossy(&attr.value), 16,
+                                ).ok();
+                            }
+                        }
+                    }
                     if local == "font" {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "name" {
@@ -1184,6 +1205,15 @@ impl OoxmlParser {
                                 if local_name(attr.key.as_ref()) == "val" {
                                     current_info.alt_name =
                                         Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                        }
+                        "sig" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "csb0" {
+                                    current_info.code_page_range = u32::from_str_radix(
+                                        &String::from_utf8_lossy(&attr.value), 16,
+                                    ).ok();
                                 }
                             }
                         }
@@ -2322,6 +2352,7 @@ fn parse_body(
         grid_char_space_raw: None,
         doc_grid_no_type: false,
         doc_grid_lines_and_chars: false,
+        grid_char_quantized: false,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
         columns: None,
@@ -2436,12 +2467,58 @@ fn parse_paragraph_with_inline_images(
     cell_inline_flow_width: Option<f32>,
     keep_inline_images: bool,
 ) -> Result<ParagraphResult, ParseError> {
+    parse_paragraph_with_inline_images_context(reader, ctx, styles, allow_inline_flow,
+        in_cell, cell_inline_flow_width, keep_inline_images, false)
+}
+
+fn parse_paragraph_with_inline_images_context(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+    allow_inline_flow: bool,
+    in_cell: bool,
+    cell_inline_flow_width: Option<f32>,
+    keep_inline_images: bool,
+    preserve_header_image_host: bool,
+) -> Result<ParagraphResult, ParseError> {
     let previous = ctx.paragraph_base.replace(paragraph_base_run_style(styles, None));
     let result = parse_paragraph_with_inline_images_impl(
         reader, ctx, styles, allow_inline_flow, in_cell, cell_inline_flow_width, keep_inline_images,
+        preserve_header_image_host,
     );
     ctx.paragraph_base.replace(previous);
     result
+}
+
+fn simple_field_type(e: &quick_xml::events::BytesStart<'_>) -> Option<FieldType> {
+    let instruction = e.attributes().flatten()
+        .find(|a| local_name(a.key.as_ref()) == "instr")
+        .and_then(|a| a.unescape_value().ok().map(|value| value.into_owned()))?;
+    match instruction.split_whitespace().next()?.to_ascii_uppercase().as_str() {
+        "PAGE" => Some(FieldType::Page),
+        "NUMPAGES" => Some(FieldType::NumPages),
+        _ => None,
+    }
+}
+
+fn finish_simple_field(runs: &mut Vec<Run>, start: usize, field: Option<FieldType>, fallback: &RunStyle) {
+    let Some(field) = field else { return; };
+    let first = (start..runs.len()).find(|&i| !runs[i].text.is_empty())
+        .or_else(|| (start < runs.len()).then_some(start));
+    if let Some(first) = first {
+        for run in &mut runs[start..] { run.text.clear(); run.field_type = None; }
+        runs[first].text = "#".into();
+        runs[first].field_type = Some(field);
+    } else {
+        runs.push(Run {
+            text: "#".into(), style: fallback.clone(), url: None,
+            footnote_ref: None, endnote_ref: None,
+            comment_range_start: Vec::new(), comment_range_end: Vec::new(),
+            comment_references: Vec::new(), tracked_change: None, rpr_change: None,
+            ruby: None, bookmark_name: None, is_math: false,
+            field_type: Some(field), has_last_rendered_page_break: false,
+        });
+    }
 }
 
 fn parse_paragraph_with_inline_images_impl(
@@ -2452,6 +2529,7 @@ fn parse_paragraph_with_inline_images_impl(
     in_cell: bool,
     cell_inline_flow_width: Option<f32>,
     keep_inline_images: bool,
+    preserve_header_image_host: bool,
 ) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
@@ -2494,12 +2572,18 @@ fn parse_paragraph_with_inline_images_impl(
     // the field's first NON-EMPTY cached-result run (the separate/end marker
     // runs are empty and carry the wrong rPr).
     let mut pending_styleref: Option<String> = None;
+    let mut simple_fields: Vec<(usize, Option<FieldType>)> = Vec::new();
+    let simple_fields_enabled = std::env::var("OXI_SIMPLE_FIELDS").is_ok();
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "fldSimple" if depth == 0 && simple_fields_enabled => {
+                        // The wrapper preserves the result runs' formatting.
+                        simple_fields.push((runs.len(), simple_field_type(&e)));
+                    }
                     "pPr" if depth == 0 => {
                         let (s, explicit_align, sid, npr, spr, ppr_change_parsed, pmark_rev) =
                             parse_paragraph_properties(reader, &ctx.theme)?;
@@ -3348,6 +3432,10 @@ fn parse_paragraph_with_inline_images_impl(
                                 });
                             }
                         }
+                        "fldSimple" if simple_fields_enabled => {
+                            let start = runs.len();
+                            finish_simple_field(&mut runs, start, simple_field_type(&e), &ctx.paragraph_base.borrow());
+                        }
                         "bookmarkEnd" => {
                             // End marker; anchor is already placed at bookmarkStart
                         }
@@ -3357,6 +3445,12 @@ fn parse_paragraph_with_inline_images_impl(
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "fldSimple" && depth == 0 && simple_fields_enabled {
+                    if let Some((start, field)) = simple_fields.pop() {
+                        finish_simple_field(&mut runs, start, field, &ctx.paragraph_base.borrow());
+                    }
+                    continue;
+                }
                 if local == "p" && depth == 0 {
                     break;
                 }
@@ -3375,7 +3469,15 @@ fn parse_paragraph_with_inline_images_impl(
     // pPr) AND no style in the basedOn chain has hard-set indent. This snapshot
     // captures pPr-explicit; the style chain check is implicit in the order of
     // operations below.
-    let ppr_explicit_indent_left = style.indent_left.is_some() || style.indent_left_chars.is_some();
+    // A zero character indent resets the character channel; without a
+    // direct absolute indent, a directly assigned list supplies the left edge.
+    let list_zero_chars_reset = std::env::var("OXI_LIST_ZERO_CHAR_INDENT").as_deref() == Ok("1")
+        && num_pr_ref.as_ref().is_some_and(|n| !n.num_id.is_empty() && n.num_id != "0")
+        && style.indent_left.is_none()
+        && style.indent_left_chars == Some(0.0)
+        && style.indent_hanging_chars.is_none();
+    let ppr_explicit_indent_left = !list_zero_chars_reset
+        && (style.indent_left.is_some() || style.indent_left_chars.is_some());
     let ppr_explicit_first_line =
         style.indent_first_line.is_some() || style.indent_first_line_chars.is_some();
 
@@ -3655,6 +3757,9 @@ fn parse_paragraph_with_inline_images_impl(
             }
             if para_rs.font_family_east_asia.is_none() {
                 para_rs.font_family_east_asia = doc_rs.font_family_east_asia.clone();
+            }
+            if para_rs.font_hint_east_asia.is_none() {
+                para_rs.font_hint_east_asia = doc_rs.font_hint_east_asia;
             }
             if !para_rs.has_explicit_east_asia && doc_rs.has_explicit_east_asia {
                 para_rs.has_explicit_east_asia = true;
@@ -3945,6 +4050,13 @@ fn parse_paragraph_with_inline_images_impl(
     // the first one with content, in document order, BEFORE the break-only run
     // below is dropped. Text counts unless it is only the field separator/end
     // markers; an inline image counts even though its run carries no text.
+    // Manual page breaks have no line or page effect inside a table cell.
+    // Keep the runs and their formatting while removing only the break markers.
+    if in_cell && std::env::var("OXI_CELL_MANUAL_PAGE_BREAKS").as_deref() == Ok("1") {
+        for run in &mut runs {
+            run.text.retain(|ch| ch != '\x0C');
+        }
+    }
     let s1351_img_run = inline_img_runs.first().map(|(i, _)| *i);
     style.chars_unit_run_style = runs
         .iter()
@@ -4272,7 +4384,21 @@ fn parse_paragraph_with_inline_images_impl(
                 txt
             );
         }
-        for (_ridx, image) in inline_img_runs {
+        for (ridx, mut image) in inline_img_runs {
+            if preserve_header_image_host
+                && std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() == Some("1")
+                && runs.iter().all(|r| r.text.is_empty())
+            {
+                if let Some(run) = runs.get(ridx) {
+                    // Keep the drawing run's font, which determines auto leading.
+                    // Unrelated empty runs and the paragraph mark do not supply it.
+                    image.host_paragraph = Some(Box::new(Paragraph {
+                        style: style.clone(), runs: vec![run.clone()],
+                        alignment: alignment.clone(), shapes: Vec::new(),
+                        ppr_change: None, paragraph_mark_revision: None
+                    }));
+                }
+            }
             images.push(image);
         }
     }
@@ -5213,6 +5339,7 @@ fn parse_paragraph_properties(
         }
     }
 
+    style.has_direct_alignment = alignment.is_some();
     style.has_explicit_widow_control = has_explicit_widow_control;
     style.has_explicit_snap_to_grid = has_explicit_snap_to_grid;
     Ok((
@@ -5690,6 +5817,15 @@ fn parse_run(
             Event::Text(e) => {
                 let content = e.unescape().unwrap_or_default();
                 if in_text {
+                    // Literal XML newlines are spaces; explicit w:br/w:cr are
+                    // handled separately and retain their line-break semantics.
+                    let content = if std::env::var("OXI_LITERAL_TEXT_NEWLINES").is_ok()
+                        && (content.contains('\n') || content.contains('\r'))
+                    {
+                        std::borrow::Cow::Owned(content.replace("\r\n", " ").replace(['\r', '\n'], " "))
+                    } else {
+                        content
+                    };
                     // S747 (2026-07-05): U+00AD SOFT HYPHEN is an invisible
                     // hyphenation OPPORTUNITY — Word renders it zero-width
                     // (a "-" appears only when a line actually breaks there).
@@ -5857,8 +5993,19 @@ fn parse_run(
             instruction.split_whitespace().next().map_or(false, |name|
                 name.eq_ignore_ascii_case("TOC") || name.eq_ignore_ascii_case("HYPERLINK"))
         });
-        let field = cached_instruction.unwrap_or(&instr_text).trim();
-        if field.contains("PAGE") && !field.contains("NUMPAGES") && !field.contains("PAGEREF") {
+        let addin_cached = std::env::var("OXI_ADDIN_CACHED_RESULTS").is_ok();
+        let addin_instruction = accumulated_instruction.as_deref().filter(|instruction| {
+            addin_cached && instruction.split_whitespace().next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("ADDIN"))
+        });
+        let field = addin_instruction.or(cached_instruction).unwrap_or(&instr_text).trim();
+        if addin_cached && field.split_whitespace().next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("ADDIN"))
+        {
+            // Add-in instructions are opaque metadata. Their cached result is
+            // the display text; keywords inside arguments are not field types.
+            field_type = Some(FieldType::Cached);
+        } else if field.contains("PAGE") && !field.contains("NUMPAGES") && !field.contains("PAGEREF") {
             text = "#".to_string();
             field_type = Some(FieldType::Page);
         } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
@@ -6353,6 +6500,8 @@ fn parse_drawing(
     let mut effect_extent_lr: f32 = 0.0;
     let mut effect_extent_b: f32 = 0.0;
     let mut effect_extent_t: f32 = 0.0;
+    let mut wrapping_points: Vec<(f32, f32)> = Vec::new();
+    let mut in_wrapping_polygon = false;
     let mut alt_text = None;
     let mut rel_id = None;
     let mut depth = 0;
@@ -6404,6 +6553,7 @@ fn parse_drawing(
     let mut text_body_anchor: Option<String> = None;
     // S481: bodyPr@vertOverflow ("overflow" default / "clip" / "ellipsis").
     let mut text_vert_overflow: Option<String> = None;
+    let mut text_vertical = false;
     // S662: bodyPr@compatLnSpc="1" (legacy "compatible line spacing").
     let mut text_compat_ln_spc = false;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
@@ -6448,6 +6598,25 @@ fn parse_drawing(
                 let local = local_name(e.name().as_ref());
                 depth += 1;
                 match local.as_str() {
+                    "wrapPolygon" => { in_wrapping_polygon = true; }
+                    "start" | "lineTo" if in_wrapping_polygon => {
+                        let mut x = None;
+                        let mut y = None;
+                        for attr in e.attributes().flatten() {
+                            let value = String::from_utf8_lossy(&attr.value).parse::<f32>().ok();
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "x" => x = value,
+                                "y" => y = value,
+                                _ => {}
+                            }
+                        }
+                        if let (Some(x), Some(y)) = (x, y) {
+                            if x.is_finite() && y.is_finite() {
+                                wrapping_points.push((x / 21600.0, y / 21600.0));
+                            }
+                        }
+                    }
+
                     // S975 (2026-07-21): wrapTight / wrapThrough ALWAYS carry a
                     // <wp:wrapPolygon> child, so they arrive as Start events —
                     // the wrap arms below live in the Empty arm only (where
@@ -6897,6 +7066,9 @@ fn parse_drawing(
                                 "vertOverflow" => {
                                     text_vert_overflow = Some(val.to_string());
                                 }
+                                "vert" => {
+                                    text_vertical = val == "eaVert";
+                                }
                                 "compatLnSpc" => {
                                     text_compat_ln_spc = val == "1" || val == "true";
                                 }
@@ -7215,6 +7387,24 @@ fn parse_drawing(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "start" | "lineTo" if in_wrapping_polygon => {
+                        let mut x = None;
+                        let mut y = None;
+                        for attr in e.attributes().flatten() {
+                            let value = String::from_utf8_lossy(&attr.value).parse::<f32>().ok();
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "x" => x = value,
+                                "y" => y = value,
+                                _ => {}
+                            }
+                        }
+                        if let (Some(x), Some(y)) = (x, y) {
+                            if x.is_finite() && y.is_finite() {
+                                wrapping_points.push((x / 21600.0, y / 21600.0));
+                            }
+                        }
+                    }
+
                     // S493i: connector arrowheads. a:headEnd (line start) / a:tailEnd (line end);
                     // type attr e.g. "triangle"/"arrow"/"stealth"/"oval" → draw arrowhead; absent
                     // or "none" → none.
@@ -7478,6 +7668,9 @@ fn parse_drawing(
                                 "vertOverflow" => {
                                     text_vert_overflow = Some(val.to_string());
                                 }
+                                "vert" => {
+                                    text_vertical = val == "eaVert";
+                                }
                                 "compatLnSpc" => {
                                     text_compat_ln_spc = val == "1" || val == "true";
                                 }
@@ -7570,6 +7763,7 @@ fn parse_drawing(
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "wrapPolygon" => { in_wrapping_polygon = false; }
                     "positionH" => {
                         in_pos_h = false;
                     }
@@ -7779,6 +7973,7 @@ fn parse_drawing(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            wrap_polygon: wrapping_points.clone(),
             effect_extent_t: if std::env::var("OXI_BODY_IMAGE_TOP_EXTENT_DISABLE").is_err() { effect_extent_t } else { 0.0 },
             effect_extent_b: if std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() { effect_extent_b } else { 0.0 },
             data,
@@ -7826,7 +8021,7 @@ fn parse_drawing(
             arrow_head,
             arrow_tail,
             wrap_polygon: Vec::new(),
-            wrap_type: None,
+            wrap_type: if std::env::var("OXI_DRAWING_SHAPE_WRAP").is_ok() { wrap_type } else { None },
             is_vml: false, // DrawingML
             escapes_cell: false,
         })
@@ -7901,6 +8096,7 @@ fn parse_drawing(
     }
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
+            vertical_text: text_vertical,
             blocks: shape_text_blocks,
             inline: inline_tb,
             font_ref_color: font_ref_color.clone(),
@@ -8008,6 +8204,7 @@ fn parse_drawing(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data: Vec::new(),
@@ -8051,6 +8248,7 @@ fn parse_drawing(
                 }
             }),
             advance_extra_w: effect_extent_lr,
+            wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b,
             data: Vec::new(),
@@ -8637,6 +8835,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
                 data: Vec::new(),
@@ -8725,6 +8924,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data,
@@ -8764,6 +8964,7 @@ fn parse_vml_pict(
         && std::env::var("OXI_S746_DISABLE").is_err();
     if s746_inline_txbx {
         let text_box = Some(TextBox {
+            vertical_text: false,
             blocks: text_blocks,
             inline: true,
             font_ref_color: None,
@@ -8819,6 +9020,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data: Vec::new(),
@@ -8910,6 +9112,17 @@ fn parse_ole_object(
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
     let mut depth = 0;
+    let positioned_ole = std::env::var("OXI_POSITIONED_OLE").ok().as_deref() == Some("1");
+    let mut absolute = false;
+    let mut relative_height = 0u32;
+    let mut behind_doc = false;
+    let mut position = FloatingPosition {
+        x: 0.0, y: 0.0, h_relative: Some("column".into()),
+        v_relative: Some("paragraph".into()), h_align: None, v_align: None,
+        dist_l: None, dist_r: None,
+    };
+    let mut wrap_type = None;
+    let mut crop = ImageCrop { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
     // Task P step 1 (2026-07-22): capture o:OLEObject/@ProgID (the embed's
     // class — "Equation.DSMT4" / "Equation.3" / "Unknown" / …). Threaded out
     // for a future cell-inline route discriminator; NOT consumed yet (routing
@@ -8947,6 +9160,25 @@ fn parse_ole_object(
                                         width = parse_css_length(w.trim());
                                     } else if let Some(h) = part.strip_prefix("height:") {
                                         height = parse_css_length(h.trim());
+                                    } else if let Some(value) = part.strip_prefix("position:") {
+                                        absolute = value.trim() == "absolute";
+                                    } else if let Some(value) = part.strip_prefix("z-index:") {
+                                        if let Ok(index) = value.trim().parse::<i64>() {
+                                            behind_doc = index < 0;
+                                            relative_height = index.clamp(0, u32::MAX as i64) as u32;
+                                        }
+                                    } else if let Some(value) = part.strip_prefix("margin-left:") {
+                                        position.x = parse_css_length(value.trim());
+                                    } else if let Some(value) = part.strip_prefix("margin-top:") {
+                                        position.y = parse_css_length(value.trim());
+                                    } else if let Some(value) = part.strip_prefix("mso-position-horizontal-relative:") {
+                                        position.h_relative = Some(match value.trim() {
+                                            "text" => "column", other => other,
+                                        }.into());
+                                    } else if let Some(value) = part.strip_prefix("mso-position-vertical-relative:") {
+                                        position.v_relative = Some(match value.trim() {
+                                            "text" => "paragraph", other => other,
+                                        }.into());
                                     }
                                 }
                             }
@@ -8958,12 +9190,37 @@ fn parse_ole_object(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "wrap" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "type" {
+                                wrap_type = Some(match attr.value.as_ref() {
+                                    b"square" => WrapType::Square,
+                                    b"tight" => WrapType::Tight,
+                                    b"topAndBottom" => WrapType::TopAndBottom,
+                                    _ => WrapType::None,
+                                });
+                            }
+                        }
+                    }
                     // v:imagedata — the preview image of the OLE object
                     "imagedata" => {
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "r:id" || key.ends_with(":id") {
                                 rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            } else if matches!(key, "croptop" | "cropright" | "cropbottom" | "cropleft") {
+                                let value = String::from_utf8_lossy(&attr.value);
+                                let percent = if let Some(fixed) = value.strip_suffix('f') {
+                                    fixed.parse::<f32>().unwrap_or(0.0) * 100.0 / 65536.0
+                                } else if let Some(percent) = value.strip_suffix('%') {
+                                    percent.parse::<f32>().unwrap_or(0.0)
+                                } else { value.parse::<f32>().unwrap_or(0.0) * 100.0 };
+                                match key {
+                                    "croptop" => crop.top = percent,
+                                    "cropright" => crop.right = percent,
+                                    "cropbottom" => crop.bottom = percent,
+                                    _ => crop.left = percent,
+                                }
                             }
                         }
                     }
@@ -9006,6 +9263,7 @@ fn parse_ole_object(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
             data,
@@ -9013,12 +9271,14 @@ fn parse_ole_object(
             height,
             alt_text: Some("OLE Object".to_string()),
             content_type,
-            position: None,
-            wrap_type: None,
-            crop: None,
+            position: if positioned_ole && absolute { Some(position) } else { None },
+            wrap_type: if positioned_ole && absolute { wrap_type } else { None },
+            crop: if positioned_ole && (crop.top != 0.0 || crop.right != 0.0 || crop.bottom != 0.0 || crop.left != 0.0) {
+                Some(crop)
+            } else { None },
             anchor_block_index: 0,
-            relative_height: 0,
-            behind_doc: false,
+            relative_height: if positioned_ole { relative_height } else { 0 },
+            behind_doc: positioned_ole && behind_doc,
         })
     } else {
         None
@@ -9341,6 +9601,8 @@ fn parse_run_properties(
                             }
                             style.font_family =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
+                        } else if key == "hint" {
+                            style.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
                         } else if key == "eastAsia" {
                             style.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -9480,6 +9742,8 @@ fn parse_run_properties(
                                 }
                                 style.font_family =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
+                            } else if key == "hint" {
+                                style.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
                             } else if key == "eastAsia" {
                                 style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -10636,6 +10900,12 @@ fn parse_table_row(
                         in_row_properties = true;
                         depth += 1;
                     }
+                    "tblHeader" if in_row_properties && depth == 1
+                        && std::env::var("OXI_TABLE_HEADER_BOOL").ok().as_deref() == Some("1") => {
+                        header = !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val"
+                            && matches!(a.value.as_ref(), b"0" | b"false" | b"off"));
+                        drain_element(reader, "tblHeader")?;
+                    }
                     "cantSplit" if in_row_properties && depth == 1
                         && std::env::var("OXI_TABLE_ROW_STYLE_DISABLE").is_err() => {
                         cant_split = !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val"
@@ -10749,7 +11019,9 @@ fn parse_table_row(
                         }
                     }
                     "tblHeader" => {
-                        header = true;
+                        header = std::env::var("OXI_TABLE_HEADER_BOOL").ok().as_deref() != Some("1")
+                            || !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val"
+                                && matches!(a.value.as_ref(), b"0" | b"false" | b"off"));
                     }
                     "cantSplit" => {
                         cant_split = std::env::var("OXI_TABLE_ROW_STYLE_DISABLE").is_ok()
@@ -10894,6 +11166,7 @@ fn parse_table_cell(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
                                 data: Vec::new(),
@@ -10962,7 +11235,8 @@ fn parse_table_cell(
                             // cells differently from body (wrap=topAndBottom
                             // is dominant inside cells), so treating them as
                             // inline-flow images is a reasonable approximation.
-                            for fimg in pr.floating_images {
+                            for mut fimg in pr.floating_images {
+                                fimg.anchor_block_index = cell_para_block_idx;
                                 blocks.push(Block::Image(fimg));
                             }
                         }
@@ -11387,6 +11661,7 @@ struct SectionProperties {
     doc_grid_no_type: bool,
     /// docGrid type == "linesAndChars" (character grid)
     doc_grid_lines_and_chars: bool,
+    grid_char_quantized: bool,
     /// Reference IDs for header parts (with type)
     header_refs: Vec<HdrFtrRef>,
     /// Reference IDs for footer parts (with type)
@@ -11430,6 +11705,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
     let mut char_space_section: Option<i32> = None;
     let mut doc_grid_no_type = false;
     let mut doc_grid_lines_and_chars = false;
+    let mut grid_char_quantized = false;
     let mut header_refs: Vec<HdrFtrRef> = Vec::new();
     let mut footer_refs: Vec<HdrFtrRef> = Vec::new();
     let mut columns: Option<ColumnLayout> = None;
@@ -11649,6 +11925,18 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                         // Preserve the section's declared precision in the IR.
                         // Legacy CJK positioning is handled by the layout engine.
                         let to_pt = |tw: f32| -> f32 { tw / 20.0 };
+                        let parse_margin = |value: &str| -> Result<f32, ()> {
+                            if std::env::var("OXI_PAGE_MARGIN_UNITS").is_ok() {
+                                for (unit, twips) in [("mm", 1440.0 / 25.4), ("cm", 1440.0 / 2.54),
+                                    ("in", 1440.0), ("pt", 20.0), ("pc", 240.0), ("pi", 240.0)] {
+                                    if let Some(number) = value.strip_suffix(unit) {
+                                        let number = number.parse::<f32>().map_err(|_| ())?;
+                                        return if number.is_finite() { Ok((number * twips).round()) } else { Err(()) };
+                                    }
+                                }
+                            }
+                            value.parse::<f32>().map_err(|_| ())
+                        };
                         let s1267 = std::env::var("OXI_S1267_DISABLE").is_err();
                         let mut gutter = 0.0f32;
                         for attr in e.attributes().flatten() {
@@ -11656,7 +11944,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
                                 "top" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_margin(&val) {
                                         // S1267 (2026-09-01, default ON, opt-out
                                         // OXI_S1267_DISABLE): a NEGATIVE top margin
                                         // means "the body starts |top| below the page
@@ -11680,7 +11968,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                     }
                                 }
                                 "bottom" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_margin(&val) {
                                         // Bottom margin: exact twips (no 10tw rounding).
                                         // Word rounds top margin to 10tw for content start Y,
                                         // but uses exact bottom margin for page break limit.
@@ -11693,27 +11981,27 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                     }
                                 }
                                 "left" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_margin(&val) {
                                         margin.left = to_pt(v);
                                     }
                                 }
                                 "right" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_margin(&val) {
                                         margin.right = to_pt(v);
                                     }
                                 }
                                 "gutter" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_margin(&val) {
                                         gutter = to_pt(v);
                                     }
                                 }
                                 "header" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_margin(&val) {
                                         header_distance = Some(to_pt(v));
                                     }
                                 }
                                 "footer" => {
-                                    if let Ok(v) = val.parse::<f32>() {
+                                    if let Ok(v) = parse_margin(&val) {
                                         footer_distance = Some(to_pt(v));
                                     }
                                 }
@@ -11797,6 +12085,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                         //          charsLine = floor(contentWidth / raw_pitch)
                         //          actual_pitch = contentWidth / charsLine
                         // charSpace unit: 1/4096 of a point (ECMA-376 §17.6.5)
+                        grid_char_quantized = s1368_snap;
                         if grid_type == "linesAndChars" || s1368_snap {
                             doc_grid_lines_and_chars = true;
                             // charGrid raw_pitch uses the document's default font size.
@@ -11984,6 +12273,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
         grid_char_space_raw: char_space_section,
         doc_grid_no_type,
         doc_grid_lines_and_chars,
+        grid_char_quantized,
         header_refs,
         footer_refs,
         columns,
@@ -12212,7 +12502,7 @@ fn parse_header_footer_xml(
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let mut pr = parse_paragraph_with_inline_images(&mut reader, ctx, styles, in_footer, false, None, in_footer)?;
+                        let mut pr = parse_paragraph_with_inline_images_context(&mut reader, ctx, styles, in_footer, false, None, in_footer || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some(), !in_footer)?;
                         // S742 (2026-07-04): keep header/footer inline images —
                         // they were silently DROPPED (only pr.paragraph was
                         // pushed), so a header logo contributed no height and
@@ -12270,7 +12560,7 @@ fn parse_header_footer_xml(
                                             false,
                                             false,
                                             None,
-                                            in_footer,
+                                            in_footer || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some(),
                                         )?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
                                     } else if content_depth > 0 && sl == "tbl" {
@@ -12438,8 +12728,21 @@ fn parse_tracked_change_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (parsed_runs, _dr) =
+                    let (mut parsed_runs, drawing) =
                         parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
+                    if std::env::var("OXI_TRACKED_INLINE_IMAGES").ok().as_deref() == Some("1") {
+                        if let Some(image) = drawing.and_then(|d| d.image)
+                            .filter(|image| image.position.is_none())
+                        {
+                            // Keep the image on its revision-bearing run so the
+                            // selected revision view controls both paint and flow.
+                            if let Some(run) = parsed_runs.last_mut() {
+                                run.style.inline_object_extent =
+                                    Some((image.width + image.advance_extra_w, image.height));
+                                run.style.inline_object_image = Some(Box::new(image));
+                            }
+                        }
+                    }
                     // R62 (2026-04-29): parser stores tracked_change ONLY.
                     // Visual styling (underline/strikethrough + author-palette
                     // color) is applied at layout time by R-01
@@ -12809,6 +13112,23 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             alias.insert(name.clone(), "Segoe UI Symbol".to_string());
         }
     }
+    // An unavailable face declared as supporting Japanese uses the Japanese
+    // substitute for Latin text and paragraph marks as well as CJK glyphs.
+    // Supported alternates and installed faces retain precedence.
+    if std::env::var_os("OXI_DECLARED_JAPANESE_FALLBACK").is_some() {
+        for (name, info) in &document.styles.font_table {
+            let japanese = info.charset.as_deref()
+                .and_then(|value| u8::from_str_radix(value, 16).ok()) == Some(0x80)
+                || info.code_page_range.is_some_and(|bits| bits & (1 << 17) != 0);
+            if japanese
+                && !registry.supports_family(name)
+                && crate::font::runtime::resolve(name, false, false).is_none()
+                && !alias.contains_key(name)
+            {
+                alias.insert(name.clone(), "Yu Gothic".to_string());
+            }
+        }
+    }
     // S1133 (2026-08-15, SHIPPED default-ON, opt-out OXI_S1133_DISABLE): a font
     // Word cannot find falls back
     // by its DECLARED `w:family`, not to one fixed face. MEASURED
@@ -12858,6 +13178,22 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
                 && !alias.contains_key(name)
             {
                 alias.insert(name.clone(), "Cambria".to_string());
+            }
+        }
+    }
+    // A declared Latin family classification participates in substitution.
+    // Supported alternates and installed faces take precedence over fallback.
+    if std::env::var("OXI_DECLARED_FONT_FALLBACK").is_ok() {
+        for (name, info) in &document.styles.font_table {
+            if matches!(info.family.as_deref(),
+                None | Some("auto" | "swiss" | "modern" | "script" | "decorative"))
+                && matches!(info.charset.as_deref(), None | Some("00"))
+                && !registry.supports_family(name)
+                && crate::font::runtime::resolve(name, false, false).is_none()
+                && !registry.get(name).is_cjk_83_64_font()
+                && !alias.contains_key(name)
+            {
+                alias.insert(name.clone(), "Calibri".to_string());
             }
         }
     }

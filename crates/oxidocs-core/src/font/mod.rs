@@ -147,6 +147,9 @@ pub fn sym_range_index(c: char) -> Option<usize> {
 /// All widths are expressed as a fraction of the em-square.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FontMetrics {
+    /// Additional normalized advance when Word synthesizes a bold face.
+    #[serde(skip)]
+    pub synthetic_bold_advance: f32,
     pub family: String,
     /// Units per em (e.g. 256 for MS Gothic/Mincho, 2048 for most others)
     #[serde(default = "default_upm")]
@@ -232,7 +235,7 @@ impl FontMetrics {
             } else {
                 0.5
             }
-        })
+        }) + self.synthetic_bold_advance
     }
 
     /// Character width in points at a given font size.
@@ -257,21 +260,27 @@ impl FontMetrics {
             return 0.0;
         }
         let _ppem = (font_size * 96.0 / 72.0).round();
-        let advance_em = self.char_width_em(c);
+        let extra = self.synthetic_bold_advance * font_size;
+        let advance_em = self.char_width_em(c) - self.synthetic_bold_advance;
+        // The Soei collection contains monospaced, proportional, and
+        // proportional-Latin faces. Their measured advances distinguish them.
+        if is_soei_family(&self.family) {
+            return advance_em * font_size + extra;
+        }
 
         // CJK monospace fonts (UPM=256): COM confirmed — fullwidth = fontSize, halfwidth = fontSize/2
         // No GDI pixel rounding; Word uses the point value directly.
         if self.units_per_em == 256 && is_fullwidth(c) {
-            return font_size;
+            return font_size + extra;
         }
         if self.units_per_em == 256 && (is_halfwidth_katakana(c) || advance_em <= 0.51) {
-            return font_size / 2.0;
+            return font_size / 2.0 + extra;
         }
 
         // COM-confirmed (2026-04-14, 13 font/size combos, 181 chars):
         // Word rounds char widths to 10tw (0.5pt), not 1tw.
         let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
-        width_tw / 20.0
+        width_tw / 20.0 + extra
     }
 
     /// Simple line height in points (no pixel rounding).
@@ -542,6 +551,9 @@ impl FontMetrics {
         // 2 cells (36pt) — COM-confirmed gap=36.00 across wi=589..618. That
         // ~0.8-page under-count lost the closing-notes page (Oxi 21 vs Word 22).
         // Opt-out OXI_S580_DISABLE restores the (buggy) Western path.
+        if is_soei_family(&self.family) {
+            return true;
+        }
         if self.family.as_str() == "HGPGothicM" {
             return std::env::var("OXI_S580_DISABLE").is_err();
         }
@@ -559,14 +571,25 @@ impl FontMetrics {
         if self.family.as_str() == "Zen Old Mincho" {
             return std::env::var("OXI_S612Z_DISABLE").is_err();
         }
+        if self.family.starts_with("Malgun Gothic") {
+            return std::env::var_os("OXI_MALGUN_METRICS").is_some();
+        }
+        if self.family.starts_with("DengXian") {
+            return std::env::var_os("OXI_DENGXIAN_METRICS").is_some();
+        }
+        let canonical_family = if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some() {
+            normalize_family_name(&self.family)
+        } else {
+            self.family.clone()
+        };
         if exclude_yu {
             matches!(
-                self.family.as_str(),
+                canonical_family.as_str(),
                 "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho" | "Meiryo"
             )
         } else {
             matches!(
-                self.family.as_str(),
+                canonical_family.as_str(),
                 "MS Gothic"
                     | "MS PGothic"
                     | "MS Mincho"
@@ -618,11 +641,18 @@ impl FontMetrics {
     }
 }
 
+#[derive(Clone, Deserialize)]
+struct VerticalFontMetrics {
+    units_per_em: u16,
+    advances: HashMap<u32, u16>,
+}
+
 /// Registry of font metrics for multiple font families.
 /// Backed by real measurements extracted from Windows system fonts.
 #[derive(Clone)]
 pub struct FontMetricsRegistry {
     fonts: HashMap<String, FontMetrics>,
+    synthetic_bold_fonts: HashMap<String, FontMetrics>,
     default_family: String,
     /// COM-measured line heights: font → size_str → grid_key → height_pt
     com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>>,
@@ -650,6 +680,7 @@ pub struct FontMetricsRegistry {
     /// (legacy kern table, ASCII + curly-quote scope; fontTools-extracted
     /// from the installed fonts, 2026-07-07).
     latin_kern: HashMap<String, HashMap<String, i32>>,
+    vertical_metrics: HashMap<String, VerticalFontMetrics>,
 }
 
 impl FontMetricsRegistry {
@@ -694,8 +725,31 @@ impl FontMetricsRegistry {
         let raw_json = include_str!("data/font_metrics_compact.json");
         #[cfg(not(has_local_font_metrics))]
         let raw_json = include_str!("data/fallback_metrics.json");
-        let raw_list: Vec<RawFontMetrics> =
+        let mut raw_list: Vec<RawFontMetrics> =
             serde_json::from_str(raw_json).expect("embedded font metrics should be valid JSON");
+
+        if std::env::var("OXI_LATIN_ITALIC_METRICS").is_ok() {
+            let italic_faces: Vec<RawFontMetrics> = serde_json::from_str(
+                include_str!("data/latin_italic_metrics.json")
+            ).expect("embedded italic metrics should be valid JSON");
+            raw_list.extend(italic_faces);
+        }
+
+        if std::env::var("OXI_PGOTHIC_FACE_METRICS").as_deref() == Ok("1") {
+            let widths: HashMap<u32, u16> = serde_json::from_str(
+                include_str!("data/pgothic_face_widths.json")
+            ).expect("embedded proportional Gothic widths should be valid JSON");
+            if let Some(face) = raw_list.iter_mut().find(|face| face.family == "MS PGothic") {
+                face.widths.extend(widths);
+            }
+        }
+
+        if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() {
+            let faces: Vec<RawFontMetrics> = serde_json::from_str(
+                include_str!("data/soei_face_metrics.json")
+            ).expect("embedded Soei face metrics should be valid JSON");
+            raw_list.extend(faces);
+        }
 
         let mut fonts = HashMap::new();
 
@@ -741,6 +795,14 @@ impl FontMetricsRegistry {
         ];
 
         for raw in raw_list {
+            if raw.family.starts_with("DengXian") && std::env::var_os("OXI_DENGXIAN_METRICS").is_none() {
+                continue;
+            }
+            if raw.family.starts_with("Malgun Gothic")
+                && std::env::var_os("OXI_MALGUN_METRICS").is_none() {
+                continue;
+            }
+
             if skip_s1140 && S1140_FAMILIES.contains(&raw.family.as_str()) {
                 continue;
             }
@@ -782,6 +844,7 @@ impl FontMetricsRegistry {
             }
 
             let metrics = FontMetrics {
+                synthetic_bold_advance: 0.0,
                 family: raw.family.clone(),
                 units_per_em: raw.units_per_em,
                 ascent,
@@ -806,6 +869,18 @@ impl FontMetricsRegistry {
             if base != raw.family {
                 fonts.entry(base).or_insert(metrics);
             }
+        }
+
+        if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() {
+            // Replace legacy alias entries as well as canonical entries: exact
+            // name lookup otherwise returns the older, incomplete width table.
+            let aliases: Vec<_> = fonts.keys().filter_map(|name| {
+                let canonical = normalize_family_name(name);
+                if is_soei_family(&canonical) {
+                    fonts.get(&canonical).cloned().map(|metrics| (name.clone(), metrics))
+                } else { None }
+            }).collect();
+            fonts.extend(aliases);
         }
 
         // S579 (2026-06-15): HGPｺﾞｼｯｸM (HG Proportional Gothic M) — synthesize a
@@ -844,6 +919,7 @@ impl FontMetricsRegistry {
         if std::env::var("OXI_S990B_DISABLE").is_err() {
             if let Some(calibri) = fonts.get("Calibri").cloned() {
                 let gill = FontMetrics {
+                    synthetic_bold_advance: 0.0,
                     family: "Gill Sans Nova".to_string(),
                     units_per_em: 2048,
                     ascent: 2054.0 / 2048.0,
@@ -992,13 +1068,41 @@ impl FontMetricsRegistry {
 
         // Latin kern pairs (KERNBREAK: Word breaks kern-active Latin text at
         // em + kern; db9ca derivation 2026-07-07).
-        let latin_kern: HashMap<String, HashMap<String, i32>> = {
+        let mut latin_kern: HashMap<String, HashMap<String, i32>> = {
             let kern_json = include_str!("data/latin_kern_pairs.json");
             serde_json::from_str(kern_json).unwrap_or_default()
         };
 
+        if std::env::var_os("OXI_YU_GOTHIC_KERN").is_some() {
+            // GPOS kern-feature advances, in the same 2048-unit coordinates
+            // as the corresponding font metrics. Used by layout and painting.
+            let yu_pairs: HashMap<String, HashMap<String, i32>> =
+                serde_json::from_str(include_str!("data/yu_gothic_kern_pairs.json"))
+                    .expect("valid bundled Yu Gothic kerning metrics");
+            latin_kern.extend(yu_pairs);
+        }
+
+        let vertical_metrics = if std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some() {
+            serde_json::from_str(include_str!("data/vertical_font_metrics.json"))
+                .expect("valid bundled vertical font metrics")
+        } else {
+            HashMap::new()
+        };
+
+        let mut synthetic_bold_fonts = HashMap::new();
+        if std::env::var_os("OXI_CJK_SYNTHETIC_BOLD").is_some() {
+            for metrics in fonts.values() {
+                if metrics.units_per_em == 256 || metrics.family == "Yu Mincho Regular" {
+                    let mut synthetic = metrics.clone();
+                    synthetic.synthetic_bold_advance = 1.0 / f32::from(metrics.units_per_em);
+                    synthetic_bold_fonts.insert(metrics.family.clone(), synthetic);
+                }
+            }
+        }
+
         Self {
             fonts,
+            synthetic_bold_fonts,
             default_family: "Calibri".to_string(),
             com_line_heights,
             gdi_widths,
@@ -1007,6 +1111,7 @@ impl FontMetricsRegistry {
             com_twips_widths,
             lm0_lineauto_base,
             latin_kern,
+            vertical_metrics,
         }
     }
 
@@ -1016,6 +1121,13 @@ impl FontMetricsRegistry {
     /// Falls back to None for fonts/sizes not in the table.
     /// Kern adjustment (in em units) for the pair (a, b) in `family`'s
     /// legacy kern table; 0.0 when absent.
+    /// Vertical advance after the font's vertical glyph substitution.
+    pub fn vertical_advance_pt(&self, family: &str, ch: char, font_size: f32) -> Option<f32> {
+        let table = self.vertical_metrics.get(family)?;
+        let advance = table.advances.get(&(ch as u32))?;
+        (table.units_per_em > 0).then(|| *advance as f32 * font_size / table.units_per_em as f32)
+    }
+
     pub fn latin_kern_em(&self, family: &str, upm: u16, a: char, b: char) -> f32 {
         self.latin_kern
             .get(family)
@@ -1180,7 +1292,23 @@ impl FontMetricsRegistry {
         self.fonts.contains_key(&format!("{}{}", base, suffix))
     }
 
+    fn get_regular_with_synthetic_bold(&self, family: &str, bold: bool) -> &FontMetrics {
+        let regular = self.get(family);
+        if bold {
+            if let Some(synthetic) = self.synthetic_bold_fonts.get(&regular.family) {
+                return synthetic;
+            }
+        }
+        regular
+    }
+
     pub fn get_with_style(&self, family: &str, bold: bool, italic: bool) -> &FontMetrics {
+        if std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some()
+            && normalize_family_name(family) == "Yu Mincho Regular"
+        {
+            return self.get_regular_with_synthetic_bold(family, bold);
+        }
+
         if italic && std::env::var("OXI_ITALIC_METRICS_DISABLE").is_err() {
             let normalized = normalize_family_name(family);
             let base = if normalized.ends_with(" Regular") {
@@ -1235,6 +1363,12 @@ impl FontMetricsRegistry {
     /// When bold is true and a "{family} Bold" or "{family} Demibold" variant exists,
     /// return that variant's metrics; otherwise fall back to the regular variant.
     pub fn get_with_bold(&self, family: &str, bold: bool) -> &FontMetrics {
+        if std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some()
+            && normalize_family_name(family) == "Yu Mincho Regular"
+        {
+            return self.get_regular_with_synthetic_bold(family, bold);
+        }
+
         if bold {
             // Try Bold variant first
             let normalized = normalize_family_name(family);
@@ -1259,7 +1393,7 @@ impl FontMetricsRegistry {
                 return m;
             }
         }
-        self.get(family)
+        self.get_regular_with_synthetic_bold(family, bold)
     }
 
     /// Get metrics for a font family. Falls back to default (Calibri) if not found.
@@ -1415,9 +1549,20 @@ impl FontMetricsRegistry {
         font_size: f32,
         metrics: &FontMetrics,
     ) -> f32 {
+        if is_soei_family(&metrics.family) {
+            return metrics.char_width_pt(c, font_size);
+        }
+
         // S1330: zero-width format characters advance nothing on every path.
         if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
             return 0.0;
+        }
+        if metrics.synthetic_bold_advance > 0.0 {
+            // Resolve the original face so each path applies the synthetic
+            // advance once, after its normal hinting/fallback calculation.
+            let regular = self.get(&metrics.family);
+            return self.char_width_pt_with_fallback(c, font_size, regular)
+                + metrics.synthetic_bold_advance * font_size;
         }
         // S888/S892: see char_width_pt_with_gdi_map — U+2011 = the hyphen
         // glyph, U+00A0 = the space advance.
@@ -1553,9 +1698,20 @@ impl FontMetricsRegistry {
         metrics: &FontMetrics,
         gdi_map: Option<&HashMap<u32, u32>>,
     ) -> f32 {
+        if is_soei_family(&metrics.family) {
+            return metrics.char_width_pt(c, font_size);
+        }
+
         // S1330: zero-width format characters advance nothing on every path.
         if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
             return 0.0;
+        }
+        if metrics.synthetic_bold_advance > 0.0 {
+            // Resolve the original face so each path applies the synthetic
+            // advance once, after its normal hinting/fallback calculation.
+            let regular = self.get(&metrics.family);
+            return self.char_width_pt_with_gdi_map(c, font_size, regular, gdi_map)
+                + metrics.synthetic_bold_advance * font_size;
         }
         // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen mapping)
         // renders with the ordinary hyphen glyph in Word (same advance).
@@ -1691,8 +1847,13 @@ fn is_cjk_or_symbol(c: char) -> bool {
 }
 
 /// Check if a font family is a CJK font (has native CJK glyphs).
+fn is_soei_family(family: &str) -> bool {
+    matches!(family, "HGSoeiKakugothicUB" | "HGPSoeiKakugothicUB" | "HGSSoeiKakugothicUB")
+        && std::env::var_os("OXI_SOEI_FACE_METRICS").is_some()
+}
+
 fn is_cjk_font_family(family: &str) -> bool {
-    matches!(
+    is_soei_family(family) || matches!(
         family,
         "MS Gothic"
             | "MS Mincho"
@@ -1868,6 +2029,13 @@ fn normalize_family_name(name: &str) -> String {
         }
     }
     match name {
+        "Yu Mincho" if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some()
+            || std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some() => "Yu Mincho Regular".to_string(),
+        "等线" if std::env::var_os("OXI_DENGXIAN_METRICS").is_some() => "DengXian".to_string(),
+        "맑은 고딕" if std::env::var_os("OXI_MALGUN_METRICS").is_some() => "Malgun Gothic".to_string(),
+        "HG創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() => "HGSoeiKakugothicUB".to_string(),
+        "HGP創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() => "HGPSoeiKakugothicUB".to_string(),
+        "HGS創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() => "HGSSoeiKakugothicUB".to_string(),
         // S831 (2026-07-13): CG Times is the PCL metric CLONE of Times New
         // Roman; Windows FontSubstitutes resolves it to TNR and Word renders
         // TNR metrics. The comment on is_metric_incompatible_substitution
