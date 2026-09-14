@@ -1362,6 +1362,9 @@ pub enum RubyAlign {
 /// Ruby (furigana) annotation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ruby {
+    /// Explicit font families used by annotation runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotation_fonts: Vec<String>,
     /// Base text (the main character(s))
     pub base: String,
     /// Annotation text (furigana reading)

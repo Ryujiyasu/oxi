@@ -751,6 +751,13 @@ impl FontMetricsRegistry {
             raw_list.extend(faces);
         }
 
+        if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() {
+            let faces: Vec<RawFontMetrics> = serde_json::from_str(
+                include_str!("data/soei_pop_metrics.json")
+            ).expect("embedded Soei Pop face metrics should be valid JSON");
+            raw_list.extend(faces);
+        }
+
         let mut fonts = HashMap::new();
 
         // S786 (2026-07-11): the 'Symbol' registry entry (real symbol.ttf
@@ -871,7 +878,8 @@ impl FontMetricsRegistry {
             }
         }
 
-        if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() {
+        if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some()
+            || std::env::var_os("OXI_SOEI_POP_METRICS").is_some() {
             // Replace legacy alias entries as well as canonical entries: exact
             // name lookup otherwise returns the older, incomplete width table.
             let aliases: Vec<_> = fonts.keys().filter_map(|name| {
@@ -1850,6 +1858,8 @@ fn is_cjk_or_symbol(c: char) -> bool {
 fn is_soei_family(family: &str) -> bool {
     matches!(family, "HGSoeiKakugothicUB" | "HGPSoeiKakugothicUB" | "HGSSoeiKakugothicUB")
         && std::env::var_os("OXI_SOEI_FACE_METRICS").is_some()
+        || matches!(family, "HGSoeiKakupoptai" | "HGPSoeiKakupoptai" | "HGSSoeiKakupoptai")
+            && std::env::var_os("OXI_SOEI_POP_METRICS").is_some()
 }
 
 fn is_cjk_font_family(family: &str) -> bool {
@@ -2029,6 +2039,9 @@ fn normalize_family_name(name: &str) -> String {
         }
     }
     match name {
+        "HG創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() => "HGSoeiKakupoptai".to_string(),
+        "HGP創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() => "HGPSoeiKakupoptai".to_string(),
+        "HGS創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() => "HGSSoeiKakupoptai".to_string(),
         "Yu Mincho" if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some()
             || std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some() => "Yu Mincho Regular".to_string(),
         "等线" if std::env::var_os("OXI_DENGXIAN_METRICS").is_some() => "DengXian".to_string(),

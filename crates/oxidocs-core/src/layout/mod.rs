@@ -4247,6 +4247,39 @@ impl LayoutEngine {
     /// predated the S772-S774 hmrc fixes — re-verified clean. JP docs are
     /// unaffected BY CONSTRUCTION: their docDefaults eastAsia lang is CJK →
     /// S763c keeps the eastAsia chain for quotes (same as legacy).
+    fn ruby_expansion_for_runs(
+        &self, runs: &[Run], default_size: f32, para_style: &ParagraphStyle,
+    ) -> f32 {
+        if std::env::var_os("OXI_RUBY_FONT_ASCENT").is_none() {
+            return ruby::paragraph_ruby_expansion_pt(runs, default_size);
+        }
+        runs.iter().filter_map(|run| {
+            let ruby = run.ruby.as_ref()?;
+            let size = run.style.font_size.unwrap_or(default_size);
+            let annotation_size = ruby.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(size / 2.0);
+            let base = self.metrics_for_text(&run.text, &run.style, para_style);
+            let annotations: Vec<_> = if ruby.annotation_fonts.is_empty() {
+                vec![self.metrics_for_text(&ruby.text, &run.style, para_style)]
+            } else {
+                ruby.annotation_fonts.iter().map(|name| self.registry.get(name)).collect()
+            };
+            if !base.is_cjk_83_64_font()
+                || annotations.iter().any(|font| !font.is_cjk_83_64_font()) {
+                return Some(ruby::ruby_expansion_pt(ruby, size));
+            }
+            let ascent = |font: &FontMetrics, fs: f32| {
+                let internal = (font.win_ascent + font.win_descent) * fs;
+                font.win_ascent * fs
+                    + (font.word_line_height_no_grid(fs) - internal).max(0.0) / 2.0
+            };
+            let annotation_ascent = annotations.iter()
+                .map(|font| ascent(font, annotation_size)).fold(0.0_f32, f32::max);
+            Some(ruby::ruby_expansion_with_ascents(
+                ruby, size, ascent(base, size), annotation_ascent,
+            ))
+        }).fold(0.0_f32, f32::max)
+    }
+
     fn metrics_for_text(
         &self,
         text: &str,
@@ -4840,6 +4873,12 @@ impl LayoutEngine {
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
                     .sum();
+
+                if std::env::var_os("OXI_DEBUG_FIT_GROUP").is_some() {
+                    eprintln!("[FIT_GROUP] id={} target={} natural={} count={} runs={:?}",
+                        group_id, target_w, natural_w, char_count,
+                        runs[start..i].iter().map(|run| (&run.text, &run.style)).collect::<Vec<_>>());
+                }
 
                 // Restore original cs before overriding
                 for (idx, run) in runs[start..i].iter_mut().enumerate() {
@@ -5876,7 +5915,7 @@ impl LayoutEngine {
             // its own runs measures, and the whole answer when S1296 is off.
             let nat_base = mark_m.word_line_height_no_grid(mark_fs);
             let nat_para = run_nat.iter().fold(nat_base, |a, b| a.max(*b))
-                + ruby::paragraph_ruby_expansion_pt(&para.runs, fs);
+                + self.ruby_expansion_for_runs(&para.runs, fs, &para.style);
             let cells_of = |nat: f32| -> f32 {
                 match page.grid_line_pitch {
                     Some(grid) if s1185_on => {
@@ -5904,7 +5943,7 @@ impl LayoutEngine {
                 if nat <= 0.0 {
                     nat = nat_base;
                 }
-                nat += ruby::paragraph_ruby_expansion_pt(&para.runs[a..=b], fs);
+                nat += self.ruby_expansion_for_runs(&para.runs[a..=b], fs, &para.style);
                 pitch_of(cells_of(nat))
             };
             let pitch = pitch_of(cells_of(nat_para));
@@ -8092,7 +8131,7 @@ cells={} pitch={:.2} text={:?}",
                                 tp.x,
                                 tp.dist_l.unwrap_or(9.0),
                                 tp.dist_r.unwrap_or(9.0),
-                                s981_physical,
+                                s981_physical || self.legacy_square_textbox_clamp(tb),
                                 tb.wrap_type == Some(crate::ir::WrapType::Tight),
                                 tp.h_relative.as_deref() == Some("column"),
                             ));
@@ -8134,7 +8173,10 @@ cells={} pitch={:.2} text={:?}",
                 let s758_needs_push =
                     s758_srcs
                         .iter()
-                        .any(|(py, _w, h, _a, _x, _dl, _dr, physical, _, _)| {
+                        .any(|(py, _w, h, _a, _x, _dl, _dr, physical, tight, _)| {
+                            // Legacy square text boxes keep their anchor and may
+                            // move above it to remain within the physical page.
+                            if *physical && !*tight { return false; }
                             // S981: a physical (behindDoc Tight) source is fit against the
                             // physical page bottom — it may use the bottom margin.
                             let fit_bottom = if *physical {
@@ -8225,7 +8267,8 @@ cells={} pitch={:.2} text={:?}",
                     // derived rule branch (a): clamp an overflowing float up
                     // against the content bottom (never above the anchor).
                     let top = if nat_top + h > cb {
-                        (cb - h).max(s758_anchor_y)
+                        if *physical && !*tight { (cb - h).max(0.0) }
+                        else { (cb - h).max(s758_anchor_y) }
                     } else {
                         nat_top
                     };
@@ -8250,7 +8293,7 @@ cells={} pitch={:.2} text={:?}",
                     // the consumer picks one band by `.find()`, so without the
                     // union the following lines rebreak at the Square's shorter
                     // bottom and ignore the Tight extent.
-                    if *physical {
+                    if *physical && *tight {
                         if let Some(b) = s758_bands.iter_mut().rev().find(|b| {
                             b.0 == nb.0
                                 && nb.1 <= b.2 + 0.5
@@ -15218,6 +15261,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     }
 
     /// Resolve absolute (x, y) position for a text box based on its anchor references.
+    fn legacy_square_textbox_clamp(&self, text_box: &TextBox) -> bool {
+        std::env::var_os("OXI_LEGACY_SQUARE_TEXTBOX_CLAMP").is_some()
+            && self.compat_mode <= 14
+            && text_box.wrap_type == Some(crate::ir::WrapType::Square)
+            && text_box.position.as_ref().map_or(false, |pos| {
+                pos.v_relative.as_deref() == Some("paragraph") && pos.y >= 0.0
+            })
+    }
+
     fn resolve_textbox_position(
         &self,
         text_box: &TextBox,
@@ -15333,7 +15385,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // column 2 -- confirms the S1222 column reference at 1150.9, i.e. Word
         // keeps a box whose right edge is 800pt past the page.
         let s1268 = std::env::var("OXI_S1268_DISABLE").is_err();
-        let abs_y = if !s1268 && abs_y + text_box.height > page.size.height {
+        let abs_y = if (!s1268 || self.legacy_square_textbox_clamp(text_box))
+            && abs_y + text_box.height > page.size.height {
             (page.size.height - text_box.height).max(0.0)
         } else {
             abs_y
@@ -19481,7 +19534,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Greenfield-dormant: 0/177 baseline docs use w:ruby, so this is
         // 0.0 for all baseline paragraphs. Used at last-line cursor advance
         // and gates ruby-annotation emission below.
-        let ruby_para_expansion_pt = ruby::paragraph_ruby_expansion_pt(&para.runs, para_font_size);
+        let ruby_para_expansion_pt = self.ruby_expansion_for_runs(&para.runs, para_font_size, &para.style);
 
         // Round 7.7: ruby atomic-wrap budget (conservative).
         // When a run has ruby_w > base_w (V2 case "とくてい" 22pt over
@@ -36123,7 +36176,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && pitch > 0.0
                     && content_width > pitch =>
             {
-                let out = (content_width / pitch).floor() * pitch;
+                let out = if std::env::var_os("OXI_GRID_FLOOR_TWIPS").is_some() {
+                    // Compare grid boundaries in document twips. The content
+                    // width comes from integer OOXML dimensions, while a grid
+                    // cell can occupy a fractional twip. Quantize the complete
+                    // boundary, not each cell, so integer boundaries remain exact.
+                    let width_tw = (f64::from(content_width) * 20.0).round();
+                    let pitch_tw = f64::from(pitch) * 20.0;
+                    let cells = (width_tw / pitch_tw).floor();
+                    let next_boundary_tw = ((cells + 1.0) * pitch_tw).floor();
+                    let boundary_tw = if next_boundary_tw <= width_tw {
+                        next_boundary_tw
+                    } else {
+                        (cells * pitch_tw).floor()
+                    };
+                    (boundary_tw / 20.0) as f32
+                } else {
+                    (content_width / pitch).floor() * pitch
+                };
                 self.s1318_floor_slack.set(content_width - out);
                 if std::env::var("OXI_DBG_FLOORW").is_ok() && (out - content_width).abs() > 0.01 {
                     let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
@@ -44503,7 +44573,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             && line.iter().any(|t| t.15)
                                         {
                                             let s1312_fs = self.resolve_font_size(&RunStyle::default(), &para.style);
-                                            lh += ruby::paragraph_ruby_expansion_pt(&para.runs, s1312_fs);
+                                            lh += self.ruby_expansion_for_runs(&para.runs, s1312_fs, &para.style);
                                         }
 
                                         // S1125 (2026-08-15, opt-out OXI_S1125_DISABLE): a CELL
@@ -52336,7 +52406,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // bearing paragraphs (V1-V10 fixtures), it adds the calibrated
             // expansion to make pagination match Word's larger paragraph box.
             let para_default_pt = self.resolve_font_size(&RunStyle::default(), &para.style);
-            let ruby_exp = ruby::paragraph_ruby_expansion_pt(&para.runs, para_default_pt);
+            let ruby_exp = self.ruby_expansion_for_runs(&para.runs, para_default_pt, &para.style);
             // Exact cell spacing already bounds the ruby line; annotation does not grow flow.
             if ruby_exp > 0.0
                 && !(in_cell && eff_lr == Some("exact")

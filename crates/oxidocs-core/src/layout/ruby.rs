@@ -110,6 +110,15 @@ pub const HPS_ASCENT_RATIO: f32 = 0.75;
 /// `base_pt` is the base text font size, used to derive defaults
 /// when `hps_halfpt` is unset and as the scaling input for the
 /// line-box ascent.
+pub fn ruby_expansion_with_ascents(
+    ruby: &Ruby, base_pt: f32, base_ascent: f32, annotation_ascent: f32,
+) -> f32 {
+    let hps = ruby.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(base_pt / 2.0);
+    let raise = ruby.hps_raise_halfpt.map(|h| h as f32 / 2.0)
+        .unwrap_or_else(|| default_hps_raise_pt(base_pt, hps));
+    (raise + annotation_ascent - base_ascent).max(0.0)
+}
+
 pub fn ruby_expansion_pt(ruby: &Ruby, base_pt: f32) -> f32 {
     let hps_pt = ruby.hps_halfpt
         .map(|h| h as f32 / 2.0)
@@ -241,6 +250,7 @@ mod tests {
 
     fn ruby(hps: Option<u32>, raise: Option<u32>) -> Ruby {
         Ruby {
+            annotation_fonts: Vec::new(),
             base: "漢字".into(),
             text: "かんじ".into(),
             font_size: hps.map(|h| h as f32 / 2.0),
@@ -323,6 +333,7 @@ mod tests {
         ];
         for (base_pt, raise_halfpt, hps_halfpt, predicted, measured) in cases {
             let r = Ruby {
+                annotation_fonts: Vec::new(),
                 base: "x".into(),
                 text: "y".into(),
                 font_size: Some(hps_halfpt as f32 / 2.0),
@@ -387,6 +398,7 @@ mod tests {
             // End-to-end via ruby_expansion_pt with raise=None: prediction
             // matches V13 measured within ±0.5pt §18.9 (c) tolerance.
             let r = Ruby {
+                annotation_fonts: Vec::new(),
                 base: "x".into(),
                 text: "y".into(),
                 font_size: Some(hps_pt),
@@ -441,6 +453,7 @@ mod tests {
             // formula and compare against V13's measured value within
             // ±0.5pt rounding (the spec §18.9 (c) tolerance).
             let r = Ruby {
+                annotation_fonts: Vec::new(),
                 base: "x".into(),
                 text: "y".into(),
                 font_size: Some(hps_pt),
@@ -564,6 +577,7 @@ mod tests {
     fn paragraph_ruby_expansion_takes_max_across_runs() {
         use crate::ir::{Run, RunStyle};
         let r1 = Ruby {
+            annotation_fonts: Vec::new(),
             base: "a".into(),
             text: "x".into(),
             font_size: Some(5.5),
@@ -599,6 +613,7 @@ mod tests {
         // r2 has bigger raise → bigger expansion; max picks it.
         let r2_only = ruby_expansion_pt(
             &Ruby {
+                annotation_fonts: Vec::new(),
                 base: "a".into(), text: "x".into(), font_size: Some(5.5),
                 align: Some(RubyAlign::Center),
                 hps_halfpt: Some(11), hps_raise_halfpt: Some(36),

@@ -12779,6 +12779,7 @@ fn parse_tracked_change_runs(
 /// rubyAlign, hps, hpsRaise, hpsBaseText, lid (per ECMA-376 §17.3.3.25).
 /// Geometry rules in spec/word_layout_spec_ra.md §18.
 fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
+    let mut annotation_fonts = Vec::new();
     let mut base_text = String::new();
     let mut ruby_text = String::new();
     let mut ruby_font_size: Option<f32> = None;
@@ -12806,6 +12807,21 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if in_rt && local == "rFonts" {
+                    let mut latin = None;
+                    let mut east_asia = None;
+                    for attr in e.attributes().flatten() {
+                        let value = attr.unescape_value().unwrap_or_default().into_owned();
+                        match local_name(attr.key.as_ref()).as_str() {
+                            "eastAsia" => east_asia = Some(value),
+                            "ascii" | "hAnsi" => latin = Some(value),
+                            _ => {}
+                        }
+                    }
+                    if let Some(family) = east_asia.or(latin) {
+                        if !annotation_fonts.contains(&family) { annotation_fonts.push(family); }
+                    }
+                }
                 match local.as_str() {
                     "rt" if depth == 0 => {
                         in_rt = true;
@@ -12835,6 +12851,21 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
+                if in_rt && local == "rFonts" {
+                    let mut latin = None;
+                    let mut east_asia = None;
+                    for attr in e.attributes().flatten() {
+                        let value = attr.unescape_value().unwrap_or_default().into_owned();
+                        match local_name(attr.key.as_ref()).as_str() {
+                            "eastAsia" => east_asia = Some(value),
+                            "ascii" | "hAnsi" => latin = Some(value),
+                            _ => {}
+                        }
+                    }
+                    if let Some(family) = east_asia.or(latin) {
+                        if !annotation_fonts.contains(&family) { annotation_fonts.push(family); }
+                    }
+                }
                 if !in_ruby_pr {
                     continue;
                 }
@@ -12921,6 +12952,7 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
     }
 
     Ok(Ruby {
+        annotation_fonts,
         base: base_text,
         text: ruby_text,
         font_size: ruby_font_size,
