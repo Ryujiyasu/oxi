@@ -50320,9 +50320,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // heading's own space-before + the first-row orphan rule), and the
                 // pair is gate-clean — EN 215 PASS unchanged with no PASS→FAIL, JP
                 // 92, SSIM 238 byte-identical.
+                // S1422 (2026-09-16, default ON, opt-out OXI_MODERN_AUTO_TABLES_DISABLE):
+                // the checkpoint's opt-in promoted -- a compat-15 body autofit
+                // table whose grid overflows the text area is redistributed
+                // (S1126) in CJK documents too. reports__1c313df3: grid 534 /
+                // 4677 / 3491 tw = 435.1pt over a 425.2pt body; Word COM
+                // Cell.Width 26.25 / 228.0 / 170.45, Oxi kept the 233.85 middle
+                // column and wrapped its cell text one line short. With the
+                // redistribution Oxi gives 26.27 / 228.06 / 170.37. Env gates:
+                // ja 188 same, golden 185 same.
                 let modern_auto = self.compat_mode >= 15
                     && !is_nested && s1126_dxa
-                    && std::env::var("OXI_MODERN_AUTO_TABLES").ok().as_deref() == Some("1");
+                    && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none();
                 let s1126 = std::env::var("OXI_S1126_DISABLE").is_err()
                     && !is_nested
                     && s1126_dxa
