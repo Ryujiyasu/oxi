@@ -974,6 +974,23 @@ pub struct FloatingPosition {
     /// wrapSquare keep-out distance right of the float (wp:anchor distR, pt)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dist_r: Option<f32>,
+    /// S1411: keep-out distance above the float (wp:anchor distT, pt)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dist_t: Option<f32>,
+    /// S1411: keep-out distance below the float (wp:anchor distB, pt)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dist_b: Option<f32>,
+    /// S1411: wp:effectExtent per side (pt) -- Word's wrap box is the extent
+    /// grown by these (an ellipse's 2.25pt outline shadow took a vertical
+    /// strip's room from 20.2 to 17.96 and Word skipped it).
+    #[serde(default)]
+    pub eff_l: f32,
+    #[serde(default)]
+    pub eff_r: f32,
+    #[serde(default)]
+    pub eff_t: f32,
+    #[serde(default)]
+    pub eff_b: f32,
 }
 
 /// Text wrapping mode for floating elements
@@ -1141,6 +1158,10 @@ pub struct Shape {
     /// How surrounding text flows around this floating shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrap_type: Option<WrapType>,
+    /// S1411: the wp:anchor wrap kind as written, kept whether or not the
+    /// DrawingML shape-wrap opt-in copies it into `wrap_type`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_wrap: Option<WrapType>,
     /// Shape type (e.g. "rect", "ellipse", "roundRect", "line", "arrow", etc.)
     pub shape_type: String,
     /// Width in points

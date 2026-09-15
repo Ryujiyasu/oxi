@@ -1914,6 +1914,17 @@ pub struct LayoutPage {
 }
 /// S1290: one paragraph's shared column properties, measured once in the
 /// vertical writer's Phase A and referenced by each of the columns it fills.
+/// S1411: one wrapped anchor on a vertical page, keep-out distances applied.
+/// `wall` = wrapTopAndBottom: the strip is blocked whatever room is left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct VertObstacle {
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+    wall: bool,
+}
+
 struct VertParaRecipe {
     style: RunStyle,
     fs: f32,
@@ -1938,6 +1949,10 @@ struct VertColumn {
     blank: bool,
     /// This column carries the paragraph's `<w:pageBreakBefore/>` (S1165).
     hard_break: bool,
+    /// S1413: an inline image block -- a column as wide as the image, needing
+    /// the image's height of room (2970ce67 p2: the 145.7pt canvas does not
+    /// fit band 3's remaining 145.5pt and opens band 4).
+    image: bool,
 }
 
 // Natural text coordinates are retained until the table's row boundaries
@@ -5072,7 +5087,12 @@ impl LayoutEngine {
     /// 015355870669f8d3 laid its 3-band and 2-band pages out with ONE band and
     /// ran a page long (pcd +1). The machinery was already here; only the value
     /// never arrived.
-    fn layout_page_vertical(&self, page: &Page) -> Vec<LayoutPage> {
+    fn layout_page_vertical_pass(
+        &self,
+        page: &Page,
+        obstacles: &[Vec<VertObstacle>],
+        block_starts_out: &mut Vec<Option<(usize, f32, f32)>>,
+    ) -> Vec<LayoutPage> {
         let page_w = page.size.width;
         let page_h = page.size.height;
         let left = page.margin.left;
@@ -5096,6 +5116,9 @@ impl LayoutEngine {
         // line grid), falling back to ~1.2em.
         let page_pitch = page.grid_line_pitch.unwrap_or(self.default_font_size * 1.2);
 
+        if std::env::var_os("OXI_DBG_VCOLS").is_some() {
+            eprintln!("[VPASS] obstacles={}", obstacles.iter().map(|v| v.len()).sum::<usize>());
+        }
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut pages_out: Vec<LayoutPage> = Vec::new();
         // `avail_right` = the right edge available to the next COLUMN. A section
@@ -5223,21 +5246,111 @@ impl LayoutEngine {
                 let mut k = i;
                 let mut max_used = 0.0f32;
                 for b in 0..num_bands {
-                    let mut used = 0.0f32;
-                    while k < chunk_end && used + cols[k].pitch <= avail + 0.01 {
+                    // S1411 (2026-09-15, opt-out OXI_VERTICAL_WRAP_DISABLE): walk the
+                    // band's strips right-to-left around the page's wrapped
+                    // anchors. Measured on tests/fixtures/vertwrap (26 arms,
+                    // Word COM): a strip that overlaps an anchor's keep-out box
+                    // keeps its grid slot and starts below (or above) the anchor
+                    // when the free run of the band is at least one grid
+                    // pitch; with less room -- or under wrapTopAndBottom
+                    // whatever the room -- the strip is a WALL and the grid
+                    // restarts at the anchor's left keep-out edge (right_full:
+                    // shape at page x 354, distL 9 -> strips from 345; band1_x:
+                    // 0.6pt of room -> the 5 strips left of it hug x=145).
+                    let obs: &[VertObstacle] = obstacles
+                        .get(pages_out.len())
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
+                    let b_top = band_top(b);
+                    let b_bot = b_top + band_h;
+                    let mut x = avail_right;
+                    let _ = avail;
+                    while k < chunk_end {
+                        let pitch = cols[k].pitch;
+                        if x - pitch < left - 0.01 {
+                            break;
+                        }
+                        let sx0 = x - pitch;
+                        let hit: Vec<&VertObstacle> = obs
+                            .iter()
+                            .filter(|o| {
+                                o.x1 > sx0 + 0.01 && o.x0 < x - 0.01 && o.y1 > b_top + 0.01 && o.y0 < b_bot - 0.01
+                            })
+                            .collect();
+                        let mut place_y = b_top;
+                        let need = if cols[k].image {
+                            match &page.blocks[recipes[cols[k].recipe].block_idx] {
+                                Block::Image(img) => img.height.max(page_pitch),
+                                _ => page_pitch,
+                            }
+                        } else {
+                            page_pitch
+                        };
+                        if !hit.is_empty() {
+                            let mut room: Option<f32> = None;
+                            if !hit.iter().any(|o| o.wall) {
+                                // Word's band grid is integer twips with the band
+                                // height floored (2452 of 2452.4): the gap under an
+                                // ellipse is 9644 - 9285 = 359 twips and a 360-twip
+                                // line does not go there, though in points it reads
+                                // 18.01. The probe's exact 360 (top_R18) passes.
+                                let tw = |v: f32| (v * 20.0).round();
+                                let bh_tw = (band_h * 20.0).floor();
+                                let bt_tw = tw(top) + b as f32 * (bh_tw + tw(band_space));
+                                let bb_tw = bt_tw + bh_tw;
+                                let need_tw = tw(need);
+                                let mut cuts: Vec<(f32, f32)> = hit
+                                    .iter()
+                                    .map(|o| (tw(o.y0).max(bt_tw), tw(o.y1).min(bb_tw)))
+                                    .collect();
+                                cuts.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap_or(std::cmp::Ordering::Equal));
+                                let mut cur = bt_tw;
+                                for (c0, c1) in cuts {
+                                    if c0 - cur >= need_tw {
+                                        room = Some(if cur == bt_tw { b_top } else { cur / 20.0 });
+                                        break;
+                                    }
+                                    cur = cur.max(c1);
+                                }
+                                if room.is_none() && bb_tw - cur >= need_tw {
+                                    room = Some(if cur == bt_tw { b_top } else { cur / 20.0 });
+                                }
+                            }
+                            match room {
+                                Some(y) => place_y = y,
+                                None => {
+                                    // The grid restarts at the nearest keep-out
+                                    // edge left of the strip's right end: a thin
+                                    // sliver of a farther anchor must not carry
+                                    // the walk past the wall that blocked it.
+                                    let wall_x = hit
+                                        .iter()
+                                        .map(|o| o.x0)
+                                        .filter(|&x0| x0 < x - 0.01)
+                                        .fold(f32::NEG_INFINITY, f32::max);
+                                    x = if wall_x.is_finite() { wall_x } else { x - pitch };
+                                    continue;
+                                }
+                            }
+                        }
                         let block = recipes[cols[k].recipe].block_idx;
-                        block_starts[block].get_or_insert((pages_out.len(), avail_right - used - cols[k].pitch + cols[k].pitch, band_top(b)));
-                        block_ends[block] = Some((pages_out.len(), avail_right - used - cols[k].pitch, band_top(b)));
+                        if std::env::var_os("OXI_DBG_VCOLS").is_some() {
+                            eprintln!("[VCOLS] page={} band={} block={} x={:.2} y={:.2} pitch={:.1} blank={}",
+                                pages_out.len(), b, block, sx0, place_y, pitch, cols[k].blank);
+                        }
+                        block_starts[block].get_or_insert((pages_out.len(), x, b_top));
+                        block_ends[block] = Some((pages_out.len(), sx0, b_top));
                         elements.extend(self.place_vertical_column(
                             page,
                             &recipes[cols[k].recipe],
                             &cols[k],
-                            avail_right - used - cols[k].pitch,
-                            band_top(b),
+                            sx0,
+                            place_y,
                         ));
-                        used += cols[k].pitch;
+                        x = sx0;
                         k += 1;
                     }
+                    let used = avail_right - x;
                     max_used = max_used.max(used);
                     if k >= chunk_end {
                         break;
@@ -5258,7 +5371,7 @@ impl LayoutEngine {
                     continue;
                 }
                 // The page is full.
-                if k == i && !elements.is_empty() {
+                if k == i && (!elements.is_empty() || avail_right < right - 0.01) {
                     // Not one column of this section fits in what is left of
                     // the page, so the section OPENS THE NEXT ONE — it does not
                     // squeeze into the remainder. (Word: sec1 ends at col 18 of
@@ -5393,7 +5506,11 @@ impl LayoutEngine {
         // the anchored drawing layer. Use the same inner box layout and stable
         // drawing order as horizontal sections. Anchor pagination is supplied
         // by the vertical flow, including paragraphs with no visible glyphs.
-        if std::env::var_os("OXI_VERTICAL_DRAWING_LAYER").is_some() {
+        *block_starts_out = block_starts.clone();
+        // S1412 (2026-09-15, default ON, opt-out OXI_VERTICAL_DRAWING_LAYER_DISABLE):
+        // the checkpoint's opt-in promoted together with S1411 -- the anchors
+        // that cut the strips are drawn on the page they cut.
+        if std::env::var_os("OXI_VERTICAL_DRAWING_LAYER_DISABLE").is_none() {
             let anchor_y: Vec<f32> = block_starts.iter()
                 .map(|a| a.map_or(top, |(_, _, y)| y)).collect();
             // A vertical section's bands divide the vertical axis; each band
@@ -5402,14 +5519,12 @@ impl LayoutEngine {
             let mut drawings: Vec<(bool, u32, usize, Vec<LayoutElement>)> = Vec::new();
             for tb in &page.text_boxes {
                 if tb.inline { continue; }
-                let target = block_starts.get(tb.anchor_block_index)
-                    .and_then(|a| *a).map_or(0, |(p, _, _)| p);
+                let target = Self::vertical_page_of(&block_starts, tb.anchor_block_index);
                 drawings.push((tb.behind_doc, tb.relative_height, target,
                     self.layout_text_box(tb, page, &anchor_y, &column_left)));
             }
             for img in &page.floating_images {
-                let target = block_starts.get(img.anchor_block_index)
-                    .and_then(|a| *a).map_or(0, |(p, _, _)| p);
+                let target = Self::vertical_page_of(&block_starts, img.anchor_block_index);
                 let (x, y) = self.resolve_floating_image_position(img, page, &anchor_y, top);
                 drawings.push((img.behind_doc, img.relative_height, target, vec![
                     LayoutElement::new(x, y, img.width, img.height, LayoutContent::Image {
@@ -5417,6 +5532,24 @@ impl LayoutEngine {
                         content_type: img.content_type.clone(),
                         crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                     })
+                ]));
+            }
+            for shape in &page.shapes {
+                if shape.position.is_none() { continue; }
+                let target = Self::vertical_page_of(&block_starts, shape.anchor_block_index);
+                let ay = anchor_y.get(shape.anchor_block_index).copied().unwrap_or(top);
+                let (x, y) = Self::vertical_shape_origin(page, shape, ay);
+                let content = shape_fill_boxrect(shape).unwrap_or_else(|| LayoutContent::PresetShape {
+                    shape_type: shape.shape_type.clone(),
+                    stroke_color: shape.stroke_color.clone(),
+                    stroke_width: shape.stroke_width.unwrap_or(0.75),
+                    flip_h: shape.flip_h,
+                    flip_v: shape.flip_v,
+                    arrow_head: shape.arrow_head,
+                    arrow_tail: shape.arrow_tail,
+                });
+                drawings.push((false, 0, target, vec![
+                    LayoutElement::new(x, y, shape.width, shape.height, content),
                 ]));
             }
             drawings.sort_by_key(|(behind, height, _, _)| (!*behind, *height));
@@ -5434,6 +5567,180 @@ impl LayoutEngine {
             }
         }
         pages_out
+    }
+
+    /// S1411: the vertical writer with its wrapped anchors. Pass 0 lays the
+    /// page out with no obstacles; each later pass takes the anchors on the
+    /// page their anchor paragraph landed on in the previous pass, until the
+    /// paragraph -> page map stops moving (four passes at most).
+    fn layout_page_vertical(&self, page: &Page) -> Vec<LayoutPage> {
+        let mut starts: Vec<Option<(usize, f32, f32)>> = Vec::new();
+        let mut pages = self.layout_page_vertical_pass(page, &[], &mut starts);
+        if std::env::var_os("OXI_VERTICAL_WRAP_DISABLE").is_some() {
+            return pages;
+        }
+        // Word meets the anchors as the story fills: an anchor joins the page
+        // its paragraph lands on, and the page reflows around it. Accepting
+        // them all at once cycles (2970ce67: "one anchor on p1" <-> "every
+        // anchor on p1"), so they are accepted in block order, one block per
+        // pass, each on the page its block currently starts on.
+        let cands = self.vertical_obstacles(page, &starts);
+        if cands.is_empty() {
+            return pages;
+        }
+        let mut accepted = 0usize;
+        let bucket = |cands: &[(usize, VertObstacle)], n: usize, starts: &[Option<(usize, f32, f32)>], pages: usize| {
+            let mut out: Vec<Vec<VertObstacle>> = vec![Vec::new(); pages.max(1)];
+            for (blk, o) in &cands[..n] {
+                let p = Self::vertical_page_of(starts, *blk);
+                if let Some(v) = out.get_mut(p) {
+                    v.push(*o);
+                }
+            }
+            out
+        };
+        let mut guard = 0usize;
+        loop {
+            guard += 1;
+            if accepted < cands.len() {
+                let blk = cands[accepted].0;
+                while accepted < cands.len() && cands[accepted].0 == blk {
+                    accepted += 1;
+                }
+            }
+            let cands_now = self.vertical_obstacles(page, &starts);
+            let obstacles = bucket(&cands_now, accepted.min(cands_now.len()), &starts, pages.len());
+            let mut s2 = Vec::new();
+            pages = self.layout_page_vertical_pass(page, &obstacles, &mut s2);
+            let same = s2 == starts;
+            starts = s2;
+            if accepted >= cands.len() && same {
+                break;
+            }
+            if guard > cands.len() + 6 {
+                break;
+            }
+        }
+        pages
+    }
+
+    /// S1411: every wrapped anchor of the page, keyed by the page its anchor
+    /// paragraph starts on, as keep-out boxes (wp:anchor distL/R/T/B applied).
+    fn vertical_obstacles(
+        &self,
+        page: &Page,
+        starts: &[Option<(usize, f32, f32)>],
+    ) -> Vec<(usize, VertObstacle)> {
+        let top = page.margin.top;
+        let left = page.margin.left;
+        let anchor_y: Vec<f32> = starts.iter().map(|a| a.map_or(top, |(_, _, y)| y)).collect();
+        let column_left = vec![left; page.blocks.len()];
+        let page_of = |b: usize| Self::vertical_page_of(starts, b);
+        let mut out: Vec<(usize, VertObstacle)> = Vec::new();
+        let dbg = std::env::var_os("OXI_DBG_VWRAP").is_some();
+        let mut push = |blk: usize,
+                        x: f32,
+                        y: f32,
+                        w: f32,
+                        h: f32,
+                        pos: &crate::ir::FloatingPosition,
+                        wrap: Option<crate::ir::WrapType>| {
+            let wall = match wrap {
+                Some(crate::ir::WrapType::TopAndBottom) => true,
+                Some(crate::ir::WrapType::Square) | Some(crate::ir::WrapType::Tight) => false,
+                _ => return,
+            };
+            let target = page_of(blk);
+            if dbg {
+                eprintln!("[VWRAP] blk={} page={} x {:.1}..{:.1} y {:.1}..{:.1} wall={}", blk, target, x, x + w, y, y + h, wall);
+            }
+            out.push((blk, VertObstacle {
+                x0: x - pos.eff_l - pos.dist_l.unwrap_or(0.0),
+                x1: x + w + pos.eff_r + pos.dist_r.unwrap_or(0.0),
+                y0: y - pos.eff_t - pos.dist_t.unwrap_or(0.0),
+                y1: y + h + pos.eff_b + pos.dist_b.unwrap_or(0.0),
+                wall,
+            }));
+        };
+        for tb in &page.text_boxes {
+            if tb.inline {
+                continue;
+            }
+            let Some(pos) = tb.position.as_ref() else { continue };
+            let (x, y) = self.resolve_textbox_position(tb, page, &anchor_y, &column_left);
+            push(tb.anchor_block_index, x, y, tb.width, tb.height, pos, tb.wrap_type);
+        }
+        for img in &page.floating_images {
+            let Some(pos) = img.position.as_ref() else { continue };
+            let (x, y) = self.resolve_floating_image_position(img, page, &anchor_y, top);
+            push(img.anchor_block_index, x, y, img.width, img.height, pos, img.wrap_type);
+        }
+        let para_shapes: Vec<(usize, &crate::ir::Shape)> = page
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| match b {
+                Block::Paragraph(p) => p.shapes.iter().map(move |s| (i, s)).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect();
+        for (block, shape) in page.shapes.iter().map(|s| (s.anchor_block_index, s)).chain(para_shapes) {
+            let Some(pos) = shape.position.as_ref() else { continue };
+            let (x, y) = Self::vertical_shape_origin(page, shape, anchor_y.get(block).copied().unwrap_or(top));
+            push(block, x, y, shape.width, shape.height, pos, shape.wrap_type.or(shape.anchor_wrap));
+        }
+        out.sort_by_key(|(b, _)| *b);
+        out
+    }
+
+    /// S1411: the page a block starts on; a block that never took a column
+    /// (an inline-image host S1293 turned into an Image block, a table) rides
+    /// with the nearest placed block before it, else after it.
+    fn vertical_page_of(starts: &[Option<(usize, f32, f32)>], blk: usize) -> usize {
+        if let Some(Some((p, _, _))) = starts.get(blk) {
+            return *p;
+        }
+        if let Some((p, _, _)) = starts[..blk.min(starts.len())].iter().rev().flatten().next() {
+            return *p;
+        }
+        starts.iter().skip(blk).flatten().next().map_or(0, |(p, _, _)| *p)
+    }
+
+    /// S1411: a page shape's top-left from its anchor position (the horizontal
+    /// path assumes column/paragraph-relative offsets; a vertical page also
+    /// meets margin- and page-relative ones).
+    fn vertical_shape_origin(page: &Page, shape: &crate::ir::Shape, anchor_y: f32) -> (f32, f32) {
+        let Some(pos) = shape.position.as_ref() else {
+            return (page.margin.left, anchor_y);
+        };
+        let content_w = page.size.width - page.margin.left - page.margin.right;
+        let content_h = page.size.height - page.margin.top - page.margin.bottom;
+        let (hx, hw) = match pos.h_relative.as_deref() {
+            Some("page") => (0.0, page.size.width),
+            Some("leftMargin") => (0.0, page.margin.left),
+            Some("rightMargin") => (page.size.width - page.margin.right, page.margin.right),
+            _ => (page.margin.left, content_w),
+        };
+        let x = match pos.h_align.as_deref() {
+            Some("left") | Some("inside") => hx,
+            Some("center") => hx + (hw - shape.width) / 2.0,
+            Some("right") | Some("outside") => hx + hw - shape.width,
+            _ => hx + pos.x,
+        };
+        let (vy, vh) = match pos.v_relative.as_deref() {
+            Some("page") => (0.0, page.size.height),
+            Some("margin") => (page.margin.top, content_h),
+            Some("topMargin") => (0.0, page.margin.top),
+            Some("bottomMargin") => (page.size.height - page.margin.bottom, page.margin.bottom),
+            _ => (anchor_y, 0.0),
+        };
+        let y = match pos.v_align.as_deref() {
+            Some("top") | Some("inside") => vy,
+            Some("center") => vy + (vh - shape.height) / 2.0,
+            Some("bottom") | Some("outside") => vy + vh - shape.height,
+            _ => vy + pos.y,
+        };
+        (x, y)
     }
 
     /// `m` columns over `n` bands, earlier bands taking the remainder — the
@@ -5842,7 +6149,30 @@ impl LayoutEngine {
         for block_idx in run_start..run_end {
             let para = match &page.blocks[block_idx] {
                 Block::Paragraph(p) => p,
-                _ => continue, // tables/images in vertical sections: not yet supported
+                Block::Image(img) if img.position.is_none()
+                    && std::env::var_os("OXI_VERTICAL_INLINE_IMAGE_DISABLE").is_none() =>
+                {
+                    // S1413: an inline image is a column of its own width.
+                    recipes.push(VertParaRecipe {
+                        style: RunStyle::default(),
+                        fs: self.default_font_size,
+                        char_adv: self.default_font_size,
+                        font_family: None,
+                        block_idx,
+                    });
+                    cols.push(VertColumn {
+                        recipe: recipes.len() - 1,
+                        text: String::new(),
+                        segs: Vec::new(),
+                        top: 0.0,
+                        pitch: img.width.max(0.0),
+                        blank: false,
+                        hard_break: false,
+                        image: true,
+                    });
+                    continue;
+                }
+                _ => continue, // tables in vertical sections: not yet supported
             };
             // S730 in the vertical axis (S1290): an EMPTY paragraph carrying a
             // CONTINUOUS section-break mark renders at zero size, which here
@@ -6051,6 +6381,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch,
                     blank: true,
                     hard_break,
+                    image: false,
                 });
                 continue;
             }
@@ -6134,6 +6465,7 @@ cells={} pitch={:.2} text={:?}",
                             top: (s1331_left + if li == 0 { s1331_first } else { 0.0 }).max(0.0),
                             blank: false,
                             hard_break: hard_break && li == 0,
+                            image: false,
                         });
                     }
                 }
@@ -6155,6 +6487,7 @@ cells={} pitch={:.2} text={:?}",
                         pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                         blank: false,
                         hard_break: hard_break && first,
+                        image: false,
                     });
                     first = false;
                     cur_y = s1331_left;
@@ -6180,6 +6513,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                     blank: false,
                     hard_break: hard_break && first,
+                    image: false,
                 });
             }
         }
@@ -6233,6 +6567,16 @@ cells={} pitch={:.2} text={:?}",
         y: f32,
     ) -> Vec<LayoutElement> {
         if col.blank {
+            return Vec::new();
+        }
+        if col.image {
+            if let Block::Image(img) = &page.blocks[recipe.block_idx] {
+                return vec![LayoutElement::new(x, y + col.top, img.width, img.height, LayoutContent::Image {
+                    data: img.data.clone(),
+                    content_type: img.content_type.clone(),
+                    crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
+                })];
+            }
             return Vec::new();
         }
         let para = match &page.blocks[recipe.block_idx] {

@@ -1839,7 +1839,7 @@ fn parse_body(
                                         h_align: None,
                                         v_align: None,
                                         dist_l: None,
-                                        dist_r: None,
+                                        dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
                                     });
                                     img.wrap_type = Some(crate::ir::WrapType::None);
                                     img.anchor_block_index = anchor_idx;
@@ -6551,6 +6551,8 @@ fn parse_drawing(
     // S1238: wp:effectExtent l + r in points (Word's inline advance is
     // extent + effectExtent l + r).
     let mut effect_extent_lr: f32 = 0.0;
+    let mut effect_extent_l: f32 = 0.0;
+    let mut effect_extent_r: f32 = 0.0;
     let mut effect_extent_b: f32 = 0.0;
     let mut effect_extent_t: f32 = 0.0;
     let mut wrapping_points: Vec<(f32, f32)> = Vec::new();
@@ -6562,6 +6564,8 @@ fn parse_drawing(
     let mut is_anchor = false;
     let mut dist_l: Option<f32> = None;
     let mut dist_r: Option<f32> = None;
+    let mut dist_t: Option<f32> = None;
+    let mut dist_b: Option<f32> = None;
     // S478: wp:anchor z-order. Word draws floating objects in ascending
     // relativeHeight (highest = on top). behindDoc=1 places the object
     // behind body text. Default 0 (in front, ordered by relativeHeight).
@@ -6771,6 +6775,12 @@ fn parse_drawing(
                                 }
                                 "distR" => {
                                     dist_r = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "distT" => {
+                                    dist_t = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "distB" => {
+                                    dist_b = val.parse::<f32>().ok().map(|v| v / 12700.0);
                                 }
                                 _ => {}
                             }
@@ -7519,11 +7529,13 @@ fn parse_drawing(
                                 "l" => {
                                     if let Ok(v) = val.parse::<f32>() {
                                         effect_extent_lr += v / 12700.0;
+                                        effect_extent_l = v / 12700.0;
                                     }
                                 }
                                 "r" => {
                                     if let Ok(v) = val.parse::<f32>() {
                                         effect_extent_lr += v / 12700.0;
+                                        effect_extent_r = v / 12700.0;
                                     }
                                 }
                                 "t" => {
@@ -8008,6 +8020,12 @@ fn parse_drawing(
             v_align,
             dist_l,
             dist_r,
+            dist_t,
+            dist_b,
+            eff_l: effect_extent_l,
+            eff_r: effect_extent_r,
+            eff_t: effect_extent_t,
+            eff_b: effect_extent_b,
         })
     } else {
         None
@@ -8075,6 +8093,7 @@ fn parse_drawing(
             arrow_tail,
             wrap_polygon: Vec::new(),
             wrap_type: if std::env::var("OXI_DRAWING_SHAPE_WRAP").is_ok() { wrap_type } else { None },
+            anchor_wrap: wrap_type,
             is_vml: false, // DrawingML
             escapes_cell: false,
         })
@@ -8129,7 +8148,7 @@ fn parse_drawing(
                 h_align: None,
                 v_align: None,
                 dist_l: None,
-                dist_r: None,
+                dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
             })
         } else {
             None
@@ -8933,7 +8952,7 @@ fn parse_vml_pict(
             h_align: None,
             v_align: None,
             dist_l: vml_dist_l,
-            dist_r: vml_dist_r,
+            dist_r: vml_dist_r, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
         })
     } else if s1006_zero_abs {
         Some(FloatingPosition {
@@ -8944,7 +8963,7 @@ fn parse_vml_pict(
             h_align: vml_h_align.clone(),
             v_align: vml_v_align.clone(),
             dist_l: vml_dist_l,
-            dist_r: vml_dist_r,
+            dist_r: vml_dist_r, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
         })
     } else {
         None
@@ -9033,7 +9052,7 @@ fn parse_vml_pict(
                 h_align: None,
                 v_align: None,
                 dist_l: None,
-                dist_r: None,
+                dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
             }),
             border: !no_stroke,
             stroke_color: if no_stroke { None } else { stroke_color_val },
@@ -9120,6 +9139,7 @@ fn parse_vml_pict(
         arrow_tail: false,
         wrap_polygon: shape_wrap_points.into_iter().map(|(x, y)| (x / shape_coord_size.0, y / shape_coord_size.1)).collect(),
         wrap_type: shape_wrap,
+        anchor_wrap: None,
         is_vml: true, // legacy VML <w:pict> shape
         escapes_cell,
     });
@@ -9174,7 +9194,7 @@ fn parse_ole_object(
     let mut position = FloatingPosition {
         x: 0.0, y: 0.0, h_relative: Some("column".into()),
         v_relative: Some("paragraph".into()), h_align: None, v_align: None,
-        dist_l: None, dist_r: None,
+        dist_l: None, dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
     };
     let mut wrap_type = None;
     let mut crop = ImageCrop { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
@@ -9358,7 +9378,7 @@ fn parse_ole_object(
                     h_align: None,
                     v_align: None,
                     dist_l: None,
-                    dist_r: None,
+                    dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
                 })
             } else {
                 None
