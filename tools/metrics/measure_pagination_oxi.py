@@ -189,7 +189,7 @@ def measure_doc(docx_path: str) -> dict:
             [RENDERER, docx_path, out_prefix, "--dump-layout=" + dump_path],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
         if proc.returncode != 0:
             raise RuntimeError(f"renderer failed (rc={proc.returncode}): {proc.stderr[:500]}")

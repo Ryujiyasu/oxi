@@ -744,14 +744,14 @@ impl FontMetricsRegistry {
             }
         }
 
-        if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() {
+        if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() {
             let faces: Vec<RawFontMetrics> = serde_json::from_str(
                 include_str!("data/soei_face_metrics.json")
             ).expect("embedded Soei face metrics should be valid JSON");
             raw_list.extend(faces);
         }
 
-        if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() {
+        if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() {
             let faces: Vec<RawFontMetrics> = serde_json::from_str(
                 include_str!("data/soei_pop_metrics.json")
             ).expect("embedded Soei Pop face metrics should be valid JSON");
@@ -878,8 +878,8 @@ impl FontMetricsRegistry {
             }
         }
 
-        if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some()
-            || std::env::var_os("OXI_SOEI_POP_METRICS").is_some() {
+        if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none()
+            || std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() {
             // Replace legacy alias entries as well as canonical entries: exact
             // name lookup otherwise returns the older, incomplete width table.
             let aliases: Vec<_> = fonts.keys().filter_map(|name| {
@@ -1855,11 +1855,19 @@ fn is_cjk_or_symbol(c: char) -> bool {
 }
 
 /// Check if a font family is a CJK font (has native CJK glyphs).
+// S1402 (2026-09-15, default ON, opt-out OXI_SOEI_FACE_METRICS_DISABLE /
+// OXI_SOEI_POP_METRICS_DISABLE): the checkpoint's opt-in HG 創英角 tables
+// promoted. MEASURED: creative__31731f9945d751d6's 19pt HGP創英角ｺﾞｼｯｸUB title,
+// Word COM per-char advances vs the table (upm 256): 22 chars sum 370.5 vs
+// 370.8, every char within the 0.75pt Info5 quantum (で 17.25/16.77, を
+// 15.75/15.51, っ 15.0/14.47 ...). Without the table every char is a full em
+// (19.0) -> 437 > the 425 measure -> the title wraps, 2 extra grid rows, +1
+// page. The Pop table takes educational__12e79fcfe67f9074 to PASS the same way.
 fn is_soei_family(family: &str) -> bool {
     matches!(family, "HGSoeiKakugothicUB" | "HGPSoeiKakugothicUB" | "HGSSoeiKakugothicUB")
-        && std::env::var_os("OXI_SOEI_FACE_METRICS").is_some()
+        && std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none()
         || matches!(family, "HGSoeiKakupoptai" | "HGPSoeiKakupoptai" | "HGSSoeiKakupoptai")
-            && std::env::var_os("OXI_SOEI_POP_METRICS").is_some()
+            && std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none()
 }
 
 fn is_cjk_font_family(family: &str) -> bool {
@@ -2039,16 +2047,16 @@ fn normalize_family_name(name: &str) -> String {
         }
     }
     match name {
-        "HG創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() => "HGSoeiKakupoptai".to_string(),
-        "HGP創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() => "HGPSoeiKakupoptai".to_string(),
-        "HGS創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS").is_some() => "HGSSoeiKakupoptai".to_string(),
+        "HG創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGSoeiKakupoptai".to_string(),
+        "HGP創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGPSoeiKakupoptai".to_string(),
+        "HGS創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGSSoeiKakupoptai".to_string(),
         "Yu Mincho" if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some()
             || std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some() => "Yu Mincho Regular".to_string(),
         "等线" if std::env::var_os("OXI_DENGXIAN_METRICS").is_some() => "DengXian".to_string(),
         "맑은 고딕" if std::env::var_os("OXI_MALGUN_METRICS").is_some() => "Malgun Gothic".to_string(),
-        "HG創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() => "HGSoeiKakugothicUB".to_string(),
-        "HGP創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() => "HGPSoeiKakugothicUB".to_string(),
-        "HGS創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS").is_some() => "HGSSoeiKakugothicUB".to_string(),
+        "HG創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGSoeiKakugothicUB".to_string(),
+        "HGP創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGPSoeiKakugothicUB".to_string(),
+        "HGS創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGSSoeiKakugothicUB".to_string(),
         // S831 (2026-07-13): CG Times is the PCL metric CLONE of Times New
         // Roman; Windows FontSubstitutes resolves it to TNR and Word renders
         // TNR metrics. The comment on is_metric_incompatible_substitution
