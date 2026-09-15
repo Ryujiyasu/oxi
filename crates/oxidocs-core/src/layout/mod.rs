@@ -4852,7 +4852,15 @@ impl LayoutEngine {
     fn fit_text_cell_overflow(
         runs: &[Run], run_idx: usize, char_idx: usize, occupied: f32, capacity: f32,
     ) -> Option<bool> {
-        if std::env::var_os("OXI_FIT_TEXT_ATOMIC_CELL").is_none() { return None; }
+        // S1404 (2026-09-15, default ON, opt-out OXI_FIT_TEXT_ATOMIC_CELL_DISABLE):
+        // the checkpoint's opt-in promoted. MEASURED (educational__12e601b185fbdd01
+        // p2, Word COM): a `fitText 360` run «1学年» in a 28.35pt cell (17.55 inside
+        // the 5.4pt margins) sets on ONE line with advances 5.25 / 6.75 / 6.0 =
+        // exactly the 18pt fit width, 0.45pt past the cell's inner edge. A fit
+        // box is a fixed-width unit Word never breaks; Oxi broke it at 「年」 and
+        // grew the header row 13.5 -> 22.25, four paragraphs over the page.
+        // Gates under the env flag: golden 183/187, ja 179 -> 180, en 291/298.
+        if std::env::var_os("OXI_FIT_TEXT_ATOMIC_CELL_DISABLE").is_some() { return None; }
         let run = &runs[run_idx];
         let width = run.style.fit_text?;
         let id = run.style.fit_text_id?;
