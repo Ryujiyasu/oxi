@@ -735,7 +735,13 @@ impl FontMetricsRegistry {
             raw_list.extend(italic_faces);
         }
 
-        if std::env::var("OXI_PGOTHIC_FACE_METRICS").as_deref() == Ok("1") {
+        // S1415 (2026-09-15, default ON, opt-out OXI_PGOTHIC_FACE_METRICS_DISABLE):
+        // Word sets MS PGothic kana at the face's own hmtx advance (COM,
+        // tests/fixtures/pgothic_px: の = 1.000em, に 0.941, り 0.746, て 0.902 at
+        // every size 8..16pt; the same in GDI at 2048px), where the fallback set
+        // them ~0.83em (MS UI Gothic). policies__0af65d45 (5): Word 56 chars on
+        // line 1, Oxi 60 -> one paragraph too many on p2.
+        if std::env::var_os("OXI_PGOTHIC_FACE_METRICS_DISABLE").is_none() {
             let widths: HashMap<u32, u16> = serde_json::from_str(
                 include_str!("data/pgothic_face_widths.json")
             ).expect("embedded proportional Gothic widths should be valid JSON");

@@ -3495,7 +3495,12 @@ fn parse_paragraph_with_inline_images_impl(
     // operations below.
     // A zero character indent resets the character channel; without a
     // direct absolute indent, a directly assigned list supplies the left edge.
-    let list_zero_chars_reset = std::env::var("OXI_LIST_ZERO_CHAR_INDENT").as_deref() == Ok("1")
+    // S1414 (2026-09-15, default ON, opt-out OXI_LIST_ZERO_CHAR_INDENT_DISABLE):
+    // Word treats a bare `w:leftChars="0"` as "no chars indent", not as zero --
+    // the directly assigned list level then supplies the left edge (COM probe
+    // tests/fixtures/leftchars0, 18 arms; policies__0568bf40 para 12: LeftIndent
+    // 63 = the level's 1260tw, wrapping at 36/35 chars where 0 wrapped at 40).
+    let list_zero_chars_reset = std::env::var_os("OXI_LIST_ZERO_CHAR_INDENT_DISABLE").is_none()
         && num_pr_ref.as_ref().is_some_and(|n| !n.num_id.is_empty() && n.num_id != "0")
         && style.indent_left.is_none()
         && style.indent_left_chars == Some(0.0)
