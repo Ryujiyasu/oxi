@@ -13325,7 +13325,15 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     // An unavailable face declared as supporting Japanese uses the Japanese
     // substitute for Latin text and paragraph marks as well as CJK glyphs.
     // Supported alternates and installed faces retain precedence.
-    if std::env::var_os("OXI_DECLARED_JAPANESE_FALLBACK").is_some() {
+    // S1403 (2026-09-15, default ON, opt-out OXI_DECLARED_JAPANESE_FALLBACK_DISABLE):
+    // the checkpoint's opt-in promoted. MEASURED: correspondence__0b6522483c20b8bd
+    // declares Kozuka Gothic Std R/B (fontTable charset 80, notTrueType, not
+    // installed); Word COM sets its 10pt paragraphs at 23.4pt per line under a
+    // 1.4 multiple = 16.7pt base = Yu Gothic's 1.67285em, and 4 lines of 173
+    // chars (~43 per line, a full em each) where the Latin fallback packed 60.
+    // reference__2296511cc7b2fa07 PASSes with it; gates under the env flag were
+    // golden 183/187, ja 178 -> 179, en 291/298 with no PASS->FAIL.
+    if std::env::var_os("OXI_DECLARED_JAPANESE_FALLBACK_DISABLE").is_none() {
         for (name, info) in &document.styles.font_table {
             let japanese = info.charset.as_deref()
                 .and_then(|value| u8::from_str_radix(value, 16).ok()) == Some(0x80)
