@@ -22309,7 +22309,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 } else {
                     natural_lh
                 }
-            } else if std::env::var("OXI_CJK_TEXT_BOTTOM_BOX").ok().as_deref() == Some("1")
+            } else if std::env::var_os("OXI_CJK_TEXT_BOTTOM_BOX_DISABLE").is_none() /* S1409 */
                 && lines[line_idx].fragments.iter().any(|fragment| {
                     fragment.text.chars().any(kinsoku::is_cjk_ideograph_or_kana)
                 })
