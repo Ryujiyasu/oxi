@@ -70,6 +70,13 @@ fn chars_to_measure() -> Vec<char> {
         }
     }
 
+    // Measure Greek and Cyrillic advances in Latin and East Asian fonts.
+    for cp in 0x0370u32..=0x04FF {
+        if let Some(c) = char::from_u32(cp) {
+            chars.push(c);
+        }
+    }
+
     // CJK Symbols and Punctuation (U+3000..U+303F)
     for cp in 0x3000u32..=0x303F {
         if let Some(c) = char::from_u32(cp) {
@@ -206,6 +213,20 @@ fn main() {
 
         let data = std::fs::read(&path).expect("Failed to read font file");
 
+        // Collection ordering is not a font identity. Resolve the proportional
+        // Gothic face by its family name before extracting its advances.
+        let face_index = if display_name == "MS PGothic" {
+            (0..ttf_parser::fonts_in_collection(&data).unwrap_or(1))
+                .find(|&index| Face::parse(&data, index).is_ok_and(|face| {
+                    face.names().into_iter().any(|name| {
+                        name.name_id == ttf_parser::name_id::FAMILY
+                            && name.to_string().as_deref() == Some(display_name)
+                    })
+                }))
+                .expect("MS PGothic family must exist in its font collection")
+        } else {
+            face_index
+        };
         match Face::parse(&data, face_index) {
             Ok(face) => {
                 let metrics = extract_face(&face, display_name);

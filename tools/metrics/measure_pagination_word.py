@@ -296,6 +296,25 @@ def measure_doc(word, docx_path: str) -> dict:
                 except Exception:
                     continue
 
+        # Word exposes w:sym characters as "(" in Range.Text. Resolve them
+        # only after coordinate sampling, without changing literal parentheses.
+        from word_symbols import restore_symbols
+        for row in rows:
+            if row.get("in_textbox") or row["i"] > n_paras or "(" not in row["text"]:
+                continue
+            try:
+                symbol_range = doc.Paragraphs(row["i"]).Range
+                raw = symbol_range.Text or ""
+                def measured_prefix(value):
+                    for marker in ("\r", "\x07", "\n", "\x0c", "\x0b"):
+                        value = value.replace(marker, "")
+                    return value[:30]
+                if measured_prefix(raw) == row["text"]:
+                    row["text"] = measured_prefix(restore_symbols(raw, symbol_range.WordOpenXML))
+            except Exception:
+                # Unsupported ranges retain their measured text for the gate.
+                continue
+
         return {
             "filename": os.path.basename(docx_path),
             "n_pages": n_pages,

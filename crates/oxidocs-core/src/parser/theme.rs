@@ -11,6 +11,8 @@ use quick_xml::reader::Reader;
 pub struct ThemeColors {
     /// Named theme colors: "dk1", "lt1", "dk2", "lt2", "accent1"-"accent6", "hlink", "folHlink"
     pub colors: HashMap<String, String>,
+    /// Document color roles mapped to physical theme slots.
+    pub color_mapping: HashMap<String, String>,
     /// Major font (headings)
     pub major_font: Option<String>,
     /// Minor font (body)
@@ -19,6 +21,8 @@ pub struct ThemeColors {
     pub major_font_ea: Option<String>,
     /// Minor East Asian font
     pub minor_font_ea: Option<String>,
+    pub major_script_fonts: HashMap<String, String>,
+    pub minor_script_fonts: HashMap<String, String>,
     /// S1370: the minorFont's `script="Jpan"` typeface, untouched by the
     /// empty-`<a:ea>` suppression above. Word substitutes THIS face for a
     /// CJK character whose eastAsia font has no CJK glyphs.
@@ -37,6 +41,41 @@ pub struct ThemeColors {
 }
 
 impl ThemeColors {
+    /// Select supplemental East Asian fonts using the document theme language.
+    pub fn apply_font_language(&mut self, settings: &str) {
+        let mut reader = Reader::from_str(settings);
+        let mut language = None;
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e) | Event::Empty(e))
+                    if local_name(e.name().as_ref()) == "themeFontLang" => {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "eastAsia" {
+                            language = Some(String::from_utf8_lossy(&attr.value).to_lowercase());
+                        }
+                    }
+                    break;
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+        let Some(language) = language else { return };
+        let script = match language.as_str() {
+            "ja" | "ja-jp" => "Jpan",
+            "zh-tw" | "zh-hk" | "zh-mo" | "zh-hant" => "Hant",
+            "zh-cn" | "zh-sg" | "zh-hans" => "Hans",
+            "ko" | "ko-kr" => "Hang",
+            _ => return,
+        };
+        if let Some(font) = self.major_script_fonts.get(script) {
+            self.major_font_ea = Some(font.clone());
+        }
+        if let Some(font) = self.minor_script_fonts.get(script) {
+            self.minor_font_ea = Some(font.clone());
+        }
+    }
+
     /// Resolve a themeColor name to an RGB hex string
     pub fn resolve(&self, theme_color: &str) -> Option<&String> {
         // Map Word's themeColor attribute names to theme XML names
@@ -55,7 +94,47 @@ impl ThemeColors {
             "followedHyperlink" => "folHlink",
             other => other,
         };
-        self.colors.get(key)
+        self.colors.get(self.color_mapping.get(theme_color).map(String::as_str).unwrap_or(key))
+    }
+
+    /// Initialize DrawingML roles and apply the document's color scheme mapping.
+    /// Targets name physical theme slots; mappings are applied once, not recursively.
+    pub fn apply_color_mapping(&mut self, settings: Option<&str>) {
+        for (role, slot) in [("bg1", "lt1"), ("tx1", "dk1"), ("bg2", "lt2"), ("tx2", "dk2")] {
+            self.color_mapping.insert(role.to_owned(), slot.to_owned());
+        }
+        let Some(xml) = settings else { return };
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                    if e.local_name().as_ref() == b"clrSchemeMapping" => {
+                    for attr in e.attributes().flatten() {
+                        let name = attr.key.local_name();
+                        let role = match name.as_ref() {
+                            b"t1" => "tx1", b"t2" => "tx2",
+                            b"bg1" => "bg1", b"bg2" => "bg2",
+                            b"accent1" => "accent1", b"accent2" => "accent2",
+                            b"accent3" => "accent3", b"accent4" => "accent4",
+                            b"accent5" => "accent5", b"accent6" => "accent6",
+                            b"hyperlink" => "hlink", b"followedHyperlink" => "folHlink",
+                            _ => continue,
+                        };
+                        let value = String::from_utf8_lossy(&attr.value);
+                        let slot = match value.as_ref() {
+                            "dark1" => "dk1", "light1" => "lt1",
+                            "dark2" => "dk2", "light2" => "lt2",
+                            "hyperlink" => "hlink", "followedHyperlink" => "folHlink",
+                            "accent1" | "accent2" | "accent3" | "accent4" | "accent5" | "accent6" => value.as_ref(),
+                            _ => continue,
+                        };
+                        self.color_mapping.insert(role.to_owned(), slot.to_owned());
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
     }
 
     /// Apply tint/shade transformation to a hex color
@@ -311,6 +390,14 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                         // key. Only used when <a:cs> was empty (_bidi still None).
                         // Generalizing to other bidi locales (Hebr, ...) is
                         // deferred (no measured corpus doc).
+                        if !typeface.is_empty() {
+                            if in_major_font {
+                                theme.major_script_fonts.entry(script.clone()).or_insert_with(|| typeface.clone());
+                            }
+                            if in_minor_font {
+                                theme.minor_script_fonts.entry(script.clone()).or_insert_with(|| typeface.clone());
+                            }
+                        }
                         if script == "Arab" && !typeface.is_empty() {
                             if in_major_font && theme.major_font_bidi.is_none() {
                                 theme.major_font_bidi = Some(typeface.clone());

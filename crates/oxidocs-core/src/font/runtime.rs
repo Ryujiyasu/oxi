@@ -172,6 +172,7 @@ fn metrics_from(font: &skrifa::FontRef, family: &str) -> Option<FontMetrics> {
     }
 
     Some(FontMetrics {
+        synthetic_bold_advance: 0.0,
         family: family.to_string(),
         units_per_em: upm,
         ascent: asc,
