@@ -8515,7 +8515,7 @@ cells={} pitch={:.2} text={:?}",
                         && matches!(block, Block::Paragraph(p)
                             if p.runs.iter().any(|r| !r.text.is_empty())
                                 && {
-                                    let first_line_only = std::env::var("OXI_TEXT_FLOAT_FIRST_LINE").is_ok();
+                                    let first_line_only = std::env::var_os("OXI_TEXT_FLOAT_FIRST_LINE_DISABLE").is_none(); // S1410
                                     let mut measure = cell_float::Measurement::default();
                                     let est = self.estimate_para_height_inner(
                                         p, self.s1211c_floor_body_width(p, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
