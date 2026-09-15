@@ -14176,7 +14176,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // which have not been pushed yet, so it lands between the two with
             // no reflow -- the section's content is already at a page top.
             if let Some(n) = s1294_restart {
-                let section_origin = std::env::var("OXI_CONTINUOUS_SECTION_ORIGIN").is_ok();
+                // S1421 (2026-09-16, default ON, opt-out OXI_CONTINUOUS_SECTION_ORIGIN_DISABLE):
+                // the checkpoint's opt-in promoted -- a continuous section's
+                // page-number restart is judged on the page its first block
+                // actually starts on (a paragraph may begin on the preceding
+                // page). reference__13e1b7fca0030560: 0.0131 (pcd +2) -> 0.977
+                // (pcd 0). Env gates: ja 188 same, golden 185 same, en 291 same.
+                let section_origin = std::env::var_os("OXI_CONTINUOUS_SECTION_ORIGIN_DISABLE").is_none();
                 // A paragraph may start on the preceding page and continue onto
                 // another. Numbering belongs to its first occupied flow page.
                 let origin = if section_origin {
