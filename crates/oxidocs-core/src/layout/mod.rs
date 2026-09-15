@@ -43916,7 +43916,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // «…「手待時» / «間」）» exactly as Word does).
                                             let would_overflow = if would_overflow
                                                 || std::env::var("OXI_S1201_DISABLE").is_ok()
-                                                || (std::env::var_os("OXI_CJK_CELL_COMPRESSED_CLOSER").is_some()
+                                                || (std::env::var_os("OXI_CJK_CELL_COMPRESSED_CLOSER_DISABLE").is_none() /* S1408 */
                                                     && self.compress_punctuation
                                                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute))
                                                 || kinsoku::is_line_start_prohibited(ch)
