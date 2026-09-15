@@ -228,7 +228,22 @@ impl FontMetrics {
                     return *w;
                 }
             }
-            if is_halfwidth_katakana(c) {
+            // S1416 (2026-09-15, default ON, opt-out OXI_S1416_DISABLE): a JIS
+            // X 0208 Greek or Cyrillic letter, or the multiply / divide sign,
+            // that an MS or Yu face lacks in its table is FULL-WIDTH in that
+            // face. COM (tests/fixtures/greek_cjk, 30-char runs): sigma, pi,
+            // alpha, Ya, x, / = 1.000em in MS Mincho / MS Gothic / MS PMincho /
+            // Yu Mincho / Yu Gothic under an eastAsia hint (0.51..0.75em from
+            // the ascii face without it; Meiryo keeps its own 0.60..0.80).
+            // educational__0ad73366 p2: sigma/pi at the 0.5em fallback packed
+            // 45 chars on a line Word ends at 43, one line short for the
+            // paragraph and one paragraph over on the page.
+            if s1416_jis_fullwidth(c)
+                && self.is_jis_fullwidth_face()
+                && std::env::var_os("OXI_S1416_DISABLE").is_none()
+            {
+                1.0
+            } else if is_halfwidth_katakana(c) {
                 0.5
             } else if is_fullwidth(c) {
                 1.0
@@ -527,6 +542,16 @@ impl FontMetrics {
     /// Meiryo uses 83/64 despite being a modern font.
     ///
     /// See tools/metrics/verify_exact_cjk.py for the measurement script.
+    /// S1416: the MS / Yu faces whose JIS Greek, Cyrillic and multiply /
+    /// divide glyphs are full-width (measured; Meiryo is proportional there).
+    pub fn is_jis_fullwidth_face(&self) -> bool {
+        matches!(
+            self.family.as_str(),
+            "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho"
+                | "Yu Gothic Regular" | "Yu Gothic Bold" | "Yu Mincho Regular" | "Yu Mincho Demibold"
+        )
+    }
+
     pub fn is_cjk_83_64_font(&self) -> bool {
         // S322 (2026-05-26) — env-gated EXCLUDE Yu Mincho/Yu Gothic from
         // the 83/64 list to test the hypothesis: Yu* fonts have natural
@@ -2257,6 +2282,16 @@ pub fn is_complex_script(c: char) -> bool {
 /// S1330: Unicode format characters that occupy no advance and leave no ink.
 pub fn is_zero_width_char(c: char) -> bool {
     matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
+}
+
+/// S1416: JIS X 0208 rows 6/7 (Greek, Cyrillic) and the multiply / divide signs.
+pub fn s1416_jis_fullwidth(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0391}'..='\u{03A9}' | '\u{03B1}'..='\u{03C9}'
+            | '\u{0401}' | '\u{0410}'..='\u{044F}' | '\u{0451}'
+            | '\u{00D7}' | '\u{00F7}'
+    )
 }
 
 pub fn is_fullwidth(ch: char) -> bool {

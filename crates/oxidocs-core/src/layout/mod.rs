@@ -3970,8 +3970,20 @@ impl LayoutEngine {
         let punctuation = std::env::var_os("OXI_PUNCT_FONT_HINT").is_some()
             && matches!(ch, '\u{2013}' | '\u{2014}' | '\u{2018}' | '\u{2019}'
                 | '\u{201C}' | '\u{201D}' | '\u{2026}' | '\u{2022}');
-        let alphabet = std::env::var_os("OXI_SCRIPT_FONT_HINT").is_some()
-            && matches!(ch, '\u{0370}'..='\u{04FF}');
+        // S1419 (2026-09-15, default ON, opt-out OXI_SCRIPT_FONT_HINT_DISABLE):
+        // the checkpoint's opt-in promoted for the JIS full-width faces. A
+        // Greek / Cyrillic letter under an eastAsia hint is set in the eastAsia
+        // face (COM, tests/fixtures/greek_cjk: 1.000em in MS Mincho / MS
+        // Gothic / MS PMincho / Yu Mincho / Yu Gothic; without the hint the
+        // ascii face's 0.51..0.75). Meiryo's own Greek is proportional
+        // (0.60..0.69) and has no table here, so it keeps the ascii routing,
+        // which is the nearer of the two. educational__0ad73366 p2: sigma/pi
+        // at the Latin width packed 45 chars on a line Word ends at 43.
+        let alphabet = std::env::var_os("OXI_SCRIPT_FONT_HINT_DISABLE").is_none()
+            && matches!(ch, '\u{0370}'..='\u{04FF}')
+            && self
+                .metrics_for_cjk_script(run_style, para_style, false)
+                .map_or(false, |m| m.is_jis_fullwidth_face());
         if !math && !punctuation && !alphabet {
             return None;
         }
@@ -21113,7 +21125,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .map(|im| im.effect_extent_b.max(0.0) + im.effect_extent_t.max(0.0)).fold(0.0_f32, f32::max)
                     } else { 0.0 };
                     let target = target + effect_bottom;
-                    let target = if std::env::var_os("OXI_INLINE_IMAGE_GRID").is_some()
+                    // S1418 (2026-09-15, default ON, opt-out OXI_INLINE_IMAGE_GRID_DISABLE):
+                    // the checkpoint's opt-in promoted. In a typed docGrid a line
+                    // holding an inline picture takes whole cells: technical__90f5b9d4
+                    // (4 ideographic spaces + a 244.07pt screenshot, effectExtent t 1.5
+                    // b 1.95) spans 252 = 14 x 18 in Word (125.25 -> 147.0 -> 395.25 ->
+                    // 413.25), Oxi 244.18; 98ef3583 is the same class. Both pass
+                    // without the saved page-break markers once the line is quantized.
+                    let target = if std::env::var_os("OXI_INLINE_IMAGE_GRID_DISABLE").is_none()
                         && !page.doc_grid_no_type && para.style.snap_to_grid
                         && line.fragments.iter().any(|f| f.style.inline_object_image.is_some())
                     {
@@ -22757,7 +22776,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let phase = (cursor.cursor_y - page_top).rem_euclid(p);
                 phase < 1.0 || phase > p - 1.0
             }) && std::env::var("OXI_S748_DISABLE").is_err();
-            let centered_multicell_grid = std::env::var("OXI_MULTICELL_GRID_FIT").as_deref() == Ok("1")
+            // S1417 (2026-09-15, default ON, opt-out OXI_MULTICELL_GRID_FIT_DISABLE):
+            // the checkpoint's opt-in promoted. reference__1323b9bc (Meiryo 12 in
+            // 2-cell 36pt grid lines, widowControl): the S608 natural look-ahead
+            // read the last line at the cell top and split a 2-line paragraph
+            // 1+1; Word centres the natural box in its cells (Info(6) sits 5.75
+            // below the cell top = (36 - 24.5) / 2) and pushes both lines. Env
+            // gates: golden 183 -> 185 (probeqsizes, probexbigrun), ja 188 same.
+            let centered_multicell_grid = std::env::var_os("OXI_MULTICELL_GRID_FIT_DISABLE").is_none()
                 && !page.doc_grid_no_type
                 && para.style.snap_to_grid
                 && grid_pitch.is_some_and(|p| p > 0.0 && effective_lh > p * 1.5);
