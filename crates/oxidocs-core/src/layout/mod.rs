@@ -38723,8 +38723,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // cell-Y errors are a DIFFERENT mechanism (NOT this col0-before-taller-cell
             // ordering). Opt-in so a future no-docGrid vAlign=center doc gets the fix.
             let s503_enable = std::env::var("OXI_S503_ENABLE").is_ok();
+            // S1423 (2026-09-16, default ON, opt-out OXI_S1423_DISABLE): a cantSplit
+            // row's page fit is measured with its RENDER height in CJK documents
+            // too. The Latin-only gate left the pagination estimate (25.75 for a
+            // 2-line MS Mincho 10.5 row) deciding against a 27.23 render:
+            // `_pb_rowfit_gen.py` (tests/fixtures/rowfit, Word COM, bottom 785.2)
+            // keeps the row at line-1 top 757.75 (last line bottom 784.75) and
+            // moves it whole at 758.75 (785.75); Oxi kept it through 759.7.
+            // Word's rule = the row's LAST LINE box must end above the content
+            // bottom; the bottom border and cell padding may hang past it.
             let measure_cant_split_fit = row.cant_split
-                && !self.doc_body_has_real_cjk
+                && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1423_DISABLE").is_none())
                 && row.height_rule.as_deref() != Some("exact");
             let mut center_row_h: f32 = 0.0;
             let mut kept_first_paragraph_height: f32 = 0.0;
@@ -49995,7 +50004,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         bw = metrics.char_width_em(ch) * fs;
                                     }
                                     if self.compat_mode >= 15
-                                        && std::env::var("OXI_MODERN_AUTO_TABLES").ok().as_deref() == Some("1")
+                                        && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none() /* S1422 */
                                         && kinsoku::is_cjk(ch)
                                     {
                                         // CJK characters offer inter-character
@@ -50267,7 +50276,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 && !is_dxa_fixed
                 && !is_pct_overwide
                 && (total > available || (self.compat_mode >= 15
-                    && std::env::var("OXI_MODERN_AUTO_TABLES").ok().as_deref() == Some("1")))
+                    && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none() /* S1422 */))
                 && table_grid_columns.len() > 1
             {
                 // S1126 (2026-08-15, opt-out OXI_S1126_DISABLE): Word's AUTOFIT
