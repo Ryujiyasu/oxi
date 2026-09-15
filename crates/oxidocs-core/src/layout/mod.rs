@@ -40182,7 +40182,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let mut cell_terminal_spacing: std::collections::HashMap<(usize, usize), f32> =
                 std::collections::HashMap::new();
             let mut split_valign_offsets: Vec<(usize, f32)> = Vec::new();
-            let fragment_valign = std::env::var("OXI_CELL_FRAGMENT_VALIGN").is_ok()
+            // S1407 (2026-09-15, default ON, opt-out OXI_CELL_FRAGMENT_VALIGN_DISABLE):
+            // the checkpoint's opt-in promoted -- a row without vMerge or cell
+            // text boxes aligns its split fragments by the cell's vAlign.
+            // technical__b243782b73e69ad1 (row 10 lrpb_mid split) and
+            // creative__32ceca2e1f3ae9a8 go to PASS. Gates under the env flag:
+            // golden 183/187 (same fail set), ja 179 -> 181, en 291/298 (same).
+            let fragment_valign = std::env::var("OXI_CELL_FRAGMENT_VALIGN_DISABLE").is_err()
                 && row.cells.iter().all(|c| c.v_merge.is_none() && c.cell_text_boxes.is_empty());
             // Element ranges exclude the outer cell borders. Keep the physical
             // content origin so alignment can use the final fragment boundary.
