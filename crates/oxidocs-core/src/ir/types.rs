@@ -985,6 +985,9 @@ pub enum WrapType {
 /// A text box (from w:txbxContent or wps:txbx)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextBox {
+    /// Inward text inset contributed by the outline, including an invisible outline.
+    #[serde(default)]
+    pub text_outline_inset: f32,
     /// Upright vertical text, with columns progressing from right to left.
     /// Independent of the containing section's writing direction.
     #[serde(default)]

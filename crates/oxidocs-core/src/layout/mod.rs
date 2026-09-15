@@ -4826,6 +4826,21 @@ impl LayoutEngine {
         }
     }
 
+    fn fit_text_cell_overflow(
+        runs: &[Run], run_idx: usize, char_idx: usize, occupied: f32, capacity: f32,
+    ) -> Option<bool> {
+        if std::env::var_os("OXI_FIT_TEXT_ATOMIC_CELL").is_none() { return None; }
+        let run = &runs[run_idx];
+        let width = run.style.fit_text?;
+        let id = run.style.fit_text_id?;
+        let starts_group = char_idx == 0 && (run_idx == 0
+            || runs[run_idx - 1].style.fit_text_id != Some(id)
+            || runs[run_idx - 1].style.fit_text.is_none());
+        // Move a fit group as a unit, retaining its advances even when
+        // its specified width exceeds an otherwise empty line.
+        Some(starts_group && occupied > 0.0 && occupied + width > capacity)
+    }
+
     fn resolve_fit_text_runs(&self, runs: &mut Vec<Run>, para_style: &ParagraphStyle) {
         let mut i = 0;
         while i < runs.len() {
@@ -5094,7 +5109,7 @@ impl LayoutEngine {
             // shows no paragraph beginning mid-column; only Word's own
             // section-break MARK does, and that is not an Oxi block.
             let (recipes, cols) =
-                self.vertical_section_columns(page, run_start, run_end, band_h, page_pitch);
+                self.vertical_section_columns(page, run_start, run_end, band_h, page_pitch, false);
 
             // ---- Phase B: place them ----------------------------------------
             // A section that ends in a continuous break balances; the LAST run
@@ -5780,6 +5795,7 @@ impl LayoutEngine {
         run_end: usize,
         band_h: f32,
         page_pitch: f32,
+        natural_columns: bool,
     ) -> (Vec<VertParaRecipe>, Vec<VertColumn>) {
         let mut recipes: Vec<VertParaRecipe> = Vec::new();
         let mut cols: Vec<VertColumn> = Vec::new();
@@ -5888,8 +5904,11 @@ impl LayoutEngine {
                     {
                         rfs = Self::vertical_align_font_size(rfs);
                     }
-                    self.metrics_for_text(&run.text, &run.style, &para.style)
-                        .word_line_height_no_grid(rfs)
+                    let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
+                    metrics.word_line_height_no_grid(rfs)
+                        + if natural_columns && metrics.is_cjk_83_64_font() {
+                            rfs * (3.0 / 64.0)
+                        } else { 0.0 }
                 })
                 .collect();
             // An empty paragraph has no runs, so its fonts live in the pPr/rPr
@@ -5913,7 +5932,10 @@ impl LayoutEngine {
             };
             // The paragraph-wide basis: what a line falls back to when none of
             // its own runs measures, and the whole answer when S1296 is off.
-            let nat_base = mark_m.word_line_height_no_grid(mark_fs);
+            let nat_base = mark_m.word_line_height_no_grid(mark_fs)
+                + if natural_columns && mark_m.is_cjk_83_64_font() {
+                    mark_fs * (3.0 / 64.0)
+                } else { 0.0 };
             let nat_para = run_nat.iter().fold(nat_base, |a, b| a.max(*b))
                 + self.ruby_expansion_for_runs(&para.runs, fs, &para.style);
             let cells_of = |nat: f32| -> f32 {
@@ -5937,6 +5959,15 @@ impl LayoutEngine {
                     _ => page_pitch * para.style.line_spacing.unwrap_or(1.0).max(0.0).max(cells),
                 }
             };
+            let pitch_for_nat = |nat: f32| -> f32 {
+                if natural_columns {
+                    match para.style.line_spacing_rule.as_deref() {
+                        Some("exact") => para.style.line_spacing.unwrap_or(nat).max(0.0),
+                        Some("atLeast") => para.style.line_spacing.unwrap_or(0.0).max(nat),
+                        _ => nat * para.style.line_spacing.unwrap_or(1.0).max(0.0),
+                    }
+                } else { pitch_of(cells_of(nat)) }
+            };
             // The width of a column whose characters came from runs `a..=b`.
             let col_pitch = |a: usize, b: usize| -> f32 {
                 let mut nat = run_nat[a..=b].iter().fold(0.0f32, |m, v| m.max(*v));
@@ -5944,9 +5975,9 @@ impl LayoutEngine {
                     nat = nat_base;
                 }
                 nat += self.ruby_expansion_for_runs(&para.runs[a..=b], fs, &para.style);
-                pitch_of(cells_of(nat))
+                pitch_for_nat(nat)
             };
-            let pitch = pitch_of(cells_of(nat_para));
+            let pitch = pitch_for_nat(nat_para);
             if std::env::var("OXI_DBGVERT").is_ok() {
                 eprintln!(
                     "[DBGVERT] blk={} fam={:?} 83/64={} fs={:.2} nat={:.3} \
@@ -15263,7 +15294,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     /// Resolve absolute (x, y) position for a text box based on its anchor references.
     fn legacy_square_textbox_clamp(&self, text_box: &TextBox) -> bool {
         std::env::var_os("OXI_LEGACY_SQUARE_TEXTBOX_CLAMP").is_some()
-            && self.compat_mode <= 14
+            && (self.compat_mode <= 14 || !self.compat_mode_explicit)
             && text_box.wrap_type == Some(crate::ir::WrapType::Square)
             && text_box.position.as_ref().map_or(false, |pos| {
                 pos.v_relative.as_deref() == Some("paragraph") && pos.y >= 0.0
@@ -15682,6 +15713,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // v-text-anchor: middle/bottom shifts content within textbox.
         // Initial cursor at top; for middle/bottom, compute content height first,
         // then offset all elements after layout.
+        if text_box.vertical_text && std::env::var_os("OXI_VERTICAL_TEXTBOX_LAYOUT").is_some() {
+            let outline = text_box.text_outline_inset.max(0.0);
+            let width = (inner_width - 2.0 * outline).max(0.0);
+            let height = (inner_height - 2.0 * outline).max(0.0);
+            let mut box_page = page.clone();
+            box_page.blocks = text_box.blocks.clone();
+            box_page.grid_line_pitch = None;
+            box_page.grid_char_pitch = None;
+            box_page.grid_char_cw_ratio = None;
+            box_page.grid_char_quantized_runs.clear();
+            box_page.grid_char_runs.clear();
+            box_page.doc_grid_lines_and_chars = false;
+            let (recipes, columns) = self.vertical_section_columns(
+                &box_page, 0, box_page.blocks.len(), height,
+                self.default_font_size.max(1.0), true,
+            );
+            let used: f32 = columns.iter().map(|column| column.pitch).sum();
+            let slack = (width - used).max(0.0);
+            let shift = match text_box.v_text_anchor.as_deref() {
+                Some("ctr" | "middle" | "center") => slack / 2.0,
+                Some("b" | "bottom") => slack,
+                _ => 0.0,
+            };
+            let mut right = inner_x + outline + width - shift;
+            for column in &columns {
+                right -= column.pitch;
+                elements.extend(self.place_vertical_column(
+                    &box_page, &recipes[column.recipe], column, right,
+                    abs_y + inset_t + v_corner_inset + outline,
+                ));
+            }
+            elements.push(LayoutElement::new(abs_x, abs_y, text_box.width,
+                text_box.height, LayoutContent::ClipEnd));
+            return elements;
+        }
         let v_anchor = text_box.v_text_anchor.as_deref().unwrap_or("t");
         let mut cursor = LayoutCursor::new(abs_y + inset_t + v_corner_inset);
 
@@ -36185,10 +36251,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let pitch_tw = f64::from(pitch) * 20.0;
                     let cells = (width_tw / pitch_tw).floor();
                     let next_boundary_tw = ((cells + 1.0) * pitch_tw).floor();
+                    // Quantize only the capacity comparison. Keep the selected
+                    // grid boundary's fractional precision for line breaking.
                     let boundary_tw = if next_boundary_tw <= width_tw {
-                        next_boundary_tw
+                        (cells + 1.0) * pitch_tw
                     } else {
-                        (cells * pitch_tw).floor()
+                        cells * pitch_tw
                     };
                     (boundary_tw / 20.0) as f32
                 } else {
@@ -42553,6 +42621,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // -0.03 SSIM regression on d1e8 p.1. S113 grid showed Word
                                             // actually compresses at cs∈{-5,-9,-15,-20}tw = {-0.25..-1.0pt};
                                             // cs=-1tw=-0.05pt is below Word's compression threshold.
+                                            if std::env::var_os("OXI_DEBUG_FIT_CELL").is_some()
+                                                && run.style.fit_text.is_some() {
+                                                eprintln!("[FIT_CELL] id={:?} ch={:?} cs={:.9} cw={:.9} x={:.9} buf={:.9} cap={:.9} sum={:.9}",
+                                                    run.style.fit_text_id, ch, cs, cw, line_x, buf_w, effective_wrap, line_x + buf_w + cw);
+                                            }
                                             let would_overflow_natural =
                                                 line_x + buf_w + cw > effective_wrap;
                                             let run_has_neg_cs = cs <= -0.1;
@@ -43506,6 +43579,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         .ok()
                                                         .and_then(|v| v.parse::<f32>().ok())
                                                         .unwrap_or(1.0);
+                                            let would_overflow = Self::fit_text_cell_overflow(
+                                                &para.runs, run_idx, s586_ci,
+                                                line_x + buf_w, effective_wrap,
+                                            ).unwrap_or(would_overflow);
                                             if !is_space
                                                 && would_overflow
                                                 && !(current_line.is_empty() && buf.is_empty())
@@ -49744,7 +49821,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let s1082_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).collect();
         let mut s1082_gpos = 0usize;
 
-        for run in &para.runs {
+        for (fit_run_idx, run) in para.runs.iter().enumerate() {
             let font_size = self.resolve_font_size(&run.style, &para.style);
             let s1312_run_ruby = run.ruby.is_some();
             // S1225 (2026-08-26): estimate mirror of S703c — a `combine` run
@@ -50310,6 +50387,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     would_overflow_natural
                 };
+                let would_overflow = Self::fit_text_cell_overflow(
+                    &para.runs, fit_run_idx, s1017_i, line_x + buf_w, effective_wrap,
+                ).unwrap_or(would_overflow);
                 if !is_space && would_overflow && !(!line_nonempty && !buf_nonempty) {
                     if kinsoku::is_line_start_prohibited(ch)
                         && !(ch.is_ascii() && !self.doc_body_has_real_cjk

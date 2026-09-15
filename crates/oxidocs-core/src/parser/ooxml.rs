@@ -8096,6 +8096,7 @@ fn parse_drawing(
     }
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
+            text_outline_inset: stroke_width_saved.unwrap_or(0.0) * 0.5,
             vertical_text: text_vertical,
             blocks: shape_text_blocks,
             inline: inline_tb,
@@ -8964,6 +8965,7 @@ fn parse_vml_pict(
         && std::env::var("OXI_S746_DISABLE").is_err();
     if s746_inline_txbx {
         let text_box = Some(TextBox {
+            text_outline_inset: 0.0,
             vertical_text: false,
             blocks: text_blocks,
             inline: true,
