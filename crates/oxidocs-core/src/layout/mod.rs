@@ -50121,8 +50121,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         stop.position + width > right
     }
 
+    // S1406 (2026-09-15, default ON, opt-out OXI_CELL_FLOAT_FLOW_DISABLE): the
+    // checkpoint's opt-in promoted. correspondence__06436121c0bfef00: a cell
+    // holding a positioned image; without the flow the row was a 743pt
+    // unsplittable push (the "PASS that never reproduced" since ja86), with it
+    // every paragraph lands on Word's page (0.5 -> 1.0). Gates under the env
+    // flag: golden 183/187 (same fail set), ja 179 -> 180, en 291/298 (same).
     fn cell_float_enabled(cell: &TableCell) -> bool {
-        std::env::var("OXI_CELL_FLOAT_FLOW").is_ok()
+        std::env::var("OXI_CELL_FLOAT_FLOW_DISABLE").is_err()
             && cell.blocks.iter().any(|block| matches!(block, Block::Image(image) if image.position.is_some()))
     }
 
