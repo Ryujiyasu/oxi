@@ -5319,7 +5319,14 @@ impl LayoutEngine {
                 right,
             );
         }
-        if std::env::var_os("OXI_VERTICAL_FLOAT_TABLES").is_some() {
+        // S1405 (2026-09-15, default ON, opt-out OXI_VERTICAL_FLOAT_TABLES_DISABLE):
+        // the checkpoint's opt-in promoted. reports__1fd371a8117ab95e (tbRl
+        // section, a page-anchored floating table): the dump held zero elements
+        // and the doc scored 0.0; with the placement below every paragraph lands
+        // on Word's page (1.0). Gates under the env flag: golden 183/187 (same
+        // fail set), ja 179 -> 180, en 291/298 (same). The other four vertical
+        // fails are untouched by it (separate walls).
+        if std::env::var_os("OXI_VERTICAL_FLOAT_TABLES_DISABLE").is_none() {
             for (block_idx, block) in page.blocks.iter().enumerate() {
                 let Block::Table(table) = block else { continue };
                 let Some(pos) = table.style.position.as_ref() else { continue };
