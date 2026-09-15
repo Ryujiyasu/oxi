@@ -10283,7 +10283,70 @@ cells={} pitch={:.2} text={:?}",
                     // lines, move a 2-line tail + follower) instead of whole-moving.
                     let mut s916_split = false;
                     if para.style.keep_next && !elements.is_empty() {
-                        if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
+                        // S1420 (2026-09-16, default ON, opt-out OXI_S1420_DISABLE): a
+                        // keepNext paragraph whose follower is a TABLE keeps with the
+                        // table's FIRST ROW. MEASURED (`_pb_keepnext_tbl_gen.py`,
+                        // tests/fixtures/keepnext_tbl, Word COM, 18pt grid, 2-line
+                        // cantSplit rows, content bottom 785.2): heading at 725.25 with
+                        // row 1 at 741.75 (+36 fits) stays; heading at 743.25 with row 1
+                        // at 759.75 (+36 = 795.75 > 785.2) moves to p2 under keepNext
+                        // and stays on p1 without it. policies__094c44cd 「例示と好ましい
+                        // 選択肢」 and policies__07543a6b are this class. The look-ahead
+                        // below only knew a paragraph follower, so the heading stayed
+                        // at the page bottom; the table's first row is folded into a
+                        // one-line EXACT-spaced stand-in and the paragraph arm decides.
+                        let s1420_synth: Option<Paragraph> = match page.blocks.get(block_idx + 1) {
+                            Some(Block::Table(tbl))
+                                if std::env::var_os("OXI_S1420_DISABLE").is_none()
+                                    // CJK-body scope: Latin documents keep their
+                                    // calibrated table-follower path (the
+                                    // `next_block_is_table` arm of layout_paragraph
+                                    // and the S960/S970 back-pulls); with both active
+                                    // legal__0010437a / 001410a8 / 001beddec kept a
+                                    // «Table» / «Form 22» heading Word pushes.
+                                    && self.doc_body_has_real_cjk
+                                    && tbl.style.position.is_none()
+                                    && !tbl.rows.is_empty() =>
+                            {
+                                let cw = self.resolve_table_col_widths_n(tbl, content_width, false);
+                                let dp = tbl.style.default_cell_margins.as_ref();
+                                let (pl, pr, pt, pb) = (
+                                    dp.and_then(|m| m.left).unwrap_or(5.4),
+                                    dp.and_then(|m| m.right).unwrap_or(5.4),
+                                    dp.and_then(|m| m.top).unwrap_or(0.0),
+                                    dp.and_then(|m| m.bottom).unwrap_or(0.0),
+                                );
+                                let row_h = self.estimate_table_row_natural_h(
+                                    &tbl.rows[0], &cw, pl, pr, pt, pb, tbl,
+                                    page.grid_line_pitch, page.grid_char_pitch, None,
+                                );
+                                let mut synth = para.clone();
+                                synth.runs.truncate(1);
+                                if let Some(r) = synth.runs.first_mut() {
+                                    r.text = "\u{3000}".to_string();
+                                }
+                                synth.shapes.clear();
+                                synth.style.keep_next = false;
+                                synth.style.widow_control = true;
+                                synth.style.page_break_before = false;
+                                synth.style.line_spacing_rule = Some("exact".to_string());
+                                synth.style.line_spacing = Some(row_h.max(1.0));
+                                synth.style.space_before = None;
+                                synth.style.space_after = None;
+                                synth.style.before_lines = None;
+                                synth.style.after_lines = None;
+                                synth.style.has_direct_spacing = true;
+                                synth.style.has_direct_before = true;
+                                Some(synth)
+                            }
+                            _ => None,
+                        };
+                        let s1420_next: Option<&Paragraph> = match page.blocks.get(block_idx + 1) {
+                            Some(Block::Paragraph(p)) => Some(p),
+                            Some(Block::Table(_)) => s1420_synth.as_ref(),
+                            _ => None,
+                        };
+                        if let Some(next_para) = s1420_next {
                             let this_h0 = self.estimate_para_height(
                                 para,
                                 self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
