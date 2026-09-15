@@ -30990,12 +30990,31 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // ×4 (+12.6pt each) driver of legal's +1 band.
                             // Legacy compatibility preserves aligned tab stops outside
                             // the paragraph boundary; modern layout clamps them.
+                            // S1401 (2026-09-15, default ON, opt-out OXI_S1401_DISABLE; the
+                            // checkpoint's opt-in OXI_CJK_ALIGNED_TAB_BOUNDARY promoted):
+                            // MEASURED (`_pb_tabbeyond_gen.py`, Word COM Information(5) of
+                            // the page number, A4 text width 425.25, right tab 9360 = 468pt):
+                            //   compat 15, no indent      number ends at the right margin
+                            //   compat 15, ind left 36/72 ends at margin - 36 / - 72
+                            //   compat 15, ind right 18   ends at margin - 18
+                            //   compat 15, stop AT 8505   one line (the at-boundary stop
+                            //                             clamps like a beyond one)
+                            //   compat 14 / no settings   ends at the 468pt stop, past the
+                            //                             margin, as S883's Latin docs do
+                            // one line in every arm. The clamp is the paragraph's usable
+                            // width (content - ind_left - ind_right) laid off from the
+                            // LEFT MARGIN, i.e. line-relative avail - ind_left; the
+                            // checkpoint's avail alone missed the indented TOC levels.
+                            // policies__07543a6b9776a1cf: 35 TOC entries (Word's default
+                            // US-Letter 9360 stop on an A4 sheet) each wrapped their page
+                            // number to a 2nd line, doubling the TOC, one page over.
+                            let s1401_target = (available_tw as f32 / 20.0 - indent_left).max(0.0);
                             let cjk_aligned_tab_boundary = self.doc_body_has_real_cjk
                                 && self.compat_mode_explicit
                                 && self.compat_mode >= 15
-                                && std::env::var_os("OXI_CJK_ALIGNED_TAB_BOUNDARY").is_some()
+                                && std::env::var("OXI_S1401_DISABLE").is_err()
                                 && matches!(tab_align, TabStopAlignment::Right | TabStopAlignment::Center)
-                                && next_relative > available_tw as f32 / 20.0 + 0.01;
+                                && next_relative > s1401_target - 0.01;
                             let tab_align = if cjk_aligned_tab_boundary {
                                 TabStopAlignment::Right
                             } else {
@@ -31006,8 +31025,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 && std::env::var("OXI_S883_DISABLE").is_err()
                                 && (!self.doc_body_has_real_cjk || cjk_aligned_tab_boundary)
                             {
-                                let avail_rel = available_tw as f32 / 20.0;
-                                if next_relative > avail_rel + 0.01 {
+                                let avail_rel = if cjk_aligned_tab_boundary {
+                                    s1401_target
+                                } else {
+                                    available_tw as f32 / 20.0
+                                };
+                                if cjk_aligned_tab_boundary {
+                                    next_relative = next_relative.min(avail_rel);
+                                    s883_nowrap = true;
+                                } else if next_relative > avail_rel + 0.01 {
                                     next_relative = avail_rel;
                                     s883_nowrap = true;
                                 }
