@@ -13263,6 +13263,43 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                         }
                     }
+                    // S1452 (2026-09-17, default ON, opt-out OXI_S1452_DISABLE): the
+                    // table's BOTTOM border takes vertical room in the flow, so the next
+                    // block starts that much lower. COM via the Word PDF's rule lines
+                    // (tools/metrics/_pb_tblgap_gen.py, tests/fixtures/tblgap, 8 arms):
+                    // table / empty paragraph / table measures bottom-rule to top-rule
+                    // 16.44 with a 1.5pt border and 15.48 with a 0.5pt one on a 15pt grid
+                    // (14.04 / 13.08 without the grid) = the paragraph's own height plus
+                    // the border width. Two ADJACENT tables share one rule and get no
+                    // addend. forms__008a2f3e's whole page-1 drift was this single 1.44pt.
+                    if !is_floating
+                        && std::env::var_os("OXI_S1452_DISABLE").is_none()
+                        && !matches!(page.blocks.get(block_idx + 1), Some(Block::Table(_)))
+                    {
+                        // Scope: only a CELL-bordered table. A table-level `tblBorders`
+                        // table already carries the gap in Oxi (fixture sz12_p1_g1: Oxi's
+                        // bottom-to-top gap is 16.50 against Word's 16.44) — its own start
+                        // is what sits 1.5pt low, so adding here double-counts and cost
+                        // 008a2f3e and 9e4d04b4 a PASS each.
+                        let bw = if table.style.border {
+                            0.0
+                        } else {
+                            table.rows.last().map_or(0.0, |r| {
+                                r.cells
+                                    .iter()
+                                    .filter_map(|c| c.borders.as_ref())
+                                    .map(|b| {
+                                        b.bottom.as_ref().map_or(0.0, |d| {
+                                            if d.style == "double" { d.width * 3.0 } else { d.width }
+                                        })
+                                    })
+                                    .fold(0.0_f32, f32::max)
+                            })
+                        };
+                        if bw > 0.0 {
+                            cursor.advance(bw);
+                        }
+                    }
                     let candidate_y_bottom = cursor.cursor_y;
 
                     // R7.60: for body-position vertAnchor=page floating tables,
