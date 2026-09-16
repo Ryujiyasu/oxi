@@ -5888,6 +5888,58 @@ impl LayoutEngine {
         (height.max(all - height), best.1)
     }
 
+    /// S1435 (2026-09-16, default ON on a grid, opt-out OXI_S1435_DISABLE):
+    /// Word levels a two-column band on a linesAndChars grid by ROW HEIGHTS,
+    /// not grid slots -- the S1352 greedy, with the column's LAST row losing
+    /// its space-after and the next column's first row keeping its
+    /// space-before. `_pb_colgridbal_gen.py` (120 arms: 12..16 rows, a
+    /// heading with 10pt after / before / 6+6 / none at 6 positions, pitch
+    /// 20.55): this law 120/120, grid-slot counting 96/120 (a 30.55pt heading
+    /// row never snaps to two pitches). `befores[i]` is row i's first-line
+    /// space-before (folded into the previous row's height by the caller).
+    fn balance_split_heights(
+        heights: &[f32],
+        gaps: &[f32],
+        befores: &[f32],
+        step: f32,
+    ) -> (f32, usize) {
+        let n = heights.len();
+        let total: f32 = heights.iter().sum();
+        // the left column ending at row s-1 drops that row's trailing gap
+        // (its space-after plus the next row's space-before); the right column
+        // keeps row s's space-before at its top
+        let left_of = |s: usize| -> f32 {
+            if s == 0 { return 0.0; }
+            let sum: f32 = heights[..s].iter().sum();
+            if s < n { sum - gaps[s - 1].max(0.0) } else { sum }
+        };
+        let right_of = |s: usize| -> f32 {
+            if s >= n { return 0.0; }
+            heights[s..].iter().sum::<f32>() + befores.get(s).copied().unwrap_or(0.0)
+        };
+        // Word flips at a 0.575pt excess (S1352's size sweep); a tie that Oxi's
+        // own rounding breaks by a few hundredths (reports__16785375 p3: left
+        // 472.55 / right 472.65 against a 472.6 half, Word 22/23 exactly equal)
+        // must still read as a tie.
+        let tol = 0.3f32;
+        let mut limit = total * 0.5;
+        for _ in 0..=n {
+            let mut split = 0usize;
+            for s in 1..n {
+                if left_of(s) > limit + tol { break; }
+                split = s;
+            }
+            if split == 0 { split = 1; }
+            let l = left_of(split);
+            let r = right_of(split);
+            if r <= limit + tol {
+                return (l.max(r), split);
+            }
+            limit += step;
+        }
+        (total, n - 1)
+    }
+
     fn balance_split(
         rows: &[(usize, f32, Vec<usize>, f32, f32)],
         total: f32,
@@ -6072,6 +6124,57 @@ impl LayoutEngine {
                             if cost <= split.0 + 0.001 { split = (cost, i + 1); }
                         }
                         split
+                    }
+                    Some(pitch) if std::env::var_os("OXI_S1435_DISABLE").is_none() => {
+                        // the painted box snapped to the grid (a 13.6pt line on a
+                        // 20.55 grid occupies one pitch; the S1434 tenth-row slack
+                        // absorbs Oxi's own rounding) -- whatever the row's gap-based
+                        // height carries above that is paragraph spacing, and a
+                        // sub-tenth remainder is rounding noise (a 21.0 row IS a
+                        // 20.55 row: reports__16785375 p3 ties at 22/23 rows in
+                        // Word and the noise alone tipped it to 23)
+                        let lineboxes: Vec<f32> = rows.iter().map(|r| {
+                            let raw = r.2.iter()
+                                .filter(|&&j| elements[j].flow_line_offset == 0.0)
+                                .map(|&j| elements[j].flow_line_height.unwrap_or(elements[j].height))
+                                .fold(0.0f32, f32::max);
+                            ((raw / pitch - 0.1).ceil().max(1.0)) * pitch
+                        }).collect();
+                        let gaps: Vec<f32> = rows.iter().zip(&lineboxes).map(|(r, lb)| {
+                            let g = r.3 + r.4 - lb;
+                            if g < 0.1 * pitch { 0.0 } else { g }
+                        }).collect();
+                        let heights: Vec<f32> = lineboxes.iter().zip(&gaps).map(|(lb, g)| lb + g).collect();
+                        let befores: Vec<f32> = rows.iter().map(|r| r.2.iter()
+                            .map(|&j| elements[j].flow_space_before)
+                            .fold(0.0f32, f32::max)).collect();
+                        if std::env::var("OXI_DBG_COL").is_ok() {
+                            eprintln!("[S1435] pitch={:.2} h={:?} gap={:?} before={:?}", pitch,
+                                heights.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>(),
+                                gaps.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>(),
+                                befores.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
+                        }
+                        let mut out = Self::balance_split_heights(&heights, &gaps, &befores, pitch);
+                        if std::env::var("OXI_DBG_COL").is_ok() {
+                            eprintln!("[S1435] split={} taller={:.2}", out.1, out.0);
+                        }
+                        // A keepNext paragraph cannot end the left column (S1324's
+                        // whole-move: reference__13e1b7fc p7 ❖児童館, keepNext +
+                        // keepLines, heads the right column in Word); back the
+                        // split off to the start of that paragraph.
+                        let para_of = |i: usize| rows[i].2.first().and_then(|&ei| elements[ei].paragraph_index);
+                        while out.1 > 1 && out.1 < rows.len() {
+                            let Some(pi) = para_of(out.1 - 1) else { break };
+                            let kn = matches!(blocks.get(pi), Some(Block::Paragraph(p)) if p.style.keep_next);
+                            if !kn { break; }
+                            let first = (0..out.1).rev().take_while(|&i| para_of(i) == Some(pi)).last().unwrap_or(out.1 - 1);
+                            if first == 0 { break; }
+                            out.1 = first;
+                        }
+                        if std::env::var("OXI_DBG_COL").is_ok() {
+                            eprintln!("[S1435] split={} taller={:.2}", out.1, out.0);
+                        }
+                        out
                     }
                     Some(pitch) => Self::balance_split_grid(&rows, pitch),
                     None => Self::balance_split(&rows, total, 0.001),
