@@ -13716,6 +13716,32 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             }
         }
     }
+    // S1444 (2026-09-17, default ON, opt-out OXI_S1444_DISABLE): a missing font
+    // whose fontTable entry carries a `w:sig` is substituted by Calibri unless
+    // its family is roman / modern / decorative / auto (those, and any entry
+    // without a signature, take Cambria — the registry's fallback and S1133).
+    // Measured (tools/metrics/_pb_missingfont_gen.py, tests/fixtures/missingfont,
+    // Word PDF span font): 30 arms over docDefaults font x theme x PANOSE x
+    // family x pitch x name; the signature is the discriminator, the family
+    // the only second term. policies__00602e8a's NTPreCursivef (script, sig)
+    // renders in Calibri 14; Oxi's Cambria fallback was ~4% wider.
+    if std::env::var_os("OXI_S1444_DISABLE").is_none() {
+        for (name, info) in &document.styles.font_table {
+            let cambria_family = matches!(
+                info.family.as_deref(),
+                Some("roman") | Some("modern") | Some("decorative") | Some("auto")
+            );
+            if info.code_page_range.is_some()
+                && !cambria_family
+                && !registry.supports_family(name)
+                && crate::font::runtime::resolve(name, false, false).is_none()
+                && !registry.get(name).is_cjk_83_64_font()
+                && !alias.contains_key(name)
+            {
+                alias.insert(name.clone(), "Calibri".to_string());
+            }
+        }
+    }
     // A declared Latin family classification participates in substitution.
     // Supported alternates and installed faces take precedence over fallback.
     if std::env::var("OXI_DECLARED_FONT_FALLBACK").is_ok() {
