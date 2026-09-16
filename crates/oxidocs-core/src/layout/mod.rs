@@ -9329,7 +9329,15 @@ cells={} pitch={:.2} text={:?}",
                         continue;
                     }
                     if tb.anchor_block_index < block_idx {
-                        if std::env::var("OXI_TABLE_WRAP_PAGE_SCOPE").is_ok() {
+                        // S1437 (2026-09-16, default ON, opt-out OXI_S1437_DISABLE): the
+                        // OXI_TABLE_WRAP_PAGE_SCOPE opt-in promoted. Without it a wrap
+                        // text box anchored to an earlier block on ANOTHER page, whose
+                        // page-local y-span happens to contain the cursor, pushed a
+                        // table below it (reports__28abf02c p3: the p2 answer-bracket
+                        // boxes at 467..586 shoved the (16) table 119pt down, one
+                        // page over for 10 paragraphs).
+                        if std::env::var("OXI_TABLE_WRAP_PAGE_SCOPE").is_ok()
+                            || std::env::var_os("OXI_S1437_DISABLE").is_none() {
                             // A wrap obstacle belongs to the page on which it is drawn.
                             let anchor_pages = if std::env::var("OXI_S1123_DISABLE").is_err() {
                                 &block_start_page_indices
