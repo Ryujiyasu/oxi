@@ -5858,8 +5858,19 @@ impl LayoutEngine {
         // The epsilon is load-bearing: a row that IS one grid row arrives as
         // a difference of two accumulated f32 tops, so it can be 20.550003
         // against a 20.55 pitch and ceil() calls it two rows.
+        // S1434 (2026-09-16, default ON, opt-out OXI_S1434_DISABLE): a row
+        // that overhangs its grid slot by Oxi's own rounding noise (a tenth
+        // of a row, ~2pt) is still ONE slot. reference__13e1b7fc p7: rows of
+        // 20.8 / 21.0 / 20.75 on a 20.55 pitch were two slots each, so 22
+        // one-pitch rows split 12/10 where Word splits 11/11 (Word's own
+        // increments read 20.25..21.0 through the 0.75pt Info6 quantisation)
+        // and every following continuous section started 18pt low (+1 x14).
+        // A genuinely taller row (a 30.75 heading, 1.5 pitches) keeps its two
+        // slots: reports__16785375 p10 splits 10/13 in Word only that way
+        // (a half-row slack there gave 12/11 and pushed 15 paragraphs).
+        let slack = if std::env::var_os("OXI_S1434_DISABLE").is_none() { 0.1 } else { 0.001 };
         let slots = |r: &(usize, f32, Vec<usize>, f32, f32)| {
-            (((r.3 + r.4) / pitch - 0.001).ceil() as i32).max(1)
+            (((r.3 + r.4) / pitch - slack).ceil() as i32).max(1)
         };
         let total: i32 = rows.iter().map(slots).sum();
         let mut left = 0;
