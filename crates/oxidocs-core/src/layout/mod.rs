@@ -22928,8 +22928,6 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     fragment.text.chars().any(kinsoku::is_cjk_ideograph_or_kana)
                 })
             {
-                // A visible CJK line must fit its natural text box. Empty
-                // paragraph marks retain their separate bottom-margin rules.
                 natural_lh
             } else {
                 ink_line_heights
@@ -23453,7 +23451,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .min(effective_lh);
                 centered_box_is_threshold = s739_centered > 0.0
                     && (v - s739_centered).abs() < 1e-6;
+                // S1438: a line that carries ruby needs its natural box plus the
+                // ruby expansion at the page bottom (proberuby vs its plain twin).
+                let s1438_ruby = std::env::var_os("OXI_S1438_DISABLE").is_none()
+                    && ruby_para_expansion_pt > 0.0
+                    && lines.get(line_idx).map_or(false, |l| {
+                        l.fragments.iter().any(|fragment| {
+                            para.runs
+                                .get(fragment.run_index)
+                                .map_or(false, |r| r.ruby.is_some())
+                        })
+                    });
+                let v = if s1438_ruby {
+                    v.max(natural_lh + ruby_para_expansion_pt)
+                } else {
+                    v
+                };
                 if std::env::var("OXI_DBG_PB").is_ok() {
+                    eprintln!("[PB-RUBY] ruby_line={} exp={:.2}", s1438_ruby, ruby_para_expansion_pt);
                     let head: String = lines.get(line_idx).map(|l| l.fragments.iter().flat_map(|f| f.text.chars()).take(16).collect()).unwrap_or_default();
                     eprintln!("[PB] cy={:.2} bottom={:.2} eff={:.2} nat={:.2} ink={:.2} c739={:.2} v={:.2} sect_end_next={} bi={:?} «{}»",
                         cursor.cursor_y, page_top + content_height, effective_lh, natural_lh, ink_lh, s739_centered, v, s1375_before_section_end, body_para_index, head);
@@ -27713,7 +27728,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // reserves NO bottom overhead (Word: pure line pitch between
                 // merged boxes; the space+bw belongs to the group's LAST para).
                 // Latin scope — the JP 3a4f 6-box stack keeps its calibration.
-                let s903_interior = !self.doc_body_has_real_cjk
+                let s903_interior = (!self.doc_body_has_real_cjk
+                    || std::env::var_os("OXI_S1439_DISABLE").is_none())
                     && std::env::var("OXI_S903_DISABLE").is_err()
                     && s903_next_borders.map_or(false, |nb| nb == borders);
                 if !s903_interior {
@@ -49717,11 +49733,36 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     if p.runs.iter().all(|r| r.text.is_empty()))
                             })
                         };
+                        // S1440: an all-empty cell's empty lines were placed from the
+                        // row top; the continuation only owes the ones past the split.
+                        let s1440_placed: usize = if std::env::var_os("OXI_S1440_DISABLE").is_none() {
+                            let lh = table_grid_pitch.unwrap_or_else(|| {
+                                elements
+                                    .iter()
+                                    .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
+                                    .filter(|e| (e.y - last_cont_top).abs() < 0.5)
+                                    .map(|e| e.height)
+                                    .fold(0.0_f32, f32::max)
+                            });
+                            if lh > 0.0 {
+                                (((split_y - row_top).max(0.0) / lh) + 0.01).floor() as usize
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
                         row.cells
                             .iter()
                             .enumerate()
                             .filter(|(ci, cell)| cols.binary_search(ci).is_ok() || all_empty(cell))
-                            .map(|(_, cell)| te_of(cell))
+                            .map(|(_, cell)| {
+                                if all_empty(cell) {
+                                    te_of(cell).saturating_sub(s1440_placed)
+                                } else {
+                                    te_of(cell)
+                                }
+                            })
                             .max()
                             .unwrap_or_else(|| row.cells.iter().map(te_of).max().unwrap_or(0))
                     } else {
@@ -49871,6 +49912,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     };
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         eprintln!("[SPLIT-CURSOR] branch=s754 cont_max_y={:.2}", cont_max_y);
+                        let mut tops: Vec<(f32, f32, String)> = elements
+                            .iter()
+                            .map(|e| {
+                                let b = match &e.content {
+                                    LayoutContent::TableBorder { y2, .. } => *y2,
+                                    LayoutContent::PresetShape { .. } => e.y,
+                                    _ => e.y + e.height,
+                                };
+                                let k = match &e.content {
+                                    LayoutContent::Text { text, .. } => format!("text:{}", text.chars().take(12).collect::<String>()),
+                                    LayoutContent::TableBorder { .. } => "border".to_string(),
+                                    _ => "other".to_string(),
+                                };
+                                (b, e.y, k)
+                            })
+                            .collect();
+                        tops.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                        for t in tops.iter().take(4) {
+                            eprintln!("[SPLIT-CURSOR-EL] bottom={:.2} y={:.2} {}", t.0, t.1, t.2);
+                        }
                     }
                     if s864_empty_tail_split {
                         // Only the non-painting empty tail crossed the page.
