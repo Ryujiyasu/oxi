@@ -12726,6 +12726,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
                 Block::Table(table) => {
                     // COM-confirmed: prev paragraph's space_after is always added before table
+                    if std::env::var("OXI_DBG_TBLSTART").is_ok() {
+                        eprintln!("[TBLARM] blk={} cur={:.2} prev_space_after={:.2}", block_idx, cursor.cursor_y, prev_space_after);
+                    }
                     cursor.advance(prev_space_after);
                     prev_space_after = 0.0;
 
@@ -13159,6 +13162,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     };
                     let mut s740_fn_pages: Vec<Vec<u32>> = Vec::new();
                     let s970_pages_before_tbl = pages.len();
+                    if std::env::var("OXI_DBG_TBLSTART").is_ok() {
+                        eprintln!("[TBLARM2] blk={} cur={:.2} before layout_table_with_fit", block_idx, cursor.cursor_y);
+                    }
                     let mut table_elements = self.layout_table_with_fit(
                         table,
                         start_x,
@@ -32964,7 +32970,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && ch == '\u{3000}'
                         && current_line.fragments.iter().all(|f| f.text.chars().all(|c| c == '\u{3000}'))
                         && (available_tw == 0 || current_line.fragments.iter().map(|f| f.text.chars().count()).sum::<usize>() < 6);
-                    let is_immune_space = (trailing_u3000 && line_near_full) || degenerate_space_overhang;
+                    // S1436 (2026-09-16, default ON, opt-out OXI_S1436_DISABLE): an
+                    // ideographic space never starts a new line by itself -- like an
+                    // ASCII space it hangs past the edge and the next non-space
+                    // character wraps. `_pb_wideindent_gen.py` (tests/fixtures/
+                    // wideindent, PREFIX=ideo/ascii): 26 leading U+3000 before 8
+                    // characters in a 0-width column give Word 10 lines (all 26
+                    // spaces on line 1), Oxi 35. reports__28abf02c p2 「　×26 調査
+                    // 平成30年７月」 overflowed a page (+1 x14).
+                    let s1436_space_hang = ch == '\u{3000}'
+                        && std::env::var_os("OXI_S1436_DISABLE").is_none();
+                    let is_immune_space = (trailing_u3000 && line_near_full) || degenerate_space_overhang || s1436_space_hang;
                     let line_compress_count = current_line
                         .fragments
                         .iter()
@@ -38481,6 +38497,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     ) -> Vec<LayoutElement> {
         let flow_entry_page = pages.len();
         let _s1429_guard = TableLayoutGuard::new();
+        if std::env::var("OXI_DBG_TBLSTART").is_ok() {
+            let head: String = table.rows.first().and_then(|r| r.cells.first()).map(|c| c.blocks.iter().filter_map(|b| match b {
+                Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(12).collect::<String>()),
+                _ => None }).next().unwrap_or_default()).unwrap_or_default();
+            eprintln!("[TBLSTART] pages={} cursor_y={:.2} visual_y={:.2} fit_offset={:?} nested={} head={:?}",
+                pages.len(), cursor.cursor_y, cursor.visual_y, flow_fit_offset, is_nested, head);
+        }
         let page_geometry = page_geometry.filter(|_| {
             std::env::var("OXI_TABLE_PAGE_GEOMETRY_DISABLE").is_err()
                 // Repeated heading rows also depend on continuation sizing.
