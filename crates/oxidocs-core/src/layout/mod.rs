@@ -47204,7 +47204,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // Lay out the merged text across page bands before its final
                 // row consumes the remaining height. Repeated headers occupy
                 // the top of every continuation band.
-                let vmerge_page_flow = std::env::var("OXI_VMERGE_PAGE_FLOW").as_deref() == Ok("1")
+                // S1433 (2026-09-16, default ON, opt-out OXI_S1433_DISABLE): the
+                // checkpoint's OXI_VMERGE_PAGE_FLOW opt-in promoted. A vMerge
+                // restart cell's text is paginated line by line against the
+                // page bands (line bottom must fit; keepLines / spacing honoured)
+                // instead of being cut by the row split of a later row -- the
+                // legacy path kept a line whose TOP was above the bottom
+                // (reports__1c313df3 p2: 「・入学前の児童」 line 1 at 752.25 with an
+                // 18pt box against 756.85, Word moves the paragraph whole; the
+                // misplaced line then shifted the continuation and the table
+                // end by ~50pt). JA 189 -> 190, no PASS -> FAIL.
+                let vmerge_page_flow = (std::env::var("OXI_VMERGE_PAGE_FLOW").as_deref() == Ok("1")
+                        || std::env::var_os("OXI_S1433_DISABLE").is_none())
                     && cell.v_merge.as_deref() == Some("restart")
                     && !is_nested && row_footnotes.is_none()
                     && !matches!(cell.v_align.as_deref(), Some("center") | Some("bottom"))
