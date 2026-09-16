@@ -18314,6 +18314,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     Block::Paragraph(p) => p.style.has_direct_tabs_or_ind,
                     _ => false,
                 });
+            if std::env::var("OXI_DBG_FTR").is_ok() {
+                eprintln!("[FTR-S894] n_blocks={} has_ink={} s909_formatted={} runs={:?}", blocks.len(), has_ink, s909_formatted,
+                    blocks.iter().map(|b| match b { Block::Paragraph(p) => p.runs.iter().map(|r| (r.text.clone(), r.field_type.is_some())).collect::<Vec<_>>(), _ => vec![] }).collect::<Vec<_>>());
+            }
             if !has_ink && s909_formatted {
                 // Full stack computed here: the shared stack path's S803
                 // add-back is gated on !has_direct_spacing, which a line-only
@@ -30752,9 +30756,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let s1178_latin_muldiv = matches!(ch, '\u{00D7}' | '\u{00F7}')
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S1178_DISABLE").is_err();
+                // S1442 (2026-09-16, default ON, opt-out OXI_S1442_DISABLE): the
+                // ellipsis U+2026 / U+2025 in a Latin body is Latin text — a run of
+                // them wraps as an unbreakable word that fills the line (Word: 36
+                // per 432pt line, legal__0022399405 p6), not as a kinsoku mark that
+                // may never open a line (Oxi: one per line until the tail fits).
+                let s1442_latin_ellipsis = matches!(ch, '\u{2026}' | '\u{2025}')
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var_os("OXI_S1442_DISABLE").is_none();
                 let latin_ctx_quote = s801_latin_dash
                     || s888_latin_hyphen
                     || s951_latin_mathop
+                    || s1442_latin_ellipsis
                     || s966_latin_bullet
                     || s1103_latin_hbar
                     || s1178_latin_muldiv

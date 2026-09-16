@@ -2861,7 +2861,11 @@ fn parse_paragraph_with_inline_images_impl(
     // runs are empty and carry the wrong rPr).
     let mut pending_styleref: Option<String> = None;
     let mut simple_fields: Vec<(usize, Option<FieldType>)> = Vec::new();
-    let simple_fields_enabled = std::env::var("OXI_SIMPLE_FIELDS").is_ok();
+    // S1441: a `w:fldSimple` keeps its cached-result runs (a footer PAGE field
+    // is ink that sizes the footer; body fields keep their text). Opt-out
+    // OXI_S1441_DISABLE restores the former drop-the-field behaviour.
+    let simple_fields_enabled = std::env::var("OXI_SIMPLE_FIELDS").is_ok()
+        || std::env::var_os("OXI_S1441_DISABLE").is_none();
 
     loop {
         match reader.read_event()? {
