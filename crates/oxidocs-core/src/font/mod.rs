@@ -30,6 +30,21 @@ fn default_upm() -> u16 {
 /// と 10.5 、7.5 at 11pt = the hmtx widths snapped to 0.75; the full-width
 /// faces stay at the em). The former opt-in OXI_VERTICAL_FONT_ADVANCE still
 /// forces it on.
+/// S1447 (2026-09-17, default ON, opt-out OXI_S1447_DISABLE): a vertical (tbRl)
+/// section under `docGrid type="snapToChars"` advances every character by the
+/// grid pitch = document default size + charSpace/4096 (COM, tests/fixtures/
+/// vchargrid, 7 arms: 10.5+12.065 -> 22.5/23.25 for 10 / 10.5 / 12pt runs alike,
+/// charSpace 0 -> the em, 2pt -> 12.75/12.0, 5pt -> 15.75/15.0) and each column
+/// by the line pitch. creative__3d2bf04c packed three pages into one without it.
+/// The former opt-in OXI_VERTICAL_CHAR_GRID still forces it on.
+pub fn vertical_char_grid_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var_os("OXI_VERTICAL_CHAR_GRID").is_some()
+            || std::env::var_os("OXI_S1447_DISABLE").is_none()
+    })
+}
+
 pub fn vertical_font_advance_on() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
