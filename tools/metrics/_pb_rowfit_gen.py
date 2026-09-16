@@ -32,6 +32,9 @@ SETTINGS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings 
             '<w:compat><w:useFELayout/><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>')
 SECT = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="851" w:footer="992"/><w:docGrid w:type="lines" w:linePitch="360"/></w:sectPr>'
 RPR = '<w:rPr><w:rFonts w:ascii="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝" w:hAnsi="ＭＳ 明朝"/><w:kern w:val="2"/><w:sz w:val="21"/></w:rPr>'
+import os
+CELL_SZ = int(os.environ.get('ROWFIT_SZ', '21'))
+CRPR = RPR.replace('w:val="21"', 'w:val="%d"' % CELL_SZ)
 
 
 def para(text, exact=None):
@@ -43,7 +46,7 @@ def table(rows=3, cant_split=True):
     cs = '<w:cantSplit/>' if cant_split else ''
     r = ''
     for i in range(rows):
-        cells = ''.join(f'<w:tc><w:tcPr><w:tcW w:w="4819" w:type="dxa"/></w:tcPr><w:p><w:pPr>{RPR}</w:pPr><w:r>{RPR}<w:t>セル{i + 1}行目の一行目</w:t></w:r></w:p><w:p><w:pPr>{RPR}</w:pPr><w:r>{RPR}<w:t>二行目</w:t></w:r></w:p></w:tc>' for _ in range(2))
+        cells = ''.join(f'<w:tc><w:tcPr><w:tcW w:w="4819" w:type="dxa"/></w:tcPr><w:p><w:pPr>{CRPR}</w:pPr><w:r>{CRPR}<w:t>セル{i + 1}行目の一行目</w:t></w:r></w:p><w:p><w:pPr>{CRPR}</w:pPr><w:r>{CRPR}<w:t>二行目</w:t></w:r></w:p></w:tc>' for _ in range(2))
         r += f'<w:tr><w:trPr>{cs}</w:trPr>{cells}</w:tr>'
     return ('<w:tbl><w:tblPr><w:tblW w:w="9638" w:type="dxa"/><w:tblBorders>'
             '<w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
@@ -62,8 +65,8 @@ import win32com.client
 app = win32com.client.DispatchEx('Word.Application'); app.Visible = False
 try:
     for cant in ((True,) if mode == 'cant' else (False,) if mode == 'split' else (True, False)):
-        for x in range(80, 101):
-            at = OUT / f'{"cant" if cant else "split"}_{x:02d}.docx'
+        for x in [int(v) for v in os.environ.get('ROWFIT_X', ','.join(str(i) for i in range(80, 101))).split(',')]:
+            at = OUT / f'{"cant" if cant else "split"}{"" if CELL_SZ == 21 else "_sz%d" % CELL_SZ}_{x:02d}.docx'
             with zipfile.ZipFile(at, 'w', zipfile.ZIP_DEFLATED) as z:
                 z.writestr('[Content_Types].xml', CT); z.writestr('_rels/.rels', RR); z.writestr('word/_rels/document.xml.rels', DR)
                 z.writestr('word/settings.xml', SETTINGS); z.writestr('word/document.xml', document(x, cant))

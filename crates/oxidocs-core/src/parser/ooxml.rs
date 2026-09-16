@@ -167,6 +167,105 @@ fn resolve_character_style(style: &mut RunStyle, styles: &StyleSheet, toc_result
     }
 }
 
+/// S1425: the styles.xml Word would hold after "update styles from template" --
+/// the template's docDefaults, the template's definition of every style whose
+/// NAME the document also has (keeping the document's styleId so paragraphs
+/// still resolve, and mapping basedOn/next/link to the document's ids by name),
+/// and the document's own styles otherwise.
+fn s1425_merge_styles_xml(doc: &str, tpl: &str) -> String {
+    fn attr<'a>(block: &'a str, name: &str) -> Option<&'a str> {
+        let key = format!("{}=\"", name);
+        let i = block.find(&key)? + key.len();
+        let j = block[i..].find('"')? + i;
+        Some(&block[i..j])
+    }
+    fn style_blocks(xml: &str) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while let Some(i) = xml[pos..].find("<w:style ") {
+            let start = pos + i;
+            let Some(e) = xml[start..].find("</w:style>") else { break };
+            let end = start + e + "</w:style>".len();
+            out.push((start, end));
+            pos = end;
+        }
+        out
+    }
+    fn name_of(block: &str) -> Option<String> {
+        let i = block.find("<w:name ")?;
+        attr(&block[i..], "w:val").map(|v| v.to_string())
+    }
+    fn style_id(block: &str) -> Option<String> {
+        let head_end = block.find('>')?;
+        attr(&block[..head_end], "w:styleId").map(|v| v.to_string())
+    }
+    // template: name -> (block, id); id -> name
+    let mut tpl_by_name: HashMap<String, &str> = HashMap::new();
+    let mut tpl_id_to_name: HashMap<String, String> = HashMap::new();
+    for (a, b) in style_blocks(tpl) {
+        let blk = &tpl[a..b];
+        if let (Some(n), Some(id)) = (name_of(blk), style_id(blk)) {
+            tpl_id_to_name.insert(id, n.clone());
+            tpl_by_name.insert(n, blk);
+        }
+    }
+    // document: name -> id
+    let doc_blocks = style_blocks(doc);
+    let mut doc_name_to_id: HashMap<String, String> = HashMap::new();
+    for (a, b) in &doc_blocks {
+        let blk = &doc[*a..*b];
+        if let (Some(n), Some(id)) = (name_of(blk), style_id(blk)) {
+            doc_name_to_id.insert(n, id);
+        }
+    }
+    let mut out = String::with_capacity(doc.len() + tpl.len());
+    let mut cursor = 0;
+    // docDefaults
+    if let (Some(d0), Some(t0)) = (doc.find("<w:docDefaults>"), tpl.find("<w:docDefaults>")) {
+        if let (Some(d1), Some(t1)) = (doc[d0..].find("</w:docDefaults>"), tpl[t0..].find("</w:docDefaults>")) {
+            out.push_str(&doc[..d0]);
+            out.push_str(&tpl[t0..t0 + t1 + "</w:docDefaults>".len()]);
+            cursor = d0 + d1 + "</w:docDefaults>".len();
+        }
+    }
+    for (a, b) in doc_blocks {
+        if a < cursor {
+            continue;
+        }
+        out.push_str(&doc[cursor..a]);
+        let blk = &doc[a..b];
+        let replaced = name_of(blk).and_then(|n| {
+            let tblk = *tpl_by_name.get(&n)?;
+            let doc_id = style_id(blk)?;
+            let mut nb = tblk.to_string();
+            // keep the document's id; map the template's basedOn / next / link ids by name
+            if let Some(tid) = style_id(tblk) {
+                nb = nb.replacen(&format!("w:styleId=\"{}\"", tid), &format!("w:styleId=\"{}\"", doc_id), 1);
+            }
+            for tag in ["w:basedOn", "w:next", "w:link"] {
+                let open = format!("<{} w:val=\"", tag);
+                if let Some(i) = nb.find(&open) {
+                    let vs = i + open.len();
+                    if let Some(ve) = nb[vs..].find('"') {
+                        let tid = nb[vs..vs + ve].to_string();
+                        if let Some(mapped) = tpl_id_to_name.get(&tid).and_then(|n| doc_name_to_id.get(n)) {
+                            nb.replace_range(vs..vs + ve, mapped);
+                        }
+                    }
+                }
+            }
+            Some(nb)
+        });
+        match replaced {
+            Some(nb) => out.push_str(&nb),
+            None => out.push_str(blk),
+        }
+        cursor = b;
+    }
+    out.push_str(&doc[cursor..]);
+    out
+}
+
 fn paragraph_base_run_style(styles: &StyleSheet, id: Option<&str>) -> RunStyle {
     let mut base = id.or(styles.default_paragraph_style_id.as_deref())
         .and_then(|id| styles.styles.get(id))
@@ -186,10 +285,27 @@ impl OoxmlParser {
     }
 
     pub fn parse(mut self) -> Result<Document, ParseError> {
+        // S1425 (2026-09-16, default ON, opt-out OXI_S1425_DISABLE): a document
+        // with `<w:linkStyles/>` and no `<w:attachedTemplate>` is updated from
+        // the machine's Normal.dotm when Word opens it -- its docDefaults, every
+        // style the template also defines (matched by name), and the theme come
+        // from the template; document-only styles stay and inherit the updated
+        // ones. MEASURED (`_pb_linkstyles_gen.py`, tests/fixtures/linkstyles):
+        // a document declaring ＭＳ 明朝 / jc both / before 6 / after 6 reads
+        // back as 游明朝 (the template theme's minor face) / left / 0 / 0 under
+        // linkStyles, and its own MyBody keeps left 21 and 14pt. policies__
+        // 07543a6b9776a1cf is exactly this (游明朝, left, where the file says
+        // Arial / ＭＳ Ｐゴシック / both). The desktop app mirrors Word here;
+        // an environment without a Normal.dotm (WASM, Linux) changes nothing.
+        // OXI_NORMAL_TEMPLATE=<path> points at another template.
+        let s1425_template = self.s1425_normal_template();
         // Parse theme first — needed for font resolution in styles
-        let mut theme = match self.read_part("word/theme/theme1.xml") {
-            Ok(xml) => parse_theme(&xml),
-            Err(_) => ThemeColors::default(),
+        let mut theme = match s1425_template.as_ref().and_then(|t| t.0.clone()) {
+            Some(xml) => parse_theme(&xml),
+            None => match self.read_part("word/theme/theme1.xml") {
+                Ok(xml) => parse_theme(&xml),
+                Err(_) => ThemeColors::default(),
+            },
         };
         if std::env::var("OXI_DRAWING_THEME_MAP").is_ok() {
             let settings = self.read_part("word/settings.xml").ok();
@@ -200,7 +316,17 @@ impl OoxmlParser {
                 theme.apply_font_language(&settings);
             }
         }
-        let mut styles = self.parse_styles_with_theme(&theme)?;
+        let mut styles = match s1425_template.as_ref() {
+            Some((_, tpl_styles_xml)) => {
+                let doc_xml = self.read_part("word/styles.xml").unwrap_or_default();
+                let merged = s1425_merge_styles_xml(&doc_xml, tpl_styles_xml);
+                parse_styles(&merged, &theme).map(|mut s| {
+                    s.cjk_substitute_face = theme.minor_font_jpan.clone();
+                    s
+                })?
+            }
+            None => self.parse_styles_with_theme(&theme)?,
+        };
         // An unstyled, unthemed package inherits the reference application's
         // Japanese defaults, as sectionless page setup does. Hosts may override
         // the family and size without changing document-declared properties.
@@ -1145,6 +1271,25 @@ impl OoxmlParser {
             comments,
             theme,
         })
+    }
+
+    /// S1425: (theme1.xml, styles.xml) of the template Word would apply, when
+    /// this document asks for it and the template can be found.
+    fn s1425_normal_template(&mut self) -> Option<(Option<String>, String)> {
+        if std::env::var_os("OXI_S1425_DISABLE").is_some() {
+            return None;
+        }
+        let settings = self.read_part("word/settings.xml").ok()?;
+        if !settings.contains("<w:linkStyles") || settings.contains("<w:attachedTemplate") {
+            return None;
+        }
+        let path = std::env::var("OXI_NORMAL_TEMPLATE").ok().filter(|p| !p.trim().is_empty())
+            .or_else(|| std::env::var("APPDATA").ok().map(|a| format!("{}\\Microsoft\\Templates\\Normal.dotm", a)))?;
+        let bytes = std::fs::read(&path).ok()?;
+        let mut tpl = OoxmlParser::new(&bytes).ok()?;
+        let styles_xml = tpl.read_part("word/styles.xml").ok()?;
+        let theme_xml = tpl.read_part("word/theme/theme1.xml").ok();
+        Some((theme_xml, styles_xml))
     }
 
     fn parse_styles_with_theme(&mut self, theme: &ThemeColors) -> Result<StyleSheet, ParseError> {

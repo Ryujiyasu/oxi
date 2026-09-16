@@ -40093,7 +40093,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     None => 58.0,
                 }
             } else {
-                table_grid_pitch.unwrap_or(14.0)
+                let legacy = table_grid_pitch.unwrap_or(14.0);
+                // S1424 (2026-09-16, default ON, opt-out OXI_S1424_DISABLE): a
+                // multi-cell row splits when ONE natural cell line fits, not one
+                // grid pitch. `_pb_rowfit_gen.py` split arms at 10.5 / 12 / 14pt
+                // (cell lines 13.5 / 15.75 / 18 on an 18pt grid, bottom 785.2):
+                // line 1 stays at top 769.5 / 767.25 / 765.75 and goes over at
+                // 770.25 / 769.5 / 767.25 -- the line box, never the pitch. The
+                // 10.5pt row with 16.5pt of room split in Word and moved whole here.
+                // CJK-body only, like S1423: the Latin arm has its own floor
+                // (legal__001410a84d3ead5f PASS -> FAIL, -1 x4, when unscoped).
+                if self.doc_body_has_real_cjk && std::env::var_os("OXI_S1424_DISABLE").is_none() {
+                    let one_line = row
+                        .cells
+                        .iter()
+                        .filter_map(|c| c.blocks.iter().find_map(|b| match b {
+                            Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.trim().is_empty()) => Some(p),
+                            _ => None,
+                        }))
+                        .map(|p| self.estimate_para_height(
+                            p, 1.0e6, row_line_pitch, table.style.para_style.as_ref(), true,
+                            grid_char_pitch, grid_char_cw_ratio,
+                        ))
+                        .filter(|h| *h > 0.5)
+                        .fold(f32::INFINITY, f32::min);
+                    if one_line.is_finite() { legacy.min(one_line) } else { legacy }
+                } else {
+                    legacy
+                }
             };
             let first_row_forced = row_idx == 0 && flow_fit_offset.is_some()
                 && page_bottom - cursor.cursor_y < s754_min_fit;
