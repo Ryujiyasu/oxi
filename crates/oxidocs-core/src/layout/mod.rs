@@ -30690,6 +30690,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let s1251_last_content =
                 chars_vec.iter().rposition(|c| !matches!(c, ' ' | '\t'));
             for (char_index, ch) in chars_vec.iter().copied().enumerate() {
+                // S1443 (2026-09-17, default ON, opt-out OXI_S1443_DISABLE): a manual
+                // page break inside a table cell is inert in Word — no line, no page
+                // (tests/fixtures/cellbr: 24/24 arms over compat 14/15 x tblHeader x
+                // cantSplit x break position keep the cell text on one line; a body
+                // paragraph's break still starts a page). technical__00c13e6a's
+                // Table 2-3 title cell opens with three breaks: Oxi drew two empty
+                // lines above the title and the page's last row fell over.
+                if ch == '\x0C'
+                    && IN_TABLE_LAYOUT.with(|c| c.get()) > 0
+                    && std::env::var_os("OXI_S1443_DISABLE").is_none()
+                {
+                    continue;
+                }
                 // LATINQUOTE (2026-07-07, default ON, opt-out
                 // OXI_LATINQUOTE_DISABLE): a curly
                 // quote (U+2018/2019/201C/201D) ADJACENT to an ASCII
@@ -43135,7 +43148,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         let mut buf_chars: Vec<
                                             crate::layout::jc_both_compress::CharContext,
                                         > = Vec::new();
-                                        let s586_run_chars: Vec<char> = run.text.chars().collect();
+                                        // S1443: a page break inside a cell is inert (see the breaker note).
+                                        let s586_run_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
                                         for (s586_ci, ch) in
                                             s586_run_chars.iter().copied().enumerate()
                                         {
@@ -51131,7 +51145,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // S1082: paragraph-wide char stream + running offset, so the estimate can
         // answer the same "is this the paragraph's last word?" question the render
         // loop answers with s586_para_chars / s586_run_offset.
-        let s1082_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).collect();
+        let s1082_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
         let mut s1082_gpos = 0usize;
 
         for (fit_run_idx, run) in para.runs.iter().enumerate() {
@@ -51210,7 +51224,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let mut buf_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
             // S1017 (2026-07-26): indexed so the KERNBREAK next-char lookup
             // (below) matches the render loop's s586_run_chars.get(ci+1).
-            let s1017_chars: Vec<char> = run.text.chars().collect();
+            let s1017_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
             for (s1017_i, ch) in s1017_chars.iter().copied().enumerate() {
                 let s1082_here = s1082_gpos;
                 s1082_gpos += 1;
