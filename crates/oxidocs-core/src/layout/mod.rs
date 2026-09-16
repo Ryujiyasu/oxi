@@ -6678,7 +6678,7 @@ cells={} pitch={:.2} text={:?}",
     // ideographic comma/full stop retain one spacing unit under balance;
     // corner/angle brackets and fullwidth Latin punctuation retain two.
     fn vertical_grid_for_block(&self, page: &Page, block: usize) -> Option<(f32, f32, bool)> {
-        if std::env::var("OXI_VERTICAL_CHAR_GRID").is_err() { return None; }
+        if !crate::font::vertical_char_grid_on() { return None; }
         let quantized = match page.grid_char_quantized_runs.iter().rev().find(|(start, _)| *start <= block) {
             Some((_, mode)) => (*mode)?,
             None if page.doc_grid_lines_and_chars => false,
@@ -30936,7 +30936,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let vertical_natural_boundary = vertical_natural_boundary_enabled
                     && ((s1446_natural_boundary_explicit && vertical_font_advance.is_some())
                         || s1446_proportional
-                        || (std::env::var("OXI_VERTICAL_CHAR_GRID").is_ok()
+                        || (crate::font::vertical_char_grid_on()
                             && grid_char_pitch.is_some() && grid_char_cw_ratio.is_some()));
                 if let Some(advance) = vertical_font_advance {
                     char_width = advance;
@@ -31243,7 +31243,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 } else {
                     1.0
                 };
-                let char_grid_extra = if vertical && std::env::var("OXI_VERTICAL_CHAR_GRID").is_ok()
+                let char_grid_extra = if vertical && crate::font::vertical_char_grid_on()
                     && crate::font::is_fullwidth(ch) && !fit_text_expand
                     && grid_char_pitch.is_some() && grid_char_cw_ratio.is_some()
                 {
@@ -31262,7 +31262,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && ch != ' '
                         && ch != '\t'
                         && ch != '\n'
-                        && crate::font::is_fullwidth(ch)
+                        && (crate::font::is_fullwidth(ch)
+                            || (use_east_asia
+                                && char_width >= 0.98 * font_size
+                                && std::env::var_os("OXI_S1449_DISABLE").is_none()))
                         && !yakumono_compressed[char_index]
                     {
                         let default_fs = pitch / ratio;
@@ -31494,6 +31497,39 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         } else {
                             char_space_pt
                         }
+                    } else if ratio > 0.0
+                        && pitch > 0.0
+                        && char_width > 0.0
+                        && !kinsoku::is_cjk(ch)
+                        && !crate::font::is_fullwidth(ch)
+                        && !use_east_asia
+                        && char_width < 0.98 * font_size
+                        && !ch.is_whitespace()
+                        && style.fit_text.is_none()
+                        && !style.ruby_spread
+                        && std::env::var_os("OXI_S1449_DISABLE").is_none()
+                    {
+                        // S1449 (2026-09-17, default ON, opt-out OXI_S1449_DISABLE): on a
+                        // `linesAndChars` grid a PROPORTIONAL half-width character carries
+                        // the grid's charSpace too — half of it when the document sets
+                        // `balanceSingleByteDoubleByteWidth`, all of it when it does not.
+                        // S1337 above only reached an ASCII glyph that is already half an
+                        // em wide (an MS-Mincho-style Latin), so a proportional face kept
+                        // its natural width. COM (tools/metrics/_pb_halfcharspace_gen.py,
+                        // tests/fixtures/halfcharspace): Century 10.5 over charSpace
+                        // -0.862, 'm(μ)Gy' spans 35.25 without the setting and 37.50 with
+                        // it (= natural 30.14 - 5 x 0.862 or - 5 x 0.431, plus the
+                        // full-width mu 9.638), matching technical__9e4d04b4's cell
+                        // character for character; kerning, justification, a first-line
+                        // indent and being inside a cell change nothing.
+                        let default_fs = pitch / ratio;
+                        let char_space_pt = pitch - default_fs;
+                        char_space_pt
+                            * if self.balance_single_byte_double_byte_width {
+                                0.5
+                            } else {
+                                1.0
+                            }
                     } else {
                         0.0
                     }
@@ -33606,7 +33642,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             * font_size
                             / 12.0;
                         let vertical_grid_hang = vertical_natural_boundary && quantized_char_grid
-                            && std::env::var("OXI_VERTICAL_CHAR_GRID").is_ok()
+                            && crate::font::vertical_char_grid_on()
                             && current_width_tw <= available_tw;
                         let s1429_cell_oidashi = IN_TABLE_LAYOUT.with(|c| c.get()) > 0
                             && std::env::var_os("OXI_S1429_DISABLE").is_none();
@@ -37365,7 +37401,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && pitch > 0.0
                     && content_width > pitch =>
             {
-                let out = if std::env::var_os("OXI_GRID_FLOOR_TWIPS").is_some() {
+                // S1448 (2026-09-17, default ON, opt-out OXI_S1448_DISABLE): the
+                // checkpoint's twips-quantised grid boundary is Word's. A line on a
+                // `docGrid type="linesAndChars"` page holds the number of cells that
+                // fit when the boundary is compared in whole twips, so a grid whose
+                // last cell overruns the text width by a fraction of a twip still
+                // holds that character. COM (tools/metrics/_pb_negindent_gen.py,
+                // tests/fixtures/negindent, 20 arms): width 481.85 / pitch 9.638 =
+                // 49.995 cells -> compat 11/12/14 hold 50 characters (the last ends
+                // 0.6pt past the right margin), compat 15 holds 49, and a grid with a
+                // larger remainder (pitch 10.75 = 44.8 cells) holds 44 in both — a
+                // twip-level boundary, not rounding. A negative left indent extends
+                // the line and never moves the first character off the margin.
+                // technical__9e4d04b4 (compat 11, leftChars -100) lost the 51st
+                // character of its first line and ran 14pt low from there on.
+                let out = if std::env::var_os("OXI_GRID_FLOOR_TWIPS").is_some()
+                    || std::env::var_os("OXI_S1448_DISABLE").is_none()
+                {
                     // Compare grid boundaries in document twips. The content
                     // width comes from integer OOXML dimensions, while a grid
                     // cell can occupy a fractional twip. Quantize the complete
@@ -43597,7 +43649,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                 // S1210: additive for both signs.
                                                                 font_size + char_space_pt
                                                             };
-                                                            if std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some() {
+                                                            if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
+                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) {
                                                                 deferred_fullwidth_grid = cw - font_size;
                                                                 cw = font_size;
                                                             }
@@ -43648,7 +43701,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 }
                                             }
                                             cw += deferred_fullwidth_grid;
-                                            if std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some() && run.style.fit_text.is_none() {
+                                            if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
+                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) && run.style.fit_text.is_none() {
                                                 cw += cell_single_byte_grid_increment(ch, grid_char_pitch,
                                                     grid_char_cw_ratio, self.balance_single_byte_double_byte_width);
                                             }
@@ -47075,7 +47129,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // the element at DE/DN boundaries and redistribute the aki into
                                             // the gaps (total width unchanged → rx/wrap/pagination
                                             // unchanged; render-only). Matches the BODY fragment-widening.
-                                            let single_byte_grid = if std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some() {
+                                            let single_byte_grid = if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
+                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) {
                                                 match (grid_char_pitch, grid_char_cw_ratio) {
                                                     (Some(p), Some(r)) if p > 0.0 && r > 0.0 => Some(if _source_style.fit_text.is_some() {
                                                         (p / r, 1.0, self.balance_single_byte_double_byte_width, *ts / 100.0)
@@ -51444,7 +51499,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // S1210: additive for both signs.
                                     font_size + char_space_pt
                                 };
-                                if std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some() {
+                                if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
+                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) {
                                     deferred_fullwidth_grid = cw - font_size;
                                     cw = font_size;
                                 }
@@ -51458,7 +51514,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                 }
                 cw += deferred_fullwidth_grid;
-                if std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some() && run.style.fit_text.is_none() {
+                if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
+                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) && run.style.fit_text.is_none() {
                     cw += cell_single_byte_grid_increment(ch, grid_char_pitch,
                         grid_char_cw_ratio, self.balance_single_byte_double_byte_width);
                 }
