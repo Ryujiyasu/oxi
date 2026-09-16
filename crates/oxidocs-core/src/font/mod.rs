@@ -23,6 +23,21 @@ fn default_upm() -> u16 {
 /// NOT floor-to-10tw (the 2026-04-11 rule, falsified by the S546 fs-sweep:
 /// MS Mincho 10.5pt digit/letter/ｱｲｳ all measure 5.25 mid-cluster at
 /// fs 9/10.5/12/14; repro_s546_digit_sweep.py). The old "5.0 not 5.25"
+/// S1445 (2026-09-17, default ON, opt-out OXI_S1445_DISABLE): vertical (tbRl)
+/// text advances each character by the face's own vertical advance table —
+/// for the proportional faces (ＭＳ Ｐ明朝 / ＭＳ Ｐゴシック) that is the
+/// proportional width Word uses (COM, tests/fixtures/vprop, 18 arms: ふ 9.75
+/// と 10.5 、7.5 at 11pt = the hmtx widths snapped to 0.75; the full-width
+/// faces stay at the em). The former opt-in OXI_VERTICAL_FONT_ADVANCE still
+/// forces it on.
+pub fn vertical_font_advance_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some()
+            || std::env::var_os("OXI_S1445_DISABLE").is_none()
+    })
+}
+
 /// was a 96dpi paint-snap artifact. Opt-out: OXI_S546_DISABLE.
 pub fn s1202_proportional_cjk_exact() -> bool {
     std::env::var("OXI_S1202").is_ok()
@@ -1121,7 +1136,7 @@ impl FontMetricsRegistry {
             latin_kern.extend(yu_pairs);
         }
 
-        let vertical_metrics = if std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some() {
+        let vertical_metrics = if vertical_font_advance_on() {
             serde_json::from_str(include_str!("data/vertical_font_metrics.json"))
                 .expect("valid bundled vertical font metrics")
         } else {

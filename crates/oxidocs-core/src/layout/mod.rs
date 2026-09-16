@@ -6771,7 +6771,7 @@ cells={} pitch={:.2} text={:?}",
                 .map(|s| s.to_string());
             let char_grid = self.vertical_grid_for_block(page, recipe.block_idx);
             let char_grid_active = char_grid.is_some();
-            if std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some() || char_grid_active {
+            if crate::font::vertical_font_advance_on() || char_grid_active {
                 let glyph_chars: Vec<_> = text.chars().collect();
                 let advances: Vec<_> = glyph_chars.iter().copied().map(|ch| {
                     let metrics = self.metrics_for_char_in(ch, true, &run.style, &para.style);
@@ -28249,9 +28249,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
         let available_tw = pt_to_tw(available_width);
+        // S1446 (2026-09-17, default ON, opt-out OXI_S1446_DISABLE): a vertical
+        // character set at a PROPORTIONAL advance (ＭＳ Ｐ明朝 kana / 、。) breaks
+        // on its exact width: no compression absorb and no hang past the column
+        // end (COM, tests/fixtures/vhang: ＭＳ Ｐ明朝 11pt pushes 'れ。' to the next
+        // column in every arm, while ＭＳ 明朝's full-width 。 hangs under compat
+        // 14). The explicit OXI_VERTICAL_NATURAL_BOUNDARY keeps the checkpoint's
+        // unscoped form (every character with a table advance).
+        let s1446_natural_boundary_explicit = std::env::var_os("OXI_VERTICAL_NATURAL_BOUNDARY").is_some();
         let vertical_natural_boundary_enabled = vertical
-            && std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some()
-            && std::env::var_os("OXI_VERTICAL_NATURAL_BOUNDARY").is_some();
+            && crate::font::vertical_font_advance_on()
+            && (s1446_natural_boundary_explicit || std::env::var_os("OXI_S1446_DISABLE").is_none());
         let dbg_frags = std::env::var("OXI_DBG_FRAGS").ok().filter(|pre| {
             let head: String = fragments.iter().flat_map(|f| f.0.chars()).take(pre.chars().count()).collect();
             head == *pre
@@ -30814,7 +30822,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // Vertical Word keeps curly quotes in the East Asian face even
                 // beside rotated Latin letters (mixed-font primary controls).
                 let latin_ctx_quote = latin_ctx_quote && !(vertical
-                    && std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some()
+                    && crate::font::vertical_font_advance_on()
                     && matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}'));
                 let use_east_asia = self.ambiguous_symbol_east_asia(ch, style, para_style)
                     .unwrap_or_else(|| kinsoku::is_cjk(ch) && !latin_ctx_quote);
@@ -30915,7 +30923,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     false
                 };
                 let vertical_font_advance = if vertical
-                    && std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some()
+                    && crate::font::vertical_font_advance_on()
                 {
                     self.registry.vertical_advance_pt(&char_metrics.family, ch, font_size)
                 } else {
@@ -30923,13 +30931,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 };
                 // Only replace the boundary model where actual vertical metrics
                 // are available. Missing tables retain their structural spacing.
+                let s1446_proportional = vertical_font_advance
+                    .is_some_and(|a| a < font_size * 0.98);
                 let vertical_natural_boundary = vertical_natural_boundary_enabled
-                    && (vertical_font_advance.is_some()
+                    && ((s1446_natural_boundary_explicit && vertical_font_advance.is_some())
+                        || s1446_proportional
                         || (std::env::var("OXI_VERTICAL_CHAR_GRID").is_ok()
                             && grid_char_pitch.is_some() && grid_char_cw_ratio.is_some()));
                 if let Some(advance) = vertical_font_advance {
                     char_width = advance;
-                } else if vertical && std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some()
+                } else if vertical && crate::font::vertical_font_advance_on()
                     && !kinsoku::is_cjk(ch) && deva_adv.is_none() && !kern_active
                 {
                     // Rotated Latin uses its horizontal glyph advance, not an em
@@ -30965,7 +30976,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // already produces the FINAL effective cs (post-balance-doubling) so
                 // adding here would over-pump by another factor.
                 if self.balance_single_byte_double_byte_width
-                    && if vertical && std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some() {
+                    && if vertical && crate::font::vertical_font_advance_on() {
                         Self::vertical_balance_spacing_char(ch)
                     } else {
                         crate::font::is_fullwidth(ch) && !yakumono_compressed[char_index]
