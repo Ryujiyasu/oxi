@@ -52,6 +52,9 @@ MIN_MATCH_RATE = 0.5
 def normalize_text(s: str) -> str:
     if not s:
         return ""
+    # Oxi's dump carries the rendered text (w:caps / w:smallCaps applied);
+    # Word Range.Text keeps the source case. Compare case-insensitively.
+    s = s.lower()
     s = s.replace("　", " ")
     # Word Range.Text control-char placeholders vs Oxi's parsed text (S747):
     #    = SOFT HYPHEN (U+00AD) placeholder — Oxi strips SHY (invisible)
