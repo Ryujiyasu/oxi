@@ -36774,7 +36774,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 // device-snapped natural, not the linePitch); the outer
                                 // .max(val) keeps the atLeast minimum. Use `dev` (not raw
                                 // base) so large headings match the old pitch.max(dev).
-                                let dev = (base / 0.75).floor() * 0.75;
+                                // S1450 (2026-09-17, default ON, opt-out OXI_S1450_DISABLE):
+                                // Word advances a no-type-docGrid line by its EXACT height and
+                                // snaps only the painted position, so the line tops read
+                                // 17.25 / 18.0 / 17.25 for a 17.527pt line rather than a flat
+                                // 17.25. COM (tools/metrics/_pb_notypegrid_lh_gen.py,
+                                // tests/fixtures/notypegrid, 7 arms): the paragraph-to-paragraph
+                                // advance is NOT constant (游明朝 10.5: 35.25 x5, 34.5, 35.25;
+                                // 12pt: 40.5 / 39.75 alternating; ＭＳ 明朝: 27.75, 27.0, 27.0,
+                                // 27.75), and linePitch 286 / 360 / absent give the same means.
+                                // Flooring the advance cost 0.277pt per line = ~28pt per page on
+                                // legal__05c84880, the drift its lastRenderedPageBreak masked.
+                                let dev = if std::env::var_os("OXI_S1450_DISABLE").is_none() {
+                                    base
+                                } else {
+                                    (base / 0.75).floor() * 0.75
+                                };
                                 if s609_no_type_natural {
                                     dev
                                 } else {
@@ -37031,7 +37046,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 // case (small body fonts that were wrongly floored to 18).
                                 // S571b's max(pitch,dev) only looked right on ikujidetail
                                 // because its pitch (14.3) ≈ its CJK natural (14.28).
-                                let dev = (spaced / 0.75).floor() * 0.75;
+                                // S1450 (see the single-spacing site above): the advance is
+                                // exact; only the painted position is snapped.
+                                let dev = if std::env::var_os("OXI_S1450_DISABLE").is_none() {
+                                    spaced
+                                } else {
+                                    (spaced / 0.75).floor() * 0.75
+                                };
                                 if s609_no_type_natural {
                                     // S615 (2026-06-19) FALSIFIED+REVERTED — keep FLOOR.
                                     // MEASURED (measure_cjk_notype_line_heights.py + 24-line
