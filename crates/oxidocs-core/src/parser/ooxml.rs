@@ -167,11 +167,17 @@ fn resolve_character_style(style: &mut RunStyle, styles: &StyleSheet, toc_result
     }
 }
 
-/// S1425: the styles.xml Word would hold after "update styles from template" --
-/// the template's docDefaults, the template's definition of every style whose
-/// NAME the document also has (keeping the document's styleId so paragraphs
-/// still resolve, and mapping basedOn/next/link to the document's ids by name),
-/// and the document's own styles otherwise.
+/// S1425: the styles.xml Word would hold after "update styles from template".
+/// MEASURED (policies__07543a6b bisection, 2026-09-16): the document's
+/// docDefaults and theme STAY; every style whose NAME the template also has
+/// takes the template's definition (document styleId kept, basedOn/next/link
+/// mapped by name); and the default paragraph style additionally receives, as
+/// EXPLICIT properties, each template-docDefault value that differs from the
+/// document's docDefault (Normal sz 21 explicit when the document default is
+/// 24 -> a table style's sz 20 no longer reaches the cells, 10.5 not 10; with
+/// the document default already 21 nothing is written and the table style's
+/// 10 applies -- variant G). A document-default property the template lacks
+/// is neutralised explicitly (pPrDefault spacing after 6 reads back as 0).
 fn s1425_merge_styles_xml(doc: &str, tpl: &str) -> String {
     fn attr<'a>(block: &'a str, name: &str) -> Option<&'a str> {
         let key = format!("{}=\"", name);
@@ -199,6 +205,143 @@ fn s1425_merge_styles_xml(doc: &str, tpl: &str) -> String {
         let head_end = block.find('>')?;
         attr(&block[..head_end], "w:styleId").map(|v| v.to_string())
     }
+    /// `<w:xxx .../>` or `<w:xxx ...>...</w:xxx>` children of the first
+    /// `<w:tag>` element inside `scope`, keyed by child tag name.
+    fn children(scope: &str, tag: &str) -> Vec<(String, String)> {
+        let open = format!("<{}>", tag);
+        let close = format!("</{}>", tag);
+        let Some(i) = scope.find(&open) else { return Vec::new() };
+        let body_start = i + open.len();
+        let Some(e) = scope[body_start..].find(&close) else { return Vec::new() };
+        let body = &scope[body_start..body_start + e];
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while let Some(lt) = body[pos..].find('<') {
+            let start = pos + lt;
+            let name_end = body[start + 1..]
+                .find(|c: char| c == ' ' || c == '/' || c == '>')
+                .map(|k| start + 1 + k)
+                .unwrap_or(body.len());
+            let name = body[start + 1..name_end].to_string();
+            let Some(gt) = body[start..].find('>') else { break };
+            let end = if body[start..start + gt].ends_with('/') {
+                start + gt + 1
+            } else {
+                let close_tag = format!("</{}>", name);
+                match body[start..].find(&close_tag) {
+                    Some(c) => start + c + close_tag.len(),
+                    None => start + gt + 1,
+                }
+            };
+            out.push((name, body[start..end].to_string()));
+            pos = end;
+        }
+        out
+    }
+    fn defaults_block<'a>(xml: &'a str, tag: &str) -> &'a str {
+        let open = format!("<{}>", tag);
+        let close = format!("</{}>", tag);
+        match (xml.find("<w:docDefaults>"), xml.find("</w:docDefaults>")) {
+            (Some(d0), Some(d1)) if d1 > d0 => {
+                let dd = &xml[d0..d1];
+                match dd.find(&open) {
+                    Some(i) => match dd[i..].find(&close) {
+                        Some(j) => &dd[i..i + j + close.len()],
+                        None => "",
+                    },
+                    None => "",
+                }
+            }
+            _ => "",
+        }
+    }
+    /// The explicit form of "this property is not set" for a document
+    /// default the template does not carry.
+    fn neutral(name: &str, doc_el: &str) -> Option<String> {
+        Some(match name {
+            "w:spacing" | "w:ind" => {
+                let mut out = format!("<{}", name);
+                for a in ["w:before", "w:after", "w:line", "w:left", "w:right", "w:hanging", "w:firstLine",
+                          "w:beforeLines", "w:afterLines", "w:leftChars", "w:rightChars", "w:hangingChars", "w:firstLineChars"] {
+                    if attr(doc_el, a).is_some() {
+                        out.push_str(&format!(" {}=\"{}\"", a, if a == "w:line" { "240" } else { "0" }));
+                    }
+                }
+                if attr(doc_el, "w:line").is_some() {
+                    out.push_str(" w:lineRule=\"auto\"");
+                }
+                out.push_str("/>");
+                out
+            }
+            "w:jc" => "<w:jc w:val=\"left\"/>".to_string(),
+            "w:kern" => "<w:kern w:val=\"0\"/>".to_string(),
+            "w:b" | "w:i" | "w:bCs" | "w:iCs" | "w:caps" | "w:smallCaps" | "w:strike" => format!("<{} w:val=\"0\"/>", name),
+            "w:color" => "<w:color w:val=\"auto\"/>".to_string(),
+            "w:widowControl" | "w:keepNext" | "w:keepLines" | "w:contextualSpacing" | "w:snapToGrid" => format!("<{} w:val=\"0\"/>", name),
+            _ => return None,
+        })
+    }
+    /// Properties the default paragraph style must carry explicitly so that it
+    /// resolves like the template's effective Normal on top of the DOCUMENT's
+    /// docDefaults: template-default children that differ from the document's,
+    /// plus neutralised document-only defaults. Children the style block
+    /// already sets win.
+    fn inject_defaults(block: &str, doc: &str, tpl: &str, tag: &str) -> String {
+        let doc_dd = children(defaults_block(doc, if tag == "w:rPr" { "w:rPrDefault" } else { "w:pPrDefault" }), tag);
+        let tpl_dd = children(defaults_block(tpl, if tag == "w:rPr" { "w:rPrDefault" } else { "w:pPrDefault" }), tag);
+        // the style's own <w:rPr>/<w:pPr> (direct child of <w:style>, not the
+        // nested rPr inside pPr) -- take the LAST top-level occurrence for rPr
+        // and the first for pPr
+        let own = children(block, tag);
+        let mut extra = String::new();
+        for (name, el) in &tpl_dd {
+            if own.iter().any(|(n, _)| n == name) {
+                continue;
+            }
+            let same = doc_dd.iter().any(|(n, e)| n == name && e == el);
+            if !same {
+                extra.push_str(el);
+            }
+        }
+        for (name, el) in &doc_dd {
+            if own.iter().any(|(n, _)| n == name) || tpl_dd.iter().any(|(n, _)| n == name) {
+                continue;
+            }
+            if let Some(n) = neutral(name, el) {
+                extra.push_str(&n);
+            }
+        }
+        if extra.is_empty() {
+            return block.to_string();
+        }
+        let open = format!("<{}>", tag);
+        let close = format!("</{}>", tag);
+        // find the style-level element: for pPr the first `<w:pPr>`; for rPr
+        // the one that is not inside a pPr (the last `<w:rPr>` at depth 1)
+        let pos = if tag == "w:pPr" {
+            block.find(&open)
+        } else {
+            let ppr_end = block.find("</w:pPr>").map(|i| i + "</w:pPr>".len()).unwrap_or(0);
+            block[ppr_end..].find(&open).map(|i| ppr_end + i)
+        };
+        match pos {
+            Some(i) => {
+                let ins = i + open.len();
+                format!("{}{}{}", &block[..ins], extra, &block[ins..])
+            }
+            None => {
+                // no such element: add one before </w:style>, pPr before any rPr
+                let end = block.rfind("</w:style>").unwrap_or(block.len());
+                let at = if tag == "w:pPr" {
+                    let ppr_end = block.find("</w:pPr>").map(|i| i + "</w:pPr>".len()).unwrap_or(0);
+                    block[ppr_end..].find("<w:rPr>").map(|i| ppr_end + i).unwrap_or(end)
+                } else {
+                    end
+                };
+                format!("{}{}{}{}{}", &block[..at], open, extra, close, &block[at..])
+            }
+        }
+    }
     // template: name -> (block, id); id -> name
     let mut tpl_by_name: HashMap<String, &str> = HashMap::new();
     let mut tpl_id_to_name: HashMap<String, String> = HashMap::new();
@@ -220,18 +363,7 @@ fn s1425_merge_styles_xml(doc: &str, tpl: &str) -> String {
     }
     let mut out = String::with_capacity(doc.len() + tpl.len());
     let mut cursor = 0;
-    // docDefaults
-    if let (Some(d0), Some(t0)) = (doc.find("<w:docDefaults>"), tpl.find("<w:docDefaults>")) {
-        if let (Some(d1), Some(t1)) = (doc[d0..].find("</w:docDefaults>"), tpl[t0..].find("</w:docDefaults>")) {
-            out.push_str(&doc[..d0]);
-            out.push_str(&tpl[t0..t0 + t1 + "</w:docDefaults>".len()]);
-            cursor = d0 + d1 + "</w:docDefaults>".len();
-        }
-    }
     for (a, b) in doc_blocks {
-        if a < cursor {
-            continue;
-        }
         out.push_str(&doc[cursor..a]);
         let blk = &doc[a..b];
         let replaced = name_of(blk).and_then(|n| {
@@ -253,6 +385,13 @@ fn s1425_merge_styles_xml(doc: &str, tpl: &str) -> String {
                         }
                     }
                 }
+            }
+            let head_end = tblk.find('>').unwrap_or(0);
+            let is_default_para = tblk[..head_end].contains("w:type=\"paragraph\"")
+                && tblk[..head_end].contains("w:default=\"1\"");
+            if is_default_para {
+                nb = inject_defaults(&nb, doc, tpl, "w:pPr");
+                nb = inject_defaults(&nb, doc, tpl, "w:rPr");
             }
             Some(nb)
         });
@@ -300,11 +439,15 @@ impl OoxmlParser {
         // OXI_NORMAL_TEMPLATE=<path> points at another template.
         let s1425_template = self.s1425_normal_template();
         // Parse theme first — needed for font resolution in styles
-        let mut theme = match s1425_template.as_ref().and_then(|t| t.0.clone()) {
-            Some(xml) => parse_theme(&xml),
-            None => match self.read_part("word/theme/theme1.xml") {
-                Ok(xml) => parse_theme(&xml),
-                Err(_) => ThemeColors::default(),
+        // The document's own theme stays (policies__07543a6b: Word resolves its
+        // Normal to the document theme's Arial, not the template's 游明朝, so a
+        // run without an ascii face gets a 13.5pt line, not 17.5); the template
+        // theme only fills in for a package that has no theme part.
+        let mut theme = match self.read_part("word/theme/theme1.xml") {
+            Ok(xml) => parse_theme(&xml),
+            Err(_) => match s1425_template.as_ref().and_then(|t| t.0.clone()) {
+                Some(xml) => parse_theme(&xml),
+                None => ThemeColors::default(),
             },
         };
         if std::env::var("OXI_DRAWING_THEME_MAP").is_ok() {

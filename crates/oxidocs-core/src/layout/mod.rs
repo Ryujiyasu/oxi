@@ -2968,6 +2968,30 @@ thread_local! {
     static S1174_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// S1429 (2026-09-16): nesting depth of table layout / table-row
+    /// estimation. Line-end punctuation never hangs past the edge inside a
+    /// table cell (`_pb_hang_gen.py`, tests/fixtures/hang: 16 arms, compat
+    /// 14/15 x jc left/both x doNotCompress/compressPunctuation x 11.8/11.2
+    /// char widths -- every CELL arm pushes 「二、」 down while the BODY arm
+    /// hangs at compat 14 and at compat 15 when justified).
+    static IN_TABLE_LAYOUT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII guard for IN_TABLE_LAYOUT (S1429 cell hang scope).
+struct TableLayoutGuard;
+impl TableLayoutGuard {
+    fn new() -> Self {
+        IN_TABLE_LAYOUT.with(|c| c.set(c.get() + 1));
+        TableLayoutGuard
+    }
+}
+impl Drop for TableLayoutGuard {
+    fn drop(&mut self) {
+        IN_TABLE_LAYOUT.with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
 /// RAII guard for IN_FOOTNOTE_LAYOUT (SG0RAW footnote scope-out).
 struct FnLayoutGuard;
 impl FnLayoutGuard {
@@ -10320,6 +10344,36 @@ cells={} pitch={:.2} text={:?}",
                                     &tbl.rows[0], &cw, pl, pr, pt, pb, tbl,
                                     page.grid_line_pitch, page.grid_char_pitch, None,
                                 );
+                                // S1428: with leading tblHeader rows the heading keeps
+                                // with the header rows AND the first data row's
+                                // page-bottom requirement (its minimum height when
+                                // declared, else its natural height when cantSplit,
+                                // else one line of it).
+                                let n_hdr = tbl.rows.iter().take_while(|r| r.header).count();
+                                let row_h = if n_hdr > 0 && n_hdr < tbl.rows.len()
+                                    && std::env::var_os("OXI_S1428_DISABLE").is_none()
+                                {
+                                    let hdr_h: f32 = tbl.rows[..n_hdr].iter().map(|r| {
+                                        let nat = self.estimate_table_row_natural_h(
+                                            r, &cw, pl, pr, pt, pb, tbl,
+                                            page.grid_line_pitch, page.grid_char_pitch, None,
+                                        );
+                                        r.height.map_or(nat, |h| h.max(nat))
+                                    }).sum();
+                                    let data = &tbl.rows[n_hdr];
+                                    let data_nat = self.estimate_table_row_natural_h(
+                                        data, &cw, pl, pr, pt, pb, tbl,
+                                        page.grid_line_pitch, page.grid_char_pitch, None,
+                                    );
+                                    let data_req = match data.height {
+                                        Some(h) => h,
+                                        None if data.cant_split => data_nat,
+                                        None => data_nat.min(page.grid_line_pitch.unwrap_or(14.0)),
+                                    };
+                                    hdr_h + data_req
+                                } else {
+                                    row_h
+                                };
                                 let mut synth = para.clone();
                                 synth.runs.truncate(1);
                                 if let Some(r) = synth.runs.first_mut() {
@@ -32542,6 +32596,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .unwrap_or(4.0);
                             current_width_tw + pt_to_tw(char_width) - available_tw - pt_to_tw(tol)
                         } else if std::env::var("OXI_S601_DISABLE").is_err()
+                            // S1429 (2026-09-16, default ON, opt-out OXI_S1429_DISABLE):
+                            // no hang inside a table cell (policies__07543a6b p28
+                            // 「服用した / 後、横紋筋」; see IN_TABLE_LAYOUT).
+                            && !(IN_TABLE_LAYOUT.with(|c| c.get()) > 0
+                                && std::env::var_os("OXI_S1429_DISABLE").is_none())
                             // S1334 (2026-09-06, default ON, opt-out OXI_S1334_DISABLE): the
                             // hang is granted at compat <= 14 whatever the alignment, and at
                             // compat 15 ONLY to a justified paragraph. DERIVED
@@ -33358,7 +33417,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let vertical_grid_hang = vertical_natural_boundary && quantized_char_grid
                             && std::env::var("OXI_VERTICAL_CHAR_GRID").is_ok()
                             && current_width_tw <= available_tw;
+                        let s1429_cell_oidashi = IN_TABLE_LAYOUT.with(|c| c.get()) > 0
+                            && std::env::var_os("OXI_S1429_DISABLE").is_none();
                         let can_hang = kinsoku::is_hangable_punct(ch)
+                            && !s1429_cell_oidashi
                             && (!vertical_natural_boundary || vertical_grid_hang)
                             && !modern_cjk_line_end
                             && !next_is_proh
@@ -38304,6 +38366,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         flow_fit_offset: Option<f32>,
     ) -> Vec<LayoutElement> {
         let flow_entry_page = pages.len();
+        let _s1429_guard = TableLayoutGuard::new();
         let page_geometry = page_geometry.filter(|_| {
             std::env::var("OXI_TABLE_PAGE_GEOMETRY_DISABLE").is_err()
                 // Repeated heading rows also depend on continuation sizing.
@@ -38596,8 +38659,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // out on the CURRENT page, so a page push can pull a keepNext row-chain
         // over with the row that triggered it. Cleared at every page push.
         let mut s1083_row_start: Vec<(usize, f32)> = Vec::new();
+        // S1428 (2026-09-16, default ON, opt-out OXI_S1428_DISABLE): promoted
+        // from the OXI_CJK_HEADER_ROW_CHAIN opt-in. `_pb_keepnext_hdr_gen.py`
+        // (tests/fixtures/keepnext_hdr): a tblHeader row whose first data row
+        // moves whole (binding atLeast, room < trH) moves with it -- plain arm
+        // N=35 row1 p2 y=57.75 while the same row without tblHeader stays at
+        // 705.75 -- and a keepNext heading before the table follows (heading
+        // p2 y=59.25). policies__07543a6b 3.2.4 / 3.2.7 / 3.2.8.
         let cjk_header_chain = self.doc_body_has_real_cjk
-            && std::env::var("OXI_CJK_HEADER_ROW_CHAIN").is_ok();
+            && (std::env::var_os("OXI_S1428_DISABLE").is_none()
+                || std::env::var("OXI_CJK_HEADER_ROW_CHAIN").is_ok());
         let s1083_on = std::env::var("OXI_S1083_DISABLE").is_err()
             && (!self.doc_body_has_real_cjk || cjk_header_chain);
         // A row "keeps with the next row" when its LEFTMOST cell's FIRST
@@ -39123,8 +39194,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // hardening pass. The `if sb_suppress_enabled` block
                             // was dead code (LEGACY var default false → block
                             // never executed). S151 default ON since 2026-05-21.
+                            // S1432 (2026-09-16, default ON, opt-out OXI_S1432_DISABLE):
+                            // promoted from the OXI_CJK_CELL_KEEP_LINES opt-in -- a
+                            // keepLines first paragraph must fit the first fragment
+                            // whole (policies__07543a6b p32 row 5: 6-line keepLines
+                            // scenario cell, 69pt of room, Word moves the row whole).
                             if self.doc_body_has_real_cjk
-                                && std::env::var("OXI_CJK_CELL_KEEP_LINES").is_ok()
+                                && (std::env::var("OXI_CJK_CELL_KEEP_LINES").is_ok()
+                                    || std::env::var_os("OXI_S1432_DISABLE").is_none())
                                 && Some(block_pos) == first_para_pos
                                 && para.style.keep_lines
                             {
@@ -40250,7 +40327,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     || std::env::var("OXI_S1025_DISABLE").is_err())
                 // A CJK row may also split when the first fragment can honor
                 // its declared minimum height. Exact heights remain atomic.
+                // S1427 (2026-09-16, default ON, opt-out OXI_S1427_DISABLE):
+                // `_pb_trhsplit_gen.py` (tests/fixtures/trhsplit, ＭＳ 明朝): an
+                // atLeast row taller than its minimum SPLITS when the minimum
+                // fits above the bottom (n7/n9, room 74.5 vs trH 72) and moves
+                // whole when it does not (room 70.5) -- the Latin S941 rule,
+                // which was opt-in for CJK bodies. policies__07543a6b p9.
+                // MULTI-CELL rows only: a single-cell prose box with a trHeight
+                // moves whole (S754's three specimens; golden 3a4f9fbe1a83 /
+                // model row 1 trH 67.2 with 67.9 of room and tokyoshugyo's
+                // （参考） box went PASS -> FAIL when the split reached them).
                 && (!self.doc_body_has_real_cjk
+                    || (row.cells.len() > 1 && std::env::var_os("OXI_S1427_DISABLE").is_none())
                     || std::env::var("OXI_CJK_ROW_MINIMUM_SPLIT").is_ok())
                 && row.height_rule.as_deref() != Some("exact")
                 && row.height.map_or(false, |trh| {
@@ -40655,6 +40743,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // Keep resolved terminal spacing with its own cell paragraph. A
             // sibling's tail must not be added after the tallest continuation.
             let mut cell_terminal_spacing: std::collections::HashMap<(usize, usize), f32> =
+                std::collections::HashMap::new();
+            // S1431 (2026-09-16, default ON, opt-out OXI_S1431_DISABLE): (cell,
+            // paragraph) -> effective space_before, so a paragraph that OPENS a
+            // split row's continuation keeps its spacing at the page top.
+            // `_pb_trhsplit_gen.py` SB=162 SBPARA=6 (n7, X=34/42): the paragraph
+            // starting the continuation sits at 64.80 = 56.7 + 8.1, not 56.7.
+            // forms__00830ac0 p4 「＿＿年度」(beforeLines 50): Word 54.0, Oxi 42.55.
+            let mut s1431_cell_para_sb: std::collections::HashMap<(usize, usize), f32> =
                 std::collections::HashMap::new();
             let mut split_valign_offsets: Vec<(usize, f32)> = Vec::new();
             // S1407 (2026-09-15, default ON, opt-out OXI_CELL_FRAGMENT_VALIGN_DISABLE):
@@ -41649,6 +41745,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     para.style.num_id.as_deref(),
                                 ));
                                 content_h += effective_space_before;
+                                s1431_cell_para_sb.insert((cell_idx, cell_para_counter), effective_space_before);
                                 let para_content_start_h = content_h;
                                 if cell_float_flow { float_tops[block_pos] = content_h; }
                                 {
@@ -43733,9 +43830,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 };
                                             // Uncompressed CJK cells keep the terminal mark
                                             // inside the available width, including legacy modes.
+                                            // S1429 (2026-09-16, default ON, opt-out OXI_S1429_DISABLE):
+                                            // promoted from the OXI_CJK_CELL_NATURAL_LINE_END opt-in.
+                                            // `_pb_hang_gen.py` (tests/fixtures/hang): a doNotCompress
+                                            // cell never hangs its line-final mark (compat 14 and 15,
+                                            // jc left and both, 11.8 and 11.2 char widths all push
+                                            // 「二、」 down); a compressPunctuation cell keeps the S1174
+                                            // half-em. policies__07543a6b p28 「服用した / 後、横紋筋」.
                                             let cell_natural_line_end = self.doc_body_has_real_cjk
                                                 && !self.compress_punctuation
-                                                && std::env::var("OXI_CJK_CELL_NATURAL_LINE_END").is_ok();
+                                                && (std::env::var("OXI_CJK_CELL_NATURAL_LINE_END").is_ok()
+                                                    || std::env::var_os("OXI_S1429_DISABLE").is_none());
                                             let would_overflow = if cell_bura_active
                                                 && !cell_natural_line_end
                                                 && is_cell_hangable
@@ -48509,6 +48614,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     .filter(|e| anchors(e))
                     .map(|e| e.y)
                     .fold(f32::INFINITY, f32::min);
+                // S1431: when the first overflow line is the FIRST line of its
+                // paragraph (no line of that paragraph stayed on this page), the
+                // paragraph's space_before rides along above it.
+                let s1431_sb = if std::env::var_os("OXI_S1431_DISABLE").is_none()
+                    && min_overflow_text_y.is_finite()
+                {
+                    next_page_elems
+                        .iter()
+                        .filter(|e| anchors(e) && (e.y - min_overflow_text_y).abs() < 0.01)
+                        .filter_map(|e| {
+                            let key = (e.cell_col_index?, e.cell_paragraph_index?);
+                            let stayed = current_page_elems.iter().any(|c| {
+                                matches!(c.content, LayoutContent::Text { .. })
+                                    && c.cell_row_index == Some(row_idx)
+                                    && c.cell_col_index == Some(key.0)
+                                    && c.cell_paragraph_index == Some(key.1)
+                            });
+                            if stayed { None } else { s1431_cell_para_sb.get(&key).copied() }
+                        })
+                        .fold(0.0f32, f32::max)
+                } else {
+                    0.0
+                };
+                let min_overflow_text_y = min_overflow_text_y - s1431_sb;
                 // S1093 (2026-08-07, opt-out OXI_S1093_DISABLE): Word restarts
                 // EACH CELL's remaining content at the continuation cell top —
                 // the re-anchor above takes ONE global minimum and shifts the
@@ -48682,8 +48811,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s817_close = if std::env::var("OXI_S942_DISABLE").is_err()
                         && (std::env::var("OXI_S940T_DISABLE").is_err()
                             || std::env::var("OXI_S1025_DISABLE").is_err())
+                        // S1430 (2026-09-16, default ON, opt-out OXI_S1430_DISABLE): CJK
+                        // bodies too -- `_pb_trhsplit_gen.py` n7/n9: the continuation
+                        // band runs page_top 56.7 -> row 2 at 130.5 = trH 72 + bw.
                         && (!self.doc_body_has_real_cjk
-                            || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some())
+                            || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
+                            || std::env::var_os("OXI_S1430_DISABLE").is_none())
                         && row.height_rule.as_deref() != Some("exact")
                     {
                         match row.height {
@@ -49566,7 +49699,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && (std::env::var("OXI_S940T_DISABLE").is_err()
                             || std::env::var("OXI_S1025_DISABLE").is_err())
                         && (!self.doc_body_has_real_cjk
-                            || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some())
+                            || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
+                            || std::env::var_os("OXI_S1430_DISABLE").is_none()) /* S1430 */
                         && row.height_rule.as_deref() != Some("exact")
                     {
                         row.height
@@ -49662,7 +49796,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && (std::env::var("OXI_S940T_DISABLE").is_err()
                         || std::env::var("OXI_S1025_DISABLE").is_err())
                     && (!self.doc_body_has_real_cjk
-                        || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some())
+                        || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
+                        || std::env::var_os("OXI_S1430_DISABLE").is_none()) /* S1430 */
                     && !s864_empty_tail_split
                     && row.height_rule.as_deref() != Some("exact")
                 {
@@ -52233,6 +52368,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         grid_char_cw_ratio: Option<f32>,
         include_border_padding: bool,
     ) -> f32 {
+        let _s1429_guard = TableLayoutGuard::new();
         let mut row_height: f32 = 0.0;
         let mut grid_idx = row.grid_before as usize;
         for cell in row.cells.iter() {
@@ -52281,8 +52417,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // though the emitted cell wraps to two, so a centered vMerge
             // restart above it used a span 10.5pt too short.  Opt-out retained
             // for corpus A/B.
+            // S1426 (2026-09-16, default ON, opt-out OXI_S1426_DISABLE): the CJK
+            // arm wraps at the padded width too. policies__07543a6b 3.2.4: a
+            // 36pt header column with 5.4pt margins holds 投薬過誤か? in THREE
+            // lines (Word row 45pt, heading pushed under keepNext); at the full
+            // width the look-ahead saw two and kept the heading on the page.
             let inner_w =
-                if !self.doc_body_has_real_cjk && std::env::var("OXI_S923_DISABLE").is_err() {
+                if (!self.doc_body_has_real_cjk && std::env::var("OXI_S923_DISABLE").is_err())
+                    || (self.doc_body_has_real_cjk && std::env::var_os("OXI_S1426_DISABLE").is_none()) {
                     (cell_w - pad_l - pad_r).max(0.0)
                 } else {
                     cell_w.max(0.0)
