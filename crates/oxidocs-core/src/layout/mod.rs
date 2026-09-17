@@ -8143,6 +8143,62 @@ cells={} pitch={:.2} text={:?}",
         // clamp would rise above the anchor) with 2ea81a's kept stamp
         // boxes (short box far below the anchor: clamp keeps it under).
         // The earlier posV<=30 registration gate is replaced by this rule.
+        // S1455 (2026-09-17, default ON, opt-out OXI_S1455_DISABLE): a bare
+        // DRAWING SHAPE with wrapSquare is a wrap obstacle exactly like the
+        // image and textbox sources. reference__0ea3ec86 p16 right column: the
+        // document's ONLY wrapSquare is a 130.4 x 172.9pt "正方形/長方形" with
+        // noFill and no line -- an invisible spacer whose whole job is to hold
+        // a lane open -- positioned relativeFrom="margin" <wp:align>right.
+        // Word flows nine 8-character lines beside it (PDF x0 308.7 -> x1
+        // 402.1, then 543.8 once past its bottom, and 172.9pt is exactly those
+        // nine lines). The band registry read only `floating_images` and
+        // `text_boxes`, so Oxi used the full column, fitted nine lines too many,
+        // and every page from 17 to 24 sat one early.
+        //
+        // The shape is NOT in `page.shapes`: an anchor inside a run lands in
+        // `Block::Paragraph(p).shapes`, which is why the painter draws it (the
+        // dump shows it) while every wrap consumer missed it. Collect BOTH the
+        // page-level and the paragraph-level shapes, the same pairing the
+        // painter itself builds. The written wrap kind lives in `anchor_wrap`;
+        // `wrap_type` is only filled behind the OXI_DRAWING_SHAPE_WRAP opt-in.
+        type S1455Band = (f32, f32, f32, Option<String>, f32, f32, f32, bool);
+        let s1455_shps: std::collections::HashMap<usize, Vec<S1455Band>> =
+            if s758_on && std::env::var("OXI_S1455_DISABLE").is_err() {
+                let mut m: std::collections::HashMap<usize, Vec<S1455Band>> = Default::default();
+                let page_level = page.shapes.iter().map(|s| (s.anchor_block_index, s));
+                let para_level = page.blocks.iter().enumerate().flat_map(|(i, b)| match b {
+                    Block::Paragraph(p) => p.shapes.iter().map(move |s| (i, s)).collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                });
+                for (blk, sh) in page_level.chain(para_level) {
+                    if sh.wrap_type.or(sh.anchor_wrap) != Some(crate::ir::WrapType::Square) {
+                        continue;
+                    }
+                    let Some(sp) = sh.position.as_ref() else { continue };
+                    if sp.v_relative.as_deref() != Some("paragraph") || sp.y < 0.0 {
+                        continue;
+                    }
+                    if std::env::var("OXI_DBG_S1455").is_ok() {
+                        eprintln!(
+                            "[S1455] blk={} w={:.1} h={:.1} x={:.1} y={:.1} hrel={:?} halign={:?}",
+                            blk, sh.width, sh.height, sp.x, sp.y, sp.h_relative, sp.h_align
+                        );
+                    }
+                    m.entry(blk).or_default().push((
+                        sp.y,
+                        sh.width,
+                        sh.height,
+                        sp.h_align.clone(),
+                        sp.x,
+                        sp.dist_l.unwrap_or(9.0),
+                        sp.dist_r.unwrap_or(9.0),
+                        sp.h_relative.as_deref() == Some("column"),
+                    ));
+                }
+                m
+            } else {
+                Default::default()
+            };
         let s758_tbs: std::collections::HashMap<usize, Vec<usize>> =
             if s758_on && std::env::var("OXI_S758_TB_DISABLE").is_err() {
                 let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
@@ -8708,6 +8764,11 @@ cells={} pitch={:.2} text={:?}",
                                 ip.h_relative.as_deref() == Some("column"),
                             ));
                         }
+                    }
+                }
+                if let Some(bands) = s1455_shps.get(&block_idx) {
+                    for b in bands {
+                        v.push((b.0, b.1, b.2, b.3.clone(), b.4, b.5, b.6, false, false, b.7));
                     }
                 }
                 if let Some(tis) = s758_tbs.get(&block_idx) {
@@ -19274,8 +19335,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         start_x: f32,
         content_width: f32,
     ) -> (Option<(f32, f32, f32)>, Option<(f32, f32, f32, f32)>, f32) {
+        // S1456 (2026-09-17, default ON, opt-out OXI_S1456_DISABLE): side-wrap
+        // band consumption is not Latin-only. The CJK gate here was a scope
+        // guard, not a Word discriminator ([[script_gate_is_not_a_discriminator]]).
+        // reference__0ea3ec86 p16 right column: Word flows nine 8-character
+        // lines beside the page's wrapSquare spacer (PDF x1 402.1, then 543.8);
+        // with S1455 registering the band and this gate lifted, Oxi reproduces
+        // all nine at x1 401.4 and the document goes 0.9907 -> 0.9975.
         let intersection = (!self.doc_body_has_real_cjk
-            || std::env::var("OXI_CJK_WRAP_LINE_INTERSECTION").is_ok())
+            || std::env::var("OXI_CJK_WRAP_LINE_INTERSECTION").is_ok()
+            || std::env::var("OXI_S1456_DISABLE").is_err())
             && std::env::var("OXI_WRAP_LINE_INTERSECTION_DISABLE").is_err();
         let before = if intersection { para.style.space_before.unwrap_or(0.0).max(0.0) } else { 0.0 };
         let mut line_top = cursor_y + before;
@@ -20688,7 +20757,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Subtracting its geometry from a previously rounded column would
         // charge the column's discarded fraction a second time.
         let floor_wrap_reduction = |red: f32| -> f32 {
-            if red > 0.0 && std::env::var("OXI_GRID_WRAP_WIDTH").is_ok() {
+            // S1457 (2026-09-17, default ON, opt-out OXI_S1457_DISABLE):
+            // promotes the OXI_GRID_WRAP_WIDTH checkpoint, whose formula the
+            // 0ea3ec86 measurement confirms. A side-wrap band must be taken
+            // from the RAW column and the remaining lane re-floored to whole
+            // grid cells; subtracting it from the already-floored column
+            // charges the column's discarded fraction twice. p16 right column
+            // (cell 11.5, column 235.6 -> floored 230.0, band reduction 139.4):
+            // the old order handed the breaker 90.635, one cell short of the
+            // eight that fit, so Word's nine 8-character lines became nine
+            // 7-character ones and the column lost a line. Re-floored:
+            // floor(96.28 / 11.5) = 8 cells = 92.0 and the document goes
+            // 0.9975 -> 1.0.
+            if red > 0.0
+                && (std::env::var("OXI_GRID_WRAP_WIDTH").is_ok()
+                    || std::env::var("OXI_S1457_DISABLE").is_err())
+            {
                 let free = self.s1211c_floor_body_width(
                     para, content_width - red, effective_char_pitch,
                     page.grid_char_cw_ratio);
