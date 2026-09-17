@@ -1989,6 +1989,20 @@ struct MergedCellTextFlow {
     cuts: std::collections::BTreeMap<usize, (f32, f32)>,
 }
 
+/// S1467 (2026-09-18, default ON, opt-out OXI_S1467_DISABLE): promotes the
+/// OXI_FLOAT_COLUMN_FLOW checkpoint. A multi-column page must reset the cursor to
+/// the COLUMN top when the flow moves to the next column; without it Oxi carried
+/// the previous column's y across, so a two-column page filled its left column to
+/// the bottom and then started the right one there. reference__00825ae3 p2:
+/// `OXI_DBG_BLKTRACE` shows blocks 9..22 running 150.3 -> 672.6 with no reset, so
+/// the right column's body text lands at 641.88 where Word puts it at 231.75 and
+/// the document comes out 5 pages against Word's 4. With the flag the document
+/// goes 0.6061 -> 0.9394 and its page count matches.
+pub(crate) fn s1467_float_column_flow() -> bool {
+    std::env::var_os("OXI_FLOAT_COLUMN_FLOW").is_some()
+        || std::env::var_os("OXI_S1467_DISABLE").is_none()
+}
+
 impl MergedCellTextFlow {
     fn paginate(&self) -> (Vec<Option<(usize, f32)>>, f32) {
         let mut positions = vec![None; self.element_count];
@@ -8538,12 +8552,12 @@ cells={} pitch={:.2} text={:?}",
                 .unwrap_or(page_orig);
             // S734: reserve the wrapTopAndBottom band ABOVE this anchor block.
             if let Some(&band_h) = s734_bands.get(&block_idx) {
-                let band_h = if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok() {
+                let band_h = if crate::layout::s1467_float_column_flow() {
                     band_h.max(s1089_tb_bands.get(&block_idx).copied().unwrap_or(0.0))
                 } else { band_h };
                 let remaining = (start_y + content_height) - cursor.cursor_y;
                 if band_h > remaining && band_h <= content_height && !elements.is_empty() {
-                    if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok()
+                    if crate::layout::s1467_float_column_flow()
                         && current_column + 1 < num_columns
                     {
                         current_column += 1;
@@ -8573,7 +8587,7 @@ cells={} pitch={:.2} text={:?}",
                         &mut s900_pending_deferred,
                         current_page_idx,
                     );
-                        if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok() {
+                        if crate::layout::s1467_float_column_flow() {
                             current_column = 0;
                             start_x = col_x_positions[0];
                             content_width = col_widths[0];
@@ -8587,14 +8601,14 @@ cells={} pitch={:.2} text={:?}",
             }
             // S1089: the same reservation for a wrapTopAndBottom wps SHAPE.
             if let Some(&band_h) = s1089_tb_bands.get(&block_idx) {
-                if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok()
+                if crate::layout::s1467_float_column_flow()
                     && s734_flow_pos.contains_key(&block_idx)
                 {
                     s1089_flow_pos.insert(block_idx, s734_flow_pos[&block_idx]);
                 } else {
                 let remaining = (start_y + content_height) - cursor.cursor_y;
                 if band_h > remaining && band_h <= content_height && !elements.is_empty() {
-                    if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok()
+                    if crate::layout::s1467_float_column_flow()
                         && current_column + 1 < num_columns
                     {
                         current_column += 1;
@@ -8624,7 +8638,7 @@ cells={} pitch={:.2} text={:?}",
                         &mut s900_pending_deferred,
                         current_page_idx,
                     );
-                        if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok() {
+                        if crate::layout::s1467_float_column_flow() {
                             current_column = 0;
                             start_x = col_x_positions[0];
                             content_width = col_widths[0];
@@ -8666,7 +8680,7 @@ cells={} pitch={:.2} text={:?}",
                     && need <= content_height
                     && !elements.is_empty()
                 {
-                    if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok()
+                    if crate::layout::s1467_float_column_flow()
                         && current_column + 1 < num_columns
                     {
                         current_column += 1;
@@ -8696,7 +8710,7 @@ cells={} pitch={:.2} text={:?}",
                         &mut s900_pending_deferred,
                         current_page_idx,
                     );
-                        if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok() {
+                        if crate::layout::s1467_float_column_flow() {
                             current_column = 0;
                             start_x = col_x_positions[0];
                             content_width = col_widths[0];
@@ -8938,7 +8952,7 @@ cells={} pitch={:.2} text={:?}",
                     && s758_max_bottom - s758_anchor_y <= content_height
                     && !elements.is_empty()
                 {
-                    if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok()
+                    if crate::layout::s1467_float_column_flow()
                         && current_column + 1 < num_columns
                     {
                         current_column += 1;
@@ -8986,7 +9000,7 @@ cells={} pitch={:.2} text={:?}",
                         &mut s900_pending_deferred,
                         current_page_idx,
                     );
-                        if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok() {
+                        if crate::layout::s1467_float_column_flow() {
                             current_column = 0;
                             start_x = col_x_positions[0];
                             content_width = col_widths[0];
@@ -9017,7 +9031,7 @@ cells={} pitch={:.2} text={:?}",
                     };
                     let bottom = top + h;
                     let column_scope = *column_relative
-                        && std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok();
+                        && crate::layout::s1467_float_column_flow();
                     let content_left = if column_scope { start_x } else { page.margin.left };
                     let band_width = if column_scope { content_width } else { total_content_width };
                     let x0 = match h_align.as_deref() {
@@ -15171,7 +15185,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 abs_y = fy + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0));
                             }
                         }
-                        if std::env::var("OXI_FLOAT_COLUMN_FLOW").is_ok()
+                        if crate::layout::s1467_float_column_flow()
                             && _pos.h_relative.as_deref() == Some("column")
                             && _pos.h_align.is_none()
                         {
