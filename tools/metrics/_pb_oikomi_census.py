@@ -94,11 +94,20 @@ try:
                     advs = [round(ln[i + 1][1] - ln[i][1], 2) for i in range(1, len(ln) - 1)]
                     plain = [a for (c, _), a in zip(ln[1:-1], advs) if c not in MARKS]
                     pm = mode(plain)
-                    marks = [
-                        {'ch': c, 'adv': a}
-                        for (c, _), a in zip(ln[1:-1], advs)
-                        if c in MARKS
-                    ]
+                    # each mark carries its LOCAL plain advance (the nearest plain
+                    # neighbours) so a paragraph that mixes font sizes cannot inflate
+                    # the apparent compression against a whole-line mode.
+                    inner = list(zip([c for c, _ in ln[1:-1]], advs))
+                    marks = []
+                    for mi, (c, a) in enumerate(inner):
+                        if c not in MARKS:
+                            continue
+                        near = [
+                            advs[j]
+                            for j in range(max(0, mi - 3), min(len(inner), mi + 4))
+                            if inner[j][0] not in MARKS
+                        ]
+                        marks.append({'ch': c, 'adv': a, 'local': mode(near), 'at_end': mi == len(inner) - 1})
                     nxt = lines[li + 1][0][0] if li + 1 < len(lines) else None
                     print(json.dumps({
                         'doc': name,
