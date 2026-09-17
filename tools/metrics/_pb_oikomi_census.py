@@ -56,7 +56,9 @@ def mode(vals):
 app = win32.DispatchEx('Word.Application'); app.Visible = False
 try:
     for name in DOCS:
-        path = os.path.abspath(os.path.join('tools/golden-test/documents/docx', name))
+        path = name if os.path.isabs(name) or os.sep in name else os.path.join(
+            'tools/golden-test/documents/docx', name)
+        path = os.path.abspath(path)
         if not os.path.exists(path):
             print(json.dumps({'error': 'missing', 'doc': name}), flush=True)
             continue
