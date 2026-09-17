@@ -35861,12 +35861,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     // sides. Include its stroke and padding before applying line spacing;
     // fixed line heights and grid cells keep their own sizing rules.
     fn run_border_height_pad(style: &RunStyle) -> f32 {
-        if std::env::var_os("OXI_RUN_BORDER_HEIGHT").is_none() {
+        // S1453 (2026-09-17, default ON, opt-out OXI_S1453_DISABLE): promotes the
+        // opt-in OXI_RUN_BORDER_HEIGHT checkpoint, whose formula the probe
+        // confirmed, and widens its style filter. COM via Information(6) over six
+        // consecutive bordered paragraphs, so the 0.75 quantisation averages out
+        // (tools/metrics/_pb_run_bdr_lineheight_gen.py, tests/fixtures/run_bdr_lh,
+        // 12 arms, plain 10.5 ＭＳ 明朝 control = 13.65): sz 4 -> 14.70, sz 8 ->
+        // 15.60, sz 12 -> 16.65, sz 24 -> 19.65, i.e. the line grows by exactly
+        // TWICE the drawn width (this helper is added to BOTH the ascent and the
+        // descent at every call site). w:space adds the same way (space=10 ->
+        // 34.65 = 13.65 + 2*(0.5+10)); `double` counts 3x its width (16.65, the
+        // same as a single sz 12); `dashed` counts as single; and bordering only
+        // the middle character of the run is worth the same as the whole run.
+        // technical__5175ec20 p8: '変更前' / '変更後' are the only runs on the page
+        // with a w:bdr, and the 1.0pt each was the drift that kept the 3.18
+        // heading off Word's page 9.
+        if std::env::var_os("OXI_RUN_BORDER_HEIGHT").is_none()
+            && std::env::var_os("OXI_S1453_DISABLE").is_some()
+        {
             return 0.0;
         }
-        style.run_border.as_ref()
-            .filter(|b| b.style == "single")
-            .map_or(0.0, |b| b.width.max(0.0) + b.space.max(0.0))
+        style
+            .run_border
+            .as_ref()
+            .filter(|b| b.style != "none" && b.style != "nil")
+            .map_or(0.0, |b| {
+                let w = b.width.max(0.0) * if b.style == "double" { 3.0 } else { 1.0 };
+                w + b.space.max(0.0)
+            })
     }
 
     fn natural_line_height_for_line(
