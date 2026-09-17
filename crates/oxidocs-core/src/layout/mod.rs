@@ -33133,6 +33133,36 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .unwrap_or(8.5)
                                 * font_size
                                 / 12.0;
+                            // S1462 (2026-09-17, default ON, opt-out
+                            // OXI_S1462_DISABLE): the S725 tolerance is a stand-in
+                            // for the render's unconditional 約物詰め, so it cannot
+                            // exceed what this line can actually give back. A line
+                            // with NO compressible mark has nothing to squeeze and
+                            // gets no tolerance at all. golden ohnoikuji p7
+                            // 「子の出生日の翌日…８週間を経過した日」 (38 chars,
+                            // ＭＳ 明朝 10.5, avail 396.85, first-line indent 2.65)
+                            // has not one 、。・：； or bracket: Word breaks it
+                            // 37 + 1, Oxi kept all 38 on a line that renders to
+                            // 515.05 against a content right edge of 510.25 -- the
+                            // 4.8pt sat inside the flat 7.44pt window. That one
+                            // line was the 18pt Oxi lost on page 7, which let the
+                            // page's last paragraph keep both of its lines and
+                            // shifted every page from 8 to 13.
+                            let tol = if std::env::var("OXI_S1462_DISABLE").is_err() {
+                                let marks = current_line
+                                    .fragments
+                                    .iter()
+                                    .flat_map(|f| f.text.chars())
+                                    .filter(|&c| {
+                                        matches!(c, '、' | '。' | '，' | '．' | '・' | '：' | '；')
+                                            || kinsoku::is_yakumono_opening(c)
+                                            || kinsoku::is_yakumono_closing(c)
+                                    })
+                                    .count() as f32;
+                                tol.min(marks * font_size * 0.5)
+                            } else {
+                                tol
+                            };
                             current_width_tw + s1317_cw_tw - available_tw - pt_to_tw(tol)
                         } else {
                             current_capw_tw + s475_capinc - available_tw
