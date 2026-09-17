@@ -9240,12 +9240,31 @@ fn parse_vml_pict(
         && ((vml_h_align.is_some() && vml_v_align.is_some())
             || (vml_h_relative.is_some() && vml_v_relative.is_some()))
         && std::env::var("OXI_S1006_DISABLE").is_err();
+    // S1458 (2026-09-17, default ON, opt-out OXI_S1458_DISABLE): an absolute VML
+    // shape with a non-zero margin kept its DECLARED anchors instead of being
+    // forced to "text". golden parttime's title hosts
+    //   style="…margin-top:107.05pt;height:72.2pt;
+    //          mso-position-vertical-relative:page"  + <w10:wrap type="topAndBottom"/>
+    // Word draws the box at the PAGE's 107.05 (bottom 179.25) and starts the
+    // next paragraph at 180.00; the hardcoded "text" made the layout resolve
+    // 107.05 against the top margin instead (34.85 + 107.05 = 141.9).
+    let s1458 = std::env::var("OXI_S1458_DISABLE").is_err();
     let vml_position = if is_absolute && (margin_left != 0.0 || margin_top != 0.0) {
         Some(FloatingPosition {
             x: margin_left,
             y: margin_top,
-            h_relative: Some("text".to_string()),
-            v_relative: Some("text".to_string()),
+            h_relative: Some(
+                vml_h_relative
+                    .clone()
+                    .filter(|_| s1458)
+                    .unwrap_or_else(|| "text".to_string()),
+            ),
+            v_relative: Some(
+                vml_v_relative
+                    .clone()
+                    .filter(|_| s1458)
+                    .unwrap_or_else(|| "text".to_string()),
+            ),
             h_align: None,
             v_align: None,
             dist_l: vml_dist_l,

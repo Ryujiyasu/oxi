@@ -8077,6 +8077,65 @@ cells={} pitch={:.2} text={:?}",
         // paragraph's own spacing).  Oxi drew the rule in the right place but
         // never advanced, so page 1 ran 1.57pt high and the keepNext pair at its
         // foot fit by 0.13pt where Word overflows by 1.43.
+        // S1459 (2026-09-17, default ON, opt-out OXI_S1459_DISABLE): a
+        // wrapTopAndBottom textbox anchored to the PAGE interrupts the flow at
+        // its own absolute position -- the anchor paragraph stays ABOVE it and
+        // the next block starts below its bottom. (The S734/S1089 bands model
+        // the PARAGRAPH-anchored shape, which pushes the anchor itself down.)
+        // golden parttime p1: the title sits at 71.25, the box spans the page's
+        // 107.05..179.25, and Word starts 第１章 at 180.00. Oxi drew the box but
+        // never advanced, so page 1 swallowed eleven extra paragraphs and the
+        // document came out 6 pages against Word's 7.
+        let s1459_page_boxes: std::collections::HashMap<usize, f32> =
+            if std::env::var("OXI_S1459_DISABLE").is_err() {
+                let mut m: std::collections::HashMap<usize, f32> = Default::default();
+                for tb in &page.text_boxes {
+                    if tb.wrap_type != Some(crate::ir::WrapType::TopAndBottom) {
+                        continue;
+                    }
+                    if let Some(p) = tb.position.as_ref() {
+                        if p.v_relative.as_deref() == Some("page") {
+                            let e = m.entry(tb.anchor_block_index).or_insert(0.0_f32);
+                            *e = e.max(p.y + tb.height);
+                        }
+                    }
+                }
+                m
+            } else {
+                Default::default()
+            };
+        // S1461 (2026-09-17, default ON, opt-out OXI_S1461_DISABLE): a
+        // wrapTopAndBottom shape attached to a body paragraph interrupts the
+        // flow -- the anchor paragraph stays ABOVE it and the next block starts
+        // below its bottom. (S734/S1089 model the band that pushes the anchor
+        // itself down; this is the other shape.) golden parttime p1: the title
+        // sits at 71.25, the box spans the page's 107.05..179.25 and Word starts
+        // 第１章 at 180.00. Oxi drew the box and never advanced, so page 1
+        // swallowed eleven extra paragraphs and the document came out 6 pages
+        // against Word's 7. The written wrap kind lives in `anchor_wrap`.
+        let s1461_tb_shapes: std::collections::HashMap<usize, f32> =
+            if std::env::var("OXI_S1461_DISABLE").is_err() {
+                let mut m: std::collections::HashMap<usize, f32> = Default::default();
+                for (bi, b) in page.blocks.iter().enumerate() {
+                    let Block::Paragraph(p) = b else { continue };
+                    for sh in &p.shapes {
+                        if sh.wrap_type.or(sh.anchor_wrap)
+                            != Some(crate::ir::WrapType::TopAndBottom)
+                        {
+                            continue;
+                        }
+                        let Some(pos) = sh.position.as_ref() else { continue };
+                        if pos.v_relative.as_deref() != Some("page") {
+                            continue;
+                        }
+                        let e = m.entry(bi).or_insert(0.0_f32);
+                        *e = e.max(pos.y + sh.height);
+                    }
+                }
+                m
+            } else {
+                Default::default()
+            };
         let s1089_tb_bands: std::collections::HashMap<usize, f32> =
             if std::env::var("OXI_S1089_DISABLE").is_err() {
                 let mut m: std::collections::HashMap<usize, f32> = Default::default();
@@ -12139,6 +12198,20 @@ cells={} pitch={:.2} text={:?}",
                         s916_split,                                          // S916
                     );
                     prev_space_after = sa;
+                    // S1461: drop the cursor below a page-anchored
+                    // wrapTopAndBottom shape hosted by this block.
+                    if let Some(&bot) = s1461_tb_shapes.get(&block_idx) {
+                        if bot > cursor.cursor_y && bot < start_y + content_height {
+                            cursor.set(bot);
+                        }
+                    }
+                    // S1459: drop the cursor below a page-anchored
+                    // wrapTopAndBottom box hosted by this block.
+                    if let Some(&bot) = s1459_page_boxes.get(&block_idx) {
+                        if bot > cursor.cursor_y && bot < start_y + content_height {
+                            cursor.set(bot);
+                        }
+                    }
                     if std::env::var("OXI_DBG_PARA").is_ok() {
                         let txt: String = para
                             .runs
@@ -12724,10 +12797,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         block_y_positions.get(block_idx).copied().unwrap_or(start_y);
                     for shape in &para.shapes {
                         if let Some(ref pos) = shape.position {
-                            // h_relative=column: x = margin_left + offset
-                            // v_relative=paragraph: y = anchor_y + offset
-                            let sx = page.margin.left + pos.x;
-                            let sy = para_anchor_y + pos.y;
+                            // S1460 (2026-09-17, default ON, opt-out
+                            // OXI_S1460_DISABLE): resolve the shape's DECLARED
+                            // anchors instead of assuming column/paragraph.
+                            // `vertical_shape_origin` already implements the
+                            // whole table and falls through to
+                            // (margin.left + pos.x, anchor_y + pos.y) for the
+                            // text/column/paragraph cases, so every shape that
+                            // does not declare page/margin is unchanged.
+                            // golden parttime's title hosts a VML box declaring
+                            // mso-position-vertical-relative:page with
+                            // margin-top 107.05 -- Word draws it at the PAGE's
+                            // 107.05, the hardcoded form put it at
+                            // 34.85 + 107.05 = 141.9.
+                            let (sx, sy) = if std::env::var("OXI_S1460_DISABLE").is_err() {
+                                Self::vertical_shape_origin(page, shape, para_anchor_y)
+                            } else {
+                                (page.margin.left + pos.x, para_anchor_y + pos.y)
+                            };
                             let content = shape_fill_boxrect(shape).unwrap_or_else(|| {
                                 LayoutContent::PresetShape {
                                     shape_type: shape.shape_type.clone(),
