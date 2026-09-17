@@ -9471,7 +9471,9 @@ cells={} pitch={:.2} text={:?}",
                     // still need its style identity for neighbouring spacing.
                     if std::env::var("OXI_S945_DISABLE").is_err()
                         && !(para.style.page_break_after
-                            && std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok())
+                            && (std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok()
+                                || (para.style.continuous_section_break
+                                    && std::env::var("OXI_S1454_DISABLE").is_err())))
                         && para.style.page_section_break
                         && para.runs.iter().all(|r| r.text.is_empty())
                     {
@@ -19671,7 +19673,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // already handled by S730 above; this is the non-continuous sibling.
         if std::env::var("OXI_S945_DISABLE").is_err()
             && !(para.style.page_break_after
-                && std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok())
+                && (std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok()
+                    || (para.style.continuous_section_break
+                        && std::env::var("OXI_S1454_DISABLE").is_err())))
             && para.style.page_section_break
             && para.runs.iter().all(|r| r.text.is_empty())
         {
