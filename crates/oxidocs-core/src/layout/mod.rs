@@ -39194,7 +39194,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let dump_table = std::env::var("OXI_DUMP_TABLE").is_ok();
         // A rendered row must fit the page. Half-point slack can keep an
         // entire overflow line; retain only floating-point roundoff tolerance.
-        let row_fit_epsilon = if std::env::var("OXI_TABLE_BOTTOM_FIT").is_ok() {
+        // S1469 (2026-09-18, default ON, opt-out OXI_S1469_DISABLE): promotes the
+        // OXI_TABLE_BOTTOM_FIT checkpoint. A row is split only when
+        // `row_bottom > page_bottom + row_fit_epsilon`, so a 0.5pt tolerance let a
+        // row hang off the page instead of splitting. educational__003299ba p4:
+        // the six-cell row whose fourth cell holds two paragraphs starts at 742.94
+        // with 26.96 left under a content bottom of 769.90 and needs 27.36, so it
+        // overruns by 0.40 -- inside the old tolerance. Word splits it, keeping
+        // '1 aged 9-12' on page 4 and '1 aged 4-8' on page 5; Oxi kept both and
+        // every later paragraph sat one page early. With the tolerance at 0.001
+        // the document goes 0.9963 -> 1.0.
+        let row_fit_epsilon = if std::env::var("OXI_TABLE_BOTTOM_FIT").is_ok()
+            || std::env::var("OXI_S1469_DISABLE").is_err()
+        {
             0.001
         } else {
             0.5
