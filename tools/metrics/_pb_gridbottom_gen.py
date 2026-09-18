@@ -77,11 +77,11 @@ CONTENT_BOTTOM = PAGE_H / 20.0 - BOTTOM / 20.0
 
 # (name, font, half-point size, docGrid linePitch tw, snapToGrid, beforeLines)
 ARMS = [
-    ("mincho105_g360", "ＭＳ明朝", 21, 360, True, 0),
-    ("mincho105_bl50", "ＭＳ明朝", 21, 360, True, 50),
-    ("mincho105_g360_nosnap", "ＭＳ明朝", 21, 360, False, 0),
-    ("mincho12_g360", "ＭＳ明朝", 24, 360, True, 0),
-    ("gothic105_g360", "ＭＳゴシック", 21, 360, True, 0),
+    ("mincho105_g360", "ＭＳ 明朝", 21, 360, True, 0),
+    ("mincho105_bl50", "ＭＳ 明朝", 21, 360, True, 50),
+    ("mincho105_g360_nosnap", "ＭＳ 明朝", 21, 360, False, 0),
+    ("mincho12_g360", "ＭＳ 明朝", 24, 360, True, 0),
+    ("gothic105_g360", "ＭＳ ゴシック", 21, 360, True, 0),
 ]
 LINE = "本日は晴天なりこの行は頁末の判定を測るための行である"
 N_LINES = 60

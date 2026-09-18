@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 """Word's page-bottom limit as a FUNCTION (size / line rule / grid pitch).
 
-MEASURED (content bottom 770.00, A4, last accepted BASELINE):
-    MS Mincho  9pt   765.60  reserve 4.400 = 0.4889 em
-    MS Mincho 10.5   764.88          5.120 = 0.4876 em
-    MS Mincho 12     764.16          5.840 = 0.4867 em
-    MS Mincho 14     763.08          6.920 = 0.4943 em
-    MS Gothic 10.5   764.88          5.120 = 0.4876 em
-    Times NR  10.5   767.04          2.960 = 0.2819 em   <- face-dependent
+MEASURED (content bottom 770.00, A4, last accepted BASELINE).  NOTE the font
+name MUST carry the full-width space -- `ＭＳ 明朝` silently resolves to Yu
+Gothic and every number below changes by ~30%; always print the PDF span font
+first:
+    MS Mincho  9pt   767.40  reserve 2.600 = 0.2889 em
+    MS Mincho 10.5   767.04          2.960 = 0.2819 em
+    MS Mincho 12     766.56          3.440 = 0.2867 em
+    MS Mincho 14     765.96          4.040 = 0.2886 em
+    MS Gothic 10.5   767.04          2.960  (no face dependence)
+    Times NR  10.5   767.04          2.960  (ditto)
     exact 13pt       767.52          2.480 = 0.191 of the line height
-    atLeast 13pt     764.88          5.120  (same as auto)
-    pitch 300/420/absent: identical -- the GRID DOES NOT ENTER.
+    atLeast 13pt / pitch 300 / 420 / absent: identical -- the GRID DOES NOT ENTER.
     space_before shifts the flip by exactly its own value; the limit is unchanged.
+
+The reserve is just the line box below the baseline: MS Mincho 10.5pt has an
+in-box baseline at 10.58 and an advance of 13.56, and 13.56 - 10.58 = 2.98.
+So Word's page-bottom test is simply "the whole line box must fit".
 
 CAVEAT: the Oxi column of this probe is NOT Oxi's page-bottom rule.  The spacer
 is a single ~680pt exact line, and Oxi's flip is governed by how it handles that
@@ -33,19 +39,19 @@ TEXT = '測定行'
 
 # (tag, font, half-pt size, line rule, line value, grid pitch, space_before_xml)
 ARMS = [
-    ('mincho9',    'ＭＳ明朝', 18, 'auto', 240, 360),
-    ('mincho105',  'ＭＳ明朝', 21, 'auto', 240, 360),
-    ('mincho12',   'ＭＳ明朝', 24, 'auto', 240, 360),
-    ('mincho14',   'ＭＳ明朝', 28, 'auto', 240, 360),
-    ('gothic105',  'ＭＳゴシック', 21, 'auto', 240, 360),
+    ('mincho9',    'ＭＳ 明朝', 18, 'auto', 240, 360),
+    ('mincho105',  'ＭＳ 明朝', 21, 'auto', 240, 360),
+    ('mincho12',   'ＭＳ 明朝', 24, 'auto', 240, 360),
+    ('mincho14',   'ＭＳ 明朝', 28, 'auto', 240, 360),
+    ('gothic105',  'ＭＳ ゴシック', 21, 'auto', 240, 360),
     ('times105',   'Times New Roman', 21, 'auto', 240, 360),
-    ('m105_exact', 'ＭＳ明朝', 21, 'exact', 260, 360),
-    ('m105_atleast', 'ＭＳ明朝', 21, 'atLeast', 260, 360),
-    ('m105_p300',  'ＭＳ明朝', 21, 'auto', 240, 300),
-    ('m105_p420',  'ＭＳ明朝', 21, 'auto', 240, 420),
-    ('m105_nogrid', 'ＭＳ明朝', 21, 'auto', 240, None),
-    ('m105_before120', 'ＭＳ明朝', 21, 'auto', 240, 360, 'w:before="120"'),
-    ('m105_bl50', 'ＭＳ明朝', 21, 'auto', 240, 360, 'w:beforeLines="50" w:before="120"'),
+    ('m105_exact', 'ＭＳ 明朝', 21, 'exact', 260, 360),
+    ('m105_atleast', 'ＭＳ 明朝', 21, 'atLeast', 260, 360),
+    ('m105_p300',  'ＭＳ 明朝', 21, 'auto', 240, 300),
+    ('m105_p420',  'ＭＳ 明朝', 21, 'auto', 240, 420),
+    ('m105_nogrid', 'ＭＳ 明朝', 21, 'auto', 240, None),
+    ('m105_before120', 'ＭＳ 明朝', 21, 'auto', 240, 360, 'w:before="120"'),
+    ('m105_bl50', 'ＭＳ 明朝', 21, 'auto', 240, 360, 'w:beforeLines="50" w:before="120"'),
 ]
 
 
