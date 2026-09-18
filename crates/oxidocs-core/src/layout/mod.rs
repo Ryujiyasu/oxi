@@ -13008,6 +13008,55 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             _ => e.y + e.height,
                         }).fold(saved_cursor_y, f32::max);
                         let actual_prefix = actual_bottom - saved_cursor_y;
+                        // S1478 (2026-09-19, default ON, opt-out
+                        // OXI_S1478_DISABLE): Word breaks a float BETWEEN rows,
+                        // never inside one. policies__00602e8a: float 2 is
+                        // anchored 19.9pt above the page-5 bottom and float 3
+                        // 32.1pt above page 6's, while their first rows are
+                        // 85.9 and 68.9pt -- Word starts both on the next page
+                        // (PDF rules 114.9.. on p6 and 132.0.. on p7, with
+                        // nothing after the previous float on the page before).
+                        // Float 1 keeps its 244.2pt prefix against a 68.9pt
+                        // first row and stays put, so the test is per-ROW, not
+                        // "does the whole float fit".
+                        let row0_height = if std::env::var("OXI_S1478_DISABLE").is_err()
+                            && !probe_table.rows.is_empty()
+                            && !actual_pages.is_empty()
+                        {
+                            let mut row0_table = probe_table.clone();
+                            row0_table.rows.truncate(1);
+                            let mut r0_cursor = LayoutCursor::new(nominal_anchor);
+                            let mut r0_pages = Vec::new();
+                            let mut r0_pending = Vec::new();
+                            let r0_tail = self.layout_table(
+                                &row0_table, start_x, &mut r0_cursor, content_width,
+                                grid_pitch, page.grid_char_pitch, page.grid_char_cw_ratio,
+                                nominal_top, start_y + content_height - nominal_top,
+                                page.size.width, page.size.height,
+                                &mut r0_pages, &mut r0_pending, Some(block_idx), page,
+                                false, None, None, 0.0, 0.0, false, None,
+                            );
+                            let r0_elems: Vec<&LayoutElement> = if let Some(f) = r0_pages.first() {
+                                f.elements.iter().collect()
+                            } else {
+                                r0_pending.iter().chain(r0_tail.iter()).collect()
+                            };
+                            Some(r0_elems.iter().map(|e| match &e.content {
+                                LayoutContent::TableBorder { y1, y2, .. } => y1.max(*y2),
+                                _ => e.y + e.height,
+                            }).fold(nominal_anchor, f32::max) - nominal_anchor)
+                        } else {
+                            None
+                        };
+                        if let Some(h0) = row0_height {
+                            if h0 > 0.0 && actual_prefix + 0.5 < h0 {
+                                move_float_to_next_page = true;
+                            }
+                        }
+                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                            eprintln!("[FLOAT-ROW0] block={} actual_prefix={:.3} row0_height={:?} move={}",
+                                block_idx, actual_prefix, row0_height, move_float_to_next_page);
+                        }
                         // S1476 (2026-09-18, default ON, opt-out OXI_S1476_DISABLE):
                         // when the float BREAKS at its real anchor, the band it
                         // excludes from the page's own flow is what it actually
