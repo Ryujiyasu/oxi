@@ -39204,8 +39204,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // '1 aged 9-12' on page 4 and '1 aged 4-8' on page 5; Oxi kept both and
         // every later paragraph sat one page early. With the tolerance at 0.001
         // the document goes 0.9963 -> 1.0.
-        let row_fit_epsilon = if std::env::var("OXI_TABLE_BOTTOM_FIT").is_ok()
-            || std::env::var("OXI_S1469_DISABLE").is_err()
+        // S1470 (2026-09-18, default ON, opt-out OXI_S1470_DISABLE): S1469's tight
+        // tolerance is for tables in the FLOW. A FLOATING table (w:tblpPr) keeps
+        // the old 0.5: policies__00602e8a is eight page-anchored "Provision:"
+        // floats, and Word pushes their rows on whole where the tight tolerance
+        // makes Oxi split them -- the document drops 0.7087 -> 0.5340 and loses a
+        // page. Measured by toggling the two flags against each other:
+        // S1469 off = 0.7087 pcd 0, S1469 on = 0.5340 pcd -1, with S1468 on in
+        // both cases.
+        let s1470_float_keeps_slack = table.style.position.is_some()
+            && std::env::var("OXI_S1470_DISABLE").is_err();
+        let row_fit_epsilon = if !s1470_float_keeps_slack
+            && (std::env::var("OXI_TABLE_BOTTOM_FIT").is_ok()
+                || std::env::var("OXI_S1469_DISABLE").is_err())
         {
             0.001
         } else {
