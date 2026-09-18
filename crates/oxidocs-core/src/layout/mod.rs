@@ -1998,6 +1998,25 @@ struct MergedCellTextFlow {
 /// the right column's body text lands at 641.88 where Word puts it at 231.75 and
 /// the document comes out 5 pages against Word's 4. With the flag the document
 /// goes 0.6061 -> 0.9394 and its page count matches.
+/// S1475 (2026-09-18, default ON, opt-out `OXI_S1475_DISABLE`): the compat-15
+/// justified space-shrink capacity has a SECOND ceiling that S825 was missing —
+/// the line may not shrink by more than 0.35 x (the LAST word's advance + one
+/// space). DERIVED (`tools/metrics/_pb_jshrink_gen.py` plus the last-word sweep:
+/// TNR-10, 16 spaces, head fixed, last word swept i/ii/iii/iiii/m/mm/mmm/...):
+/// allow = 1.85/2.80/3.75/4.70/3.60/6.25/9.00 pt, i.e. 0.345-0.350 x (w+space)
+/// until it reaches 0.625 x 16 = 10.00 and stays there. Falsified en route:
+/// a flat per-line cap (fixes educational__0036ed4b, costs 3 other EN docs),
+/// glyph-width error (Word PDF vs Oxi agree within 0.1pt over 27 lines), bold /
+/// shd / lang / color / settings content, commas and hyphens (allow identical),
+/// and the CANDIDATE word (only the line's LAST word moves it).
+pub(crate) fn s1475_last_word_cap(credit_tw: i32, word_tw: i32, space_tw: i32, on: bool) -> i32 {
+    if !on {
+        return credit_tw;
+    }
+    let cap = (((word_tw + space_tw) as f32) * 0.35).floor() as i32;
+    credit_tw.min(cap.max(0))
+}
+
 pub(crate) fn s1467_float_column_flow() -> bool {
     std::env::var_os("OXI_FLOAT_COLUMN_FLOW").is_some()
         || std::env::var_os("OXI_S1467_DISABLE").is_none()
@@ -28818,6 +28837,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let s809_hang = s953_hang;
         // S799 cap: the no-kern justified shrink is SMALLER than KERNBREAK's 0.25
         // (a blanket 0.25 over-fits — framework {−1:20}→{−1:31}); sweep knob.
+        // S1475: the last-word ceiling applies to the S825 (compat-15 explicit)
+        // arm only — the c14 / S933 / S1046 classes keep their own allowances.
+        let s1475_on = std::env::var("OXI_S1475_DISABLE").is_err()
+            && s799_space_shrink
+            && self.compat_mode >= 15
+            && self.compat_mode_explicit;
+        let mut s1475_space_tw: i32 = 0;
         let s799_cap: f32 = std::env::var("OXI_S799_CAP")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -29470,7 +29496,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // identical. Opt-out OXI_OPENWRAP_DISABLE.
                         if std::env::var("OXI_OPENWRAP_DISABLE").is_err()
                             && preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && current_line.fragments.len() > 1 && !para_all_whitespace {
                             let mut carried: Vec<LineFragment> = Vec::new();
                             while current_line.fragments.len() > 1 {
@@ -29497,7 +29523,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                         }
                         if !preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             wrap_and_seed!(ws);
                         }
@@ -29574,7 +29600,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // final ','/'.' (one segment) then wraps here despite the KEEP
                             // decision («revenues,»: decision KEEP, segment wrapped).
                             // Apply the same exclusive-boundary hang to the LAST segment.
-                            if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                            if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), seg_w_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 + segment_hang_tw
                                 && !current_line.fragments.is_empty() && !para_all_whitespace
                                 && !s1059_overlong {
@@ -29607,7 +29633,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 let piece_w_tw = pt_to_tw(piece_w);
                                 let limit = available_tw
                                     + if std::env::var("OXI_SEGMENT_CREDIT_DISABLE").is_err() { s1346_credit_tw } else { 0 }
-                                    + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) })
+                                    + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), piece_w_tw, s1475_space_tw, s1475_on) })
                                     + right_tab_slack_tw
                                     + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                     + segment_hang_tw;
@@ -29683,7 +29709,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
                     let mut hyphenated = false;
-                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         // S1128 (2026-08-15, SHIPPED default-ON, opt-out
                         // OXI_S1128_DISABLE): `<w:autoHyphenation/>`.
@@ -32281,6 +32307,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             current_width += char_width;
                             current_width_tw += space_tw;
                             current_capw_tw += space_tw; // S475: space, no punct capacity
+                            s1475_space_tw = space_tw;
                             if dbg_flush {
                                 eprintln!(
                                     "[DBGSPACE] w={:.3} fam={} fs={} has32={} em32={:.4}",
