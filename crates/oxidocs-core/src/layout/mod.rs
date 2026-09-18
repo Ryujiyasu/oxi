@@ -27929,11 +27929,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // document's whole p2 drift: it loses the last line and slips its one
         // FAIL paragraph. 683f (JP) keeps the rule -- today's falsification is
         // Latin-scoped, and 683f sits in the golden 96 to catch any flip.
+        // S1481 (2026-09-19, default OFF, opt-in OXI_S1481_LEGACY=1): the JP
+        // half of the rule falls too. The 683f derivation read Information(6),
+        // which is 0.75pt-quantized (683f_word_paras.json: 56.5 / 70.0 / 83.5 /
+        // 97.5 -- every y a multiple of 0.75), so a phantom +0.5 is its
+        // resolution. Word PDF truth on a JP no-grid repro (MS Mincho 11pt,
+        // [3 content, N empty, 2 content], N = 1 / 2 / 3, with and without a
+        // no-type docGrid) measures the span at (N+1) x 14.30 EXACT (-0.04 ..
+        // -0.08); Oxi's +0.49 fires only at N = 2. ikujidetail page 1 carries
+        // the same shape (3-line body, 2 empties, heading): Word 45.72 = the
+        // exact model, Oxi 46.38 -- the +0.5 is the first divergence of the
+        // whole document once S571's pitch snap stops masking it.
         if adjacent_to_empty_run
             && is_single_lm0
             && grid_pitch.is_none()
             && (cursor.cursor_y - page_top).abs() > 0.1
-            && (self.doc_body_has_real_cjk || std::env::var("OXI_S1173_DISABLE").is_ok())
+            && std::env::var("OXI_S1481_LEGACY").is_ok()
         {
             cursor.advance(0.5);
         }
