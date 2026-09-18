@@ -34,6 +34,23 @@ fn cell_has_em_advance(metrics: &FontMetrics, ch: char) -> bool {
 /// spacing (_bl_derive). docGrid uses the grid pitch instead.
 const NO_GRID_LINE_PT: f32 = 12.0;
 
+/// S1480 (2026-09-19, default ON, opt-out `OXI_S1480_DISABLE`): the "line" that
+/// `w:beforeLines`/`w:afterLines` count in. A docGrid WITHOUT `w:type` is not a
+/// line grid for spacing: Word uses the fixed 12pt unit (the no-grid S697 value)
+/// regardless of its linePitch. MEASURED (three-paragraph probe, MS Mincho,
+/// beforeLines=100): unit 11.90 for linePitch 286 / 355 / 360 / 403 and for
+/// compatibilityMode 11 / 14 / 15 / absent — while a `type="linesAndChars"`
+/// grid gives exactly bl/100 x pitch (parttime: 0.3 x 20.15 = 6.04). Oxi took
+/// the pitch for every non-360 no-type grid (S571 keeps that pitch for LINE
+/// snapping; this only changes the spacing unit).
+fn s1480_lines_unit(no_type_grid: bool, pitch: f32) -> f32 {
+    if no_type_grid && std::env::var("OXI_S1480_DISABLE").is_err() {
+        NO_GRID_LINE_PT
+    } else {
+        pitch
+    }
+}
+
 /// Convert a char to a String with pre-sized buffer (avoids realloc for multi-byte chars).
 #[inline]
 fn char_to_string(ch: char) -> String {
@@ -10726,7 +10743,7 @@ cells={} pitch={:.2} text={:?}",
                                 let next_sb = if let (Some(bl), Some(pitch)) =
                                     (next_para.style.before_lines, grid_pitch)
                                 {
-                                    bl / 100.0 * pitch
+                                    bl / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
                                 } else {
                                     next_para.style.space_before.unwrap_or(0.0)
                                 };
@@ -10776,7 +10793,7 @@ cells={} pitch={:.2} text={:?}",
                                     let this_sb = if let (Some(bl), Some(pitch)) =
                                         (para.style.before_lines, grid_pitch)
                                     {
-                                        bl / 100.0 * pitch
+                                        bl / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
                                     } else {
                                         para.style.space_before.unwrap_or(0.0)
                                     };
@@ -10874,7 +10891,7 @@ cells={} pitch={:.2} text={:?}",
                                 } else if let (Some(bl), Some(pitch)) =
                                     (next_para.style.before_lines, grid_pitch)
                                 {
-                                    bl / 100.0 * pitch
+                                    bl / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
                                 } else {
                                     next_para.style.space_before.unwrap_or(0.0)
                                 }
@@ -11224,7 +11241,7 @@ cells={} pitch={:.2} text={:?}",
                                 } else if let (Some(bl), Some(pitch)) =
                                     (para.style.before_lines, grid_pitch)
                                 {
-                                    bl / 100.0 * pitch
+                                    bl / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
                                 } else {
                                     para.style.space_before.unwrap_or(0.0)
                                 };
@@ -11845,7 +11862,7 @@ cells={} pitch={:.2} text={:?}",
                     && para.style.line_spacing_rule.as_deref() != Some("atLeast")
                 {
                     if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
-                        bl / 100.0 * pitch
+                        bl / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
                     } else {
                         para.style.space_before.unwrap_or(0.0)
                     }
@@ -19258,7 +19275,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // beforeLines is specified as percentage of linePitch (e.g., 50 = 0.5 lines).
             // COM-confirmed (2026-04-06): the value is exact (bl/100 * pitch), no grid snap.
             // beforeLines=50 at pitch=17.5 gives exactly 8.75pt, not 17.5pt.
-            bl / 100.0 * pitch
+            bl / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
         } else if let Some(bl) = para.style.before_lines.filter(|_| {
             page.grid_line_pitch.is_none() && std::env::var("OXI_S697_DISABLE").is_err()
         }) {
@@ -27943,7 +27960,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         } else if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
             // afterLines: exact value (al/100 * pitch), no grid snap needed.
-            al / 100.0 * pitch
+            al / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
         } else if let Some(al) = para.style.after_lines.filter(|_| {
             page.grid_line_pitch.is_none() && std::env::var("OXI_S697_DISABLE").is_err()
         }) {
