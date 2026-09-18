@@ -31,13 +31,24 @@ SETTINGS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings 
             '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>')
 
 
-def styles(style_before):
+def styles(style_before, dd_sz=21, normal_sz=None, h2_sz=24):
+    """dd_sz = docDefaults size; normal_sz = the Normal style's own size (None = inherit).
+
+    S1453 の導出では dd_sz=21 / normal_sz=None の 1 点しか測っておらず、そこから
+    「beforeLines の単位は 12pt 固定」と一般化してしまった。policies__094c44cd
+    (docDefaults に sz 無し、Normal が sz=24) は beforeLines=50 に 7.52pt を与え、
+    12pt 単位なら 6.0 のはずのところと合わない。単位が既定サイズに依存するかを
+    決めるため、docDefaults と Normal のサイズを振る。
+    """
     sb = '' if style_before is None else f'<w:spacing w:before="{style_before}" w:after="60"/>'
+    dd = f'<w:sz w:val="{dd_sz}"/>' if dd_sz else ''
+    nrm = f'<w:rPr><w:sz w:val="{normal_sz}"/></w:rPr>' if normal_sz else ''
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Century" w:eastAsia="ＭＳ 明朝" w:hAnsi="Century"/><w:sz w:val="21"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>'
-            '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/></w:style>'
+            '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Century" w:eastAsia="ＭＳ 明朝" w:hAnsi="Century"/>'
+            f'{dd}</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>'
+            f'<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/>{nrm}</w:style>'
             f'<w:style w:type="paragraph" w:styleId="H2"><w:name w:val="heading 2"/><w:basedOn w:val="a"/><w:pPr><w:keepNext/>{sb}<w:outlineLvl w:val="1"/></w:pPr>'
-            '<w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="ＭＳ ゴシック" w:hAnsi="Arial"/><w:b/><w:sz w:val="24"/></w:rPr></w:style></w:styles>')
+            f'<w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="ＭＳ ゴシック" w:hAnsi="Arial"/><w:b/><w:sz w:val="{h2_sz}"/></w:rPr></w:style></w:styles>')
 
 
 def document(before_lines, pitch):
@@ -59,6 +70,24 @@ try:
         for bl in (0, 100):
             arms.append((sb, bl, 360))
     arms += [(240, 50, 360), (240, 200, 360), (240, 100, 240), (240, 100, None), (None, 100, 240)]
+    # size-varying arms: (dd_sz, normal_sz, h2_sz) with a fixed beforeLines=50
+    size_arms = [
+        (21, None, 24), (21, None, 21), (None, 24, 24), (None, 24, 21),
+        (24, None, 24), (None, 21, 24), (None, None, 24),
+    ]
+    for dd, nz, hz in size_arms:
+        tag = f'dd{dd}_n{nz}_h{hz}'
+        at = OUT / f'size_{tag}.docx'
+        with zipfile.ZipFile(at, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('[Content_Types].xml', CT); z.writestr('_rels/.rels', RR); z.writestr('word/_rels/document.xml.rels', DR)
+            z.writestr('word/settings.xml', SETTINGS); z.writestr('word/styles.xml', styles(240, dd, nz, hz))
+            z.writestr('word/document.xml', document(50, 360))
+        d = app.Documents.Open(str(at.resolve()), ReadOnly=True)
+        try:
+            ys = [round(d.Range(d.Paragraphs(i).Range.Start, d.Paragraphs(i).Range.Start).Information(6), 2) for i in (1, 2, 3)]
+            print(f'SIZE dd={str(dd):4} normal={str(nz):4} h2={hz} | y={ys} gap1={round(ys[1] - ys[0], 2)} gap2={round(ys[2] - ys[1], 2)}', flush=True)
+        finally:
+            d.Close(False)
     for sb, bl, pitch in arms:
         at = OUT / f'sb{sb}_bl{bl}_p{pitch}.docx'
         with zipfile.ZipFile(at, 'w', zipfile.ZIP_DEFLATED) as z:
