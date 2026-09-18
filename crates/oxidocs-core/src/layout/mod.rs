@@ -24335,6 +24335,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 false
             };
+            // OXI_DBG_S391: one line per per-LINE LRPB break, with the geometry a
+            // discriminator would use. S822 failed by picking a threshold before
+            // dumping both populations; do not repeat that -- collect first.
+            if s391_lrpb_break && std::env::var("OXI_DBG_S391").is_ok() {
+                let preview: String = line
+                    .fragments
+                    .iter()
+                    .flat_map(|f| f.text.chars())
+                    .take(16)
+                    .collect();
+                eprintln!(
+                    "[S391] pg={} line_idx={} y={:.2} bottom={:.2} slack={:.2} natural={} text={:?}",
+                    pages.len() + 1,
+                    line_idx,
+                    cursor.cursor_y,
+                    effective_break_bottom,
+                    effective_break_bottom - cursor.cursor_y,
+                    natural_needs_page_break,
+                    preview
+                );
+            }
             let needs_page_break = natural_needs_page_break || s391_lrpb_break;
             // OXI_DUMP_BREAK_Y lowers the ALL-lines cutoff: a page whose bottom
             // is eaten by a footnote area breaks well above 700.
