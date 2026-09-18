@@ -8729,7 +8729,8 @@ cells={} pitch={:.2} text={:?}",
                 if matches!(shape.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight)) {
                     if let Some(pos) = &shape.position {
                         let mut top = cursor.cursor_y + pos.y;
-                        if std::env::var("OXI_PARAGRAPH_FLOAT_SPACING").is_ok()
+                        if (std::env::var("OXI_PARAGRAPH_FLOAT_SPACING").is_ok()
+                || std::env::var("OXI_S1471_DISABLE").is_err())
                             && matches!(pos.v_relative.as_deref(), None | Some("paragraph"))
                         {
                             if let Block::Paragraph(para) = block {
@@ -8907,7 +8908,8 @@ cells={} pitch={:.2} text={:?}",
                         .map(|(_, y)| *y).reduce(f32::min)
                 } else { None };
                 let mut s758_anchor_y = shared_origin.unwrap_or(cursor.cursor_y);
-                if std::env::var("OXI_PARAGRAPH_FLOAT_SPACING").is_ok() {
+                if (std::env::var("OXI_PARAGRAPH_FLOAT_SPACING").is_ok()
+                || std::env::var("OXI_S1471_DISABLE").is_err()) {
                     if let Block::Paragraph(para) = block {
                         s758_anchor_y += self.paragraph_spacing_before(
                             para, page, grid_pitch, prev_para_style_id.as_deref(),
@@ -9551,7 +9553,8 @@ cells={} pitch={:.2} text={:?}",
             let natural_anchor_y = shared_float_anchors.get(&block_idx)
                 .filter(|(pg, _)| *pg == current_page_idx)
                 .map_or(cursor.cursor_y, |(_, y)| *y);
-            let anchor_spacing = if std::env::var("OXI_PARAGRAPH_FLOAT_SPACING").is_ok() {
+            let anchor_spacing = if (std::env::var("OXI_PARAGRAPH_FLOAT_SPACING").is_ok()
+                || std::env::var("OXI_S1471_DISABLE").is_err()) {
                 if let Block::Paragraph(para) = block {
                     self.paragraph_spacing_before(
                         para, page, grid_pitch, prev_para_style_id.as_deref(),
@@ -11296,7 +11299,8 @@ cells={} pitch={:.2} text={:?}",
                                     let y0 = block_y_positions[pull_from] - 0.1;
                                     let (keep, moved): (Vec<LayoutElement>, Vec<LayoutElement>) =
                                         elements.drain(..).partition(|e| {
-                                            if std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok() {
+                                            if (std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok()
+                || std::env::var("OXI_S1474_DISABLE").is_err()) {
                                                 if let Some(index) = e.paragraph_index {
                                                     return index < pull_from || index >= block_idx;
                                                 }
@@ -11455,7 +11459,8 @@ cells={} pitch={:.2} text={:?}",
                                             Vec<LayoutElement>,
                                             Vec<LayoutElement>,
                                         ) = elements.drain(..).partition(|e| {
-                                            if std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok() {
+                                            if (std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok()
+                || std::env::var("OXI_S1474_DISABLE").is_err()) {
                                                 if let Some(index) = e.paragraph_index {
                                                     return index < pull_from || index >= block_idx;
                                                 }
@@ -11911,7 +11916,8 @@ cells={} pitch={:.2} text={:?}",
                                             Vec<LayoutElement>,
                                             Vec<LayoutElement>,
                                         ) = elements.drain(..).partition(|e| {
-                                            if std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok() {
+                                            if (std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok()
+                || std::env::var("OXI_S1474_DISABLE").is_err()) {
                                                 if let Some(index) = e.paragraph_index {
                                                     return index < pull_from || index >= block_idx;
                                                 }
@@ -19577,7 +19583,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     (*bot, red, 0.0)
                 }
             })
-            .find(|(_, red, _)| *red > 6.0 || (!self.doc_body_has_real_cjk && std::env::var("OXI_WRAP_WORD_FIT").is_ok()));
+            .find(|(_, red, _)| *red > 6.0 || (!self.doc_body_has_real_cjk && (std::env::var("OXI_WRAP_WORD_FIT").is_ok()
+                || std::env::var("OXI_S1472_DISABLE").is_err())));
         // S-TWOSEG: the same band, asked a different question -- does
         // this paragraph have usable room on BOTH sides of the float?
         // If it does, the single-segment answer above is the wrong
@@ -20546,7 +20553,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             };
             if cursor.cursor_y + marker_break_h > page_top + content_height {
                 let marker_columns = num_columns > 1
-                    && std::env::var("OXI_MARKER_COLUMN_FLOW").is_ok();
+                    && (std::env::var("OXI_MARKER_COLUMN_FLOW").is_ok()
+                || std::env::var("OXI_S1473_DISABLE").is_err());
                 let old_origin = (start_x, cursor.cursor_y);
                 if marker_columns && cur_col + 1 < num_columns {
                     cur_col += 1;
@@ -20898,7 +20906,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // narrowing and shift are dropped. The band BOTTOM is kept, because the
         // rebreak at the band exit is what returns the paragraph to full width
         // once it clears the float.
-        let marker_left_region = std::env::var("OXI_MARKER_COLUMN_FLOW").is_ok()
+        let marker_left_region = (std::env::var("OXI_MARKER_COLUMN_FLOW").is_ok()
+                || std::env::var("OXI_S1473_DISABLE").is_err())
             && (cur_col != start_column || pages.len() > s749_pages_at_entry);
         let s758_two_seg = if marker_left_region { None } else { s758_two_seg };
         let s758_band = if marker_left_region {
@@ -21068,7 +21077,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // wrapping object has ended; preceding rows stay beside the object.
         let mut word_fit_widths = Vec::new();
         let mut word_fit_floors: Vec<Option<f32>> = Vec::new();
-        if std::env::var("OXI_WRAP_WORD_FIT").is_ok()
+        if std::env::var("OXI_DBG_WF").is_ok() {
+            eprintln!("[WF-GATE] cjk={} bpi={:?} two_seg={:?} clean={} band={:?} text={:?}",
+                self.doc_body_has_real_cjk, body_para_index, s758_two_seg,
+                fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\n' | '\r' | '\t' | '\u{FFFC}'))),
+                s758_band,
+                para.runs.iter().map(|r| r.text.as_str()).collect::<String>()
+                    .chars().take(22).collect::<String>());
+        }
+        if (std::env::var("OXI_WRAP_WORD_FIT").is_ok()
+                || std::env::var("OXI_S1472_DISABLE").is_err())
             && !self.doc_body_has_real_cjk && body_para_index.is_some()
             && s758_two_seg.is_none()
             && fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\n' | '\r' | '\t' | '\u{FFFC}')))
@@ -21129,6 +21147,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         remaining[0].0 = remaining[0].0.chars().skip(count).collect();
                         remaining[0].4 = co;
                     } else { remaining.clear(); }
+                }
+                if std::env::var("OXI_DBG_WF").is_ok() {
+                    eprintln!("[WF-PLAN] valid={} n={} floors={:?} text={:?}",
+                        valid, planned.len(), floors,
+                        para.runs.iter().map(|r| r.text.as_str()).collect::<String>()
+                            .chars().take(22).collect::<String>());
                 }
                 if valid && !planned.is_empty() {
                     lines = planned;
@@ -22940,6 +22964,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let mut s758_rebroken = s758_band.is_none() || !region_line_widths.is_empty();
         let s758_entry_pages = pages.len();
         while line_idx < lines.len() {
+            if std::env::var("OXI_DBG_WF").is_ok() && !word_fit_floors.is_empty() {
+                eprintln!("[WF-EMIT] li={} y={:.2} pages={} entry={} col={} start_col={} floor={:?}",
+                    line_idx, cursor.cursor_y, pages.len(), s758_entry_pages, cur_col,
+                    start_column, word_fit_floors.get(line_idx));
+            }
             if pages.len() == s758_entry_pages && cur_col == start_column {
                 if let Some(Some(bottom)) = word_fit_floors.get(line_idx) {
                     if cursor.cursor_y < *bottom { cursor.set(*bottom); }
