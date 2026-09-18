@@ -12908,7 +12908,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let mut saved_cursor_y = cursor.cursor_y;
                     let mut committed_float_fit = None;
                     let mut move_float_to_next_page = false;
-                    let float_reflow_enabled = std::env::var_os("OXI_FLOAT_TABLE_REFLOW").is_some();
+                    // S1468 (2026-09-18, default ON, opt-out OXI_S1468_DISABLE):
+                    // promotes the OXI_FLOAT_TABLE_REFLOW checkpoint. A floating
+                    // table whose remainder cannot sit in the gap above the page's
+                    // own flow content moves on as a unit instead of being packed
+                    // in. policies__00602e8a is eight "Provision:" tables, each a
+                    // `tblpPr vertAnchor="page" tblpY="2431"` float: Word puts
+                    // table 2168's row 0 on page 4 (y 122.25..173.25) and rows
+                    // 1..3 on page 5 (from 114.75) while page 4 already carries
+                    // the previous table's tail at 328.5..500.2. Oxi packed the
+                    // remaining rows onto page 4 and came out 8 pages against
+                    // Word's 9 (46 paragraphs at -1). With the flag the document
+                    // goes 0.5340 -> 0.7087 and all four EN benchmark failures
+                    // match Word's page count.
+                    let float_reflow_enabled = std::env::var_os("OXI_FLOAT_TABLE_REFLOW").is_some()
+                        || std::env::var_os("OXI_S1468_DISABLE").is_none();
                     if !is_floating && (std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() || float_reflow_enabled) {
                         previous_table_probe = Some((block_idx, cursor.cursor_y, pages.len(), start_y, content_height, s755_geom));
                         previous_table_probe_elements = elements.clone();
