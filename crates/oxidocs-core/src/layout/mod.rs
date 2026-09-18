@@ -12998,13 +12998,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             _ => e.y + e.height,
                         }).fold(saved_cursor_y, f32::max);
                         let actual_prefix = actual_bottom - saved_cursor_y;
-                        let placement_prefix = if probe_pages.is_empty() {
+                        // S1476 (2026-09-18, default ON, opt-out OXI_S1476_DISABLE):
+                        // when the float BREAKS at its real anchor, the band it
+                        // excludes from the page's own flow is what it actually
+                        // fits here, not its whole height. policies__00602e8a
+                        // page 4: the float's row 0 occupies 121.55..365.79
+                        // (actual_prefix 244.24) and Word resumes the previous
+                        // table's tail at 365.8 -- measured off the Word PDF's
+                        // rules. The old branch reserved the float's FULL height
+                        // (311.59), pushing that tail to 433.1 and freeing the
+                        // 190..430 band, so rows 1..3 packed onto page 4 too.
+                        let s1476 = std::env::var("OXI_S1476_DISABLE").is_err();
+                        let placement_prefix = if probe_pages.is_empty()
+                            && !(s1476 && !actual_pages.is_empty())
+                        {
                             first_bottom - nominal_anchor
                         } else {
                             actual_prefix
                         };
-                        eprintln!("[FLOAT-ACTUAL] block={} first_bottom={:.3} prefix_height={:.3} breaks={} placement_prefix={:.3}",
-                            block_idx, actual_bottom, actual_prefix, actual_pages.len(), placement_prefix);
+                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                            eprintln!("[FLOAT-ACTUAL] block={} first_bottom={:.3} prefix_height={:.3} breaks={} placement_prefix={:.3}",
+                                block_idx, actual_bottom, actual_prefix, actual_pages.len(), placement_prefix);
+                        }
                         if let (Some((prev_idx, entry_y, entry_page, entry_top, entry_height, geometry)), Some(pos)) = (previous_table_probe, table.style.position.as_ref()) {
                             if pos.v_anchor.as_deref() == Some("page") && num_columns == 1 {
                                 if let Some(Block::Table(previous)) = page.blocks.get(prev_idx) {
@@ -13020,9 +13035,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         &mut baseline_pages, &mut baseline_pending, Some(prev_idx), page,
                                         false, None, None, 0.0, 0.0, false, geometry.as_ref(),
                                     );
-                                    eprintln!("[FLOAT-CONTEXT] previous={} entry_page={} entry_y={:.3} entry_top={:.3} entry_height={:.3} target_page={} baseline_end_page={} baseline_cursor={:.3} geometry={:?}",
-                                        prev_idx, entry_page + 1, entry_y, entry_top, entry_height,
-                                        current_page_idx + 1, baseline_pages.len() + 1, baseline_cursor.cursor_y, geometry);
+                                    if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                                        eprintln!("[FLOAT-CONTEXT] previous={} entry_page={} entry_y={:.3} entry_top={:.3} entry_height={:.3} target_page={} baseline_end_page={} baseline_cursor={:.3} geometry={:?}",
+                                            prev_idx, entry_page + 1, entry_y, entry_top, entry_height,
+                                            current_page_idx + 1, baseline_pages.len() + 1, baseline_cursor.cursor_y, geometry);
+                                    }
                                     let exclusion_bottom = pos.y + placement_prefix;
                                     let target_page = current_page_idx + 1;
                                     let mut replay_geometry = geometry.unwrap_or(S755Geom {
@@ -13070,11 +13087,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             }
                                             None
                                         })).collect::<Vec<_>>();
-                                        eprintln!("[FLOAT-POSITION] block={} anchor={:.3} end_page={} end_cursor={:.3} text={:?}",
-                                            block_idx, flow_anchor, positioned_pages.len() + 1, positioned_cursor.cursor_y, entries);
+                                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                                            eprintln!("[FLOAT-POSITION] block={} anchor={:.3} end_page={} end_cursor={:.3} text={:?}",
+                                                block_idx, flow_anchor, positioned_pages.len() + 1, positioned_cursor.cursor_y, entries);
+                                        }
                                     }
-                                    eprintln!("[FLOAT-REFLOW] block={} previous={} exclusion_bottom={:.3} end_page={} end_cursor={:.3} tail_elements={}",
-                                        block_idx, prev_idx, exclusion_bottom, replay_pages.len() + 1, replay_cursor.cursor_y, replay_tail.len());
+                                    if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                                        eprintln!("[FLOAT-REFLOW] block={} previous={} exclusion_bottom={:.3} end_page={} end_cursor={:.3} tail_elements={}",
+                                            block_idx, prev_idx, exclusion_bottom, replay_pages.len() + 1, replay_cursor.cursor_y, replay_tail.len());
+                                    }
                                     let separator: Vec<LayoutElement> = elements.iter()
                                         .filter(|e| e.paragraph_index == Some(prev_idx + 1)).cloned().collect();
                                     let can_commit = float_reflow_enabled && prev_idx + 2 == block_idx
@@ -13103,9 +13124,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 }
                             }
                         }
-                        eprintln!("[FLOAT-FLOW] block={} page={} actual_anchor={:.3} nominal_anchor={:.3} first_bottom={:.3} prefix_height={:.3} breaks={} final_cursor={:.3}",
-                            block_idx, current_page_idx + 1, saved_cursor_y, nominal_anchor,
-                            first_bottom, first_bottom - nominal_anchor, probe_pages.len(), probe_cursor.cursor_y);
+                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                            eprintln!("[FLOAT-FLOW] block={} page={} actual_anchor={:.3} nominal_anchor={:.3} first_bottom={:.3} prefix_height={:.3} breaks={} final_cursor={:.3}",
+                                block_idx, current_page_idx + 1, saved_cursor_y, nominal_anchor,
+                                first_bottom, first_bottom - nominal_anchor, probe_pages.len(), probe_cursor.cursor_y);
+                        }
                     }
 
                     if move_float_to_next_page {
