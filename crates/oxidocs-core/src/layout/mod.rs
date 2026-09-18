@@ -2502,11 +2502,21 @@ fn advance_table_page_geometry(
     content_height: &mut f32,
     elements: &mut [LayoutElement],
 ) -> f32 {
-    let Some(geometry) = geometry else { return 0.0; };
+    let Some(geometry) = geometry else {
+        if std::env::var("OXI_DBG_GEOM").is_ok() {
+            eprintln!("[GEOM] page_no={} geometry=None (no shift)", page_no);
+        }
+        return 0.0;
+    };
     let next_top = geometry.top(page_no);
     let next_height = geometry.ch(page_no);
     let bottom_delta = next_top + next_height - (*page_top + *content_height);
     let dy = next_top - *page_top;
+    if std::env::var("OXI_DBG_GEOM").is_ok() {
+        eprintln!("[GEOM] page_no={} page_top {:.2} -> {:.2} dy={:.2} ch {:.2} -> {:.2} bottom_delta={:.2} n_elems={} override={:?}",
+            page_no, *page_top, next_top, dy, *content_height, next_height, bottom_delta,
+            elements.len(), geometry.page_override);
+    }
     for element in elements {
         element.y += dy;
         if let LayoutContent::TableBorder { y1, y2, .. } = &mut element.content {
@@ -49438,6 +49448,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let first_after = min_overflow_text_y - adjust;
                         eprintln!("[REANCHOR] page_top={:.2} split_y={:.2} min_overflow_text_y={:.2} orig_shift={:.2} correct_shift={:.2} adjust={:.2} -> first_overflow_line_y={:.2}",
                             page_top, split_y, min_overflow_text_y, original_shift, correct_shift, adjust, first_after);
+                        for e in next_page_elems.iter() {
+                            if let LayoutContent::Text { text, .. } = &e.content {
+                                if !text.trim().is_empty() {
+                                    eprintln!("    [REANCHOR-EL] y={:.2} -> {:.2} row={:?} col={:?} {:?}",
+                                        e.y, e.y - adjust - original_shift + original_shift,
+                                        e.cell_row_index, e.cell_col_index,
+                                        text.chars().take(18).collect::<String>());
+                                }
+                            }
+                        }
                     }
                     // S1093 fires only when the split genuinely spans MULTIPLE
                     // columns and every shifted element carries a cell index —
@@ -50473,6 +50493,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .margin
                             .top
                             .max(self.s755_header_bottom(&page.header, page));
+                        // S1477 (2026-09-18, default ON, opt-out
+                        // OXI_S1477_DISABLE): when a page_override is in force
+                        // for the page we just moved onto, the content top is
+                        // NOT the section's own body top — a floating table's
+                        // exclusion band has pushed it down, and
+                        // `advance_table_page_geometry` has already put that
+                        // value in `page_top`. policies__00602e8a page 4: the
+                        // float reserves 121.55..365.79, the split shifts the
+                        // row-2 tail to 365.8 and sets cont_max_y 435.29, and
+                        // then THIS branch threw it away and sent row 3 back to
+                        // the section top 110.92 -- its box stayed at 435.3
+                        // while its text drew at 111.4. The titlePg case this
+                        // recomputation exists for has no page_override, so it
+                        // is untouched.
+                        let next_page_top = if std::env::var("OXI_S1477_DISABLE").is_err()
+                            && page_geometry
+                                .and_then(|g| g.page_override)
+                                .is_some_and(|(p, _, _)| p == pages.len() + 1)
+                        {
+                            page_top
+                        } else {
+                            next_page_top
+                        };
                         cursor.set(next_page_top);
                     } else if cont_max_y.is_finite() {
                         cursor.set(cont_max_y);
