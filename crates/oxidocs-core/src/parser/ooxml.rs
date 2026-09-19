@@ -12520,7 +12520,15 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                             // 286=14.3pt ≈ its MS Mincho natural) IS a real grid Word honors
                             // (needed for its Phase-1 pagination — full disable = ikujidetail
                             // PASS→FAIL). Opt-out OXI_S571_DISABLE; force-all OXI_S571_ALL=1.
-                            if std::env::var("OXI_S571_DISABLE").is_err()
+                            // ★S1483 (2026-09-19): S571 RETIRED to opt-in
+                            // OXI_S1483_LEGACY_S571=1. `_pb_lines_unit_gen.py` (MS Mincho
+                            // 10.5pt, pitch 286/355/360/403, compat 11/14/15) shows Word
+                            // advancing by the NATURAL height (13.68) under a no-type
+                            // docGrid: the 14.3 ikujidetail "truth" was the 11pt natural
+                            // 14.266 (Word PDF 14.268/line) coinciding with pitch 286. The
+                            // two docs the pitch kept passing were masked drifts, fixed as
+                            // S1481/S1483 (ikujidetail) and S1482 (legal__001410a8).
+                            if std::env::var("OXI_S1483_LEGACY_S571").is_ok()
                                 && (line_pitch != 360
                                     || std::env::var("OXI_S571_ALL").ok().as_deref() == Some("1"))
                             {

@@ -27690,7 +27690,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && raw_spaced_tw > 0.0
                         && !self.doc_body_has_real_cjk
                         && std::env::var("OXI_S1172_DISABLE").is_err();
-                    if s805_latin_lm0 || s1172_latin_mult || ((grid_pitch.is_none() || page.doc_grid_no_type) && self.doc_body_has_real_cjk && std::env::var("OXI_CJK_EXACT_BODY_ADVANCE").is_ok()) {
+                    // S1483 (2026-09-19, default ON, opt-out OXI_S1483_DISABLE): a CJK
+                    // document with no line grid advances by the EXACT raw line
+                    // height too. The S510 CEIL-10tw cumulative fired only on lines
+                    // whose natural height sits ABOVE the half point (14pt MS Mincho
+                    // 18.156 -> 18.5) and fell through to the exact advance below it
+                    // (11pt 14.266), so a single heading gained +0.35 the render never
+                    // drew (ikujidetail p12 [PARA] end_cur 189.3 vs [EMITY] visual
+                    // 188.91; Word PDF: empty line + heading advance 32.40 = 14.27 +
+                    // 18.13, the natural height). Formerly the sleeping opt-in
+                    // OXI_CJK_EXACT_BODY_ADVANCE.
+                    if s805_latin_lm0 || s1172_latin_mult || ((grid_pitch.is_none() || page.doc_grid_no_type) && self.doc_body_has_real_cjk && std::env::var("OXI_S1483_DISABLE").is_err()) {
                         // S805: exact accumulate — no 10tw quantization (Word
                         // device-snaps only at render; per-line snap accumulates
                         // error, the S674 lesson).

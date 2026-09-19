@@ -323,13 +323,14 @@ fn v1_sect_docgrid_no_type_flips_flag_and_honors_custom_pitch() {
         page.doc_grid_no_type,
         "docGrid with linePitch but NO type → doc_grid_no_type=true"
     );
-    let pitch = page
-        .grid_line_pitch
-        .expect("S571: a CUSTOM (≠360) no-type linePitch IS honored as a line grid");
+    // S1483 (2026-09-19): S571 is retired to the opt-in
+    // OXI_S1483_LEGACY_S571 — Word does NOT snap lines to a no-type docGrid
+    // (`_pb_lines_unit_gen.py`), so the default keeps the pitch out of the
+    // line grid while `doc_grid_no_type` still records the attribute.
     assert!(
-        (pitch - 17.5).abs() < 0.001,
-        "linePitch=350 twips → grid_line_pitch=17.5pt (val/20), got {}",
-        pitch
+        page.grid_line_pitch.is_none(),
+        "S1483: a no-type linePitch is NOT a line grid by default, got {:?}",
+        page.grid_line_pitch
     );
 }
 
