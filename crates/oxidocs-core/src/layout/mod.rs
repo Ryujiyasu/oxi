@@ -31164,7 +31164,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .all(|f| f.0.chars().all(|c| matches!(c, ' ' | '\t')));
             let s1251_last_content =
                 chars_vec.iter().rposition(|c| !matches!(c, ' ' | '\t'));
+            // S1488 v2: set when a hung mark just closed the line; the ASCII
+            // spaces that follow belong to that line, not to a new one.
+            let mut s1488_after_hang = false;
             for (char_index, ch) in chars_vec.iter().copied().enumerate() {
+                if s1488_after_hang && std::env::var_os("OXI_S1488_DISABLE").is_none() {
+                    if ch == ' ' && current_line.fragments.is_empty() {
+                        if let Some(prev) = lines.last_mut() {
+                            if let Some(last) = prev.fragments.last().cloned() {
+                                let mut f = last;
+                                f.char_offset += f.text.chars().count();
+                                f.text = " ".to_string();
+                                f.width = 0.0;
+                                f.natural_width = 0.0;
+                                f.auto_space_shrink = 0.0;
+                                prev.fragments.push(f);
+                            }
+                        }
+                        continue;
+                    }
+                    s1488_after_hang = false;
+                }
                 // S1443 (2026-09-17, default ON, opt-out OXI_S1443_DISABLE): a manual
                 // page break inside a table cell is inert in Word — no line, no page
                 // (tests/fixtures/cellbr: 24/24 arms over compat 14/15 x tblHeader x
@@ -33596,7 +33616,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // 平成30年７月」 overflowed a page (+1 x14).
                     let s1436_space_hang = ch == '\u{3000}'
                         && std::env::var_os("OXI_S1436_DISABLE").is_none();
-                    let is_immune_space = (trailing_u3000 && line_near_full) || degenerate_space_overhang || s1436_space_hang;
+                    // S1488 (2026-09-19, default ON, opt-out OXI_S1488_DISABLE): an
+                    // ASCII space reaching this loop (after a CJK character) hangs
+                    // the same way -- ikujidetail p9 「…はない。」 + two U+0020: Word's
+                    // line ends at x=549.6 with the 。 hung and the spaces past it,
+                    // Oxi put the spaces on a 5th line.
+                    let s1488_ascii_space_hang = ch == ' '
+                        && std::env::var_os("OXI_S1488_DISABLE").is_none();
+                    let is_immune_space = (trailing_u3000 && line_near_full) || degenerate_space_overhang || s1436_space_hang || s1488_ascii_space_hang;
                     let line_compress_count = current_line
                         .fragments
                         .iter()
@@ -34198,6 +34225,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             right_tab_slack_tw = 0;
                             center_tab_stop_tw = None;
                             compress_used = false;
+                            s1488_after_hang = true;
                             continue;
                         }
 
