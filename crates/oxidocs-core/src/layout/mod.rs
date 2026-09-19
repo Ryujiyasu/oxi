@@ -10404,7 +10404,15 @@ cells={} pitch={:.2} text={:?}",
                     // class: nyserda p18 kept a saved break with 6.6 lines of
                     // fresh room). S391 per-line respect is untouched (it did
                     // not fire against the EN gate; JP keeps everything).
+                    // S1491 (2026-09-19, default ON, opt-in OXI_S1491_LEGACY_LRPB
+                    // restores the saved-break model): CJK bodies retire the
+                    // saved page breaks too. The natural flow measures golden
+                    // 187/187, EN 298/298 and JA blind 200/200 with both
+                    // respects off, while the saved marks alone cost JA 3 docs
+                    // (legal__0493f12e / policies__0820fb07 / correspondence__0b652248,
+                    // each a mark one line stale against fresh Word).
                     let lrpb_knob_off = std::env::var("OXI_LRPB_DISABLE").is_ok()
+                        || std::env::var_os("OXI_S1491_LEGACY_LRPB").is_none()
                         || self.doc_lrpb_distrust
                         || self.lrpb_count_distrust.get()
                         || (!self.doc_body_has_real_cjk
@@ -24420,7 +24428,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // the doc reads 0.9746 vs 0.83 with the mark). JP keeps the
                 // full LRPB model (b837/d77a/3a4f load-bearing).
                 && (self.doc_body_has_real_cjk
-                    || std::env::var("OXI_S897_DISABLE").is_ok());
+                    || std::env::var("OXI_S897_DISABLE").is_ok())
+                // S1491: the per-line respect retires for CJK bodies as well
+                // (see the block-level site); opt-in OXI_S1491_LEGACY_LRPB.
+                && std::env::var_os("OXI_S1491_LEGACY_LRPB").is_some();
             let s391_lrpb_break = if line_idx > 0 && !in_textbox && s391_on {
                 let lrpb_frag = |f: &LineFragment| {
                     f.char_offset == 0
