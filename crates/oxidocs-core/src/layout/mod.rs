@@ -40983,7 +40983,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // 10.5pt row with 16.5pt of room split in Word and moved whole here.
                 // CJK-body only, like S1423: the Latin arm has its own floor
                 // (legal__001410a84d3ead5f PASS -> FAIL, -1 x4, when unscoped).
-                if self.doc_body_has_real_cjk && std::env::var_os("OXI_S1424_DISABLE").is_none() {
+                // S1485 (2026-09-19, default ON, opt-out OXI_S1485_DISABLE): the
+                // same floor for a LATIN body. The Latin exclusion was covering
+                // legal__001410a8's foot-only overflow (S1482); with that fixed
+                // the one-line floor is Word's rule there too (`rowsplitmin.py`,
+                // TNR 8-14pt: Word splits with one line box + border of room).
+                if (self.doc_body_has_real_cjk || std::env::var_os("OXI_S1485_DISABLE").is_none())
+                    && std::env::var_os("OXI_S1424_DISABLE").is_none() {
                     let one_line = row
                         .cells
                         .iter()
