@@ -40546,11 +40546,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             } else {
                 row_height
             };
-            let row_fit_height = row_fit_height + if std::env::var("OXI_TABLE_FOOT_FIT_DISABLE").is_err()
+            let s1191_foot = if std::env::var("OXI_TABLE_FOOT_FIT_DISABLE").is_err()
                 && row_idx + 1 == table.rows.len()
                 && self.s1191_on() && self.s1191_table_needs_foot(table) {
                 self.s1191_foot_bw(table)
             } else { 0.0 };
+            let row_fit_height = row_fit_height + s1191_foot;
             // A terminating merged cell contributes to the atomic row fit
             // before pagination, as well as to its final border height.
             let row_fit_height = if row.cant_split {
@@ -41200,7 +41201,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let kept_first_paragraph_requires_page = kept_first_paragraph_height > 0.0
                 && kept_first_paragraph_height <= content_height
                 && cursor.cursor_y + kept_first_paragraph_height > page_bottom + 0.5;
+            // S1482 (2026-09-19, default ON, opt-out OXI_S1482_DISABLE): an
+            // overflow that only the table FOOT causes (the row's content fits,
+            // its bottom border does not) cannot be resolved by a split -- a
+            // border is not splittable and a one-line row has nothing to move,
+            // so the split path left the row in place with its double rule past
+            // the page bottom. Word pushes the row whole (legal__001410a8 p58:
+            // Word COM needs +0.25pt of footer room before rows 18-19 stay).
+            let s1482_foot_only = std::env::var("OXI_S1482_DISABLE").is_err()
+                && row_overflows
+                && s1191_foot > 0.0
+                && cursor.cursor_y + row_fit_height - s1191_foot <= page_bottom;
             let needs_row_split = row_overflows
+                && !s1482_foot_only
                 && !kept_first_paragraph_requires_page
                 && !(row.header && std::env::var("OXI_HEADER_ROW_ATOMIC_DISABLE").is_err())
                 && !explicit_row_page_break
