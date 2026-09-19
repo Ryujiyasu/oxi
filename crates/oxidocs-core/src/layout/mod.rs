@@ -9167,8 +9167,14 @@ cells={} pitch={:.2} text={:?}",
                     // −0.0718 SSIM (ssim_ab, the only changed doc). The empty-box
                     // rule is measured on policies (Word COM); a JP derivation
                     // would need its own session.
+                    // S1489 (2026-09-19, default ON, opt-out OXI_S1489_DISABLE): the
+                    // same empty-box rule for a CJK body. golden parttime p2: the
+                    // empty exact-11 paragraph before the 年次有給休暇 float sits at
+                    // 273.5..284.5 against the band top 281.2 and Word puts it below
+                    // the table (「２ 年次…」 starts at 398.05 = table bottom 387.05 +
+                    // 11); Oxi kept it above, -9.3pt for the rest of the page.
                     let s872_empty_cross = std::env::var("OXI_S872_DISABLE").is_err()
-                        && !self.doc_body_has_real_cjk
+                        && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1489_DISABLE").is_none())
                         && cursor.cursor_y < ft_top - 0.1
                         && matches!(block, Block::Paragraph(p)
                             if p.runs.iter().all(|r| r.text.is_empty())
@@ -13973,7 +13979,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 float_lane_below =
                                     Some((candidate_y_bottom + 1.5, current_page_idx));
                             } else {
-                                cursor.set(candidate_y_bottom + 1.5);
+                                // S1489 v2 (2026-09-19, default ON, opt-out
+                                // OXI_S1489_DISABLE): the EMPTY paragraph laid out
+                                // just before this float, whose line box the float's
+                                // top cuts, is re-issued below the float. golden
+                                // parttime p2: the exact-11 empty at 273.5..284.5
+                                // against the band top 281.2 -- Word starts
+                                // 「２ 年次…」 at table bottom 387.05 + 11.
+                                let mut s1489_extra = 0.0f32;
+                                if std::env::var_os("OXI_S1489_DISABLE").is_none()
+                                    && block_idx > 0
+                                    && matches!(page.blocks.get(block_idx - 1),
+                                        Some(Block::Paragraph(p)) if p.runs.iter().all(|r| r.text.is_empty()))
+                                {
+                                    for e in elements.iter_mut().filter(|e| e.paragraph_index == Some(block_idx - 1)) {
+                                        if e.y < candidate_y_top - 0.1 && e.y + e.height > candidate_y_top + 0.1 {
+                                            s1489_extra = s1489_extra.max(e.height);
+                                            e.y = candidate_y_bottom + 1.5;
+                                        }
+                                    }
+                                }
+                                cursor.set(candidate_y_bottom + 1.5 + s1489_extra);
                             }
                         } else {
                             // Original behavior: floating tables don't advance text flow
