@@ -2006,6 +2006,18 @@ struct MergedCellTextFlow {
     cuts: std::collections::BTreeMap<usize, (f32, f32)>,
 }
 
+/// S1486 (2026-09-19, default ON, opt-out OXI_S1486_DISABLE): where the flow
+/// resumes below a wrapTopAndBottom box -- the shape's path bottom plus half
+/// its stroke, snapped up to the 0.75pt device grid (`vmlwrap.py`, 7 arms).
+fn s1486_wrap_bottom(path_bottom: f32, stroke_width: Option<f32>) -> f32 {
+    if std::env::var_os("OXI_S1486_DISABLE").is_some() {
+        return path_bottom;
+    }
+    let b = path_bottom + stroke_width.unwrap_or(0.0).max(0.0) / 2.0;
+    ((b / 0.75) - 1.0e-4).ceil() * 0.75
+}
+
+
 /// S1467 (2026-09-18, default ON, opt-out OXI_S1467_DISABLE): promotes the
 /// OXI_FLOAT_COLUMN_FLOW checkpoint. A multi-column page must reset the cursor to
 /// the COLUMN top when the flow moves to the next column; without it Oxi carried
@@ -8156,7 +8168,7 @@ cells={} pitch={:.2} text={:?}",
                     if let Some(p) = tb.position.as_ref() {
                         if p.v_relative.as_deref() == Some("page") {
                             let e = m.entry(tb.anchor_block_index).or_insert(0.0_f32);
-                            *e = e.max(p.y + tb.height);
+                            *e = e.max(s1486_wrap_bottom(p.y + tb.height, tb.stroke_width));
                         }
                     }
                 }
@@ -8189,7 +8201,7 @@ cells={} pitch={:.2} text={:?}",
                             continue;
                         }
                         let e = m.entry(bi).or_insert(0.0_f32);
-                        *e = e.max(pos.y + sh.height);
+                        *e = e.max(s1486_wrap_bottom(pos.y + sh.height, sh.stroke_width));
                     }
                 }
                 m
