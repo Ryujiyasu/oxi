@@ -23919,7 +23919,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && !page.doc_grid_no_type
                 && !s548b_exact_full
                 && !s562b_empty_full;
-            let break_threshold = if s1152_full_box {
+            // S1484 (2026-09-19, default ON, opt-out OXI_S1484_DISABLE): with
+            // S1483 a CJK document without a line grid advances by the EXACT
+            // line box, so the page-bottom fit must ask for that same box.
+            // The S576 ink box / 0.5pt-quantized natural (13.5 for MS Mincho
+            // 10.5pt against a 13.617 box) was calibrated on the S571 pitch and
+            // now lets a line stay with its box past the content bottom
+            // (policies__094c44cd p39 「例示」 over=-0.056 on 13.5, +0.06 on
+            // 13.617; Word pushes). `bottomlimit2.py`: Word's limit is exactly
+            // "box top + advance <= content bottom" for auto/atLeast lines of
+            // every face and size; exact lines and empty paragraphs keep their
+            // own laws (S548b / S562b / S1113), and a multiplied auto line keeps
+            // the ink leniency (the multiplier's leading may hang, S576's case).
+            let s1484_full_box = std::env::var_os("OXI_S1484_DISABLE").is_none()
+                && self.doc_body_has_real_cjk
+                && (grid_pitch.is_none() || page.doc_grid_no_type)
+                && !s548b_exact_full
+                && !s562b_empty_full
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                && para.style.line_spacing.unwrap_or(1.0) <= 1.0;
+            let break_threshold = if s1152_full_box || s1484_full_box {
                 effective_lh
             } else if s693_nonlast {
                 let nat_over = cursor.cursor_y + natural_lh - effective_break_bottom;
