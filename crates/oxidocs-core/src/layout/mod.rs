@@ -30810,8 +30810,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // 436, trackedge 84, kinsokufinal 51) agree on every break.
             let s1318_v2 = std::env::var("OXI_S1318_DISABLE").is_err()
                 && std::env::var("OXI_S1318").ok().as_deref() != Some("0");
-            let s1318_at_default_regime = s568_legacy_oikomi
-                && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
+            // S1490 (2026-09-19, default ON, opt-out OXI_S1490_DISABLE): a compat-15
+            // compressPunctuation body without a linesAndChars grid (the 大野 /
+            // NEDO / d77a family, docGrid type=lines, jc=both) breaks under the
+            // regime's machinery with its own capacity law (`compcap.py`, 18
+            // arms on the ohnoshugyo slice, kinds 、。）・（ identical):
+            //   k marks on the line -> up to k/(k+1) cell of overflow (-0.045),
+            //   each mark shrunk by 1/(k+1): 0.452 / 0.624 / 0.714 / 0.762.
+            // S475's summed 3.25pt caps under-pack at k=1 (0.31) and over-pack
+            // at k>=3 (0.93, 1.24) -- the census pattern on all nine witnesses.
+            // A non-justified paragraph breaks at natural width (S492):
+            // technical__978ec9c102290205 (jc=left x176) wraps at 0.06 cell
+            // with five marks on the line.
+            let s1490_regime = std::env::var_os("OXI_S1490_DISABLE").is_none()
+                && !natural_break_jc
+                && !vertical
+                && !lines_and_chars
+                && s476_body
+                && self.compress_punctuation
+                && self.compat_mode >= 15
+                && self.compat_mode_explicit;
+            let s1318_at_default_regime = (s568_legacy_oikomi
+                    && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5))
+                || s1490_regime;
             // S1346: a Latin word overflowing the floor is rescued by the same
             // elective half-cell as a CJK character (`_pb_unitcap_gen.py`: 19 kana
             // + 、 + 「111」 keeps 111 with the 、 at 5.8; 「…セ）12」 「…）123」
@@ -33184,7 +33205,38 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         (0, 0)
                     };
                     let s1318_cap_tw: i32 = if s1318_n_solo > 0 { s1318_half_cell_tw } else { 0 };
+                    // S1490: k/(k+1) cell minus 0.045 for a normal character; a
+                    // unit X+mark needs 0.05 cell more (census: k=1 wraps at 0.457,
+                    // k>=2 packs at 0.505).
                     let s1318_one_cell_tw = pt_to_tw(char_width.max(font_size));
+                    // `compcap.py` (10.5pt, kinds identical): the capacity depends on
+                    // the marks k AND the line's length n -- marks shrink further on a
+                    // short line. Measured, cells of overflow a normal character may
+                    // pull in (n = characters already on the line):
+                    //   n=14: 0.495 0.838 0.886 0.910
+                    //   n=26: 0.495 0.724 0.800 0.838
+                    //   n=40: 0.452 0.624 0.714 0.762   (12pt n=35: +0.03)
+                    // A unit X+mark (n=40): 0.429 0.538 0.614 -> -0.02/-0.09/-0.10.
+                    // ：； (JIS 中点類) do not count: technical__978ec9c102290205 wraps
+                    // a 0.58-cell overflow with 「：、」 on the line.
+                    let s1490_colons = current_line.fragments.iter().flat_map(|f| f.text.chars()).filter(|&c| c == '：' || c == '；').count();
+                    let s1490_cap = |k: usize, unit: bool| -> i32 {
+                        let k = k.saturating_sub(s1490_colons);
+                        if k == 0 { return 0; }
+                        const T14: [f32; 4] = [0.495, 0.838, 0.886, 0.910];
+                        const T26: [f32; 4] = [0.495, 0.724, 0.800, 0.838];
+                        const T40: [f32; 4] = [0.452, 0.624, 0.714, 0.762];
+                        let ki = k.min(4) - 1;
+                        let n = current_line.fragments.iter().map(|f| f.text.chars().count()).sum::<usize>() as f32;
+                        let n = n.clamp(14.0, 40.0);
+                        let cells = if n <= 26.0 {
+                            T14[ki] + (T26[ki] - T14[ki]) * (n - 14.0) / 12.0
+                        } else {
+                            T26[ki] + (T40[ki] - T26[ki]) * (n - 26.0) / 14.0
+                        };
+                        let unit_term = if unit { match k { 1 => 0.02, 2 => 0.09, _ => 0.10 } } else { 0.0 };
+                        ((cells - unit_term) * s1318_one_cell_tw as f32) as i32
+                    };
                     // the regime measures against the TRUE column edge, not the
                     // S1211C whole-cell floor (see `s1318_floor_slack`)
                     // S1318 v5 (2026-09-06): the capacity IS the S1211C floor -- Word's
@@ -33245,6 +33297,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                     };
                     let s1318_ch_cjk = (ch as u32) >= 0x2E80;
+                    // S1490 v13: a unit whose extra marks push it past the cap is
+                    // wrapped even when the character alone fits naturally.
+                    let mut s1490_unit_refused = false;
                     let (s1318_force_fit, s1318_refuse_here) = if !s1318_regime {
                         (false, false)
                     } else if s1318_prev_open {
@@ -33280,7 +33335,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                     } else if s1318_next_joined.is_some() {
                         let over = s1318_natural_over_tw + s1318_one_cell_tw;
-                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW);
+                        // S1490: the joined mark hangs; X itself must fit the unit cap.
+                        let fit = if s1490_regime {
+                            s1318_natural_over_tw <= s1490_cap(s1318_n_solo, true).max(S1318_TOL_TW)
+                        } else {
+                            over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW)
+                        };
                         (fit, !fit)
                     } else if s1318_prev_latin && s1318_ch_cjk {
                         // a natural fit needs no rescue; 2 twips absorb the cumulative
@@ -33295,19 +33355,42 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // p4 「…（障害者総合支援法）」とされ|た。」 keeps た: 3 brackets
                         // minus the pair's free half = 0.5); the mark then hangs.
                         let over = s1318_natural_over_tw;
-                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW);
+                        // S1490 v13: only ONE mark hangs past the character; every
+                        // further line-start-prohibited mark of the unit adds its
+                        // compressed half cell (technical__978ec9c102290205 p3
+                        // 「…ご注意願いま|す。）」: す fits by 0.44 cell, yet Word wraps
+                        // the unit す。） because the ） cannot hang behind the 。).
+                        let s1490_extra_marks = chars_vec[char_index + 1..]
+                            .iter()
+                            .take_while(|&&nc| {
+                                matches!(nc, '、' | '。' | '，' | '．' | '：' | '；' | '・') || kinsoku::is_yakumono_closing(nc)
+                            })
+                            .count()
+                            .saturating_sub(1) as i32;
+                        s1490_unit_refused = s1490_regime && s1490_extra_marks > 0
+                            && over + s1490_extra_marks * s1318_half_cell_tw > s1490_cap(s1318_n_solo, true).max(S1318_TOL_TW);
+                        let fit = if s1490_regime {
+                            !s1490_unit_refused && over <= s1490_cap(s1318_n_solo, true).max(S1318_TOL_TW)
+                        } else {
+                            over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW)
+                        };
                         (fit, !fit)
                     } else {
                         let over = s1318_natural_over_tw;
-                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW);
+                        let fit = if s1490_regime {
+                            over <= s1490_cap(s1318_n_solo, false).max(S1318_TOL_TW)
+                        } else {
+                            over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW)
+                        };
                         (fit, !fit)
                     };
                     if s1318_regime && std::env::var("OXI_DBG1318").is_ok() {
-                        eprintln!("[S1318] ch={:?} idx={} cur_tw={} cw_tw={} avail_tw={} over_tw={} cap_tw={} half_tw={} n_elect={} prev_latin={} next_mark={} ch_mark={} force_fit={} refuse={} s475={} line={:?}",
+                        eprintln!("[S1318] ch={:?} idx={} cur_tw={} cw_tw={} avail_tw={} over_tw={} cap_tw={} half_tw={} n_elect={} prev_latin={} next_mark={} ch_mark={} force_fit={} refuse={} s475={} r1490={} cap90={}/{} joined={:?} prev_open={} line={:?}",
                             ch, char_index, current_width_tw, s1317_cw_tw, s1318_avail_tw, s1318_natural_over_tw, s1318_cap_tw, s1318_half_cell_tw, s1318_n_solo, s1318_prev_latin, s1318_next_mark, s1318_ch_mark, s1318_force_fit, s1318_refuse_here, s475_break,
+                            s1490_regime, s1490_cap(s1318_n_solo, false), s1490_cap(s1318_n_solo, true), s1318_next_joined, s1318_prev_open,
                             current_line.fragments.iter().map(|f| f.text.as_str()).collect::<String>());
                     }
-                    let s1318_force_wrap = s1318_regime && s1318_next_joined.is_some() && s1318_refuse_here;
+                    let s1318_force_wrap = (s1318_regime && s1318_next_joined.is_some() && s1318_refuse_here) || s1490_unit_refused;
                     let s475_break = s475_break && !s1318_refuse_here;
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
