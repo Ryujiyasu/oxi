@@ -33279,6 +33279,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .ok()
                                 .and_then(|v| v.parse::<f32>().ok())
                                 .unwrap_or(4.0);
+                            // S1487 (2026-09-19, default ON, opt-out OXI_S1487_DISABLE):
+                            // the tolerance is what the line's own marks can absorb
+                            // (the S1462 cap, marks x 0.5em) -- a mark-free line gets
+                            // none. ikujidetail p1 「３ 配偶者が…」 line 1 (no mark):
+                            // Word wraps at 42 chars, Oxi kept a 43rd 1.6pt past the
+                            // margin; its lines 2-3 carry 、 and squeeze 42 in.
+                            let tol = if std::env::var_os("OXI_S1487_DISABLE").is_none() {
+                                let marks = current_line
+                                    .fragments
+                                    .iter()
+                                    .flat_map(|f| f.text.chars())
+                                    .filter(|&c| {
+                                        matches!(c, '、' | '。' | '，' | '．' | '・' | '：' | '；')
+                                            || kinsoku::is_yakumono_opening(c)
+                                            || kinsoku::is_yakumono_closing(c)
+                                    })
+                                    .count() as f32;
+                                tol.min(marks * font_size * 0.5)
+                            } else {
+                                tol
+                            };
                             current_width_tw + pt_to_tw(char_width) - available_tw - pt_to_tw(tol)
                         } else if std::env::var("OXI_S601_DISABLE").is_err()
                             // S1429 (2026-09-16, default ON, opt-out OXI_S1429_DISABLE):
