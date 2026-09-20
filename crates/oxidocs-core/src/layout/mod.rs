@@ -3052,6 +3052,15 @@ thread_local! {
     /// float hosted by the paragraph currently in layout_paragraph -- the
     /// band is applied per line there instead of reserved before the block.
     static S1497_BAND: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
+    // S1501 (2026-09-20, default ON, opt-out OXI_S1501_DISABLE): an empty
+    // sectPr-carrier paragraph that is the FIRST block of a fresh page keeps
+    // its line (Word: policies__0c94a7 p3 -- a nextPage section holding only
+    // its empty carrier puts that mark at the page top, 18pt on the lines
+    // grid, and the next continuous section's title starts at 118.5, not
+    // 100.5). S945's skip stays for a carrier that follows content (it hangs
+    // past the bottom instead of making a page). Set by the block loop,
+    // consumed by layout_paragraph's S945 site.
+    static S1501_KEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// RAII guard for IN_TABLE_LAYOUT (S1429 cell hang scope).
@@ -9873,7 +9882,21 @@ cells={} pitch={:.2} text={:?}",
                     // phantom page before every chapter section). It is the last
                     // block before the next section. Merged continuous sections
                     // still need its style identity for neighbouring spacing.
+                    // S1501 v2: the carrier of a nextPage section that holds only
+                    // that carrier becomes block 0 of its page run (the following
+                    // continuous section merges behind it and S730 marks it
+                    // continuous) -- Word gives that mark a line at the page top.
+                    let s1501_keep = std::env::var_os("OXI_S1501_DISABLE").is_none()
+                        && para.style.page_section_break
+                        && para.runs.iter().all(|r| r.text.is_empty())
+                        && block_idx == 0
+                        && cursor.cursor_y <= start_y + 0.01;
+                    if std::env::var_os("OXI_DBG1501").is_some() && para.style.page_section_break {
+                        eprintln!("[S1501] block={} keep={} cursor={:.2} start_y={:.2} cont={} empty={}", block_idx, s1501_keep, cursor.cursor_y, start_y, para.style.continuous_section_break, para.runs.iter().all(|r| r.text.is_empty()));
+                    }
+                    S1501_KEEP.with(|c| c.set(s1501_keep));
                     if std::env::var("OXI_S945_DISABLE").is_err()
+                        && !s1501_keep
                         && !(para.style.page_break_after
                             && (std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok()
                                 || (para.style.continuous_section_break
@@ -20225,6 +20248,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Oxi's normal empty-para line drifted everything below +18pt).
         // Same skip shape as S673v. Opt-out OXI_S730_DISABLE.
         if std::env::var("OXI_S730_DISABLE").is_err()
+            && !S1501_KEEP.with(|c| c.get())
             && para.style.continuous_section_break
             && para.runs.iter().all(|r| r.text.is_empty())
         {
@@ -20252,6 +20276,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // phantom page before the nextPage section). Continuous breaks are
         // already handled by S730 above; this is the non-continuous sibling.
         if std::env::var("OXI_S945_DISABLE").is_err()
+            && !S1501_KEEP.with(|c| c.get())
             && !(para.style.page_break_after
                 && (std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok()
                     || (para.style.continuous_section_break
@@ -38204,6 +38229,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             //   18.156 -> 363.1tw  -> 2   (MS Mincho 14)
                             //   18.173 -> 363.5tw  -> 2   (Cambria 15.5)
                             //   20.750 -> 415.0tw  -> 1 at pitch 415, 2 at pitch 414
+                            // S1502 (2026-09-20, default ON, opt-out OXI_S1502_DISABLE):
+                            // a single EMPTY line on a typed grid counts its cells from
+                            // its ASCII face when that face is Western -- the S1328
+                            // derivation (pitch x max(m, ceil(n_ascii/pitch))) applied
+                            // at m = 1, where only the 0.5pt S195 window used to reach.
+                            // legal__076cc2 p1: an empty Normal paragraph (ascii Times
+                            // New Roman 10pt, eastAsia MS Mincho) on a 12.1pt
+                            // linesAndChars grid: Word 12 (one cell), Oxi 24.2 (the
+                            // Mincho 12.88 box, 0.78 over the pitch, outside the window).
+                            let cell_basis = if is_empty
+                                && !ascii_is_cjk
+                                && std::env::var_os("OXI_S1502_DISABLE").is_none()
+                            {
+                                let rpr_ref =
+                                    para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                let fs = rpr_ref.font_size.unwrap_or(para_font_size);
+                                let m = self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
+                                m.word_line_height(fs, 96.0).min(cell_basis)
+                            } else {
+                                cell_basis
+                            };
                             let h_tw = ((cell_basis - tol) * 20.0).round();
                             let p_tw = (pitch * 20.0).round();
                             let cells = if std::env::var("OXI_S1143_DISABLE").is_ok() {
