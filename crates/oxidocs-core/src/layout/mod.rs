@@ -3451,6 +3451,93 @@ impl LayoutEngine {
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
+        // S1498 (2026-09-20, default ON, opt-out OXI_S1498_DISABLE): a text box
+        // with bodyPr <a:spAutoFit/> is as tall as its content plus the
+        // top/bottom insets, whatever cy says. Word COM Shape.Height
+        // (`autofit_probe.py`, 9 arms): picture 299.3 -> 306.5 (no grid) /
+        // 313.2 = 17 x 18 + 7.2 (lines grid); one Meiryo 10.5 line -> 27.7 /
+        // 43.2 (2 x 18 + 7.2); two lines -> 79.2; <a:noAutofit/> keeps cy.
+        // technical__c5bb0090235dfedb p1: declared 286.2, Word 313.7, so
+        // 「なお…」 starts at 621 there and 593.8 here. The content height
+        // is the body's own paragraph estimate (grid snap included); the
+        // adjusted document is a clone made only when such a box exists.
+        let s1498_doc;
+        let doc = if std::env::var_os("OXI_S1498_DISABLE").is_none()
+            && doc.pages.iter().any(|p| p.text_boxes.iter().any(|tb| tb.auto_fit))
+        {
+            let mut d = doc.clone();
+            for page in d.pages.iter_mut() {
+                let grid_pitch = if page.doc_grid_lines_and_chars || page.grid_line_pitch.is_some() {
+                    page.grid_line_pitch
+                } else {
+                    None
+                };
+                let (gcp, gcr) = (page.grid_char_pitch, page.grid_char_cw_ratio);
+                let page_ro = page.clone();
+                for tb in page.text_boxes.iter_mut() {
+                    if !tb.auto_fit {
+                        continue;
+                    }
+                    let ins_l = tb.inset_left.unwrap_or(7.2);
+                    let ins_r = tb.inset_right.unwrap_or(7.2);
+                    let ins_t = tb.inset_top.unwrap_or(3.6);
+                    let ins_b = tb.inset_bottom.unwrap_or(3.6);
+                    let avail = (tb.width - ins_l - ins_r).max(1.0);
+                    let mut content = 0.0f32;
+                    for (bi, b) in tb.blocks.iter().enumerate() {
+                        // the text box parser keeps an image-only paragraph's empty
+                        // host before its sibling Block::Image (S537's body twin
+                        // suppresses it): the image IS that paragraph's line
+                        if let Block::Paragraph(p) = b {
+                            let empty_host = p.runs.iter().all(|r| r.text.trim().is_empty()
+                                && r.style.inline_object_extent.is_none() && r.style.inline_object_image.is_none());
+                            if empty_host && matches!(tb.blocks.get(bi + 1), Some(Block::Image(_))) {
+                                continue;
+                            }
+                        }
+                        if let Block::Image(im) = b {
+                            let line = im.height;
+                            content += match grid_pitch { Some(gp) if gp > 0.0 => (line / gp).ceil() * gp, _ => line };
+                            continue;
+                        }
+                        if let Block::Paragraph(p) = b {
+                            // an inline picture line is the picture (S875's solo-object
+                            // line: obj + the auto multiple's extra, none at 240), then
+                            // the grid snaps it like any body line (299.3 -> 306 on an
+                            // 18pt pitch; the text estimator does not see the object)
+                            let obj_h = p
+                                .runs
+                                .iter()
+                                .filter_map(|r| {
+                                    r.style
+                                        .inline_object_extent
+                                        .map(|(_, h)| h)
+                                        .or_else(|| r.style.inline_object_image.as_ref().map(|im| im.height))
+                                })
+                                .fold(0.0f32, f32::max);
+                            let est = self.estimate_para_height(p, avail, grid_pitch, None, false, gcp, gcr);
+                            content += if obj_h > 0.0 {
+                                let line = obj_h.max(est);
+                                match grid_pitch {
+                                    Some(gp) if gp > 0.0 => (line / gp).ceil() * gp,
+                                    _ => line,
+                                }
+                            } else {
+                                est
+                            };
+                        }
+                    }
+                    let _ = &page_ro;
+                    if content > 0.0 {
+                        tb.height = content + ins_t + ins_b;
+                    }
+                }
+            }
+            s1498_doc = d;
+            &s1498_doc
+        } else {
+            doc
+        };
         // S1304 (2026-09-04, opt-out OXI_S1304_DISABLE): decide whether this
         // document's SAVED page-break markers can be trusted, by counting them.
         //

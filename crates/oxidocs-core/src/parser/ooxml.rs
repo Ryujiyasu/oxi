@@ -6916,6 +6916,8 @@ fn parse_drawing(
     let mut text_vertical = false;
     // S662: bodyPr@compatLnSpc="1" (legacy "compatible line spacing").
     let mut text_compat_ln_spc = false;
+    // S1498: bodyPr <a:spAutoFit/>
+    let mut text_auto_fit = false;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
     // S839 (2026-07-14): wpg vector-group per-shape extraction. The main
@@ -8011,6 +8013,10 @@ fn parse_drawing(
                             }
                         }
                     }
+                    // S1498: the auto-fit flag is an empty child of bodyPr
+                    "spAutoFit" => {
+                        text_auto_fit = true;
+                    }
                     // Text body properties — text insets (bodyPr as empty element)
                     "bodyPr" => {
                         for attr in e.attributes().flatten() {
@@ -8502,6 +8508,7 @@ fn parse_drawing(
             inset_left: text_inset_left,
             inset_right: text_inset_right,
             inset_top: text_inset_top,
+            auto_fit: text_auto_fit,
             inset_bottom: text_inset_bottom,
             // S535: an inline canvas text_box must stay RENDER-ONLY — without
             // an explicit WrapType::None the table wrap-below rule (layout
@@ -9364,6 +9371,7 @@ fn parse_vml_pict(
             blocks: text_blocks,
             inline: true,
             font_ref_color: None,
+            auto_fit: false,
             width,
             height,
             position: Some(FloatingPosition {

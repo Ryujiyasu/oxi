@@ -1059,6 +1059,10 @@ pub struct TextBox {
     /// Text inset top (in points, default 3.6pt = 45720 EMU)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_top: Option<f32>,
+    /// S1498: bodyPr <a:spAutoFit/> -- the box grows to its content
+    /// (content lines + top/bottom insets); the declared height is ignored.
+    #[serde(default)]
+    pub auto_fit: bool,
     /// Text inset bottom (in points, default 3.6pt)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_bottom: Option<f32>,
