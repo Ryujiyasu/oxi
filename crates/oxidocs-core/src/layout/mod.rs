@@ -31531,7 +31531,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     char_width += cs;
                 }
                 // 2-pass wrap: remember pre-yakumono width to compute yakumono savings.
-                let pre_yakumono_width = char_width;
+                let mut pre_yakumono_width = char_width;
                 // Physical yakumono compression (COM-confirmed b837 2026-04-16):
                 //   Pair (both chars): 6pt (×0.5) — e.g., 。）→ 6+6pt
                 //   Standalone 、。 between non-trigger CJK: 7pt (×0.583)
@@ -32089,6 +32089,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // keep the existing separate-accumulator model (padding for positioning).
                 if char_grid_extra < 0.0 {
                     char_width += char_grid_extra;
+                    // S1492 (2026-09-20, default ON, opt-out OXI_S1492_DISABLE): the
+                    // S475 break CAPACITY is accumulated from `pre_yakumono_width`,
+                    // which is taken before the grid fold -- so a docGrid that
+                    // COMPRESSES its characters (negative w:charSpace) was rendered at
+                    // the compressed advance but broken at the natural em.
+                    // legal__08a3b60be53504c7 (linesAndChars, charSpace=-2714, 12pt on a
+                    // 9.837 pitch): Word fits 40 characters on the 453.5pt line, Oxi 38
+                    // (capw += 240 per character where the fragment advances 227), so
+                    // every full paragraph took one line too many and the form ran to 4
+                    // pages against Word's 3.
+                    if std::env::var_os("OXI_S1492_DISABLE").is_none() {
+                        pre_yakumono_width += char_grid_extra;
+                    }
                 } else if s466_grid_expand && char_grid_extra > 0.0 {
                     // S466: fold POSITIVE grid expansion into char_width so the wrap
                     // (chars/line) reflects Word's grid-pitch advance. Default-OFF
