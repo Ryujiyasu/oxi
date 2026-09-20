@@ -20411,7 +20411,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 if let Some(ref top) = borders.top {
                     let merges_with_prev = prev_para_borders == Some(borders);
                     if !merges_with_prev {
-                        cursor.advance(top.space + top.width);
+                        // S1504 (2026-09-20, default ON, opt-out OXI_S1504_DISABLE):
+                        // a DOUBLE rule is three strokes wide (2 lines + gap, each
+                        // sz/8). grid_probe.py B (typed grid 360, MS Gothic 10.5,
+                        // Info6 of the plain paragraphs around): none 18 / single
+                        // sz4 sp1 21 / double sz4 sp1 23.25 / single sz8 sp1 22.5 /
+                        // single sz4 sp4 27 / top-only 19.5 -> space + full stroke
+                        // width on BOTH sides; Oxi reserved double as single
+                        // (20.75) and halved the bottom on CJK docs. ca290d's two
+                        // bordered headings were 2.3pt short, pushing two
+                        // paragraphs across page bottoms.
+                        let s1504 = std::env::var_os("OXI_S1504_DISABLE").is_none();
+                        let tw = if s1504 && top.style == "double" { top.width * 3.0 } else { top.width };
+                        cursor.advance(top.space + tw);
                     }
                 }
             }
@@ -28438,7 +28450,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .map_or(false, |b| b.style != "none" && b.style != "nil");
 
             if let Some(ref bottom) = borders.bottom {
-                let bw = bottom.width;
+                let s1504 = std::env::var_os("OXI_S1504_DISABLE").is_none();
+                let bw = if s1504 && bottom.style == "double" { bottom.width * 3.0 } else { bottom.width };
                 let color = bottom.color.clone().unwrap_or_else(|| "000000".to_string());
                 let border_y = para_bottom + bottom.space;
                 // S990A: the interior `between` element below draws this line;
@@ -28495,7 +28508,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // Latin scope also matches the sibling S903 (whose own note keeps the JP
                 // 3a4f 6-box stack on its calibration).
                 let pbdr_full = std::env::var("OXI_S467_PBDR_ENABLE").is_ok()
-                    || (!self.doc_body_has_real_cjk && std::env::var("OXI_S1048_DISABLE").is_err());
+                    || (!self.doc_body_has_real_cjk && std::env::var("OXI_S1048_DISABLE").is_err())
+                    // S1504: the CJK half-width was a calibration; the typed-grid
+                    // probe reads the full stroke (single sz8: 22.5 not 21.5).
+                    || std::env::var_os("OXI_S1504_DISABLE").is_none();
                 // S903: an INTERIOR paragraph of a merged identical-pBdr group
                 // reserves NO bottom overhead (Word: pure line pitch between
                 // merged boxes; the space+bw belongs to the group's LAST para).

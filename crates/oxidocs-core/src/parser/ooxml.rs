@@ -2025,6 +2025,26 @@ fn parse_body(
                             // mark revision rule). The EMPTY-vanish case stays S673v
                             // (layout skip). Corpus scan: exactly 1 such para exists
                             // (nyserda); the S673v docs' hidden marks are all EMPTY.
+                            // S1505b: a paragraph whose mark AND every run are hidden
+                            // (technical__012baf11's ARCATnote paragraphs, hidden by
+                            // style) is not a join partner -- Word drops it whole and
+                            // the following paragraph keeps its own spacing-before
+                            // (hidden_probe.py: hidden plain / pBdr / before / after /
+                            // two lines / two in a row all equal the control 13.50;
+                            // the document's 'Welded metal lockers' keeps before=10).
+                            // Its runs are blanked so the S673v layout skip takes it.
+                            if std::env::var_os("OXI_S1505_DISABLE").is_none() {
+                                if let Some(Block::Paragraph(prev)) = current_blocks.last_mut() {
+                                    if prev.style.ppr_rpr.as_ref().map_or(false, |r| r.vanish)
+                                        && prev.runs.iter().any(|r| !r.text.is_empty())
+                                        && prev.runs.iter().all(|r| r.text.is_empty() || r.style.vanish)
+                                    {
+                                        for r in prev.runs.iter_mut() {
+                                            r.text.clear();
+                                        }
+                                    }
+                                }
+                            }
                             let s784_join = std::env::var("OXI_S784_DISABLE").is_err()
                                 && matches!(current_blocks.last(), Some(Block::Paragraph(prev))
                                     if prev.style.ppr_rpr.as_ref().map_or(false, |r| r.vanish)
@@ -4758,6 +4778,22 @@ fn parse_paragraph_with_inline_images_impl(
     if let Some(ref para_drs) = style.default_run_style {
         for run in runs.iter_mut() {
             super::styles::merge_run_style(&mut run.style, para_drs);
+        }
+        // S1505: the paragraph MARK inherits the style's hidden flag too, so a
+        // paragraph hidden by its style collapses entirely (S784/S673v).
+        if para_drs.vanish && std::env::var_os("OXI_S1505_DISABLE").is_none() {
+            match style.ppr_rpr.as_mut() {
+                Some(m) => {
+                    if !m.vanish_off {
+                        m.vanish = true;
+                    }
+                }
+                None => {
+                    let mut m = crate::ir::RunStyle::default();
+                    m.vanish = true;
+                    style.ppr_rpr = Some(m);
+                }
+            }
         }
     }
 
@@ -7504,6 +7540,16 @@ fn parse_drawing(
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "r:embed" || key.ends_with(":embed") || key == "embed" {
                                 rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            } else if (key == "r:link" || key.ends_with(":link") || key == "link")
+                                && rel_id.is_none()
+                                && std::env::var_os("OXI_S1507_DISABLE").is_none()
+                            {
+                                // S1507 (2026-09-20, default ON, opt-out OXI_S1507_DISABLE):
+                                // a LINKED picture (a:blip r:link only, no package
+                                // media -- technical__012baf11's IMPORT field logo,
+                                // 225x112.5pt) still occupies its extent in Word; the
+                                // data-less Image is the existing flow placeholder.
+                                rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -7862,6 +7908,16 @@ fn parse_drawing(
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "r:embed" || key.ends_with(":embed") || key == "embed" {
+                                rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            } else if (key == "r:link" || key.ends_with(":link") || key == "link")
+                                && rel_id.is_none()
+                                && std::env::var_os("OXI_S1507_DISABLE").is_none()
+                            {
+                                // S1507 (2026-09-20, default ON, opt-out OXI_S1507_DISABLE):
+                                // a LINKED picture (a:blip r:link only, no package
+                                // media -- technical__012baf11's IMPORT field logo,
+                                // 225x112.5pt) still occupies its extent in Word; the
+                                // data-less Image is the existing flow placeholder.
                                 rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
@@ -10376,7 +10432,17 @@ fn parse_run_properties(
                         }
                     }
                     "vanish" => {
-                        style.vanish = true;
+                        // S1505: honour an explicit w:val="0"/"false".
+                        let off = e.attributes().flatten().any(|at| {
+                            local_name(at.key.as_ref()) == "val"
+                                && matches!(at.value.as_ref(), b"0" | b"false" | b"off")
+                        });
+                        if off {
+                            style.vanish = false;
+                            style.vanish_off = true;
+                        } else {
+                            style.vanish = true;
+                        }
                     }
                     // w:webHidden (ECMA-376 §17.3.2.44) hides text ONLY in Web
                     // Layout view — print/PDF renders it normally. ToC tab-leaders

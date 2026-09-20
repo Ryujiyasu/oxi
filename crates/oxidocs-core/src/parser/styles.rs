@@ -420,6 +420,14 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
 
 /// Merge parent run style into child (child values take precedence)
 pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
+    // S1505 (2026-09-20, default ON, opt-out OXI_S1505_DISABLE): hidden text
+    // is inherited from the paragraph/character style like any other run
+    // property. technical__012baf11's ARCATnote style carries <w:vanish/>
+    // and its runs carry nothing; Word lists none of those paragraphs and
+    // draws nothing for them, Oxi drew 16 lines on p1 (17 -> 19 pages).
+    if parent.vanish && !child.vanish_off && std::env::var_os("OXI_S1505_DISABLE").is_none() {
+        child.vanish = true;
+    }
     if child.font_family.is_none() {
         child.font_family = parent.font_family.clone();
     }
@@ -1397,6 +1405,12 @@ fn parse_style_definition(
                         "b" => {
                             run_style.bold = ct_on_off(&e);
                             run_style.has_explicit_bold = true;
+                            has_run_style = true;
+                        }
+                        // S1505: a style's <w:vanish/> hides the runs it governs.
+                        "vanish" => {
+                            run_style.vanish = ct_on_off(&e);
+                            run_style.vanish_off = !run_style.vanish;
                             has_run_style = true;
                         }
                         "i" => {

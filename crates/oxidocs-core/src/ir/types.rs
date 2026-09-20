@@ -539,6 +539,10 @@ pub struct RunStyle {
     /// Hidden text (w:vanish)
     #[serde(default)]
     pub vanish: bool,
+    /// S1505: `<w:vanish w:val="0"/>` written on this run/mark -- an explicit
+    /// OFF that a hidden paragraph style must not switch back on.
+    #[serde(default)]
+    pub vanish_off: bool,
     /// Text outline effect (w:outline)
     #[serde(default)]
     pub outline: bool,
@@ -688,6 +692,7 @@ impl Default for RunStyle {
             shading: None,
             rtl: false,
             vanish: false,
+            vanish_off: false,
             outline: false,
             shadow: false,
             emboss: false,
