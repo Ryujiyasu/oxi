@@ -7986,7 +7986,9 @@ cells={} pitch={:.2} text={:?}",
         // S1241 (2026-08-27): the region also records the float's X range
         // (fx0, fx1) so a flow in a DIFFERENT column lane (forms__000cf39c:
         // float in col1, inline table flowing in col2) is not bumped below it.
-        let mut text_float_region: Option<(f32, f32, usize, f32, f32)> = None;
+        // S1509: the sixth element is the free side lane (pt, net of the
+        // tblpPr wrap distances) beside the float.
+        let mut text_float_region: Option<(f32, f32, usize, f32, f32, f32)> = None;
         // S1195 (2026-08-22, default ON, opt-out `OXI_S1195_DISABLE`): a
         // wrap-below float that still leaves a usable side LANE. Word flows the
         // EMPTY paragraphs that follow such a float in that lane, beside the
@@ -9341,7 +9343,12 @@ cells={} pitch={:.2} text={:?}",
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and
             // this block's cursor has reached the float's region (the gap above it
             // is now consumed), skip the cursor past the float (body wraps below).
-            if let Some((ft_top, ft_bot, ft_page, ft_x0, ft_x1)) = text_float_region {
+            if let Some((ft_top, ft_bot, ft_page, ft_x0, ft_x1, ft_lane)) = text_float_region {
+                // S1509: an EMPTY paragraph flows in a side lane of at least 18.5pt
+                // (the S1195 floor) instead of being bumped below the float.
+                let s1509_keep = std::env::var_os("OXI_S1509_DISABLE").is_none()
+                    && ft_lane >= 18.5
+                    && matches!(block, Block::Paragraph(p) if p.runs.iter().all(|r| r.text.is_empty()));
                 // S1241: the float bump applies only when the CURRENT lane
                 // ([start_x, start_x + content_width]) overlaps the float's X
                 // range — a col2 flow passes a col1 float untouched (Word:
@@ -9449,7 +9456,9 @@ cells={} pitch={:.2} text={:?}",
                                         + l1
                                         > ft_top + if first_line_only { 0.0 } else { 0.1 }
                                 });
-                    if cursor.cursor_y >= ft_top - 0.1 && cursor.cursor_y < ft_bot {
+                    if s1509_keep && cursor.cursor_y < ft_bot {
+                        // the empty line rides the lane; the region stays armed
+                    } else if cursor.cursor_y >= ft_top - 0.1 && cursor.cursor_y < ft_bot {
                         cursor.set(ft_bot);
                         text_float_region = None;
                     } else if s1230_text_cross {
@@ -14162,12 +14171,43 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 };
                                 (base + px, base + px + table_w_pt)
                             };
+                            // S1509 (2026-09-20, default ON, opt-out OXI_S1509_DISABLE):
+                            // the lane beside this float, placed the way S1195 places
+                            // its band (an ALIGN-positioned float resolves against its
+                            // anchor rect). legal__07b25a's cover: a centred 378pt
+                            // float (lanes 44.85pt net) anchored 21.8pt below eight
+                            // empty paragraphs -- Word flows the empties in the lane
+                            // (Info6 417..599 beside the table at 441..614); the
+                            // region bump sent them below it and onto a second page.
+                            let s1509_lane = {
+                                let tpos = table.style.position.as_ref();
+                                let x0 = match tpos {
+                                    Some(tp) => match tp.h_align.as_deref() {
+                                        Some(ha) => {
+                                            let (rl, rw) = match tp.h_anchor.as_deref() {
+                                                Some("page") => (0.0, page.size.width),
+                                                _ => (start_x, content_width),
+                                            };
+                                            match ha {
+                                                "center" => rl + (rw - table_w_pt) * 0.5,
+                                                "right" => rl + rw - table_w_pt,
+                                                _ => rl,
+                                            }
+                                        }
+                                        None => s1241_fx0,
+                                    },
+                                    None => s1241_fx0,
+                                };
+                                let (dl, dr) = tpos.map_or((0.0, 0.0), |tp| (tp.left_from_text, tp.right_from_text));
+                                (x0 - dl - start_x).max(start_x + content_width - (x0 + table_w_pt + dr))
+                            };
                             text_float_region = Some((
                                 candidate_y_top,
                                 candidate_y_bottom + 1.5,
                                 current_page_idx,
                                 s1241_fx0,
                                 s1241_fx1,
+                                s1509_lane,
                             ));
                         } else if needs_wrap_below {
                             // S469: the cursor advances below the table so body
