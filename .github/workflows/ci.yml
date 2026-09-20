@@ -13,6 +13,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      font_metrics:
+        description: Collect installed Windows font metrics instead of running the test suite
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +29,7 @@ env:
 
 jobs:
   test:
+    if: ${{ !inputs.font_metrics }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -38,6 +44,7 @@ jobs:
         run: cargo test -p oxidocs-wasm --features suite --locked
 
   clippy:
+    if: ${{ !inputs.font_metrics }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -49,6 +56,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked
 
   wasm:
+    if: ${{ !inputs.font_metrics }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -68,6 +76,7 @@ jobs:
           retention-days: 7
 
   browser:
+    if: ${{ !inputs.font_metrics }}
     # Four of the six suites open a real workbook through the engine, so they
     # need the build the `wasm` job makes; the pkg is gitignored and is not in
     # a fresh checkout.
@@ -97,3 +106,34 @@ jobs:
         run: |
           node --test web/vertical-text.test.mjs
           node web/vertical-layout.test.mjs pkg
+
+  font-metrics:
+    if: ${{ inputs.font_metrics }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Record font provenance
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path font-metrics -Force | Out-Null
+          Get-ComputerInfo -Property OsName,OsVersion,WindowsVersion | ConvertTo-Json | Set-Content font-metrics/os.json
+          Get-ChildItem C:/Windows/Fonts -File | Get-FileHash -Algorithm SHA256 | Select-Object Path,Hash | ConvertTo-Json | Set-Content font-metrics/font-hashes.json
+      - name: Extract metrics
+        run: cargo run --release --manifest-path tools/font-metrics-gen/Cargo.toml -- C:/Windows/Fonts font-metrics
+      - name: Verify requested font coverage
+        shell: pwsh
+        run: |
+          $metrics = Get-Content font-metrics/font_metrics.json -Raw | ConvertFrom-Json
+          foreach ($family in @('Microsoft JhengHei Light', 'Microsoft JhengHei UI Light')) {
+            if (-not ($metrics | Where-Object family -eq $family)) { throw "Missing metrics for $family" }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-font-metrics
+          path: font-metrics/*.json
+          retention-days: 30
