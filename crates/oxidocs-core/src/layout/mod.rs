@@ -46757,7 +46757,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 )
                                                 && effective_line_spacing
                                                     .map_or(true, |f| (f - 1.0).abs() <= 0.01)
-                                                && rpr_ref.font_family.is_some()
+                                                // S1512 (2026-09-21, default ON, opt-out OXI_S1512_DISABLE):
+                                                // a mark whose ascii face comes only from the
+                                                // docDefaults theme (no rFonts on the mark) is
+                                                // still set in that ascii face in a Latin document.
+                                                // reports__006de1d2: 4pt empty cell paragraphs
+                                                // under a theme whose <a:ea typeface=""/> resolved
+                                                // to the CJK substitute (5.19 = 4 x 83/64) where
+                                                // Word's rows read Calibri's 4.88; five tables on
+                                                // p2 grew ~1.5pt each and a three-line paragraph
+                                                // fell to p3 (+1 page).
+                                                && (rpr_ref.font_family.is_some()
+                                                    || (!self.doc_body_has_real_cjk
+                                                        && std::env::var_os("OXI_S1512_DISABLE").is_none()))
                                                 && (rpr_ref.font_family_east_asia.is_none() || s1376_mark || s1382
                                                     || (!self.doc_body_has_real_cjk
                                                         && std::env::var("OXI_CELL_MARK_ASCII").as_deref() == Ok("1")));
