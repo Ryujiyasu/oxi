@@ -12427,6 +12427,15 @@ cells={} pitch={:.2} text={:?}",
                         cursor.cursor_y, start_x, content_width,
                     );
                     cursor.advance(wrap_advance);
+                    // S1515 (2026-09-21, default ON, opt-out OXI_S1515_DISABLE): a
+                    // paragraph that resumes BELOW a square-wrapped float starts at
+                    // the band's bottom; the previous paragraph's after-spacing is
+                    // absorbed by that move. technical__01242a0a p1: 'List of
+                    // figure' (after=8) hosts a 104.75pt wrapSquare group at +29.9;
+                    // Word sets 'Fig. 1' at 207.0 = band bottom 206.9, Oxi 214.6.
+                    if wrap_advance > 0.0 && std::env::var_os("OXI_S1515_DISABLE").is_none() {
+                        prev_space_after = (prev_space_after - wrap_advance).max(0.0);
+                    }
                     if std::env::var("OXI_DBG773").is_ok() {
                         for s in &para.shapes {
                             eprintln!(
@@ -13241,7 +13250,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
-                    prev_autospacing_numid = if para.style.after_autospacing {
+                    // S1516 (2026-09-21): the previous LIST id is tracked for every
+                    // list item, tagged with whether its after-spacing was auto
+                    // ("|auto") or explicit ("|plain"); see paragraph_spacing_before.
+                    prev_autospacing_numid = if std::env::var_os("OXI_S1516_DISABLE").is_none() {
+                        para.style.num_id.clone().map(|n| format!("{}|{}", n, if para.style.after_autospacing { "auto" } else { "plain" }))
+                    } else if para.style.after_autospacing {
                         para.style.num_id.clone()
                     } else {
                         None
@@ -19750,12 +19764,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Corpus scan: adjacent same-numId autospacing items exist in 4
         // docx_corpus/en docs ONLY (golden 0 / ja 0 / real_en 0) -> the
         // gated JP + frozen surface is byte-identical by construction.
+        // S1516 (2026-09-21, default ON, opt-out OXI_S1516_DISABLE): the auto
+        // before-spacing of a list item is suppressed after ANY item of the same
+        // list, not only after one whose after-spacing was auto (S931). What
+        // survives is the previous item's explicit after. policies__007be028
+        // p7: ListParagraph (after=8) -> NormalWeb item (before auto 14):
+        // Word 91.5 = 3 x 27.6 + 8.7, Oxi 97.6 (+14); the extra 6pt pushed a
+        // two-line item at the page bottom (its second line's natural 13.8 no
+        // longer fit) and the following pages by one.
+        let (s1516_prev_numid, s1516_prev_auto) = match prev_autospacing_numid {
+            Some(v) => match v.split_once('|') {
+                Some((n, tag)) => (Some(n), tag == "auto"),
+                None => (Some(v), true),
+            },
+            None => (None, false),
+        };
         if para.style.before_autospacing
             && para.style.num_id.is_some()
-            && para.style.num_id.as_deref() == prev_autospacing_numid
+            && para.style.num_id.as_deref() == s1516_prev_numid
             && std::env::var("OXI_S931_DISABLE").is_err()
+            && (s1516_prev_auto || prev_space_after > 0.0)
         {
-            effective_spacing = 0.0;
+            effective_spacing = if s1516_prev_auto { 0.0 } else { prev_space_after };
         }
 
         // Suppress space_before at the top of a page (page 2+).
@@ -36813,7 +36843,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         grid_pitch: Option<f32>,
         grid_no_type: bool,
     ) -> f32 {
-        self.line_height_for_line_inner(
+        let base = self.line_height_for_line_inner(
             line,
             para_style,
             para_font_size,
@@ -36821,7 +36851,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             grid_pitch,
             false,
             grid_no_type,
-        )
+        );
+        // S1517 (2026-09-21): the BODY path needs nothing here -- S655 inside
+        // the inner fold already shifts each fragment's box by its w:position
+        // and takes the union (position_probe2.py: a lowered 14pt run beside
+        // 10pt text grows the line 0, a 10pt run raised 5pt beside 14pt text
+        // grows it 1.5, lowered 7pt grows it 6 -- the union, not |position|).
+        // The cell path had no such term; see the S1517 cell site.
+        base
+    }
+
+    /// S1517: a fragment counts as text when it carries a visible glyph and
+    /// no object/math sentinel (U+F8FD..U+F8FF).
+    fn s1517_is_text(text: &str, style: &RunStyle) -> bool {
+        !text.trim().is_empty()
+            && style.inline_object_extent.is_none()
+            && style.inline_object_image.is_none()
+            && !text.chars().any(|c| c == '\u{FFFC}' || ('\u{F8FD}'..='\u{F8FF}').contains(&c))
     }
 
     /// Returns ascent+descent only (no grid snap, no leading) for a line.
@@ -47222,6 +47268,39 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         {
                                             let s1312_fs = self.resolve_font_size(&RunStyle::default(), &para.style);
                                             lh += self.s1396_ruby_expansion(para, s1312_fs);
+                                        }
+                                        // S1517 cell site (2026-09-21, default ON, opt-out
+                                        // OXI_S1517_DISABLE): a raised/lowered run shifts its
+                                        // own box by w:position and the CELL line is the
+                                        // union of the shifted boxes -- the body path's S655,
+                                        // which never reached cells. position_probe2.py
+                                        // (TNR, line 240, Info6 pitch): same-size run lowered
+                                        // 2pt +1.5; 10pt run beside 14pt text lowered 2pt
+                                        // +0.75, raised 5pt +1.5, raised 10pt +6, lowered 7pt
+                                        // +6; a 14pt run beside 10pt text lowered 2pt +0,
+                                        // lowered 5pt +0.75 (the top shrinks). A flat
+                                        // |position| broke 002a301d/0016b30b/0019967c
+                                        // (lowered inline OLE equations); objects stay out.
+                                        // technical__01242a0a 'Density (kg/m3)': the 3 at
+                                        // position 10 -> Word row 25.5, Oxi 19.5.
+                                        if std::env::var_os("OXI_S1517_DISABLE").is_none()
+                                            && (!para.style.snap_to_grid || row_line_pitch.is_none())
+                                            && line.iter().any(|t| t.16.position.is_some() && Self::s1517_is_text(&t.0, &t.16))
+                                        {
+                                            let (mut a0, mut d0, mut a1, mut d1) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+                                            for t in line.iter().filter(|t| Self::s1517_is_text(&t.0, &t.16)) {
+                                                let m = match t.8.as_deref() {
+                                                    Some(ff) => self.registry.get(ff),
+                                                    None => self.registry.default_metrics(),
+                                                };
+                                                let (asc, des) = (m.word_ascent_pt(t.1), m.word_descent_pt(t.1));
+                                                let pos = t.16.position.unwrap_or(0.0);
+                                                a0 = a0.max(asc);
+                                                d0 = d0.max(des);
+                                                a1 = a1.max(asc + pos);
+                                                d1 = d1.max(des - pos);
+                                            }
+                                            lh = (lh + (a1 + d1) - (a0 + d0)).max(0.0);
                                         }
 
                                         // S1125 (2026-08-15, opt-out OXI_S1125_DISABLE): a CELL
