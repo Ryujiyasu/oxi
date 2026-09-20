@@ -8244,6 +8244,18 @@ cells={} pitch={:.2} text={:?}",
         // paragraph now sits BELOW the image, so resolving from the paragraph's
         // y would double-shift).
         let mut s734_flow_pos: std::collections::HashMap<usize, (usize, f32)> = Default::default();
+        // S1500 (2026-09-20, default ON, opt-out OXI_S1500_DISABLE): the block
+        // right after a wrapTopAndBottom band host anchors its own
+        // paragraph-relative shapes to its UNPUSHED top -- the y it had before
+        // the host's band dropped the cursor -- while its lines sit below the
+        // band. MEASURED (box7_probe v2/v3, c5bb00 p8 slice: para 91 hosts
+        // four bands, para 92 hosts a 196pt box at posOffset 134.6): Word
+        // draws the box at 65 + 134.6 (para 91's line bottom + offset) though
+        // para 92's text renders at 175; with one plain paragraph between,
+        // the box sits at that paragraph's pushed bottom + offset (normal).
+        // The document: box at 405 = 253.5 + 17 + 134.6, Oxi had 512.
+        // (next block idx, page, unpushed y)
+        let mut s1500_unpushed: Option<(usize, usize, f32)> = None;
         // S1497 (2026-09-20, default ON, opt-out OXI_S1497_DISABLE): a float
         // whose top sits BELOW its anchor paragraph's top (posOffset > 0) is a
         // band inside that paragraph: the lines that fit above it stay, the
@@ -8825,9 +8837,15 @@ cells={} pitch={:.2} text={:?}",
                     }
 
                 }
-                s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
+                // S1500: an in-paragraph band on the block after a band host
+                // is measured from the unpushed top.
+                let s1500_fy = s1500_unpushed
+                    .filter(|&(b, pg, _)| b == block_idx && pg == current_page_idx && s1497_mid.contains_key(&block_idx))
+                    .map(|(_, _, y)| y)
+                    .unwrap_or(cursor.cursor_y);
+                s734_flow_pos.insert(block_idx, (current_page_idx, s1500_fy));
                 if let Some(&(off, h)) = s1497_mid.get(&block_idx) {
-                    S1497_BAND.with(|c| c.set(Some((off, h))));
+                    S1497_BAND.with(|c| c.set(Some((off - (cursor.cursor_y - s1500_fy), h))));
                 } else {
                     cursor.advance(band_h);
                 }
@@ -8882,9 +8900,13 @@ cells={} pitch={:.2} text={:?}",
                     }
 
                 }
-                s1089_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
+                let s1500_fy = s1500_unpushed
+                    .filter(|&(b, pg, _)| b == block_idx && pg == current_page_idx && s1497_mid.contains_key(&block_idx))
+                    .map(|(_, _, y)| y)
+                    .unwrap_or(cursor.cursor_y);
+                s1089_flow_pos.insert(block_idx, (current_page_idx, s1500_fy));
                 if let Some(&(off, h)) = s1497_mid.get(&block_idx) {
-                    S1497_BAND.with(|c| c.set(Some((off, h))));
+                    S1497_BAND.with(|c| c.set(Some((off - (cursor.cursor_y - s1500_fy), h))));
                 } else {
                     cursor.advance(band_h);
                 }
@@ -12478,6 +12500,9 @@ cells={} pitch={:.2} text={:?}",
                         if let Some(&(fp, fy)) = s734_flow_pos.get(&block_idx).or(s1089_flow_pos.get(&block_idx)) {
                             let bottom = fy + off + h;
                             if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height {
+                                if std::env::var_os("OXI_S1500_DISABLE").is_none() {
+                                    s1500_unpushed = Some((block_idx + 1, current_page_idx, cursor.cursor_y));
+                                }
                                 cursor.set(bottom);
                             }
                         }
@@ -33865,6 +33890,67 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let mut overflow_tw = if vertical_natural_boundary {
                         current_width_tw + s1317_cw_tw - available_tw
                     } else { overflow_tw };
+                    // S1499 (2026-09-20, default ON, opt-out OXI_S1499_DISABLE): a
+                    // compat-15 doNotCompress body line set jc=both absorbs a small
+                    // overflow through its CJK<->Latin auto-space gaps. MEASURED on
+                    // the faithful slice of c5bb00 paragraph 54 (`slice54_probe`
+                    // v14-v23, left-vs-justified right-indent thresholds, 10 tw
+                    // steps, Meiryo 10.5pt): no gap -> 0; a line-start Latin island
+                    // -> 0; 2 gaps -> 30 tw; 4 -> 50; 6 -> 60; a longer Latin run
+                    // adds ~10 (2 gaps + 3-5 letters -> 40). Modelled as fs/14 per
+                    // gap capped at fs/4 (30 / 52.5 / 52.5), the conservative side
+                    // of every arm (21pt reads 100/140/170 for 2/3/4 gaps: the
+                    // model under-credits there and Oxi keeps its current break).
+                    // The document's line 1 (48 chars, 5 gaps) overflows 10.8 tw
+                    // in Oxi and Word keeps it; the pure-CJK arm refuses 22 tw.
+                    if overflow_tw > 0
+                        && !s475_break
+                        && std::env::var_os("OXI_S1499_DISABLE").is_none()
+                        && !self.compress_punctuation
+                        && is_justified
+                        && self.compat_mode >= 15
+                        && !vertical
+                        && !lines_and_chars
+                        && s476_body
+                        && IN_TABLE_LAYOUT.with(|c| c.get()) == 0
+                    {
+                        let line_chars: Vec<char> = current_line
+                            .fragments
+                            .iter()
+                            .flat_map(|f| f.text.chars())
+                            .chain(word.chars())
+                            .chain(std::iter::once(ch))
+                            .collect();
+                        let is_lat = |c: char| {
+                            (c.is_ascii_alphabetic() && para_style.auto_space_de)
+                                || (c.is_ascii_digit() && para_style.auto_space_dn)
+                        };
+                        let mut gaps = 0usize;
+                        let mut island_from_start = line_chars.first().map_or(false, |&c| is_lat(c));
+                        for w in line_chars.windows(2) {
+                            let (a, b) = (w[0], w[1]);
+                            let a_cjk = kinsoku::is_cjk_ideograph_or_kana(a);
+                            let b_cjk = kinsoku::is_cjk_ideograph_or_kana(b);
+                            if a_cjk && is_lat(b) {
+                                gaps += 1;
+                                island_from_start = false;
+                            } else if is_lat(a) && b_cjk {
+                                if !island_from_start {
+                                    gaps += 1;
+                                }
+                                island_from_start = false;
+                            } else if !is_lat(b) {
+                                island_from_start = false;
+                            }
+                        }
+                        let credit_tw = pt_to_tw(font_size / 14.0)
+                            .saturating_mul(gaps as i32)
+                            .min(pt_to_tw(font_size / 4.0));
+                        if std::env::var_os("OXI_DBG1499").is_some() {
+                            eprintln!("[S1499] ch={:?} over_tw={} gaps={} credit_tw={}", ch, overflow_tw, gaps, credit_tw);
+                        }
+                        overflow_tw -= credit_tw;
+                    }
                     if overflow_tw > 0 && s476_body && is_justified
                         && !vertical && !lines_and_chars
                         && kinsoku::is_line_start_prohibited(ch)
