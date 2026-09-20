@@ -40,6 +40,21 @@ pub fn s1397_minor_ea_styles(theme: &ThemeColors, theme_val: &str) -> Option<Str
     // -> 游明朝, the Jpan face). The empty slot is "no font": the next literal
     // in the chain wins, and only the chain's end takes the script face.
     if S1397_IN_RPR_DEFAULT.with(|c| c.get()) {
+        // S1496 (2026-09-20, default ON, opt-out OXI_S1496_DISABLE): the script
+        // face is the one settings `themeFontLang eastAsia` names -- zh-CN ->
+        // Hans (等线), zh-TW -> Hant (PMingLiU), ja-JP / absent -> Jpan
+        // (`ea_theme_probe.py`, Word PDF span fonts; the docDefaults lang
+        // eastAsia is irrelevant). correspondence__0c5ad162c3d320f0
+        // (themeFontLang zh-CN): Word DengXian 16.5/line, Oxi 游明朝 20.1.
+        if std::env::var_os("OXI_S1496_DISABLE").is_none() {
+            if let Some(script) = theme.theme_font_lang_script.as_deref() {
+                if script != "Jpan" {
+                    if let Some(f) = theme.minor_script_fonts.get(script) {
+                        return Some(f.clone());
+                    }
+                }
+            }
+        }
         return theme.minor_font_jpan.clone().or(stand_in);
     }
     None

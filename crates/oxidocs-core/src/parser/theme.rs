@@ -32,6 +32,10 @@ pub struct ThemeColors {
     /// face. A consumer that has a literal rPrDefault eastAsia takes that
     /// (S323's d1e8ac8 law); one that has none takes the Jpan script face.
     pub minor_ea_empty: bool,
+    /// S1496: the East Asian script named by settings `themeFontLang
+    /// eastAsia` ("Jpan" / "Hans" / "Hant" / "Hang"), when present. The
+    /// empty-`<a:ea>` chain end (S1397) takes THIS script's face, not Jpan.
+    pub theme_font_lang_script: Option<String>,
     /// Major complex-script (Bidi) font — non-empty `<a:cs>` else the locale's
     /// supplemental `<a:font script="Arab">` (S987: `*Bidi` theme tokens resolve
     /// here, not to the Latin major/minor font).
@@ -41,6 +45,36 @@ pub struct ThemeColors {
 }
 
 impl ThemeColors {
+    /// S1496: read settings `themeFontLang eastAsia` into the script name
+    /// ("Jpan" / "Hans" / "Hant" / "Hang") WITHOUT touching the EA font
+    /// slots (that is `apply_font_language`, still opt-in).
+    pub fn capture_theme_font_lang_script(&mut self, settings: &str) {
+        let mut reader = Reader::from_str(settings);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e) | Event::Empty(e))
+                    if local_name(e.name().as_ref()) == "themeFontLang" => {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "eastAsia" {
+                            let language = String::from_utf8_lossy(&attr.value).to_lowercase();
+                            let script = match language.as_str() {
+                                "ja" | "ja-jp" => "Jpan",
+                                "zh-tw" | "zh-hk" | "zh-mo" | "zh-hant" => "Hant",
+                                "zh-cn" | "zh-sg" | "zh-hans" => "Hans",
+                                "ko" | "ko-kr" => "Hang",
+                                _ => return,
+                            };
+                            self.theme_font_lang_script = Some(script.to_string());
+                        }
+                    }
+                    return;
+                }
+                Ok(Event::Eof) | Err(_) => return,
+                _ => {}
+            }
+        }
+    }
+
     /// Select supplemental East Asian fonts using the document theme language.
     pub fn apply_font_language(&mut self, settings: &str) {
         let mut reader = Reader::from_str(settings);
@@ -68,6 +102,7 @@ impl ThemeColors {
             "ko" | "ko-kr" => "Hang",
             _ => return,
         };
+        self.theme_font_lang_script = Some(script.to_string());
         if let Some(font) = self.major_script_fonts.get(script) {
             self.major_font_ea = Some(font.clone());
         }

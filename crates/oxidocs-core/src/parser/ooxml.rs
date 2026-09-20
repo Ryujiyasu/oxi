@@ -459,6 +459,12 @@ impl OoxmlParser {
                 theme.apply_font_language(&settings);
             }
         }
+        // S1496: the themeFontLang script is always known to the styles chain.
+        if std::env::var_os("OXI_S1496_DISABLE").is_none() {
+            if let Ok(settings) = self.read_part("word/settings.xml") {
+                theme.capture_theme_font_lang_script(&settings);
+            }
+        }
         let mut styles = match s1425_template.as_ref() {
             Some((_, tpl_styles_xml)) => {
                 let doc_xml = self.read_part("word/styles.xml").unwrap_or_default();

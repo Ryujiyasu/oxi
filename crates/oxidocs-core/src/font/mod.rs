@@ -630,7 +630,8 @@ impl FontMetrics {
             return std::env::var_os("OXI_MALGUN_METRICS").is_some();
         }
         if self.family.starts_with("DengXian") {
-            return std::env::var_os("OXI_DENGXIAN_METRICS").is_some();
+            // S1496: default ON (was an opt-in left by a wip checkpoint).
+            return std::env::var_os("OXI_DENGXIAN_METRICS_DISABLE").is_none();
         }
         let canonical_family = if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some() {
             normalize_family_name(&self.family)
@@ -863,7 +864,7 @@ impl FontMetricsRegistry {
         ];
 
         for raw in raw_list {
-            if raw.family.starts_with("DengXian") && std::env::var_os("OXI_DENGXIAN_METRICS").is_none() {
+            if raw.family.starts_with("DengXian") && std::env::var_os("OXI_DENGXIAN_METRICS_DISABLE").is_some() {
                 continue;
             }
             if raw.family.starts_with("Malgun Gothic")
@@ -2113,7 +2114,7 @@ fn normalize_family_name(name: &str) -> String {
         "HGS創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGSSoeiKakupoptai".to_string(),
         "Yu Mincho" if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some()
             || std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some() => "Yu Mincho Regular".to_string(),
-        "等线" if std::env::var_os("OXI_DENGXIAN_METRICS").is_some() => "DengXian".to_string(),
+        "等线" if std::env::var_os("OXI_DENGXIAN_METRICS_DISABLE").is_none() => "DengXian".to_string(),
         "맑은 고딕" if std::env::var_os("OXI_MALGUN_METRICS").is_some() => "Malgun Gothic".to_string(),
         "HG創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGSoeiKakugothicUB".to_string(),
         "HGP創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGPSoeiKakugothicUB".to_string(),
