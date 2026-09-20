@@ -19932,15 +19932,38 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         if intersection {
             let left = start_x + para.style.indent_left.unwrap_or(0.0).max(0.0);
             let right = start_x + content_width - para.style.indent_right.unwrap_or(0.0).max(0.0);
-            while let Some(band) = s758_bands.iter().find(|b|
-                b.0 == current_page_idx && line_top + line_height > b.1
-                    && line_top < b.2 - 0.5
-                    && b.3 < right && b.4 > left
-                    && (b.3 - left).max(0.0).max((right - b.4).max(0.0)) <
-                        if para.runs.iter().all(|r| r.text.is_empty())
-                            && std::env::var("OXI_EMPTY_WRAP_SLOT_DISABLE").is_err()
-                        { 9.75 } else { 30.0 })
-            {
+            let s1511_thr = if para.runs.iter().all(|r| r.text.is_empty())
+                && std::env::var("OXI_EMPTY_WRAP_SLOT_DISABLE").is_err()
+            { 9.75 } else { 30.0 };
+            let s1511_on = std::env::var_os("OXI_S1511_DISABLE").is_none();
+            while let Some(band) = {
+                // S1511 (2026-09-21, default ON, opt-out OXI_S1511_DISABLE): the
+                // free lane is judged against the UNION of every band the line
+                // crosses, not band by band. correspondence__101d48 p1: two
+                // wrapSquare boxes side by side (x 7..362 and 374..495 of a
+                // 482pt column, both anchored to the first paragraph) -- each
+                // alone leaves a wide "lane" that is in fact the other box, so
+                // the body was set over them; Word puts the first paragraph
+                // below both (Info6 169.5 under boxes ending ~165).
+                let overl: Vec<&(usize, f32, f32, f32, f32, bool)> = s758_bands.iter().filter(|b|
+                    b.0 == current_page_idx && line_top + line_height > b.1
+                        && line_top < b.2 - 0.5
+                        && b.3 < right && b.4 > left).collect();
+                let forced_single = overl.iter().any(|b|
+                    (b.3 - left).max(0.0).max((right - b.4).max(0.0)) < s1511_thr);
+                let forced_union = s1511_on && overl.len() >= 2 && {
+                    let mut iv: Vec<(f32, f32)> = overl.iter().map(|b| (b.3.max(left), b.4.min(right))).collect();
+                    iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    let mut free_max = 0.0f32; let mut x = left;
+                    for (x0, x1) in iv { free_max = free_max.max(x0 - x); x = x.max(x1); }
+                    free_max = free_max.max(right - x);
+                    free_max < s1511_thr
+                };
+                if forced_single || forced_union {
+                    // step by the band that ends first
+                    overl.iter().copied().min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                } else { None }
+            } {
                 let step = if band.5 {
                     let line_step = line_height + before;
                     ((band.2 - line_top) / line_step).ceil().max(1.0) * line_step
