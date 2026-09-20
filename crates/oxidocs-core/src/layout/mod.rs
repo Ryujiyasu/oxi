@@ -8241,9 +8241,18 @@ cells={} pitch={:.2} text={:?}",
                                 .map_or(false, |p| p.v_relative.as_deref() == Some("paragraph"))
                     })
                     .map(|img| {
+                        // S1513 (2026-09-21, default ON, opt-out OXI_S1513_DISABLE): the
+                        // band reaches down to the picture's effectExtent b (its
+                        // shadow/outline margin), not only its extent. educational__
+                        // 004c4a3d: Figure 1 b=18415 EMU (1.45pt) is exactly Oxi's -1.45
+                        // on the caption below; Figure 2 (b=1.65) then ended 769.2 vs
+                        // a 769.9 text bottom in Oxi and 770.9 in Word, which pushed
+                        // the host to the next page (tb_after_probe2.py: the host
+                        // moves the moment the band bottom exceeds the text bottom).
+                        let s1513_b = if std::env::var_os("OXI_S1513_DISABLE").is_none() { img.effect_extent_b.max(0.0) } else { 0.0 };
                         (
                             img.anchor_block_index,
-                            img.height + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0)),
+                            img.height + s1513_b + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0)),
                         )
                     })
                     .collect()
@@ -8314,7 +8323,8 @@ cells={} pitch={:.2} text={:?}",
                 .floating_images
                 .iter()
                 .filter(|img| img.wrap_type == Some(crate::ir::WrapType::TopAndBottom))
-                .filter_map(|img| img.position.as_ref().filter(|p| p.v_relative.as_deref() == Some("paragraph")).map(|p| (img.anchor_block_index, p.y, img.height)))
+                .filter_map(|img| img.position.as_ref().filter(|p| p.v_relative.as_deref() == Some("paragraph")).map(|p| (img.anchor_block_index, p.y,
+                    img.height + if std::env::var_os("OXI_S1513_DISABLE").is_none() { img.effect_extent_b.max(0.0) } else { 0.0 })))
                 .chain(
                     page.text_boxes
                         .iter()
@@ -8807,7 +8817,22 @@ cells={} pitch={:.2} text={:?}",
                 let band_h = if crate::layout::s1467_float_column_flow() {
                     band_h.max(s1089_tb_bands.get(&block_idx).copied().unwrap_or(0.0))
                 } else { band_h };
-                let remaining = (start_y + content_height) - cursor.cursor_y;
+                // S1513b: the paragraph-relative band hangs from the host's TOP,
+                // i.e. after its (collapsed) space-before; measure the remaining
+                // room from there (tb_after_probe2.py: the host moves to the next
+                // page exactly when band bottom > text bottom; 004c4a3d's host
+                // carries before=120 and its band ended 0.5pt short in Oxi).
+                let s1513_before = if std::env::var_os("OXI_S1513_DISABLE").is_none() {
+                    if let Block::Paragraph(para) = block {
+                        self.paragraph_spacing_before(
+                            para, page, grid_pitch, prev_para_style_id.as_deref(),
+                            prev_contextual_spacing, prev_autospacing_numid.as_deref(),
+                            prev_space_after, Some(block_idx), &pages, &elements,
+                            cursor.cursor_y, start_y,
+                        ).0.max(0.0)
+                    } else { 0.0 }
+                } else { 0.0 };
+                let remaining = (start_y + content_height) - cursor.cursor_y - s1513_before;
                 if band_h > remaining && band_h <= content_height && !elements.is_empty() {
                     if crate::layout::s1467_float_column_flow()
                         && current_column + 1 < num_columns
