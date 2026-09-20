@@ -3048,6 +3048,10 @@ thread_local! {
     /// char widths -- every CELL arm pushes 「二、」 down while the BODY arm
     /// hangs at compat 14 and at compat 15 when justified).
     static IN_TABLE_LAYOUT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// S1497: (posOffset, height) of the paragraph-relative wrapTopAndBottom
+    /// float hosted by the paragraph currently in layout_paragraph -- the
+    /// band is applied per line there instead of reserved before the block.
+    static S1497_BAND: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
 }
 
 /// RAII guard for IN_TABLE_LAYOUT (S1429 cell hang scope).
@@ -8153,6 +8157,70 @@ cells={} pitch={:.2} text={:?}",
         // paragraph now sits BELOW the image, so resolving from the paragraph's
         // y would double-shift).
         let mut s734_flow_pos: std::collections::HashMap<usize, (usize, f32)> = Default::default();
+        // S1497 (2026-09-20, default ON, opt-out OXI_S1497_DISABLE): a float
+        // whose top sits BELOW its anchor paragraph's top (posOffset > 0) is a
+        // band inside that paragraph: the lines that fit above it stay, the
+        // first line whose box would cross it (and everything after) resumes
+        // at the band bottom. Word (`tb_host_probe.py`, 200pt picture, 18pt
+        // lines): off 18 keeps 1 line above, 45 keeps 2, 60 keeps 3, and off
+        // 0 / 10 push the whole paragraph -- the S734 case, which is the same
+        // rule with the first line cut. technical__c5bb0090235dfedb p1: the
+        // 「下図は…」 line stays at 287.25 above its picture (off 20.35).
+        let s1497_on = std::env::var_os("OXI_S1497_DISABLE").is_none();
+        // S1497b: a wrapTopAndBottom float pushes only the lines of the
+        // COLUMN(S) its rectangle crosses horizontally. educational__13ef8d6ec218af24
+        // (two columns): a 175pt picture anchored in a column-1 paragraph but
+        // placed at posH 277 (x 334-509, column 1 ends at 286) leaves column 1
+        // untouched in Word -- `bisect13ef.py`: posH <= 220 pushes, >= 240 does
+        // not; VML boxes, compat, host style, offset, WMF/PNG and layoutInCell
+        // change nothing. A single-column page always overlaps.
+        let s1497b_img_overlaps = |block_idx: usize, byp: &[f32], cy: f32, sx: f32, cw: f32| -> bool {
+            if !s1497_on { return true; }
+            page.floating_images.iter().any(|img| {
+                img.anchor_block_index == block_idx
+                    && img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                    && img.position.as_ref().map_or(false, |p| p.v_relative.as_deref() == Some("paragraph"))
+                    && {
+                        let (fx, _) = self.resolve_floating_image_position(img, page, byp, cy);
+                        fx < sx + cw - 0.5 && fx + img.width > sx + 0.5
+                    }
+            })
+        };
+        let s1497b_tb_overlaps = |block_idx: usize, byp: &[f32], bcx: &[f32], sx: f32, cw: f32| -> bool {
+            if !s1497_on { return true; }
+            page.text_boxes.iter().any(|tb| {
+                tb.anchor_block_index == block_idx
+                    && tb.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                    && tb.position.as_ref().map_or(false, |p| p.v_relative.as_deref() == Some("paragraph"))
+                    && {
+                        let (fx, _) = self.resolve_textbox_position(tb, page, byp, bcx);
+                        fx < sx + cw - 0.5 && fx + tb.width > sx + 0.5
+                    }
+            })
+        };
+        let s1497_mid: std::collections::HashMap<usize, (f32, f32)> = if s1497_on {
+            let mut m: std::collections::HashMap<usize, (f32, f32)> = Default::default();
+            for (idx, off, h) in page
+                .floating_images
+                .iter()
+                .filter(|img| img.wrap_type == Some(crate::ir::WrapType::TopAndBottom))
+                .filter_map(|img| img.position.as_ref().filter(|p| p.v_relative.as_deref() == Some("paragraph")).map(|p| (img.anchor_block_index, p.y, img.height)))
+                .chain(
+                    page.text_boxes
+                        .iter()
+                        .filter(|tb| tb.wrap_type == Some(crate::ir::WrapType::TopAndBottom))
+                        .filter_map(|tb| tb.position.as_ref().filter(|p| p.v_relative.as_deref() == Some("paragraph")).map(|p| (tb.anchor_block_index, p.y, tb.height))),
+                )
+            {
+                if off > 0.0 {
+                    let e = m.entry(idx).or_insert((off, h));
+                    if off + h > e.0 + e.1 { *e = (off, h); }
+                }
+            }
+            m
+        } else {
+            Default::default()
+        };
         // S1089 (2026-08-07, opt-out OXI_S1089_DISABLE): S734 covers floating
         // IMAGES only — a wrapTopAndBottom float that is a wps SHAPE lands in
         // page.text_boxes (S839) and reserved NOTHING.  technical__002c6778's
@@ -8623,7 +8691,9 @@ cells={} pitch={:.2} text={:?}",
                 .and_then(|(_, v)| v.as_ref())
                 .unwrap_or(page_orig);
             // S734: reserve the wrapTopAndBottom band ABOVE this anchor block.
-            if let Some(&band_h) = s734_bands.get(&block_idx) {
+            if let Some(&band_h) = s734_bands.get(&block_idx)
+                .filter(|_| s1497b_img_overlaps(block_idx, &block_y_positions, cursor.cursor_y, start_x, content_width))
+            {
                 let band_h = if crate::layout::s1467_float_column_flow() {
                     band_h.max(s1089_tb_bands.get(&block_idx).copied().unwrap_or(0.0))
                 } else { band_h };
@@ -8669,10 +8739,16 @@ cells={} pitch={:.2} text={:?}",
 
                 }
                 s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
-                cursor.advance(band_h);
+                if let Some(&(off, h)) = s1497_mid.get(&block_idx) {
+                    S1497_BAND.with(|c| c.set(Some((off, h))));
+                } else {
+                    cursor.advance(band_h);
+                }
             }
             // S1089: the same reservation for a wrapTopAndBottom wps SHAPE.
-            if let Some(&band_h) = s1089_tb_bands.get(&block_idx) {
+            if let Some(&band_h) = s1089_tb_bands.get(&block_idx)
+                .filter(|_| s1497b_tb_overlaps(block_idx, &block_y_positions, &block_col_x, start_x, content_width))
+            {
                 if crate::layout::s1467_float_column_flow()
                     && s734_flow_pos.contains_key(&block_idx)
                 {
@@ -8720,7 +8796,11 @@ cells={} pitch={:.2} text={:?}",
 
                 }
                 s1089_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
-                cursor.advance(band_h);
+                if let Some(&(off, h)) = s1497_mid.get(&block_idx) {
+                    S1497_BAND.with(|c| c.set(Some((off, h))));
+                } else {
+                    cursor.advance(band_h);
+                }
                 }
             }
             // S842 (2026-07-14, opt-out OXI_S842_DISABLE): a PAGE-anchored
@@ -12304,6 +12384,18 @@ cells={} pitch={:.2} text={:?}",
                         s916_split,                                          // S916
                     );
                     prev_space_after = sa;
+                    // S1497: whatever the host paragraph's own lines did, the
+                    // content after it resumes below the band (the S734
+                    // reservation used to guarantee this by advancing first).
+                    if let Some(&(off, h)) = s1497_mid.get(&block_idx) {
+                        if let Some(&(fp, fy)) = s734_flow_pos.get(&block_idx).or(s1089_flow_pos.get(&block_idx)) {
+                            let bottom = fy + off + h;
+                            if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height {
+                                cursor.set(bottom);
+                            }
+                        }
+                    }
+                    S1497_BAND.with(|c| c.set(None));
                     // S1461: drop the cursor below a page-anchored
                     // wrapTopAndBottom shape hosted by this block.
                     if let Some(&bot) = s1461_tb_shapes.get(&block_idx) {
@@ -19991,6 +20083,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // threads a real value; all other callers pass false.
         s916_tail_split: bool,
     ) -> (Vec<LayoutElement>, f32, usize) {
+        // S1497: the band of a paragraph-relative wrapTopAndBottom float hosted
+        // here starts at the block's entry cursor + posOffset (the S734
+        // reservation point), whatever spacing is applied below.
+        let s1497_entry_y = cursor.cursor_y;
+        let s1497_band: Option<(f32, f32)> = S1497_BAND
+            .with(|c| c.get())
+            .map(|(off, h)| (cursor.cursor_y + off, cursor.cursor_y + off + h));
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
         // not display/print the hidden mark, so the para contributes nothing (no
@@ -23219,6 +23318,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .map(|f| &f.style)
                 .unwrap_or(&default_style);
             let line_height = line_heights[line_idx];
+            // S1497: the paragraph-relative wrapTopAndBottom band.
+            if let Some((bt, bb)) = s1497_band {
+                if pages.len() == s758_entry_pages {
+                    if line_idx == 0 {
+                        // The FIRST line's box begins at the block's entry (its
+                        // space-before belongs to it): a band that starts inside
+                        // [entry, entry + before + line] cuts it, and Word moves the
+                        // whole paragraph -- space-before included -- below the band
+                        // (S1089's technical__002c6778: the 0.1pt rule at posOffset 1.25
+                        // sits inside the 7.3pt before; text at 145.83 = band bottom +
+                        // 7.3). Testing the line against the band alone missed it.
+                        if bt >= s1497_entry_y - 0.01
+                            && bt < s1497_entry_y + effective_spacing.max(0.0) + line_height - 0.01
+                        {
+                            cursor.set(bb + effective_spacing.max(0.0));
+                        }
+                    } else if cursor.cursor_y + line_height > bt + 0.01 && cursor.cursor_y < bb {
+                        cursor.set(bb);
+                    }
+                }
+            }
             // Fixed top margins allow header text to overlap the body, but
             // wrapping header drawings exclude each intersecting body line.
             if body_para_index.is_some() {
