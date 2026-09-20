@@ -4746,6 +4746,20 @@ impl LayoutEngine {
             return "Yu Gothic";
         }
         if crate::font::is_latin_only_font(ff) {
+            // S1495 (2026-09-20, default ON, opt-out OXI_S1495_DISABLE): the
+            // EXPLICIT run face goes through font linking (MS Mincho) -- S634's
+            // law -- and only an INHERITED Latin face takes the theme's Jpan
+            // face (S1370). `ea_theme_probe.py`, Word PDF span fonts: run
+            // eastAsia TNR/Arial -> MS-Mincho under every docDefaults /
+            // themeFontLang / lang shape (5 arms); docDefaults literal TNR /
+            // Arial -> YuMincho (3 arms). reference__3de85ac121902dd0
+            // 「オーストラリア人の…」: Word 14.25/line, Oxi 18.40.
+            if has_explicit
+                && std::env::var("OXI_S634_DISABLE").is_err()
+                && std::env::var_os("OXI_S1495_DISABLE").is_none()
+            {
+                return "MS Mincho";
+            }
             if cjk_script && std::env::var("OXI_S1370_DISABLE").is_err() {
                 return self.cjk_substitute_face.as_str();
             }
@@ -31180,10 +31194,31 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let yakumono_compressed: Vec<bool> = if yakumono_pair_enabled {
                 let n = chars_vec.len();
                 let mut v = vec![false; n];
+                // S1494 (2026-09-20, default ON, opt-out OXI_S1494_DISABLE): a pair
+                // is a pair across a RUN boundary too. technical__c5bb0090235dfedb
+                // keeps （ / 「キャッシュ… / 、 / 「令和… in separate runs; Word halves
+                // the 、 (5.25) and one bracket of （「 (COM Information(5)), Oxi
+                // saw every mark alone (10.16) and lost a character per line --
+                // two lines became three. Minimal repro (pair_1run/pair_2run):
+                // the same text in one run halves 」、。, split into runs only 」
+                // (its partner stayed in-run) does.
+                let s1494 = std::env::var_os("OXI_S1494_DISABLE").is_none();
+                let next_frag_first: Option<char> = if s1494 {
+                    fragments[frag_outer_idx + 1..].iter().flat_map(|f| f.0.chars()).next()
+                } else { None };
+                let prev_frag_last: Option<char> = if s1494 {
+                    fragments[..frag_outer_idx].iter().rev().flat_map(|f| f.0.chars().rev()).next()
+                } else { None };
+                let next_of = |i: usize| -> Option<char> {
+                    if i + 1 < n { Some(chars_vec[i + 1]) } else { next_frag_first }
+                };
+                let prev_of = |i: usize| -> Option<char> {
+                    if i > 0 { Some(chars_vec[i - 1]) } else { prev_frag_last }
+                };
                 for i in 0..n {
                     let c = chars_vec[i];
                     if kinsoku::is_yakumono_closing(c) {
-                        if i + 1 < n && kinsoku::is_yakumono_trigger(chars_vec[i + 1]) {
+                        if next_of(i).map_or(false, kinsoku::is_yakumono_trigger) {
                             v[i] = true;
                         }
                     } else if kinsoku::is_yakumono_opening(c) {
@@ -31197,13 +31232,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // first, half of the 10.56 every solitary mark gets. The same
                         // reading at 9pt under charSpace=-2714 gives 4.077 of 8.337.
                         if std::env::var("OXI_S1217_DISABLE").is_err()
-                            && i + 1 < n
-                            && kinsoku::is_yakumono_opening(chars_vec[i + 1])
+                            && next_of(i).map_or(false, kinsoku::is_yakumono_opening)
                         {
                             v[i] = true;
-                        } else if i > 0
-                            && kinsoku::is_yakumono_trigger(chars_vec[i - 1])
-                            && !v[i - 1]
+                        } else if prev_of(i).map_or(false, kinsoku::is_yakumono_trigger)
+                            && !(i > 0 && v[i - 1])
                         {
                             v[i] = true;
                         }
@@ -31557,7 +31590,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let s1217_next_open = std::env::var("OXI_S1217_DISABLE").is_err()
                     && chars_vec
                         .get(char_index + 1)
-                        .map_or(false, |c| kinsoku::is_yakumono_opening(*c));
+                        .copied()
+                        // S1494: the pair may continue in the next run
+                        .or_else(|| if std::env::var_os("OXI_S1494_DISABLE").is_none() {
+                            fragments[frag_outer_idx + 1..].iter().flat_map(|f| f.0.chars()).next()
+                        } else { None })
+                        .map_or(false, kinsoku::is_yakumono_opening);
                 // vmtx after vertical substitution already contains the vertical
                 // punctuation advance. Horizontal pair compression would halve it
                 // a second time (Word vertical controls retain the raw advance).
