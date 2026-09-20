@@ -44349,6 +44349,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         }
                                         let font_size =
                                             self.resolve_font_size(&run.style, &para.style);
+                                        // S1518 (2026-09-21, default ON, opt-out OXI_S1518_DISABLE):
+                                        // a CELL sub/superscript run that states its own size is
+                                        // still drawn at 0.65 of it -- the body path's S899, which
+                                        // never reached cells. technical__01242a0a Table 3 header:
+                                        // 'Q' 10pt + 'shoulder-' subscript sz=20 in a 38.7pt cell;
+                                        // Word's PDF sets 'shoulder-' at 6.5pt (26.2pt wide) on the
+                                        // Q's line, Oxi measured it at 10pt (37.7pt) and broke it
+                                        // 'shoulde'/'r-', so the header row grew 2 -> 4 lines and
+                                        // 25 paragraphs ran a page late.
+                                        let font_size = if std::env::var_os("OXI_S1518_DISABLE").is_none()
+                                            && run.style.font_size.is_some()
+                                            && matches!(
+                                                run.style.vertical_align,
+                                                Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)
+                                            ) {
+                                            Self::vertical_align_font_size(font_size)
+                                        } else {
+                                            font_size
+                                        };
                                         let bold = self.resolve_bold(&run.style, &para.style);
                                         let font_family = self
                                             .resolve_font_family_for_text(
@@ -47293,7 +47312,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     Some(ff) => self.registry.get(ff),
                                                     None => self.registry.default_metrics(),
                                                 };
-                                                let (asc, des) = (m.word_ascent_pt(t.1), m.word_descent_pt(t.1));
+                                                // A sub/superscript run's box is its DECLARED
+                                                // (unscaled) size shifted by the raw position:
+                                                // position_probe3.py -- sup/sub alone grow the
+                                                // line 0, sup pos+10 grows it like a plain run
+                                                // pos+10 (+4.5/+5.25), sub pos-8 +3.75, and a
+                                                // 10pt-declared superscript beside 14pt text 0.
+                                                // Word's PDF: 01242a0a's Density row is 25pt.
+                                                let fs = if matches!(
+                                                    t.16.vertical_align,
+                                                    Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)
+                                                ) {
+                                                    t.16.font_size.unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &para.style))
+                                                } else {
+                                                    t.1
+                                                };
+                                                let (asc, des) = (m.word_ascent_pt(fs), m.word_descent_pt(fs));
                                                 let pos = t.16.position.unwrap_or(0.0);
                                                 a0 = a0.max(asc);
                                                 d0 = d0.max(des);
@@ -52608,6 +52642,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
 
         for (fit_run_idx, run) in para.runs.iter().enumerate() {
             let font_size = self.resolve_font_size(&run.style, &para.style);
+            // S1518 second site: the line COUNTER measures a sub/superscript
+            // run at 0.65 of its declared size too (01242a0a Table 3 header:
+            // 4 counted lines x 17.25 = 70.5 where Word's row is 36).
+            let font_size = if std::env::var_os("OXI_S1518_DISABLE").is_none()
+                && run.style.font_size.is_some()
+                && matches!(
+                    run.style.vertical_align,
+                    Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)
+                ) {
+                Self::vertical_align_font_size(font_size)
+            } else {
+                font_size
+            };
             let s1312_run_ruby = run.ruby.is_some();
             // S1225 (2026-08-26): estimate mirror of S703c — a `combine` run
             // (eastAsianLayout w:combine, 割注 / two-lines-in-one) is ONE atomic
