@@ -39856,7 +39856,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     grid_idx += span;
                     continue;
                 }
-                let cell_w: f32 = col_widths[grid_idx..grid_idx + span].iter().sum();
+                // S1493 (2026-09-20): a cell whose gridSpan runs past the table's grid
+                // (reference__009644b180d1bc56) must not index past col_widths.
+                let cell_w: f32 = col_widths[grid_idx.min(col_widths.len())..(grid_idx + span).min(col_widths.len())].iter().sum();
                 let _pad_l = cell
                     .margins
                     .as_ref()
@@ -53494,7 +53496,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 grid_idx += span;
                 continue;
             }
-            let cell_w: f32 = col_widths[grid_idx..grid_idx + span].iter().sum();
+            // S1493 (2026-09-20): a cell whose gridSpan runs past the table's grid
+            // (reference__009644b180d1bc56) must not index past col_widths.
+            let cell_w: f32 = col_widths[grid_idx.min(col_widths.len())..(grid_idx + span).min(col_widths.len())].iter().sum();
             let pad_l = cell
                 .margins
                 .as_ref()
