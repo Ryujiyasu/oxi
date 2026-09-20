@@ -46,6 +46,8 @@ const FONTS: &[(&str, &str, u32)] = &[
     ("cambria.ttc", "Cambria", 0),
     ("cambriab.ttf", "Cambria Bold", 0),
     ("meiryo.ttc", "Meiryo", 0),
+    ("msjhl.ttc", "Microsoft JhengHei Light", 0),
+    ("msjhl.ttc", "Microsoft JhengHei UI Light", 1),
     // OSS metric-compatible fonts
     ("Carlito-Regular.ttf", "Carlito", 0),
     ("Carlito-Bold.ttf", "Carlito Bold", 0),
@@ -213,17 +215,18 @@ fn main() {
 
         let data = std::fs::read(&path).expect("Failed to read font file");
 
-        // Collection ordering is not a font identity. Resolve the proportional
-        // Gothic face by its family name before extracting its advances.
-        let face_index = if display_name == "MS PGothic" {
+        // Collection ordering is not a font identity. Select the named face
+        // before extracting its advances.
+        let face_index = if display_name == "MS PGothic" || filename == "msjhl.ttc" {
             (0..ttf_parser::fonts_in_collection(&data).unwrap_or(1))
                 .find(|&index| Face::parse(&data, index).is_ok_and(|face| {
                     face.names().into_iter().any(|name| {
-                        name.name_id == ttf_parser::name_id::FAMILY
+                        (name.name_id == ttf_parser::name_id::FAMILY
+                            || name.name_id == ttf_parser::name_id::FULL_NAME)
                             && name.to_string().as_deref() == Some(display_name)
                     })
                 }))
-                .expect("MS PGothic family must exist in its font collection")
+                .unwrap_or_else(|| panic!("{display_name} must exist in {filename}"))
         } else {
             face_index
         };
