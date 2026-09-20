@@ -32286,6 +32286,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // (11.20) nor twips-floored (11.30).
                             let expected_w = if char_space_pt >= 0.0 && !s1210 {
                                 font_size * pitch / default_fs
+                            } else if std::env::var_os("OXI_S1510_DISABLE").is_none()
+                                && char_width < 0.98 * font_size
+                            {
+                                // S1510 (2026-09-20, default ON, opt-out OXI_S1510_DISABLE):
+                                // the additive pitch is per GLYPH -- a proportional
+                                // glyph narrower than the em keeps its own advance plus
+                                // the charSpace, it is not stretched to the full pitch.
+                                // MEASURED (reports__393aa9, linesAndChars charSpace
+                                // 4884 = +1.19pt, MS PMincho 10pt, Info5 steps): kanji
+                                // 11.25 = pitch; kana オ 9.75 / ス 9.0 / ト 6.75 / リ
+                                // 6.75 (natural 9.5 / 8.0 / 6.0 / 6.0 + 1.19); ・ 6.0
+                                // (5.0 + 1.19); 、 6.75; digits 5.25..6.0.
+                                // v3 (kana_grid_probe.py, 40 P-Mincho kana / 30 kanji
+                                // on one line, charSpace 0 / 4884 / 9768 / 19536 /
+                                // -2000): kanji +1.19 / +2.35 / +4.76 / -0.52 per glyph
+                                // (= charSpace/4096), kana +0.58 / +1.17 / +2.37 /
+                                // -0.27 -- exactly HALF. A proportional glyph takes
+                                // half the charSpace, the way a single-byte glyph
+                                // takes half the cell increment under balance.
+                                char_width + 0.5 * char_space_pt
                             } else {
                                 // S1210: additive for BOTH signs (see above).
                                 font_size + char_space_pt
