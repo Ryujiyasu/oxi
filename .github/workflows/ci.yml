@@ -128,7 +128,7 @@ jobs:
         shell: pwsh
         run: |
           $metrics = Get-Content font-metrics/font_metrics.json -Raw | ConvertFrom-Json
-          foreach ($family in @('Microsoft JhengHei Light', 'Microsoft JhengHei UI Light')) {
+          foreach ($family in @('Microsoft JhengHei Light', 'Microsoft JhengHei UI Light', 'Meiryo UI')) {
             if (-not ($metrics | Where-Object family -eq $family)) { throw "Missing metrics for $family" }
           }
       - uses: actions/upload-artifact@v4

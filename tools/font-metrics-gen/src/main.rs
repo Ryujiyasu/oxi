@@ -46,6 +46,7 @@ const FONTS: &[(&str, &str, u32)] = &[
     ("cambria.ttc", "Cambria", 0),
     ("cambriab.ttf", "Cambria Bold", 0),
     ("meiryo.ttc", "Meiryo", 0),
+    ("meiryo.ttc", "Meiryo UI", 1),
     ("msjhl.ttc", "Microsoft JhengHei Light", 0),
     ("msjhl.ttc", "Microsoft JhengHei UI Light", 1),
     // OSS metric-compatible fonts
@@ -217,7 +218,7 @@ fn main() {
 
         // Collection ordering is not a font identity. Select the named face
         // before extracting its advances.
-        let face_index = if display_name == "MS PGothic" || filename == "msjhl.ttc" {
+        let face_index = if display_name == "MS PGothic" || filename == "msjhl.ttc" || filename == "meiryo.ttc" {
             (0..ttf_parser::fonts_in_collection(&data).unwrap_or(1))
                 .find(|&index| Face::parse(&data, index).is_ok_and(|face| {
                     face.names().into_iter().any(|name| {
