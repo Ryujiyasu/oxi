@@ -116,6 +116,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Japanese supplemental fonts
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          if (-not (Test-Path C:/Windows/Fonts/meiryo.ttc)) {
+            Add-WindowsCapability -Online -Name 'Language.Fonts.Jpan~~~und-JPAN~0.0.1.0' -ErrorAction Stop | Out-Host
+          }
+          if (-not (Test-Path C:/Windows/Fonts/meiryo.ttc)) { throw 'Japanese font capability did not provide Meiryo' }
       - name: Record font provenance
         shell: pwsh
         run: |
