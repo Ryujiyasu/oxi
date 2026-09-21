@@ -11,8 +11,18 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tools/metrics/**'
+      - 'tools/golden-test/**'
   pull_request:
   workflow_dispatch:
+
+# A newer push to the same branch supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
