@@ -1,0 +1,129 @@
+[
+  {
+    "name": "wrap_Calibri_nbsp0_width86",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-",
+      "64) - Acute Phase"
+    ],
+    "extent": 60.84002685546875
+  },
+  {
+    "name": "wrap_Calibri_nbsp0_width96",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-64) -",
+      "Acute Phase"
+    ],
+    "extent": 60.84002685546875
+  },
+  {
+    "name": "wrap_Calibri_nbsp1_width86",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-",
+      "64) - Acute Phase"
+    ],
+    "extent": 60.84002685546875
+  },
+  {
+    "name": "wrap_Calibri_nbsp1_width96",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-64) -",
+      "Acute Phase"
+    ],
+    "extent": 60.84002685546875
+  },
+  {
+    "name": "wrap_Arial_nbsp0_width86",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-",
+      "64) - Acute Phase"
+    ],
+    "extent": 57.96002197265625
+  },
+  {
+    "name": "wrap_Arial_nbsp0_width96",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-64)",
+      "- Acute Phase"
+    ],
+    "extent": 57.96002197265625
+  },
+  {
+    "name": "wrap_Arial_nbsp1_width86",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-",
+      "64) - Acute Phase"
+    ],
+    "extent": 57.96002197265625
+  },
+  {
+    "name": "wrap_Arial_nbsp1_width96",
+    "lines": [
+      "Antidepressant",
+      "Medication",
+      "Management (18-",
+      "64) - Acute Phase"
+    ],
+    "extent": 57.96002197265625
+  },
+  {
+    "name": "context_word_width70",
+    "lines": [
+      "before abcdefgh-",
+      "ijklmnop after"
+    ],
+    "extent": 36.3599853515625
+  },
+  {
+    "name": "context_word_width100",
+    "lines": [
+      "before abcdefgh-",
+      "ijklmnop after"
+    ],
+    "extent": 36.3599853515625
+  },
+  {
+    "name": "context_mixed_width70",
+    "lines": [
+      "before ABCD-",
+      "12345 after"
+    ],
+    "extent": 36.3599853515625
+  },
+  {
+    "name": "context_mixed_width100",
+    "lines": [
+      "before ABCD-12345",
+      "after"
+    ],
+    "extent": 36.3599853515625
+  },
+  {
+    "name": "context_numeric_width70",
+    "lines": [
+      "before 18-64",
+      "after"
+    ],
+    "extent": 36.3599853515625
+  },
+  {
+    "name": "context_numeric_width100",
+    "lines": [
+      "before 18-64 after"
+    ],
+    "extent": 24.239990234375
+  }
+]

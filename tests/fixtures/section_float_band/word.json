@@ -1,0 +1,122 @@
+[
+  {
+    "name": "visible0_gap0_height60",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  },
+  {
+    "name": "visible0_gap0_height120",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  },
+  {
+    "name": "visible0_gap6_height60",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  },
+  {
+    "name": "visible0_gap6_height120",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  },
+  {
+    "name": "visible1_gap0_height60",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "HOST": {
+        "page": 1,
+        "baseline": 153.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  },
+  {
+    "name": "visible1_gap0_height120",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "HOST": {
+        "page": 1,
+        "baseline": 213.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  },
+  {
+    "name": "visible1_gap6_height60",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "HOST": {
+        "page": 1,
+        "baseline": 159.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  },
+  {
+    "name": "visible1_gap6_height120",
+    "paragraphs": {
+      "BEFORE": {
+        "page": 1,
+        "baseline": 81.6199951171875
+      },
+      "HOST": {
+        "page": 1,
+        "baseline": 219.6199951171875
+      },
+      "AFTER": {
+        "page": 2,
+        "baseline": 81.6199951171875
+      }
+    }
+  }
+]

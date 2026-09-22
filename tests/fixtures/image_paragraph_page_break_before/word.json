@@ -1,0 +1,138 @@
+[
+  {
+    "name": "direct_0_empty",
+    "pages": 1,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 1
+    },
+    "images": [
+      1
+    ]
+  },
+  {
+    "name": "direct_0_space",
+    "pages": 1,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 1
+    },
+    "images": [
+      1
+    ]
+  },
+  {
+    "name": "direct_0_text",
+    "pages": 1,
+    "labels": {
+      "BEFORE": 1,
+      "IMAGE": 1,
+      "AFTER": 1
+    },
+    "images": [
+      1
+    ]
+  },
+  {
+    "name": "direct_1_empty",
+    "pages": 2,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 2
+    },
+    "images": [
+      2
+    ]
+  },
+  {
+    "name": "direct_1_space",
+    "pages": 2,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 2
+    },
+    "images": [
+      2
+    ]
+  },
+  {
+    "name": "direct_1_text",
+    "pages": 2,
+    "labels": {
+      "BEFORE": 1,
+      "IMAGE": 2,
+      "AFTER": 2
+    },
+    "images": [
+      2
+    ]
+  },
+  {
+    "name": "style_0_empty",
+    "pages": 1,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 1
+    },
+    "images": [
+      1
+    ]
+  },
+  {
+    "name": "style_0_space",
+    "pages": 1,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 1
+    },
+    "images": [
+      1
+    ]
+  },
+  {
+    "name": "style_0_text",
+    "pages": 1,
+    "labels": {
+      "BEFORE": 1,
+      "IMAGE": 1,
+      "AFTER": 1
+    },
+    "images": [
+      1
+    ]
+  },
+  {
+    "name": "style_1_empty",
+    "pages": 2,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 2
+    },
+    "images": [
+      2
+    ]
+  },
+  {
+    "name": "style_1_space",
+    "pages": 2,
+    "labels": {
+      "BEFORE": 1,
+      "AFTER": 2
+    },
+    "images": [
+      2
+    ]
+  },
+  {
+    "name": "style_1_text",
+    "pages": 2,
+    "labels": {
+      "BEFORE": 1,
+      "IMAGE": 2,
+      "AFTER": 2
+    },
+    "images": [
+      2
+    ]
+  }
+]

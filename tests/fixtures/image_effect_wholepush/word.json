@@ -1,0 +1,170 @@
+[
+  {
+    "name": "filler64_effect0",
+    "text": {
+      "FILLER": {
+        "page": 1,
+        "baseline": 87.28999328613281
+      },
+      "BEFORE": {
+        "page": 1,
+        "baseline": 112.87199401855469
+      },
+      "FOLLOW": {
+        "page": 2,
+        "baseline": 48.86000061035156
+      }
+    },
+    "images": [
+      {
+        "page": 1,
+        "bbox": [
+          36.0,
+          116.0,
+          76.0,
+          156.0
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filler64_effect1.5",
+    "text": {
+      "FILLER": {
+        "page": 1,
+        "baseline": 87.28999328613281
+      },
+      "BEFORE": {
+        "page": 1,
+        "baseline": 112.87199401855469
+      },
+      "FOLLOW": {
+        "page": 2,
+        "baseline": 48.86000061035156
+      }
+    },
+    "images": [
+      {
+        "page": 1,
+        "bbox": [
+          36.0,
+          117.5,
+          76.0,
+          157.5
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filler64_effect8",
+    "text": {
+      "FILLER": {
+        "page": 1,
+        "baseline": 87.28999328613281
+      },
+      "BEFORE": {
+        "page": 1,
+        "baseline": 112.87199401855469
+      },
+      "FOLLOW": {
+        "page": 2,
+        "baseline": 98.80998992919922
+      }
+    },
+    "images": [
+      {
+        "page": 2,
+        "bbox": [
+          36.0,
+          43.99999237060547,
+          76.0,
+          83.99999237060547
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filler112_effect0",
+    "text": {
+      "FILLER": {
+        "page": 1,
+        "baseline": 125.71199035644531
+      },
+      "BEFORE": {
+        "page": 1,
+        "baseline": 160.89599609375
+      },
+      "FOLLOW": {
+        "page": 2,
+        "baseline": 90.7699966430664
+      }
+    },
+    "images": [
+      {
+        "page": 2,
+        "bbox": [
+          36.0,
+          35.99999237060547,
+          76.0,
+          75.99999237060547
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filler112_effect1.5",
+    "text": {
+      "FILLER": {
+        "page": 1,
+        "baseline": 125.71199035644531
+      },
+      "BEFORE": {
+        "page": 1,
+        "baseline": 160.89599609375
+      },
+      "FOLLOW": {
+        "page": 2,
+        "baseline": 92.32999420166016
+      }
+    },
+    "images": [
+      {
+        "page": 2,
+        "bbox": [
+          36.0,
+          37.49999237060547,
+          76.0,
+          77.49999237060547
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filler112_effect8",
+    "text": {
+      "FILLER": {
+        "page": 1,
+        "baseline": 125.71199035644531
+      },
+      "BEFORE": {
+        "page": 1,
+        "baseline": 160.89599609375
+      },
+      "FOLLOW": {
+        "page": 2,
+        "baseline": 98.80998992919922
+      }
+    },
+    "images": [
+      {
+        "page": 2,
+        "bbox": [
+          36.0,
+          43.99999237060547,
+          76.0,
+          83.99999237060547
+        ]
+      }
+    ]
+  }
+]

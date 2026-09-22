@@ -1,0 +1,114 @@
+[
+  {
+    "name": "first_sz0_space0",
+    "pages": 1,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 121.87199401855469
+      },
+      "TARGET": {
+        "page": 1,
+        "y": 148.05599975585938
+      }
+    }
+  },
+  {
+    "name": "first_sz12_space0",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 123.43199157714844
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 70.9699935913086
+      }
+    }
+  },
+  {
+    "name": "first_sz4_space1",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 123.43199157714844
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 70.9699935913086
+      }
+    }
+  },
+  {
+    "name": "first_sz12_space1",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 124.39199829101562
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 72.04999542236328
+      }
+    }
+  },
+  {
+    "name": "last_sz0_space0",
+    "pages": 1,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 121.87199401855469
+      },
+      "TARGET": {
+        "page": 1,
+        "y": 148.05599975585938
+      }
+    }
+  },
+  {
+    "name": "last_sz12_space0",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 123.43199157714844
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 70.9699935913086
+      }
+    }
+  },
+  {
+    "name": "last_sz4_space1",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 123.43199157714844
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 70.9699935913086
+      }
+    }
+  },
+  {
+    "name": "last_sz12_space1",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 124.39199829101562
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 72.04999542236328
+      }
+    }
+  }
+]

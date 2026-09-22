@@ -1,0 +1,274 @@
+[
+  {
+    "name": "header0_border4_extra0",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        1
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "header0_border4_extra0.2",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        1
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "header0_border12_extra0",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        1
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "header0_border12_extra0.2",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        1
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "header1_border4_extra0",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "HEADER": [
+        1,
+        2
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        2
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "header1_border4_extra0.2",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "HEADER": [
+        1,
+        2
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        2
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "header1_border12_extra0",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "HEADER": [
+        1,
+        2
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        2
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "header1_border12_extra0.2",
+    "paragraphs": {
+      "BEFORE": [
+        1
+      ],
+      "HEADER": [
+        1,
+        2
+      ],
+      "LINE01": [
+        1
+      ],
+      "LINE02": [
+        1
+      ],
+      "LINE03": [
+        1
+      ],
+      "LINE04": [
+        1
+      ],
+      "LINE05": [
+        2
+      ],
+      "LINE06": [
+        2
+      ],
+      "TAILROW": [
+        2
+      ],
+      "AFTER": [
+        2
+      ]
+    }
+  }
+]

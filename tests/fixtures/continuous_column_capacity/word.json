@@ -1,0 +1,146 @@
+[
+  {
+    "name": "room_bottom0_room3",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "room_bottom0_room9",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "room_bottom0_room15",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 1,
+      "SECOND": 1,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "room_bottom0_room30",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 1,
+      "SECOND": 1,
+      "THIRD": 1
+    }
+  },
+  {
+    "name": "room_bottom20_room3",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "room_bottom20_room9",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "room_bottom20_room15",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 1,
+      "SECOND": 1,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "room_bottom20_room30",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 1,
+      "SECOND": 1,
+      "THIRD": 1
+    }
+  },
+  {
+    "name": "widow_bottom0_room3",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "widow_bottom0_room9",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "widow_bottom0_room15",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "widow_bottom0_room30",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "widow_bottom20_room3",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "widow_bottom20_room9",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "widow_bottom20_room15",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  },
+  {
+    "name": "widow_bottom20_room30",
+    "paragraphs": {
+      "BEFORE": 1,
+      "FIRST": 2,
+      "SECOND": 2,
+      "THIRD": 2
+    }
+  }
+]

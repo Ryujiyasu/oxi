@@ -1,0 +1,420 @@
+[
+  {
+    "name": "internal-row-border-fit_border4_room48.9",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit_border4_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit_border4_room49.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit_border4_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit_border12_room48.9",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit_border12_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit_border12_room49.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit_border12_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit-wide_border12_room51.0",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit-wide_border12_room51.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit-wide_border12_room51.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit-wide_border12_room52.0",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit-wide_border12_room52.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "internal-row-border-fit-wide_border12_room53.0",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer4_inside12_room50.0",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer4_inside12_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer4_inside12_room51.0",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer4_inside12_room51.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer12_inside4_room50.0",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer12_inside4_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer12_inside4_room51.0",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-source_outer12_inside4_room51.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row1_bottom0_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row1_bottom0_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row1_bottom12_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row1_bottom12_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row2_bottom0_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row2_bottom0_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row2_bottom12_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-override_row2_bottom12_room50.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border4_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 2,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 3
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border4_room49.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border4_room51.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border4_room52.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border12_room49.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 2,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 3
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border12_room49.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 2,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 3
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border12_room51.1",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 2,
+      "ROW1B": 2,
+      "ROW2": 2,
+      "AFTER": 3
+    }
+  },
+  {
+    "name": "row-border-cantsplit_border12_room52.5",
+    "paragraphs": {
+      "BEFORE": 1,
+      "ROW0": 1,
+      "ROW1A": 1,
+      "ROW1B": 1,
+      "ROW2": 2,
+      "AFTER": 2
+    }
+  }
+]

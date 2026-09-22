@@ -1,0 +1,75 @@
+[
+  {
+    "name": "prefix0_stop100_words3",
+    "lines": [
+      "wordwordword"
+    ]
+  },
+  {
+    "name": "prefix0_stop100_words4",
+    "lines": [
+      "wordwordwordword"
+    ]
+  },
+  {
+    "name": "prefix16_stop100_words3",
+    "lines": [
+      "XXXXXXXXXXXXXXXXwordword",
+      "word"
+    ]
+  },
+  {
+    "name": "prefix16_stop100_words4",
+    "lines": [
+      "XXXXXXXXXXXXXXXXwordword",
+      "wordword"
+    ]
+  },
+  {
+    "name": "prefix16_stop100_words6",
+    "lines": [
+      "XXXXXXXXXXXXXXXXwordword",
+      "wordwordwordword"
+    ]
+  },
+  {
+    "name": "prefix16_stop140_words3",
+    "lines": [
+      "XXXXXXXXXXXXXXXXwordword",
+      "word"
+    ]
+  },
+  {
+    "name": "prefix16_stop140_words4",
+    "lines": [
+      "XXXXXXXXXXXXXXXXwordword",
+      "wordword"
+    ]
+  },
+  {
+    "name": "prefix16_stop140_words6",
+    "lines": [
+      "XXXXXXXXXXXXXXXXwordword",
+      "wordwordwordword"
+    ]
+  },
+  {
+    "name": "prefix8_stop100_words3",
+    "lines": [
+      "XXXXXXXXwordwordword"
+    ]
+  },
+  {
+    "name": "prefix8_stop100_words4",
+    "lines": [
+      "XXXXXXXXwordwordwordword"
+    ]
+  },
+  {
+    "name": "prefix8_stop100_words6",
+    "lines": [
+      "XXXXXXXXwordwordwordword",
+      "wordword"
+    ]
+  }
+]

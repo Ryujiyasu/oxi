@@ -257,8 +257,63 @@ fn resolve_single_style(styles: &mut StyleSheet, id: &str, depth: u32) {
     }
 }
 
+
+/// Read a frame's declared properties without confusing omitted scalars with zero.
+pub(super) fn parse_frame_properties(e: &quick_xml::events::BytesStart) -> crate::ir::FrameProperties {
+    let mut fp = crate::ir::FrameProperties::default();
+    for attr in e.attributes().flatten() {
+        let key = local_name(attr.key.as_ref());
+        let val = String::from_utf8_lossy(&attr.value);
+        match key.as_str() {
+            "dropCap" => fp.drop_cap = Some(val.to_string()),
+            "lines" => { fp.lines = val.parse().unwrap_or(1); fp.explicit_fields |= 1; },
+            "w" => fp.width = val.parse::<f32>().ok().map(|v| v / 20.0),
+            "h" => fp.height = val.parse::<f32>().ok().map(|v| v / 20.0),
+            "hRule" => fp.height_rule = Some(val.to_string()),
+            "hAnchor" => fp.h_anchor = Some(val.to_string()),
+            "vAnchor" => fp.v_anchor = Some(val.to_string()),
+            "x" => { fp.x = val.parse::<f32>().unwrap_or(0.0) / 20.0; fp.explicit_fields |= 2; },
+            "y" => { fp.y = val.parse::<f32>().unwrap_or(0.0) / 20.0; fp.explicit_fields |= 4; },
+            "hSpace" => { fp.h_space = val.parse::<f32>().unwrap_or(0.0) / 20.0; fp.explicit_fields |= 8; },
+            "vSpace" => { fp.v_space = val.parse::<f32>().unwrap_or(0.0) / 20.0; fp.explicit_fields |= 16; },
+            "wrap" => fp.wrap = Some(val.to_string()),
+            "xAlign" => fp.x_align = Some(val.to_string()),
+            "yAlign" => fp.y_align = Some(val.to_string()),
+            _ => {},
+        }
+    }
+    fp
+}
+
+pub(super) fn inherit_frame_properties(child: &mut Option<crate::ir::FrameProperties>, parent: &Option<crate::ir::FrameProperties>) {
+    let Some(parent) = parent else { return; };
+    let Some(child) = child else { *child = Some(parent.clone()); return; };
+    macro_rules! inherit { ($($field:ident),*) => { $(if child.$field.is_none() { child.$field = parent.$field.clone(); })* }; }
+    inherit!(drop_cap, width, height, height_rule, h_anchor, v_anchor, wrap);
+    if child.explicit_fields & 1 == 0 { child.lines = parent.lines; }
+    if child.explicit_fields & 2 == 0 && child.x_align.is_none() {
+        child.x = parent.x; child.x_align = parent.x_align.clone();
+    }
+    if child.explicit_fields & 4 == 0 && child.y_align.is_none() {
+        child.y = parent.y; child.y_align = parent.y_align.clone();
+    }
+    if child.explicit_fields & 8 == 0 { child.h_space = parent.h_space; }
+    if child.explicit_fields & 16 == 0 { child.v_space = parent.v_space; }
+    child.explicit_fields |= parent.explicit_fields;
+}
 /// Merge parent paragraph style into child (child values take precedence)
 fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
+    inherit_frame_properties(&mut child.frame_pr, &parent.frame_pr);
+    // Preserve explicit ON/OFF values through every basedOn layer.
+    if !child.has_explicit_auto_space_de {
+        child.auto_space_de = parent.auto_space_de;
+        child.has_explicit_auto_space_de = parent.has_explicit_auto_space_de;
+    }
+    if !child.has_explicit_auto_space_dn {
+        child.auto_space_dn = parent.auto_space_dn;
+        child.has_explicit_auto_space_dn = parent.has_explicit_auto_space_dn;
+    }
+
     if child.heading_level.is_none() {
         child.heading_level = parent.heading_level;
     }
@@ -428,6 +483,12 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if parent.vanish && !child.vanish_off && std::env::var_os("OXI_S1505_DISABLE").is_none() {
         child.vanish = true;
     }
+    if child.east_asia_lang.is_none() {
+        child.east_asia_lang = parent.east_asia_lang.clone();
+    }
+    if child.latin_lang.is_none() {
+        child.latin_lang = parent.latin_lang.clone();
+    }
     if child.font_family.is_none() {
         child.font_family = parent.font_family.clone();
     }
@@ -569,8 +630,6 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                             rs.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                             rs.has_explicit_east_asia = true;
-                        } else if key == "hint" {
-                            rs.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                         } else if key == "eastAsiaTheme" {
                             if rs.font_family_east_asia.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
@@ -852,8 +911,6 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                     rs.font_family_east_asia =
                         Some(String::from_utf8_lossy(&attr.value).to_string());
                     rs.has_explicit_east_asia = true;
-                } else if key == "hint" {
-                    rs.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                 } else if key == "eastAsiaTheme" {
                     if rs.font_family_east_asia.is_none() {
                         let val = String::from_utf8_lossy(&attr.value);
@@ -1013,6 +1070,7 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
 fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut ParagraphStyle) {
     let local = local_name(e.name().as_ref());
     match local.as_str() {
+        "framePr" => style.frame_pr = Some(parse_frame_properties(e)),
         "spacing" => {
             let mut line_val: Option<f32> = None;
             let mut line_rule: Option<String> = None;
@@ -1150,6 +1208,7 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.auto_space_de = enabled;
+            style.has_explicit_auto_space_de = true;
         }
         "autoSpaceDN" => {
             let mut enabled = true;
@@ -1160,6 +1219,7 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.auto_space_dn = enabled;
+            style.has_explicit_auto_space_dn = true;
         }
         "wordWrap" => {
             let mut enabled = true;
@@ -1290,6 +1350,10 @@ fn parse_style_definition(
                     }
                 }
                 match local.as_str() {
+                    "autoSpaceDE" | "autoSpaceDN" if !in_rpr && !in_num_pr => {
+                        apply_para_property_empty(&e, &mut style);
+                        depth += 1;
+                    }
                     "pBdr" if !in_rpr && !in_num_pr => {
                         style.borders = Some(super::ooxml::parse_paragraph_borders(reader)?);
                         continue;
@@ -1308,6 +1372,17 @@ fn parse_style_definition(
                     "rPr" if depth == 0 => {
                         in_rpr = true;
                         depth += 1;
+                    }
+                    "lang" if in_rpr => {
+                        for attr in e.attributes().flatten() {
+                            let value = String::from_utf8_lossy(&attr.value).to_string();
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "eastAsia" => run_style.east_asia_lang = Some(value),
+                                "val" => run_style.latin_lang = Some(value),
+                                _ => {}
+                            }
+                        }
+                        has_run_style = true;
                     }
                     "rFonts" if in_rpr => {
                         // S1341: ascii wins over hAnsi (see the ooxml.rs run parser).
@@ -1343,8 +1418,6 @@ fn parse_style_definition(
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                                 run_style.has_explicit_east_asia = true;
                                 has_run_style = true;
-                            } else if key == "hint" {
-                                run_style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                             } else if key == "eastAsiaTheme" {
                                 if run_style.font_family_east_asia.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
@@ -1503,6 +1576,17 @@ fn parse_style_definition(
                                 if cv != "auto" { run_style.color = Some(cv.clone()); has_run_style = true; }
                             }
                         }
+                        "lang" => {
+                            for attr in e.attributes().flatten() {
+                                let value = String::from_utf8_lossy(&attr.value).to_string();
+                                match local_name(attr.key.as_ref()).as_str() {
+                                    "eastAsia" => run_style.east_asia_lang = Some(value),
+                                    "val" => run_style.latin_lang = Some(value),
+                                    _ => {}
+                                }
+                            }
+                            has_run_style = true;
+                        }
                         "rFonts" => {
                             // S1341: ascii wins over hAnsi (see the ooxml.rs run parser).
                             let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
@@ -1537,8 +1621,6 @@ fn parse_style_definition(
                                         Some(String::from_utf8_lossy(&attr.value).to_string());
                                     run_style.has_explicit_east_asia = true;
                                     has_run_style = true;
-                                } else if key == "hint" {
-                                    run_style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                                 } else if key == "eastAsiaTheme" {
                                     if run_style.font_family_east_asia.is_none() {
                                         let val = String::from_utf8_lossy(&attr.value);
@@ -1649,6 +1731,7 @@ fn parse_style_definition(
                     }
                 } else {
                     match local.as_str() {
+                        "framePr" => style.frame_pr = Some(parse_frame_properties(&e)),
                         "basedOn" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
@@ -1808,6 +1891,7 @@ fn parse_style_definition(
                                 }
                             }
                             style.auto_space_de = enabled;
+                            style.has_explicit_auto_space_de = true;
                         }
                         "autoSpaceDN" => {
                             let mut enabled = true;
@@ -1818,6 +1902,7 @@ fn parse_style_definition(
                                 }
                             }
                             style.auto_space_dn = enabled;
+                            style.has_explicit_auto_space_dn = true;
                         }
                         "wordWrap" => {
                             let mut enabled = true;
@@ -2516,3 +2601,79 @@ mod s985_pbb_inheritance {
     }
 }
 
+
+#[cfg(test)]
+mod automatic_spacing_inheritance {
+    #[test]
+    fn parsed_spacing_flags_survive_three_style_layers_and_overrides() {
+        for parent in ["0", "1"] {
+            for child in [None, Some("0"), Some("1")] {
+                for expanded in [false, true] {
+                    let flags = |value: &str| {
+                        ["autoSpaceDE", "autoSpaceDN"].iter().map(|tag| {
+                            if expanded { format!("<w:{tag} w:val=\"{value}\"></w:{tag}>") }
+                            else { format!("<w:{tag} w:val=\"{value}\"/>") }
+                        }).collect::<String>()
+                    };
+                    let xml = format!(r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                        <w:style w:type="paragraph" w:styleId="base"><w:pPr>{}</w:pPr></w:style>
+                        <w:style w:type="paragraph" w:styleId="child"><w:basedOn w:val="base"/><w:pPr>{}</w:pPr></w:style>
+                        <w:style w:type="paragraph" w:styleId="leaf"><w:basedOn w:val="child"/></w:style>
+                    </w:styles>"#, flags(parent), child.map(flags).unwrap_or_default());
+                    let sheet = super::parse_styles(&xml, &Default::default()).unwrap();
+                    let expected = child.unwrap_or(parent) == "1";
+                    for id in ["child", "leaf"] {
+                        let p = &sheet.styles[id].paragraph;
+                        assert_eq!(p.auto_space_de, expected, "{id}: {xml}");
+                        assert_eq!(p.auto_space_dn, expected, "{id}: {xml}");
+                        assert!(p.has_explicit_auto_space_de && p.has_explicit_auto_space_dn);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod frame_inheritance_tests {
+    use super::*;
+    #[test]
+    fn frame_properties_follow_style_chain_and_explicit_zero_overrides() {
+        let xml = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:style w:type="paragraph" w:styleId="Base"><w:pPr><w:framePr w:w="9360" w:h="1600" w:hRule="exact" w:x="200" w:y="100" w:hSpace="187" w:vSpace="200" w:hAnchor="page" w:vAnchor="text" w:wrap="around"/></w:pPr></w:style>
+          <w:style w:type="paragraph" w:styleId="Child"><w:basedOn w:val="Base"/><w:pPr><w:framePr w:wrap="notBeside" w:x="0" w:hSpace="0"/></w:pPr></w:style>
+          <w:style w:type="paragraph" w:styleId="Grandchild"><w:basedOn w:val="Child"/></w:style>
+        </w:styles>"#;
+        let styles = parse_styles(xml, &ThemeColors::default()).unwrap();
+        let fp = styles.styles["Grandchild"].paragraph.frame_pr.as_ref().unwrap();
+        assert_eq!(fp.width, Some(468.0));
+        assert_eq!(fp.height, Some(80.0));
+        assert_eq!(fp.height_rule.as_deref(), Some("exact"));
+        assert_eq!((fp.x, fp.y, fp.h_space, fp.v_space), (0.0, 5.0, 0.0, 10.0));
+        assert_eq!(fp.h_anchor.as_deref(), Some("page"));
+        assert_eq!(fp.wrap.as_deref(), Some("notBeside"));
+    }
+    #[test]
+    fn direct_frame_coordinates_replace_inherited_alignment() {
+        let read = |attrs: &str| {
+            let xml = format!("<framePr {attrs}/>");
+            let mut reader = Reader::from_str(&xml);
+            match reader.read_event().unwrap() {
+                Event::Empty(e) => parse_frame_properties(&e), _ => panic!("frame"),
+            }
+        };
+        let parent = Some(read(r#"w="9360" xAlign="center" yAlign="bottom" hAnchor="page" hSpace="187""#));
+        let mut child = Some(read(r#"wrap="notBeside" x="0" y="0""#));
+        inherit_frame_properties(&mut child, &parent);
+        let fp = child.unwrap();
+        assert_eq!(fp.width, Some(468.0));
+        assert_eq!(fp.x_align, None);
+        assert_eq!(fp.y_align, None);
+        assert_eq!(fp.x, 0.0);
+        assert_eq!(fp.y, 0.0);
+        assert!((fp.h_space - 9.35).abs() < 0.001);
+        let mut alignment = Some(read(r#"xAlign="right""#));
+        inherit_frame_properties(&mut alignment, &Some(fp));
+        assert_eq!(alignment.unwrap().x_align.as_deref(), Some("right"));
+    }
+}

@@ -100,6 +100,9 @@ pub struct Document {
     /// Derived from V19 minimal repro vs real 1636 (Session 56 Finding 3).
     #[serde(default)]
     pub balance_single_byte_double_byte_width: bool,
+    /// Keep a floating table together when it fits on a fresh page.
+    #[serde(default)]
+    pub keep_floating_tables_together: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1738,9 +1741,15 @@ pub struct ParagraphStyle {
     /// Auto space between East Asian and Western text (w:autoSpaceDE, default true)
     #[serde(default = "default_true")]
     pub auto_space_de: bool,
+    /// Whether this layer explicitly sets automatic character spacing.
+    #[serde(default, skip_serializing)]
+    pub has_explicit_auto_space_de: bool,
     /// Auto space between East Asian and numbers (w:autoSpaceDN, default true)
     #[serde(default = "default_true")]
     pub auto_space_dn: bool,
+    /// Whether this layer explicitly sets automatic character spacing.
+    #[serde(default, skip_serializing)]
+    pub has_explicit_auto_space_dn: bool,
     /// Text alignment within line (w:textAlignment): "top", "center", "baseline", "bottom", "auto"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_alignment: Option<String>,
@@ -1869,7 +1878,9 @@ impl Default for ParagraphStyle {
             text_alignment: None,
             text_alignment_from_pprdefault: false,
             auto_space_de: true,
+            has_explicit_auto_space_de: false,
             auto_space_dn: true,
+            has_explicit_auto_space_dn: false,
             frame_pr: None,
             bidi: false,
             num_id: None,
@@ -2046,6 +2057,9 @@ pub struct TableLook {
 /// Frame paragraph properties (w:framePr) — for drop caps and positioned text frames
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FrameProperties {
+    /// Presence of scalar overrides while resolving style inheritance.
+    #[serde(skip)]
+    pub explicit_fields: u8,
     /// Drop cap type: "drop" (dropped into text), "margin" (in margin)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<String>,

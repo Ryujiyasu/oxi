@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Arial10_line16_inherit",
+    "baseline": 48.86000061035156
+  },
+  {
+    "name": "Arial10_line24_inherit",
+    "baseline": 55.21998596191406
+  },
+  {
+    "name": "Arial10_line32_inherit",
+    "baseline": 61.69999694824219
+  },
+  {
+    "name": "Calibri14_line16_inherit",
+    "baseline": 48.86000061035156
+  },
+  {
+    "name": "Calibri14_line24_inherit",
+    "baseline": 55.21998596191406
+  },
+  {
+    "name": "Calibri14_line32_inherit",
+    "baseline": 61.69999694824219
+  },
+  {
+    "name": "MS_Mincho14_line16_inherit",
+    "baseline": 48.86000061035156
+  },
+  {
+    "name": "MS_Mincho14_line24_inherit",
+    "baseline": 55.21998596191406
+  },
+  {
+    "name": "MS_Mincho14_line32_inherit",
+    "baseline": 61.69999694824219
+  }
+]

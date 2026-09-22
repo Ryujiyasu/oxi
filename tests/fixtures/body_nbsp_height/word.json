@@ -1,0 +1,58 @@
+[
+  {
+    "name": "nbsp_1",
+    "word_y": 83.96000671386719,
+    "actual_y": 85.799,
+    "docx_sha256": "e48b0d0a5601ab86f4ca84d0a449bec86c72e26b74b406da5bdef49ae2336389",
+    "pdf_sha256": "ee3e2cbe4156d9ca2cd0ddfc8dde91fba9fcc387f86164faaa279669c5aaecc3"
+  },
+  {
+    "name": "space_1",
+    "word_y": 86.23997497558594,
+    "actual_y": 85.799,
+    "docx_sha256": "992738772264eab6cbb406c1a1d0ae6a2bc625866e88b724a02a2f096cf2793f",
+    "pdf_sha256": "86654cb1b26ee55828480395d553c98fbd11b1e2a86106ab0d8decb715fd4013"
+  },
+  {
+    "name": "empty_1",
+    "word_y": 86.23997497558594,
+    "actual_y": 85.799,
+    "docx_sha256": "1a0a9af4fc4af074c5a7ab6a91b1e9b20d0d5573ffaeac844cabefbdb5a8e57f",
+    "pdf_sha256": "ad0140d0a5cd612f23bee3fc29873edb59f0bb18ae8e81bca16cc6085f37c577"
+  },
+  {
+    "name": "letter_1",
+    "word_y": 83.96000671386719,
+    "actual_y": 83.499,
+    "docx_sha256": "5ef14bf7a0bdf83d09b5e9c38e8e8e728491655eedecd58d3727082960f03e28",
+    "pdf_sha256": "d64abd73ca5819eae769836f73efa4741bb74ace918021152c9dba0180b4745f"
+  },
+  {
+    "name": "nbsp_1.15",
+    "word_y": 85.63999938964844,
+    "actual_y": 87.869,
+    "docx_sha256": "f17df833eb35f2ed3203cd18ad6dd7f79969d9f98a8c1e68bb5a5554b3c8182a",
+    "pdf_sha256": "0ffa95939f7b1e9619250791bb7d28975cd1b7e3dd62460c844155782880c2bf"
+  },
+  {
+    "name": "space_1.15",
+    "word_y": 88.28001403808594,
+    "actual_y": 87.869,
+    "docx_sha256": "a91a72dec5ead7d3ca52f2653c5449974c34970c9465897f6cd8352c2f0cb48a",
+    "pdf_sha256": "49088f2b7dc3988a55cbd9391ed07652c21e7ac2d43d194eb78b15e79ba4b57e"
+  },
+  {
+    "name": "empty_1.15",
+    "word_y": 88.28001403808594,
+    "actual_y": 87.869,
+    "docx_sha256": "b8e5db8e656c12a651c9e22ed1ca45c82be3cc069af6b9cd1320939fe2325ec6",
+    "pdf_sha256": "34f5f6d5641b408677b46f3a348288fe5608d80fa67419eb697d55ee5a00956d"
+  },
+  {
+    "name": "letter_1.15",
+    "word_y": 85.63999938964844,
+    "actual_y": 85.224,
+    "docx_sha256": "76aa72fef94f306e2190f39741b3461637941c08fbd8b102af91e322ca786e4f",
+    "pdf_sha256": "42e0a7a8873d5cdac6dca1b2de3fe3a723d1411e2687b3912e8ce9245652e6a2"
+  }
+]

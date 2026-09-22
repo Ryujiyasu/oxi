@@ -1,0 +1,138 @@
+[
+  {
+    "name": "ja0_custom0_s0",
+    "word": {
+      "XONE": 84.8119888305664,
+      "XTWO": 97.77201080322266,
+      "AFTER": 110.61197662353516
+    },
+    "actual": {
+      "XONE": 84.896,
+      "XTWO": 97.792,
+      "AFTER": 110.688
+    },
+    "word_pitch": 12.96002197265625,
+    "actual_pitch": 12.896,
+    "docx_sha256": "96b1261be61c73bf83363015e271e06b201fdef5ceeba9f09a3ebcae3e5e550b",
+    "pdf_sha256": "ad3142b407842c59752d36a8ce432308ce259ba1ac575f8dfd1aaf544e5be944"
+  },
+  {
+    "name": "ja0_custom0_s1.8",
+    "word": {
+      "XONE": 90.2120132446289,
+      "XTWO": 106.77201080322266,
+      "AFTER": 123.2120132446289
+    },
+    "actual": {
+      "XONE": 90.296,
+      "XTWO": 106.792,
+      "AFTER": 123.288
+    },
+    "word_pitch": 16.55999755859375,
+    "actual_pitch": 16.495999999999995,
+    "docx_sha256": "1513a0a4a66990ab2dfb69768dfa60a814ce3283f164ea934ed42b806337f468",
+    "pdf_sha256": "6bccd83c535fea1d66ded45460788ec5efa2fedb51665bdb6716d619c8ee0efa"
+  },
+  {
+    "name": "ja0_custom1_s0",
+    "word": {
+      "XONE": 84.8119888305664,
+      "XTWO": 97.77201080322266,
+      "AFTER": 110.61197662353516
+    },
+    "actual": {
+      "XONE": 84.896,
+      "XTWO": 97.792,
+      "AFTER": 110.688
+    },
+    "word_pitch": 12.96002197265625,
+    "actual_pitch": 12.896,
+    "docx_sha256": "6df504dd156fb0ea5f69f6ff2eac670ad16ccec2d22226d84540291d7b163c55",
+    "pdf_sha256": "066a903c0d8391cf8064094ec09b5fe255137ad85fc1c82f2e605ad40a8d1db1"
+  },
+  {
+    "name": "ja0_custom1_s1.8",
+    "word": {
+      "XONE": 86.61197662353516,
+      "XTWO": 103.1719741821289,
+      "AFTER": 117.8119888305664
+    },
+    "actual": {
+      "XONE": 86.696,
+      "XTWO": 103.192,
+      "AFTER": 117.888
+    },
+    "word_pitch": 16.55999755859375,
+    "actual_pitch": 16.495999999999995,
+    "docx_sha256": "d842890426ab01a4ca6f34777e27c0b7a774c50baab7de0f24b7f87a13383cd2",
+    "pdf_sha256": "8cf4e4449fb4b2ad67c6be34e3d31c7429a48268acb5e145765b56f0f9ae1c72"
+  },
+  {
+    "name": "ja1_custom0_s0",
+    "word": {
+      "XONE": 86.25199127197266,
+      "XTWO": 99.0920181274414,
+      "AFTER": 112.0519790649414
+    },
+    "actual": {
+      "XONE": 86.266,
+      "XTWO": 99.016,
+      "AFTER": 111.766
+    },
+    "word_pitch": 12.84002685546875,
+    "actual_pitch": 12.75,
+    "docx_sha256": "1562010993117a2cf0e71fabf1fe458551565b55153c51e539437d0dff71e05c",
+    "pdf_sha256": "eca0145f5f4b689800c85ad94a6ebb295f9136c5ae1ec728dba47957010e4c79"
+  },
+  {
+    "name": "ja1_custom0_s1.8",
+    "word": {
+      "XONE": 91.65201568603516,
+      "XTWO": 108.0920181274414,
+      "AFTER": 124.65201568603516
+    },
+    "actual": {
+      "XONE": 89.866,
+      "XTWO": 102.616,
+      "AFTER": 117.166
+    },
+    "word_pitch": 16.44000244140625,
+    "actual_pitch": 12.75,
+    "docx_sha256": "af6f5ed71e081354b9b96d11d2e51ef17bdeeb4e07403e7386c4713e3435a47a",
+    "pdf_sha256": "997776fe0229678027851fd3335d98a1b9e2284a02cf4459ed9bbbac24d3a025"
+  },
+  {
+    "name": "ja1_custom1_s0",
+    "word": {
+      "XONE": 86.25199127197266,
+      "XTWO": 99.0920181274414,
+      "AFTER": 112.0519790649414
+    },
+    "actual": {
+      "XONE": 86.266,
+      "XTWO": 99.016,
+      "AFTER": 111.766
+    },
+    "word_pitch": 12.84002685546875,
+    "actual_pitch": 12.75,
+    "docx_sha256": "bba301bcdcb2cd0f472c9f870162c5489d4221d9458f90668d92497965b2363c",
+    "pdf_sha256": "ce7cd8b857383b00e6760022cbd728c919bd20f0afbd6a1ca9bd1b94baf8546c"
+  },
+  {
+    "name": "ja1_custom1_s1.8",
+    "word": {
+      "XONE": 88.0519790649414,
+      "XTWO": 104.49198150634766,
+      "AFTER": 119.25199127197266
+    },
+    "actual": {
+      "XONE": 86.266,
+      "XTWO": 99.016,
+      "AFTER": 111.766
+    },
+    "word_pitch": 16.44000244140625,
+    "actual_pitch": 12.75,
+    "docx_sha256": "9fede395aa6fed7d6781c8764b8ea2eec0867595faf6122829ae544b56cf1d1c",
+    "pdf_sha256": "0a0f2e6c8aae3c041c320b3c6c29d301fb33db49471d0ef38b98a962b2dcd6b8"
+  }
+]

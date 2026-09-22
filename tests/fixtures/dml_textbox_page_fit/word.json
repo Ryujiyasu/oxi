@@ -1,0 +1,254 @@
+[
+  {
+    "name": "behind0_square_height100",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "behind0_square_height160",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "behind0_none_height100",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "behind0_none_height160",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "behind1_square_height100",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "behind1_square_height160",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "behind1_none_height100",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "behind1_none_height160",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "compat14_square_height160",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 137.31332397460938
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "compat14_square_height180",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 127.35331726074219
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "compat14_square_height260",
+    "pages": 1,
+    "positions": {
+      "BOX": {
+        "page": 1,
+        "y": 47.283321380615234
+      },
+      "AFTER": {
+        "page": 1,
+        "y": 148.71331787109375
+      }
+    }
+  },
+  {
+    "name": "compat15_square_height160",
+    "pages": 2,
+    "positions": {
+      "BOX": {
+        "page": 2,
+        "y": 57.36332321166992
+      },
+      "AFTER": {
+        "page": 2,
+        "y": 68.76332092285156
+      }
+    }
+  },
+  {
+    "name": "compat15_square_height180",
+    "pages": 2,
+    "positions": {
+      "BOX": {
+        "page": 2,
+        "y": 57.36332321166992
+      },
+      "AFTER": {
+        "page": 2,
+        "y": 68.76332092285156
+      }
+    }
+  },
+  {
+    "name": "compat15_square_height260",
+    "pages": 3,
+    "positions": {
+      "BOX": {
+        "page": 2,
+        "y": 57.36332321166992
+      },
+      "AFTER": {
+        "page": 3,
+        "y": 53.7633171081543
+      }
+    }
+  },
+  {
+    "name": "width40_square_height210",
+    "pages": 3,
+    "positions": {
+      "BOX": {
+        "page": 2,
+        "y": 57.36332321166992
+      },
+      "AFTER": {
+        "page": 3,
+        "y": 53.7633171081543
+      }
+    }
+  },
+  {
+    "name": "width40_square_height260",
+    "pages": 3,
+    "positions": {
+      "BOX": {
+        "page": 2,
+        "y": 57.36332321166992
+      },
+      "AFTER": {
+        "page": 3,
+        "y": 53.7633171081543
+      }
+    }
+  },
+  {
+    "name": "width180_square_height210",
+    "pages": 3,
+    "positions": {
+      "BOX": {
+        "page": 2,
+        "y": 57.36332321166992
+      },
+      "AFTER": {
+        "page": 3,
+        "y": 53.7633171081543
+      }
+    }
+  },
+  {
+    "name": "width180_square_height260",
+    "pages": 3,
+    "positions": {
+      "BOX": {
+        "page": 2,
+        "y": 57.36332321166992
+      },
+      "AFTER": {
+        "page": 3,
+        "y": 53.7633171081543
+      }
+    }
+  }
+]

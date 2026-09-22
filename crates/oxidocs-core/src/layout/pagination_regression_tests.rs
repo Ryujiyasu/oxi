@@ -1772,8 +1772,9 @@ fn table_continuation_keeps_following_rows_below_images() {
                 ).fold(f32::NEG_INFINITY, f32::max);
                 assert!(image_bottom.is_finite() && element.y >= image_bottom - 0.01,
                     "{name}: following row overlaps image");
-                assert!((element.y + element.text_y_off - expected["y"].as_f64().unwrap() as f32).abs() < 0.8,
-                    "{name}: following text differs from Word");
+                let baseline = element.y + element.baseline_offset.expect("exact cell baseline");
+                assert!((baseline - expected["baseline"].as_f64().unwrap() as f32).abs() < 0.8,
+                    "{name}: following baseline {baseline} differs from Word {expected:?}");
             }
         }
     }
@@ -1973,5 +1974,1673 @@ fn merged_cell_coordinates_do_not_use_available_height_as_page_stride() {
         let (positions, end) = flow.paginate();
         assert_eq!(positions, vec![Some((source_page + 1, 40.0)), Some((source_page + 2, 10.0))]);
         assert_eq!(end - (source_page + 2) as f32 * 400.0, 30.0);
+    }
+}
+
+
+#[test]
+fn exact_cell_baselines_match_word_across_fonts_and_sizes() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_exact_baselines");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap(),
+    ).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap(),
+        ).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}: page count");
+        let e = layout.pages[0].elements.iter().find(|e| matches!(&e.content,
+            LayoutContent::Text { text, .. } if text == "FOLLOW")).unwrap();
+        let actual = e.y + e.baseline_offset.expect("exact cell baseline");
+        let expected = case["baseline"].as_f64().unwrap() as f32;
+        assert!((actual - expected).abs() < 0.2, "{name}: {actual} vs {expected}");
+    }
+}
+
+
+#[test]
+fn circled_number_fonts_follow_the_hint_in_mixed_script_documents() {
+    for has_cjk in [false, true] {
+        let mut engine = LayoutEngine::new();
+        engine.doc_body_has_real_cjk = has_cjk;
+        let para = ParagraphStyle::default();
+        for hint in [None, Some(false), Some(true)] {
+            let run = RunStyle {
+                font_family: Some("Calibri".into()),
+                font_family_east_asia: Some("Microsoft JhengHei Light".into()),
+                font_size: Some(11.0),
+                font_hint_east_asia: hint,
+                ..RunStyle::default()
+            };
+            let expected = if hint == Some(true) {
+                "Microsoft JhengHei Light"
+            } else { "Calibri" };
+            for text in ["①", "⑩", "A ① B", "A ⑩ B"] {
+                assert_eq!(engine.resolve_font_family_for_text(text, &run, &para),
+                    Some(expected), "{text}: hint {hint:?}, CJK {has_cjk}");
+                assert_eq!(engine.metrics_for_text(text, &run, &para).family,
+                    expected, "{text}: hint {hint:?}, CJK {has_cjk}");
+            }
+        }
+    }
+}
+
+
+#[test]
+fn no_grid_empty_lines_keep_the_paragraph_mark_font() {
+    for has_cjk in [false, true] {
+        let mut engine = LayoutEngine::new();
+        engine.doc_body_has_real_cjk = has_cjk;
+        for hint in [None, Some(false), Some(true)] {
+            let para = ParagraphStyle {
+                line_spacing: Some(1.0),
+                ppr_rpr: Some(RunStyle {
+                    font_family: Some("Calibri".into()),
+                    font_family_east_asia: Some("Microsoft JhengHei Light".into()),
+                    font_size: Some(11.0),
+                    font_hint_east_asia: hint,
+                    ..RunStyle::default()
+                }),
+                ..ParagraphStyle::default()
+            };
+            let actual = engine.line_height_for_line(
+                &Line::default(), &para, 11.0, true, None, false);
+            assert!((actual - 13.44).abs() < 0.2,
+                "hint {hint:?}, CJK {has_cjk}: {actual}");
+        }
+    }
+}
+
+
+#[test]
+fn cell_image_leading_excludes_paragraph_spacing() {
+    fn image_in(blocks: &[Block]) -> Option<&crate::ir::Image> {
+        for block in blocks {
+            match block {
+                Block::Image(image) => return Some(image),
+                Block::Table(table) => {
+                    for row in &table.rows {
+                        for cell in &row.cells {
+                            if let Some(image) = image_in(&cell.blocks) { return Some(image); }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    let doc = crate::parser::parse_docx(include_bytes!(
+        "../../../../tests/fixtures/table_image_continuation/filler64_image40.docx"
+    )).unwrap();
+    let mut engine = LayoutEngine::for_document(&doc);
+    let source = image_in(&doc.pages[0].blocks).expect("inline image");
+    for has_cjk in [false, true] {
+    engine.doc_body_has_real_cjk = has_cjk;
+    for after in [0.0, 8.0, 16.0] {
+        let mut image = source.clone();
+        image.host_paragraph.as_mut().unwrap().style.space_after = Some(after);
+        let actual = engine.s971_image_line_h(&image, 1.0e6, None, false);
+        assert!((actual - 41.92).abs() < 0.2,
+            "paragraph spacing {after}: image line {actual}");
+    }
+    }
+}
+
+
+#[test]
+fn cell_space_width_does_not_change_line_height() {
+    let base = crate::parser::parse_docx(include_bytes!(
+        "../../../../tests/fixtures/table_image_continuation/filler64_image40.docx"
+    )).unwrap();
+    let table = base.pages[0].blocks.iter().find_map(|b| match b {
+        Block::Table(t) => Some(t.clone()), _ => None,
+    }).unwrap();
+    let template = table.rows[0].cells[0].blocks.iter().find_map(|b| match b {
+        Block::Paragraph(p) => Some(p.clone()), _ => None,
+    }).unwrap();
+    let mut reference = None;
+    for position in 0..3 {
+        for size in [10.0, 11.0, 20.0] {
+            let mut p = template.clone();
+            let font = RunStyle { font_family: Some("Arial".into()),
+                font_size: Some(10.0), ..RunStyle::default() };
+            p.style = ParagraphStyle { line_spacing: Some(1.0),
+                space_before: Some(0.0), space_after: Some(0.0),
+                ppr_rpr: Some(font.clone()), default_run_style: Some(font.clone()),
+                ..ParagraphStyle::default() };
+            let mut a = p.runs[0].clone(); a.style = font.clone(); a.text = "Before".into();
+            let mut b = a.clone(); b.text = "After".into();
+            let mut space = a.clone(); space.text = "  ".into(); space.style.font_size = Some(size);
+            p.runs = match position { 0 => vec![space, a, b], 1 => vec![a, space, b], _ => vec![a, b, space] };
+            let mut after = p.clone(); after.runs.truncate(1);
+            after.runs[0].style = font; after.runs[0].text = "SENTINEL".into();
+            let mut t = table.clone(); t.rows.truncate(1); t.rows[0].cells.truncate(1);
+            t.rows[0].height = None; t.rows[0].height_rule = None;
+            t.rows[0].cells[0].blocks = vec![Block::Paragraph(p)];
+            let mut doc = base.clone();
+            doc.pages[0].blocks = vec![Block::Table(t), Block::Paragraph(after)];
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            assert_eq!(layout.pages.len(), 1);
+            let y = layout.pages[0].elements.iter().find(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text == "SENTINEL")).unwrap().y;
+            let expected = *reference.get_or_insert(y);
+            assert!((y - expected).abs() < 0.01,
+                "position {position}, space {size}: {y} vs {expected}");
+        }
+    }
+}
+
+
+#[test]
+fn image_effects_survive_whole_row_page_moves() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/image_effect_wholepush");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for expected in case["images"].as_array().unwrap() {
+            let images: Vec<_> = layout.pages.iter().enumerate().flat_map(|(i,p)|
+                p.elements.iter().filter_map(move |e|
+                    matches!(e.content, LayoutContent::Image { .. }).then_some((i+1,e))))
+                .collect();
+            assert_eq!(images.len(), 1, "{name}");
+            assert_eq!(images[0].0, expected["page"].as_u64().unwrap() as usize, "{name}");
+            assert!((images[0].1.y - expected["bbox"][1].as_f64().unwrap() as f32).abs() < 0.2,
+                "{name}: image y {} vs {expected}", images[0].1.y);
+        }
+        let expected = &case["text"]["FOLLOW"];
+        let (pi, e) = layout.pages.iter().enumerate().find_map(|(i,p)|
+            p.elements.iter().find(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text == "FOLLOW")).map(|e| (i+1,e))).unwrap();
+        assert_eq!(pi, expected["page"].as_u64().unwrap() as usize, "{name}");
+        let baseline = e.y + e.baseline_offset.expect("exact baseline");
+        assert!((baseline - expected["baseline"].as_f64().unwrap() as f32).abs() < 0.8,
+            "{name}: following baseline {baseline} vs {expected}");
+    }
+}
+
+#[test]
+fn outer_table_edges_preserve_word_row_origins_and_following_paragraph() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/table_outer_edges");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        let y = |label: &str| layout.pages[0].elements.iter().find_map(|e| {
+            matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+                .then_some(e.y)
+        }).unwrap();
+        for label in ["ROW0", "ROW1", "AFTER"] {
+            let word = case["word"][label]["y"].as_f64().unwrap()
+                - case["word"]["BEFORE"]["y"].as_f64().unwrap();
+            let actual = (y(label) - y("BEFORE")) as f64;
+            assert!((actual - word).abs() < 0.2,
+                "{name} {label}: Word {word}, actual {actual}");
+        }
+    }
+}
+
+#[test]
+fn table_bottom_edge_participates_in_page_fit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/table_outer_edge_fit");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), case["pages"].as_u64().unwrap() as usize, "{name}");
+        for (label, expected) in case["paragraphs"].as_object().unwrap() {
+            let actual = layout.pages.iter().position(|p| p.elements.iter().any(|e| {
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+            })).unwrap() + 1;
+            assert_eq!(actual, expected.as_u64().unwrap() as usize, "{name} {label}");
+        }
+    }
+}
+
+#[test]
+fn leading_page_break_preserves_excess_before_spacing_in_both_scripts() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/leading_break_spacing");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), case["pages"].as_u64().unwrap() as usize, "{name}");
+        let (page, element) = layout.pages.iter().enumerate().find_map(|(i, p)| {
+            p.elements.iter().find(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text == "SENTINEL"))
+                .map(|e| (i + 1, e))
+        }).unwrap();
+        assert_eq!(page, case["word"]["page"].as_u64().unwrap() as usize, "{name}");
+        // All fixtures use a 15pt exact line: Word's baseline is 12pt in.
+        let baseline = element.y as f64 + 12.0;
+        let expected = case["word"]["y"].as_f64().unwrap();
+        assert!((baseline - expected).abs() < 0.2,
+            "{name}: Word {expected}, actual {baseline}");
+    }
+}
+
+#[test]
+fn cjk_adjacent_spaces_follow_balance_setting_independent_of_run_boundaries() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/space_balance");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        let x = |label: &str| layout.pages[0].elements.iter().find_map(|e| {
+            matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+                .then_some(e.x)
+        }).unwrap();
+        let actual = (x("\u{4e19}") - x("\u{7532}")) as f64;
+        let word = case["word_extent"].as_f64().unwrap();
+        assert!((actual - word).abs() < 0.2,
+            "{name}: Word {word}, actual {actual}");
+    }
+}
+
+#[test]
+fn mixed_script_lines_advance_by_their_own_heights() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/body_mixed_line_heights");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        let y = |label: &str| layout.pages[0].elements.iter().find_map(|e| {
+            matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+                .then_some(e.y)
+        }).unwrap();
+        let actual = (y("AFTER") - y("BEFORE")) as f64;
+        let word = case["height"].as_f64().unwrap();
+        assert!((actual - word).abs() < 0.2,
+            "{name}: Word {word}, actual {actual}");
+    }
+}
+
+#[test]
+fn table_fragment_bottom_edge_participates_in_page_fit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/table_fragment_border_fit");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["paragraphs"].as_object().unwrap() {
+            let actual = layout.pages.iter().position(|p| p.elements.iter().any(|e| {
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+            })).unwrap() + 1;
+            assert_eq!(actual, expected.as_u64().unwrap() as usize, "{name} {label}");
+        }
+    }
+}
+
+#[test]
+fn continuous_column_moves_preserve_required_line_capacity() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/continuous_column_capacity");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["paragraphs"].as_object().unwrap() {
+            let actual = layout.pages.iter().position(|p| p.elements.iter().any(|e| {
+                matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+            })).unwrap() + 1;
+            assert_eq!(actual, expected.as_u64().unwrap() as usize, "{name} {label}");
+        }
+    }
+}
+
+#[test]
+fn table_fragment_border_capacity_is_not_counted_twice() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/table_fragment_border_tie");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["paragraphs"].as_object().unwrap() {
+            let actual: Vec<usize> = layout.pages.iter().enumerate().filter_map(|(i, p)| {
+                p.elements.iter().any(|e| {
+                    matches!(&e.content, LayoutContent::Text { text, .. } if text == label)
+                }).then_some(i + 1)
+            }).collect();
+            let expected: Vec<usize> = expected.as_array().unwrap().iter()
+                .map(|p| p.as_u64().unwrap() as usize).collect();
+            assert_eq!(actual, expected, "{name} {label}");
+        }
+    }
+}
+
+#[test]
+fn table_continuation_capacity_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/table_continuation_capacity");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), case["pages"].as_u64().unwrap() as usize, "{name}");
+        for (label, expected) in case["paragraphs"].as_object().unwrap() {
+            let actual: Vec<usize> = layout.pages.iter().enumerate().filter_map(|(i, p)| {
+                p.elements.iter().any(|e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text == label)).then_some(i + 1)
+            }).collect();
+            let expected: Vec<usize> = expected.as_array().unwrap().iter()
+                .map(|p| p.as_u64().unwrap() as usize).collect();
+            assert_eq!(actual, expected, "{name} {label}");
+        }
+        let after = layout.pages.iter().flat_map(|p| &p.elements)
+            .find(|e| matches!(&e.content, LayoutContent::Text { text, .. } if text == "AFTER")).unwrap();
+        // Every sentinel uses Arial 10pt in a 12pt exact line.
+        let baseline = after.y as f64 + 9.6;
+        let word = case["after"]["baseline"].as_f64().unwrap();
+        assert!((baseline - word).abs() < 0.2, "{name}: AFTER Word {word}, actual {baseline}");
+    }
+}
+
+#[test]
+fn cell_hyphen_breaks_match_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_hyphen_breaks");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        let mut before = None;
+        let mut after = None;
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => before = Some(e.y),
+                        "AFTER" => after = Some(e.y),
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").trim().to_string();
+            (!text.is_empty()).then_some(text)
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        assert_eq!(actual, expected, "{name}");
+        let extent = (after.unwrap() - before.unwrap()) as f64;
+        let word = case["extent"].as_f64().unwrap();
+        assert!((extent - word).abs() < 0.3, "{name}: Word {word}, actual {extent}");
+    }
+}
+
+#[test]
+fn cell_tab_line_height_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_tab_line_height");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "{name}");
+        let marker = |label: &str| layout.pages[0].elements.iter()
+            .find_map(|e| matches!(&e.content, LayoutContent::Text { text, .. }
+                if text == label).then_some(e.y)).unwrap();
+        // Identical sentinel fonts cancel their baseline offset.
+        let extent = (marker("AFTER") - marker("BEFORE")) as f64;
+        let word = case["extent"].as_f64().unwrap();
+        assert!((extent - word).abs() < 0.2, "{name}: Word {word}, actual {extent}");
+    }
+}
+
+#[test]
+fn section_float_band_stays_with_its_anchor() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/section_float_band");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 2, "{name}");
+        for (label, word) in case["paragraphs"].as_object().unwrap() {
+            let (page, y) = layout.pages.iter().enumerate().find_map(|(i, p)|
+                p.elements.iter().find_map(|e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text == label).then_some((i + 1, e.y)))).unwrap();
+            assert_eq!(page, word["page"].as_u64().unwrap() as usize, "{name} {label}");
+            let baseline = y as f64 + 9.6;
+            let expected = word["baseline"].as_f64().unwrap();
+            assert!((baseline - expected).abs() < 0.2,
+                "{name} {label}: Word {expected}, actual {baseline}");
+        }
+    }
+}
+
+#[test]
+fn body_punctuation_language_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/body_punctuation_language");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").trim().to_string();
+            (!text.is_empty()).then_some(text)
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn footnote_table_carry_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/footnote_table_carry");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize { failures.push(format!("{name}: total pages Word {}, actual {}", case["pages"], layout.pages.len())); }
+        for (label, expected) in case["paragraphs"].as_object().unwrap() {
+            let actual: Vec<usize> = layout.pages.iter().enumerate().filter_map(|(i, p)| {
+                // FIRST also occurs inside the footnote's sentence. Identify
+                // the sentinel by its source body block as well as its text.
+                p.elements.iter().any(|e| e.paragraph_index == Some(
+                    if label == "FIRST" { 2 } else if label == "LAST" { 3 } else { 1 }
+                ) && matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text == label)).then_some(i + 1)
+            }).collect();
+            let expected: Vec<usize> = expected.as_array().unwrap().iter()
+                .map(|p| p.as_u64().unwrap() as usize).collect();
+            if actual != expected { failures.push(format!("{name} {label}: Word {expected:?}, actual {actual:?}")); }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn cell_pair_boundaries_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_pair_boundaries");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").trim().to_string();
+            (!text.is_empty()).then_some(text)
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn multiple_empty_footer_paragraphs_reserve_the_word_stack() {
+    let cases: &[(&[u8], usize)] = &[
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n1_ink0_h480.docx"), 1),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n1_ink0_h490.docx"), 1),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n1_ink0_h500.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n1_ink1_h480.docx"), 1),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n1_ink1_h490.docx"), 1),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n1_ink1_h500.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n2_ink0_h480.docx"), 1),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n2_ink0_h490.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n2_ink0_h500.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n2_ink1_h480.docx"), 1),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n2_ink1_h490.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n2_ink1_h500.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n3_ink0_h480.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n3_ink0_h490.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n3_ink0_h500.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n3_ink1_h480.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n3_ink1_h490.docx"), 2),
+        (include_bytes!("../../../../tests/fixtures/empty_footer_stack/n3_ink1_h500.docx"), 2),
+    ];
+    for (case, (bytes, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let pages: Vec<_> = layout.pages.iter().enumerate()
+            .filter_map(|(i, page)| page.elements.iter().any(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text == "TARGET")).then_some(i + 1))
+            .collect();
+        assert_eq!(pages, vec![*expected], "case {case}");
+    }
+}
+
+#[test]
+fn cell_style_spacing_is_preserved_in_mixed_script_documents() {
+    let cases: &[(&[u8], f32)] = &[
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja0_custom0_s0.docx"), 12.96),
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja0_custom0_s1.8.docx"), 16.56),
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja0_custom1_s0.docx"), 12.96),
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja0_custom1_s1.8.docx"), 16.56),
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja1_custom0_s0.docx"), 12.84),
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja1_custom0_s1.8.docx"), 16.44),
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja1_custom1_s0.docx"), 12.84),
+        (include_bytes!("../../../../tests/fixtures/cell_inherited_spacing/ja1_custom1_s1.8.docx"), 16.44),
+    ];
+    for (case, (bytes, expected)) in cases.iter().enumerate() {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), 1, "case {case}");
+        let y = |label: &str| layout.pages[0].elements.iter()
+            .find(|e| matches!(&e.content, LayoutContent::Text { text, .. } if text == label))
+            .unwrap().y;
+        let actual = y("XTWO") - y("XONE");
+        assert!((actual - expected).abs() < 0.15,
+            "case {case}: Word pitch {expected}, actual {actual}");
+    }
+}
+
+#[test]
+fn nbsp_lines_keep_the_run_height() {
+    let cases: &[([&[u8]; 4], f32)] = &[
+        ([include_bytes!("../../../../tests/fixtures/body_nbsp_height/nbsp_1.docx"), include_bytes!("../../../../tests/fixtures/body_nbsp_height/letter_1.docx"), include_bytes!("../../../../tests/fixtures/body_nbsp_height/space_1.docx"), include_bytes!("../../../../tests/fixtures/body_nbsp_height/empty_1.docx")], 2.28),
+        ([include_bytes!("../../../../tests/fixtures/body_nbsp_height/nbsp_1.15.docx"), include_bytes!("../../../../tests/fixtures/body_nbsp_height/letter_1.15.docx"), include_bytes!("../../../../tests/fixtures/body_nbsp_height/space_1.15.docx"), include_bytes!("../../../../tests/fixtures/body_nbsp_height/empty_1.15.docx")], 2.64),
+    ];
+    for (case, (arms, expected_gap)) in cases.iter().enumerate() {
+        let ys: Vec<f32> = arms.iter().map(|bytes| {
+            let doc = crate::parser::parse_docx(bytes).unwrap();
+            let layout = LayoutEngine::for_document(&doc).layout(&doc);
+            assert_eq!(layout.pages.len(), 1);
+            layout.pages[0].elements.iter().find(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. } if text == "AFTER")).unwrap().y
+        }).collect();
+        assert!((ys[0] - ys[1]).abs() < 0.01, "case {case}: NBSP differs from text");
+        assert!((ys[2] - ys[3]).abs() < 0.01, "case {case}: ASCII space differs from empty");
+        assert!((ys[2] - ys[0] - expected_gap).abs() < 0.08,
+            "case {case}: Word gap {expected_gap}, actual {}", ys[2] - ys[0]);
+    }
+}
+
+#[test]
+fn center_tab_capacity_respects_preceding_text() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/center_tab_prefix");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .chars().filter(|c| !c.is_whitespace()).collect::<String>();
+            (!text.is_empty()).then_some(text)
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn inline_images_fit_their_centered_grid_box() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_image_grid_fit");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(fixtures.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let images: Vec<_> = layout.pages.iter().enumerate().flat_map(|(i, p)|
+            p.elements.iter().filter_map(move |e|
+                matches!(e.content, LayoutContent::Image { .. }).then_some(i + 1))).collect();
+        let expected_pages = case["pages"].as_u64().unwrap() as usize;
+        let expected_image = case["image_page"].as_u64().unwrap() as usize;
+        if layout.pages.len() != expected_pages || images != vec![expected_image] {
+            failures.push(format!("{name}: Word pages {expected_pages}, image {expected_image}; actual pages {}, images {images:?}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn paragraph_widow_style_precedes_document_defaults() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/widow_style_inheritance");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected.as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn drawingml_textbox_page_fit_respects_compatibility_mode() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/dml_textbox_page_fit");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn empty_paragraphs_use_the_declared_default_style() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/empty_default_style_id");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn cell_first_paragraph_orphan_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_first_orphan");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn header_intermediate_border_reserves_body_space() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/header_intermediate_border");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn header_image_line_spacing_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/header_image_leading");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn cell_proportional_grid_widths_match_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_proportional_grid");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").trim().to_string();
+            (!text.is_empty()).then_some(text)
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn cell_grid_space_balance_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_grid_space_balance");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").replace('\u{3000}', " ").trim().to_string();
+            (!text.is_empty()).then_some(text)
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn floating_table_keep_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/floating_table_keep");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn latin_keep_lastline_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/latin_keep_lastline");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = layout.pages.iter().position(|p| p.elements.iter().any(|e|
+                matches!(&e.content, LayoutContent::Text { text, .. } if text.contains(label))));
+            if page.map(|p| p + 1) != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?} (zero-based)"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn word_punctuation_credit_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/word_punctuation_credit");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").trim().to_string();
+            (!text.is_empty()).then(|| text.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn cell_atleast_grid_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/cell_atleast_grid");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let texts: Vec<String> = layout.pages.iter().map(|page| page.elements.iter()
+            .filter_map(|e| match &e.content { LayoutContent::Text { text, .. } => Some(text.as_str()), _ => None })
+            .collect()).collect();
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let page = texts.iter().position(|text| text.contains(label)).map(|p| p + 1);
+            if page != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {expected}, actual {page:?}"));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong total page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn floating_table_following_flow_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/floating_table_following_flow");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let locate = |label: &str| layout.pages.iter().enumerate().find_map(|(pi, page)|
+            page.elements.iter().find_map(|e| match &e.content {
+                LayoutContent::Text { text, .. } if text == label => Some((pi + 1, e.y + e.text_y_off)), _ => None,
+            }));
+        let (tp, ty) = locate("ROW0LINE0").unwrap();
+        for label in ["BEFORE", "AFTER"] {
+            let (ap, ay) = locate(label).unwrap();
+            let expected = case["positions"][label]["y"].as_f64().unwrap()
+                - case["positions"]["ROW0LINE0"]["y"].as_f64().unwrap();
+            if ap != tp || (f64::from(ay - ty) - expected).abs() > 0.75 {
+                failures.push(format!("{name} {label}: Word relative y {expected}, actual {} pages {ap}/{tp}", ay - ty));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn inherited_frames_match_word_equivalent_direct_documents() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/frame_style_inheritance");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    for variant in ["inherit", "wrap", "zero", "space"] {
+        let name = |mode: &str| format!("{variant}_{mode}");
+        let truth = |mode: &str| cases.as_array().unwrap().iter()
+            .find(|c| c["name"] == name(mode)).unwrap();
+        assert_eq!(truth("styled")["positions"], truth("inline")["positions"]);
+        let parse = |mode: &str| crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{}.docx", name(mode)))).unwrap()).unwrap();
+        let styled = parse("styled");
+        let direct = parse("inline");
+        let first_frame = |doc: &crate::ir::Document| {
+            doc.pages.iter().flat_map(|p| &p.blocks).find_map(|b| match b {
+                crate::ir::Block::Paragraph(p) => p.style.frame_pr.as_ref(), _ => None,
+            }).map(|fp| serde_json::to_value(fp).unwrap()).unwrap()
+        };
+        assert_eq!(first_frame(&styled), first_frame(&direct), "{variant}: resolved frame");
+        let render = |doc: &crate::ir::Document| {
+            let layout = LayoutEngine::for_document(doc).layout(doc);
+            let positions: Vec<_> = layout.pages.iter().enumerate().flat_map(|(pi, page)| {
+                page.elements.iter().filter_map(move |e| match &e.content {
+                    LayoutContent::Text { text, .. } => Some((pi, text.clone(), e.x, e.y + e.text_y_off)),
+                    _ => None,
+                })
+            }).collect();
+            (layout.pages.len(), positions)
+        };
+        assert_eq!(render(&styled), render(&direct), "{variant}: Word-equivalent layout");
+    }
+}
+
+#[test]
+fn frame_exclusion_across_columns_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/frame_two_columns");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let first = layout.pages.iter().flat_map(|page| &page.elements).find(|e|
+            matches!(&e.content, LayoutContent::Text { text, .. } if text == "BODY00")).unwrap();
+        let native_origin = first.y + first.text_y_off;
+        let word_origin = case["positions"]["BODY00"]["y"].as_f64().unwrap();
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            if !label.starts_with("BODY") { continue; }
+            let actual = layout.pages.iter().enumerate().find_map(|(pi, page)|
+                page.elements.iter().find_map(|e| match &e.content {
+                    LayoutContent::Text { text, .. } if text == label => {
+                        let dy = f64::from(e.y + e.text_y_off - native_origin);
+                        let expected_dy = expected["y"].as_f64().unwrap() - word_origin;
+                        assert!((dy - expected_dy).abs() <= 0.75,
+                            "{name} {label}: Word relative y {expected_dy:.2}, actual {dy:.2}");
+                        Some((pi + 1, e.x > 250.0))
+                    },
+                    _ => None,
+                }));
+            let word = (expected["page"].as_u64().unwrap() as usize, expected["x"].as_f64().unwrap() > 250.0);
+            if actual != Some(word) { failures.push(format!("{name} {label}: Word {word:?}, actual {actual:?}")); }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn negative_floating_table_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/negative_floating_table");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let actual = layout.pages.iter().enumerate().find_map(|(pi, page)|
+                page.elements.iter().find_map(|e| match &e.content {
+                    LayoutContent::Text { text, .. } if text == label => Some(pi + 1),
+                    _ => None,
+                }));
+            if actual != Some(expected["page"].as_u64().unwrap() as usize) {
+                failures.push(format!("{name} {label}: Word {}, actual {actual:?}", expected["page"]));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn legacy_kerning_space_capacity_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/legacy_kerning_space_capacity");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").trim().to_string();
+            (!text.is_empty()).then(|| text.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn floating_table_narrow_lane_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/floating_table_narrow_lane");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let native_origin = layout.pages.iter().flat_map(|p| &p.elements).find_map(|e|
+            match &e.content { LayoutContent::Text { text, .. } if text == "ROW0LINE0" => Some(e.y + e.text_y_off), _ => None }).unwrap();
+        let word_origin = case["positions"]["ROW0LINE0"]["y"].as_f64().unwrap();
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let actual = layout.pages.iter().enumerate().find_map(|(pi, page)|
+                page.elements.iter().find_map(|e| match &e.content {
+                    LayoutContent::Text { text, .. } if text == label => Some((pi + 1, e.y + e.text_y_off)),
+                    _ => None,
+                }));
+            if actual.map_or(true, |(pi, y)| pi != expected["page"].as_u64().unwrap() as usize || (f64::from(y - native_origin) - (expected["y"].as_f64().unwrap() - word_origin)).abs() > 0.75) {
+                let nearby: Vec<_> = layout.pages.iter().flat_map(|p| &p.elements)
+                    .filter_map(|e| match &e.content { LayoutContent::Text { text, .. }
+                        if !text.starts_with("ROW") && text != "BEFORE" => Some((text.as_str(), e.x, e.y, e.width)), _ => None }).collect();
+                failures.push(format!("{name} {label}: Word {}, actual {actual:?}, body {nearby:?}", expected["page"]));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn text_frame_group_anchor_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/text_frame_group_anchor");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let native_origin = layout.pages.iter().flat_map(|p| &p.elements).find_map(|e|
+            match &e.content { LayoutContent::Text { text, .. } if text == "FRAME" => Some(e.y + e.text_y_off), _ => None }).unwrap();
+        let word_origin = case["positions"]["FRAME"]["y"].as_f64().unwrap();
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let actual = layout.pages.iter().enumerate().find_map(|(pi, page)| {
+                let mut rows: std::collections::BTreeMap<(Option<usize>, i64), Vec<&LayoutElement>> = std::collections::BTreeMap::new();
+                for e in &page.elements { if matches!(&e.content, LayoutContent::Text { .. }) {
+                    rows.entry((e.paragraph_index, (e.y * 1000.0).round() as i64)).or_default().push(e);
+                }}
+                rows.values_mut().find_map(|row| {
+                    row.sort_by(|a,b| a.x.total_cmp(&b.x));
+                    let text: String = row.iter().filter_map(|e| match &e.content { LayoutContent::Text { text, .. } => Some(text.as_str()), _ => None }).collect();
+                    (text.trim() == label).then(|| (pi + 1, row[0].y + row[0].text_y_off))
+                })
+            });
+            if actual.map_or(true, |(pi, y)| pi != expected["page"].as_u64().unwrap() as usize || (f64::from(y - native_origin) - (expected["y"].as_f64().unwrap() - word_origin)).abs() > 0.75) {
+                let nearby: Vec<_> = layout.pages.iter().flat_map(|p| &p.elements)
+                    .filter_map(|e| match &e.content { LayoutContent::Text { text, .. }
+                        if !text.starts_with("ROW") && text != "BEFORE" => Some((text.as_str(), e.x, e.y, e.width)), _ => None }).collect();
+                failures.push(format!("{name} {label}: Word {}, actual {actual:?}, body {nearby:?}", expected["page"]));
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: wrong page count {}", layout.pages.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn latin_no_grid_bottom_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/latin_no_grid_bottom");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: page count {}", layout.pages.len()));
+        }
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let actual = layout.pages.iter().enumerate().find_map(|(pi, page)| {
+                page.elements.iter().any(|e| matches!(&e.content,
+                    LayoutContent::Text { text, .. } if text == label)).then_some(pi + 1)
+            });
+            let want = expected["page"].as_u64().unwrap() as usize;
+            if actual != Some(want) {
+                failures.push(format!("{name} {label}: Word {want}, actual {actual:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn latin_table_line_pitch_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/latin_table_line_pitch");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut positions = std::collections::BTreeMap::new();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    positions.insert(text.clone(), (pi + 1, e.y));
+                }
+            }
+        }
+        if layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: page count {}", layout.pages.len()));
+        }
+        let origin = positions.get("LINE0").expect("first line missing").1;
+        let expected_origin = case["positions"]["LINE0"]["y"].as_f64().unwrap() as f32;
+        for i in 0..16 {
+            let label = format!("LINE{i}");
+            let expected = &case["positions"][&label];
+            let want_page = expected["page"].as_u64().unwrap() as usize;
+            let want_y = expected["y"].as_f64().unwrap() as f32 - expected_origin;
+            if !positions.get(&label).is_some_and(|&(page, y)|
+                page == want_page && (y - origin - want_y).abs() < 0.2)
+            {
+                failures.push(format!("{name} {label}: Word {want_page}/{want_y}, actual {:?}", positions.get(&label)));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn image_paragraph_page_break_before_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/image_paragraph_page_break_before");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut labels = std::collections::BTreeMap::new();
+        let mut images = Vec::new();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                match &e.content {
+                    LayoutContent::Text { text, .. } => { labels.insert(text.clone(), pi + 1); },
+                    LayoutContent::Image { .. } => images.push(pi + 1),
+                    _ => {},
+                }
+            }
+        }
+        let expected_images: Vec<usize> = case["images"].as_array().unwrap().iter()
+            .map(|p| p.as_u64().unwrap() as usize).collect();
+        if images != expected_images || layout.pages.len() != case["pages"].as_u64().unwrap() as usize {
+            failures.push(format!("{name}: images {images:?}, pages {}", layout.pages.len()));
+        }
+        for (text, page) in case["labels"].as_object().unwrap() {
+            let want = page.as_u64().unwrap() as usize;
+            if labels.get(text) != Some(&want) {
+                failures.push(format!("{name} {text}: Word {want}, actual {:?}", labels.get(text)));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn header_text_frame_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/header_text_frame");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut positions = std::collections::BTreeMap::new();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    positions.insert(text.clone(), (pi + 1, e.x, e.y + e.text_y_off));
+                }
+            }
+        }
+        let origin = positions.get("HEADER").expect("header missing").2;
+        let word_origin = case["positions"]["HEADER"]["y"].as_f64().unwrap() as f32;
+        for (label, expected) in case["positions"].as_object().unwrap() {
+            let want_page = expected["page"].as_u64().unwrap() as usize;
+            let want_x = expected["x"].as_f64().unwrap() as f32;
+            let want_y = expected["y"].as_f64().unwrap() as f32 - word_origin;
+            if !positions.get(label).is_some_and(|&(page, x, y)|
+                page == want_page && (x - want_x).abs() < 0.3 && (y - origin - want_y).abs() < 0.2)
+            {
+                failures.push(format!("{name} {label}: Word ({want_page}, {want_x}, relative {want_y}), actual {:?}, origin {origin}", positions.get(label)));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn inline_picture_position_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_picture_position");
+    let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for c in cases.as_array().unwrap() {
+        let name = c["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(&std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let find = |label: &str| layout.pages.iter().enumerate().find_map(|(pi, page)| {
+            page.elements.iter().find_map(|e| match &e.content {
+                LayoutContent::Text { text, .. } if text.trim() == label => Some((pi + 1, e.y + e.text_y_off)),
+                _ => None,
+            })
+        });
+        let before = find("BEFORE").unwrap();
+        let picture = layout.pages.iter().enumerate().find_map(|(pi, page)| {
+            page.elements.iter().find_map(|e| matches!(&e.content, LayoutContent::Image { .. }).then_some((pi + 1, e.y)))
+        });
+        let image_y = c["image"]["bbox"][1].as_f64().unwrap();
+        match picture {
+            Some((page, y)) if page == c["image"]["page"].as_u64().unwrap() as usize
+                && (y as f64 - image_y).abs() < 0.15 => {},
+            actual => failures.push(format!("{name} image: Word y {image_y}, actual {actual:?}")),
+        }
+        for label in ["AFTER", "X", "(1)"] {
+            let expected = &c["positions"][label];
+            let delta = expected["y"].as_f64().unwrap() - c["positions"]["BEFORE"]["y"].as_f64().unwrap();
+            match find(label) {
+                Some((page, y)) if page == expected["page"].as_u64().unwrap() as usize
+                    && ((y - before.1) as f64 - delta).abs() < 0.25 => {},
+                actual => failures.push(format!("{name} {label}: expected relative y {delta}, actual {actual:?}, before {before:?}")),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+
+#[test]
+fn synthetic_ms_gothic_bold_width_matches_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/synthetic_ms_gothic_bold_width");
+    let cases: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("word.json")).unwrap()).unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let doc = crate::parser::parse_docx(
+            &std::fs::read(root.join(format!("{name}.docx"))).unwrap()).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        let mut lines: std::collections::BTreeMap<(usize, i32), Vec<(f32, String)>> = Default::default();
+        for (pi, page) in layout.pages.iter().enumerate() {
+            for e in &page.elements {
+                if let LayoutContent::Text { text, .. } = &e.content {
+                    match text.as_str() {
+                        "BEFORE" => {},
+                        "AFTER" => {},
+                        _ => lines.entry((pi, (e.y * 1000.0).round() as i32))
+                            .or_default().push((e.x, text.clone())),
+                    }
+                }
+            }
+        }
+        let actual: Vec<String> = lines.into_values().filter_map(|mut pieces| {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let text = pieces.into_iter().map(|(_, t)| t).collect::<String>()
+                .replace('\u{a0}', " ").trim().to_string();
+            (!text.is_empty()).then(|| text.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        }).collect();
+        let expected: Vec<String> = case["lines"].as_array().unwrap().iter()
+            .map(|t| t.as_str().unwrap().to_string()).collect();
+        if actual != expected {
+            failures.push(format!("{name}: Word {expected:?}, actual {actual:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+#[test]
+fn keep_next_across_last_column_matches_word() {
+    let cases: &[(&str, &[u8], usize, usize, f32, f32, usize)] = &[
+        ("first-line_widow0_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow0_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line_widow0_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow0_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line_widow0_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow0_remaining25.docx"), 2, 1, 30.0000, 245.2500, 1),
+        ("first-line_widow0_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow0_remaining30.docx"), 2, 1, 30.0000, 240.0000, 1),
+        ("first-line_widow0_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow0_remaining35.docx"), 2, 1, 30.0000, 234.7500, 1),
+        ("first-line_widow0_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow0_remaining40.docx"), 2, 1, 30.0000, 230.2500, 1),
+        ("first-line_widow1_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow1_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line_widow1_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow1_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line_widow1_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow1_remaining25.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line_widow1_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow1_remaining30.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line_widow1_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow1_remaining35.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line_widow1_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line_widow1_remaining40.docx"), 2, 1, 30.0000, 230.2500, 1),
+        ("first-line-auto_widow0_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow0_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow0_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow0_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow0_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow0_remaining25.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow0_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow0_remaining30.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow0_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow0_remaining35.docx"), 2, 1, 30.0000, 240.7500, 1),
+        ("first-line-auto_widow0_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow0_remaining40.docx"), 2, 1, 30.0000, 236.2500, 1),
+        ("first-line-auto_widow1_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow1_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow1_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow1_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow1_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow1_remaining25.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow1_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow1_remaining30.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow1_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow1_remaining35.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-auto_widow1_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-auto_widow1_remaining40.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow0_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow0_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow0_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow0_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow0_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow0_remaining25.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow0_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow0_remaining30.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow0_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow0_remaining35.docx"), 2, 1, 30.0000, 240.7500, 1),
+        ("first-line-short_widow0_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow0_remaining40.docx"), 2, 1, 30.0000, 236.2500, 1),
+        ("first-line-short_widow1_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow1_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow1_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow1_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow1_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow1_remaining25.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow1_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow1_remaining30.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow1_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow1_remaining35.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("first-line-short_widow1_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/first-line-short_widow1_remaining40.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow0_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow0_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow0_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow0_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow0_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow0_remaining25.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow0_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow0_remaining30.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow0_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow0_remaining35.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow0_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow0_remaining40.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow1_remaining15", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow1_remaining15.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow1_remaining20", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow1_remaining20.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow1_remaining25", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow1_remaining25.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow1_remaining30", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow1_remaining30.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow1_remaining35", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow1_remaining35.docx"), 2, 2, 30.0000, 30.0000, 2),
+        ("last-column_widow1_remaining40", include_bytes!("../../../../tests/fixtures/keepnext_first_line/last-column_widow1_remaining40.docx"), 2, 2, 30.0000, 30.0000, 2),
+    ];
+    for &(name, bytes, page_count, heading_page, heading_x, heading_y, body_page) in cases {
+        let doc = crate::parser::parse_docx(bytes).unwrap();
+        let layout = LayoutEngine::for_document(&doc).layout(&doc);
+        assert_eq!(layout.pages.len(), page_count, "{name}: page count");
+        let heading_index = if name.starts_with("last-column_") { 2 } else { 1 };
+        let headings: Vec<_> = layout.pages.iter().enumerate().flat_map(|(page, p)| {
+            p.elements.iter().filter_map(move |e| match &e.content {
+                LayoutContent::Text { text, .. } if e.paragraph_index == Some(heading_index) && !text.is_empty() => Some((page + 1, e)),
+                _ => None,
+            })
+        }).collect();
+        let heading_text: String = headings.iter().filter_map(|(_, e)| match &e.content {
+            LayoutContent::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(heading_text.trim(), "Kept heading", "{name}: heading text");
+        assert!(headings.iter().all(|(p, _)| *p == heading_page), "{name}: heading fragments on expected page");
+        let (page, heading) = headings[0];
+        assert_eq!(page, heading_page, "{name}: heading page");
+        assert!((heading.x - heading_x).abs() <= 0.5, "{name}: heading x {} expected {heading_x}", heading.x);
+        assert!((heading.y - heading_y).abs() <= 0.5, "{name}: heading y {} expected {heading_y}", heading.y);
+        let first_body_page = layout.pages.iter().position(|p| p.elements.iter().any(|e| {
+            matches!(&e.content, LayoutContent::Text { text, .. } if e.paragraph_index == Some(heading_index + 1) && !text.is_empty())
+        })).map(|p| p + 1);
+        assert_eq!(first_body_page, Some(body_page), "{name}: first body line");
     }
 }

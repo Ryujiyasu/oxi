@@ -629,6 +629,16 @@ impl FontMetrics {
         if self.family.starts_with("Malgun Gothic") {
             return std::env::var_os("OXI_MALGUN_METRICS").is_some();
         }
+        // Runtime font metrics retain the requested family name, including
+        // localized names. These faces use the same CJK single-line spacing
+        // as the table-backed faces (Word paragraph measurements).
+        if matches!(self.family.as_str(), "MingLiU" | "細明體"
+            | "Microsoft YaHei" | "微软雅黑") {
+            return true;
+        }
+        if matches!(self.family.as_str(), "Microsoft JhengHei Light" | "Microsoft JhengHei UI Light") {
+            return true;
+        }
         if self.family.starts_with("DengXian") {
             // S1496: default ON (was an opt-in left by a wip checkpoint).
             return std::env::var_os("OXI_DENGXIAN_METRICS_DISABLE").is_none();
@@ -819,6 +829,16 @@ impl FontMetricsRegistry {
             ).expect("embedded Soei Pop face metrics should be valid JSON");
             raw_list.extend(faces);
         }
+
+        let jhenghei_faces: Vec<RawFontMetrics> = serde_json::from_str(
+            include_str!("data/jhenghei_light_metrics.json")
+        ).expect("embedded JhengHei metrics should be valid JSON");
+        raw_list.extend(jhenghei_faces);
+
+        let meiryo_ui_faces: Vec<RawFontMetrics> = serde_json::from_str(
+            include_str!("data/meiryo_ui_metrics.json")
+        ).expect("embedded Meiryo UI metrics should be valid JSON");
+        raw_list.extend(meiryo_ui_faces);
 
         let mut fonts = HashMap::new();
 
@@ -1160,9 +1180,14 @@ impl FontMetricsRegistry {
         };
 
         let mut synthetic_bold_fonts = HashMap::new();
-        if std::env::var_os("OXI_CJK_SYNTHETIC_BOLD").is_some() {
+        {
+            let experimental_all_cjk = std::env::var_os("OXI_CJK_SYNTHETIC_BOLD").is_some();
             for metrics in fonts.values() {
-                if metrics.units_per_em == 256 || metrics.family == "Yu Mincho Regular" {
+                // Word's synthesized MS Gothic bold adds one design unit per glyph.
+                // This includes full-width spaces; native bold faces use their own metrics.
+                let measured_ms_gothic = metrics.family == "MS Gothic";
+                if measured_ms_gothic || (experimental_all_cjk
+                    && (metrics.units_per_em == 256 || metrics.family == "Yu Mincho Regular")) {
                     let mut synthetic = metrics.clone();
                     synthetic.synthetic_bold_advance = 1.0 / f32::from(metrics.units_per_em);
                     synthetic_bold_fonts.insert(metrics.family.clone(), synthetic);
@@ -1519,6 +1544,15 @@ impl FontMetricsRegistry {
         if !self.has_gdi_widths(family) {
             if let Some(m) = runtime::resolve(family, false, false) {
                 return m;
+            }
+        }
+        // Word substitutes this unavailable traditional Chinese face with
+        // YaHei, for both its localized and English names. Keep a real Kai
+        // face when present (all table/runtime lookups above take precedence).
+        if matches!(family, "標楷體" | "DFKai-SB") {
+            if let Some(metrics) = self.fonts.get("Microsoft YaHei")
+                .or_else(|| runtime::resolve("Microsoft YaHei", false, false)) {
+                return metrics;
             }
         }
         // S1146 (2026-08-16, opt-out OXI_S1146_DISABLE): a font Word cannot
@@ -2054,7 +2088,12 @@ pub fn render_family_name(name: &str) -> &str {
     if std::env::var("OXI_S844_DISABLE").is_ok() {
         return name;
     }
-    if name.starts_with("Humnst777") {
+    if matches!(name, "標楷體" | "DFKai-SB")
+        && runtime::resolve(name, false, false).is_none()
+        && runtime::resolve("Microsoft YaHei", false, false).is_some()
+    {
+        "Microsoft YaHei"
+    } else if name.starts_with("Humnst777") {
         "Calibri"
     } else if name == "CG Times" || name.starts_with("CG Times ") {
         "Times New Roman"
@@ -2109,6 +2148,7 @@ fn normalize_family_name(name: &str) -> String {
         }
     }
     match name {
+        "微軟正黑體 Light" => "Microsoft JhengHei Light".to_string(),
         "HG創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGSoeiKakupoptai".to_string(),
         "HGP創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGPSoeiKakupoptai".to_string(),
         "HGS創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGSSoeiKakupoptai".to_string(),
@@ -2196,7 +2236,7 @@ fn normalize_family_name(name: &str) -> String {
         "游ゴシック Medium" | "游ゴシック Bold" => "Yu Gothic Bold".to_string(),
         "游明朝" | "游明朝 Light" => "Yu Mincho Regular".to_string(),
         "游明朝 Demibold" | "游明朝 Bold" => "Yu Mincho Demibold".to_string(),
-        "メイリオ" | "Meiryo UI" => "Meiryo".to_string(),
+        "メイリオ" => "Meiryo".to_string(),
         // Arial Unicode MS: COM-confirmed (Round 20 correction, 2026-04-08)
         // Word substitutes to ＭＳ 明朝 in Japanese locale (NOT Arial), even
         // though the doc XML specifies Arial Unicode MS. Verified across
@@ -2507,6 +2547,24 @@ mod tests {
         // CJK char should be ~1.0em
         let kanji_w = yu.char_width_em('漢');
         assert!(kanji_w > 0.9 && kanji_w < 1.1, "kanji width: {}", kanji_w);
+    }
+
+    #[test]
+    fn jhenghei_light_names_retain_their_single_spacing() {
+        let registry = FontMetricsRegistry::load();
+        for (name, canonical, heights) in [
+            ("Microsoft JhengHei Light", "Microsoft JhengHei Light", [15.75, 19.125, 24.375]),
+            ("微軟正黑體 Light", "Microsoft JhengHei Light", [15.75, 19.125, 24.375]),
+            ("Microsoft JhengHei UI Light", "Microsoft JhengHei UI Light", [15.0, 18.0, 23.25]),
+        ] {
+            let metrics = registry.get(name);
+            assert_eq!(metrics.family, canonical);
+            for (size, expected) in [9.0, 11.0, 14.0].into_iter().zip(heights) {
+                let actual = metrics.word_line_height(size, 150.0);
+                assert!((actual - expected).abs() < 0.4,
+                    "{name} at {size}pt: expected about {expected}pt, got {actual}pt");
+            }
+        }
     }
 
     #[test]

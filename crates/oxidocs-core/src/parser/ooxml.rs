@@ -1143,6 +1143,7 @@ impl OoxmlParser {
             hyphenation_zone,
             do_not_expand_shift_return,
             balance_single_byte_double_byte_width,
+            keep_floating_tables_together: self.parse_compat_bool_flag("doNotBreakWrappedTables"),
         };
         // S1008 (2026-07-26): resolve fontTable w:altName substitutions
         // (source unsupported → alternate supported). No-op for the vast
@@ -1947,6 +1948,8 @@ fn parse_body(
                         }
                         // S1056: capture the leading-page-break flag before
                         // `pr.paragraph` moves (same reason as S965/S898a below).
+                        let image_paragraph_page_break_before =
+                            image_only && pr.paragraph.style.page_break_before;
                         let s1056_page_break = image_only
                             && pr.paragraph.style.page_break_after
                             && std::env::var("OXI_S1056_DISABLE").is_err();
@@ -2208,7 +2211,9 @@ fn parse_body(
                         // Word truth (technical__00a2d61f, ExportAsFixedFormat): Fig
                         // S3/S4/S5 each open their own page (7 pages, one figure per
                         // page after p2); Oxi packed two per page and rendered 6.
-                        if s1056_page_break {
+                        // Lowering an image-only paragraph must preserve its
+                        // resolved page-break-before property, including styles.
+                        if s1056_page_break || image_paragraph_page_break_before {
                             if let Some(first) = pr.inline_images.first_mut() {
                                 if let Block::Image(img) = first {
                                     img.page_break_before = true;
@@ -3835,6 +3840,7 @@ fn parse_paragraph_with_inline_images_impl(
         .or_else(|| styles.default_paragraph_style_id.clone());
     if let Some(ref sid) = effective_style_id {
         if let Some(defined) = styles.styles.get(sid) {
+            super::styles::inherit_frame_properties(&mut style.frame_pr, &defined.paragraph.frame_pr);
             // Inherit alignment from style if not explicitly set in paragraph
             // (S540: explicit jc=left == default Left, so gate on the flag,
             // not the value)
@@ -3949,6 +3955,7 @@ fn parse_paragraph_with_inline_images_impl(
             // Inherit widow_control: style's explicit setting takes precedence
             if !style.has_explicit_widow_control && ds.has_explicit_widow_control {
                 style.widow_control = ds.widow_control;
+                style.has_explicit_widow_control = true;
             }
             // Inherit numPr from style definition
             if style.num_id.is_none() {
@@ -4057,8 +4064,9 @@ fn parse_paragraph_with_inline_images_impl(
             // Word. CR6 (pStyle ac only) fits 35 chars → pStyle inheritance
             // for auto_space_de was broken. tokumei_08_01 series (a1d6/d4d126/
             // de6e/etc, 22 baseline docs) uses style "ac" with autoSpaceDE=0.
-            if !ds.auto_space_de {
-                style.auto_space_de = false;
+            if !style.has_explicit_auto_space_de {
+                style.auto_space_de = ds.auto_space_de;
+                style.has_explicit_auto_space_de = ds.has_explicit_auto_space_de;
             }
             // Session 95 (2026-05-18) symmetric fix: inherit auto_space_dn
             // (East Asian ↔ digit auto-spacing). S85 only handled auto_space_de
@@ -4066,8 +4074,9 @@ fn parse_paragraph_with_inline_images_impl(
             // flag (is_ascii_alphanumeric). S95 split alpha vs digit at 4 call
             // sites in mod.rs; without dn inheritance, a1d6/d4d126/de6e "ac"
             // paragraphs would have dn=true (default) and over-space digits.
-            if !ds.auto_space_dn {
-                style.auto_space_dn = false;
+            if !style.has_explicit_auto_space_dn {
+                style.auto_space_dn = ds.auto_space_dn;
+                style.has_explicit_auto_space_dn = ds.has_explicit_auto_space_dn;
             }
             // S301 (2026-05-26) symmetric fix: inherit word_wrap from style
             // (false overrides default true). Mirrors snap_to_grid /
@@ -4128,6 +4137,14 @@ fn parse_paragraph_with_inline_images_impl(
         }
     }
     if let Some(ref doc_para) = styles.doc_default_para_style {
+        if !style.has_explicit_auto_space_de && doc_para.has_explicit_auto_space_de {
+            style.auto_space_de = doc_para.auto_space_de;
+            style.has_explicit_auto_space_de = true;
+        }
+        if !style.has_explicit_auto_space_dn && doc_para.has_explicit_auto_space_dn {
+            style.auto_space_dn = doc_para.auto_space_dn;
+            style.has_explicit_auto_space_dn = true;
+        }
         if style.space_before.is_none() {
             style.space_before = doc_para.space_before;
             style.space_before_from_doc_defaults = doc_para.space_before.is_some();
@@ -4797,6 +4814,19 @@ fn parse_paragraph_with_inline_images_impl(
         }
     }
 
+    // Apply document language defaults after the paragraph style so that
+    // a default never masks an explicit style or run language.
+    if let Some(defaults) = &styles.doc_default_run_style {
+        for run in &mut runs {
+            if run.style.east_asia_lang.is_none() {
+                run.style.east_asia_lang = defaults.east_asia_lang.clone();
+            }
+            if run.style.latin_lang.is_none() {
+                run.style.latin_lang = defaults.latin_lang.clone();
+            }
+        }
+    }
+
     // RUN-PRESENCE rule — ★FALSIFIED (2026-07-07 level 10; kept as a
     // standalone opt-in tombstone). Hypothesis: a paragraph whose runs are
     // ALL text-empty but non-empty (a text-less anchor-run holder) sizes
@@ -5246,29 +5276,7 @@ fn parse_paragraph_properties(
                         }
                     }
                     "framePr" => {
-                        let mut fp = crate::ir::FrameProperties::default();
-                        for attr in e.attributes().flatten() {
-                            let key = local_name(attr.key.as_ref());
-                            let val = String::from_utf8_lossy(&attr.value);
-                            match key.as_str() {
-                                "dropCap" => fp.drop_cap = Some(val.to_string()),
-                                "lines" => fp.lines = val.parse().unwrap_or(1),
-                                "w" => fp.width = val.parse::<f32>().ok().map(|v| v / 20.0),
-                                "h" => fp.height = val.parse::<f32>().ok().map(|v| v / 20.0),
-                                "hRule" => fp.height_rule = Some(val.to_string()),
-                                "hAnchor" => fp.h_anchor = Some(val.to_string()),
-                                "vAnchor" => fp.v_anchor = Some(val.to_string()),
-                                "x" => fp.x = val.parse::<f32>().unwrap_or(0.0) / 20.0,
-                                "y" => fp.y = val.parse::<f32>().unwrap_or(0.0) / 20.0,
-                                "hSpace" => fp.h_space = val.parse::<f32>().unwrap_or(0.0) / 20.0,
-                                "vSpace" => fp.v_space = val.parse::<f32>().unwrap_or(0.0) / 20.0,
-                                "wrap" => fp.wrap = Some(val.to_string()),
-                                "xAlign" => fp.x_align = Some(val.to_string()),
-                                "yAlign" => fp.y_align = Some(val.to_string()),
-                                _ => {}
-                            }
-                        }
-                        style.frame_pr = Some(fp);
+                        style.frame_pr = Some(super::styles::parse_frame_properties(&e));
                     }
                     "snapToGrid" => {
                         // CT_OnOff: presence alone (no val) = true. A direct
@@ -5660,6 +5668,7 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.auto_space_de = enabled;
+                        style.has_explicit_auto_space_de = true;
                     }
                     "autoSpaceDN" => {
                         let mut enabled = true;
@@ -5670,6 +5679,7 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.auto_space_dn = enabled;
+                        style.has_explicit_auto_space_dn = true;
                     }
                     "outlineLvl" => {
                         for attr in e.attributes().flatten() {
@@ -10083,7 +10093,16 @@ fn parse_run_properties(
                     continue;
                 }
                 depth += 1;
-                if local == "rFonts" {
+                if local == "lang" {
+                    for attr in e.attributes().flatten() {
+                        let value = String::from_utf8_lossy(&attr.value).to_string();
+                        match local_name(attr.key.as_ref()).as_str() {
+                            "eastAsia" => style.east_asia_lang = Some(value),
+                            "val" => style.latin_lang = Some(value),
+                            _ => {}
+                        }
+                    }
+                } else if local == "rFonts" {
                     // S1341 (2026-09-06, default ON, opt-out OXI_S1341_DISABLE): w:ascii
                     // wins over w:hAnsi -- ascii names the font of U+0000-007F (digits,
                     // Latin letters, the text these documents actually carry), hAnsi the
@@ -10108,8 +10127,6 @@ fn parse_run_properties(
                             style.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                             style.has_explicit_east_asia = true;
-                        } else if key == "hint" {
-                            style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                         } else if key == "cs" {
                             style.font_family_cs =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -10236,6 +10253,16 @@ fn parse_run_properties(
                             }
                         }
                     }
+                    "lang" => {
+                        for attr in e.attributes().flatten() {
+                            let value = String::from_utf8_lossy(&attr.value).to_string();
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "eastAsia" => style.east_asia_lang = Some(value),
+                                "val" => style.latin_lang = Some(value),
+                                _ => {}
+                            }
+                        }
+                    }
                     "rFonts" => {
                         // S1341: ascii wins over hAnsi (see the run-level parser).
                         let s1341_ascii_wins = std::env::var("OXI_S1341_DISABLE").is_err();
@@ -10254,8 +10281,6 @@ fn parse_run_properties(
                                 style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                                 style.has_explicit_east_asia = true;
-                            } else if key == "hint" {
-                                style.east_asia_hint = attr.value.as_ref() == b"eastAsia";
                             } else if key == "cs" {
                                 style.font_family_cs =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
@@ -12936,10 +12961,10 @@ fn dbg_bodywalk() -> bool {
 
 fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
     let mut style = ParagraphStyle::default();
-    // Apply Normal style (common IDs: "a" for Japanese, "Normal" for English)
-    if let Some(defined) = styles
-        .styles
-        .get("a")
+    // Empty paragraphs inherit the declared default, even with a custom style ID.
+    if let Some(defined) = styles.default_paragraph_style_id.as_deref()
+        .and_then(|id| styles.styles.get(id))
+        .or_else(|| styles.styles.get("a"))
         .or_else(|| styles.styles.get("Normal"))
     {
         let ds = &defined.paragraph;
@@ -12976,6 +13001,14 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
         style.default_run_style = styles.doc_default_run_style.clone();
     }
     if let Some(ref doc_para) = styles.doc_default_para_style {
+        if !style.has_explicit_auto_space_de && doc_para.has_explicit_auto_space_de {
+            style.auto_space_de = doc_para.auto_space_de;
+            style.has_explicit_auto_space_de = true;
+        }
+        if !style.has_explicit_auto_space_dn && doc_para.has_explicit_auto_space_dn {
+            style.auto_space_dn = doc_para.auto_space_dn;
+            style.has_explicit_auto_space_dn = true;
+        }
         if style.space_before.is_none() {
             style.space_before = doc_para.space_before;
             style.space_before_from_doc_defaults = doc_para.space_before.is_some();

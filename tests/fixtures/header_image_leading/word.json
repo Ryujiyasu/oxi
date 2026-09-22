@@ -1,0 +1,170 @@
+[
+  {
+    "name": "t0_fs8_mul1.0",
+    "pages": 1,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 120.6719970703125
+      },
+      "TARGET": {
+        "page": 1,
+        "y": 148.29598999023438
+      }
+    }
+  },
+  {
+    "name": "t0_fs8_mul1.15",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 122.11199951171875
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 63.649993896484375
+      }
+    }
+  },
+  {
+    "name": "t0_fs8_mul1.5",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 125.47198486328125
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 67.12999725341797
+      }
+    }
+  },
+  {
+    "name": "t0_fs11_mul1.0",
+    "pages": 1,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 120.6719970703125
+      },
+      "TARGET": {
+        "page": 1,
+        "y": 148.29598999023438
+      }
+    }
+  },
+  {
+    "name": "t0_fs11_mul1.15",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 122.59199523925781
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 64.24999237060547
+      }
+    }
+  },
+  {
+    "name": "t0_fs11_mul1.5",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 127.39199829101562
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 68.92999267578125
+      }
+    }
+  },
+  {
+    "name": "t1_fs8_mul1.0",
+    "pages": 1,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 121.39199829101562
+      },
+      "TARGET": {
+        "page": 1,
+        "y": 148.29598999023438
+      }
+    }
+  },
+  {
+    "name": "t1_fs8_mul1.15",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 122.83200073242188
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 67.3699951171875
+      }
+    }
+  },
+  {
+    "name": "t1_fs8_mul1.5",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 126.19198608398438
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 70.72999572753906
+      }
+    }
+  },
+  {
+    "name": "t1_fs11_mul1.0",
+    "pages": 1,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 121.39199829101562
+      },
+      "TARGET": {
+        "page": 1,
+        "y": 148.29598999023438
+      }
+    }
+  },
+  {
+    "name": "t1_fs11_mul1.15",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 123.31199645996094
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 67.84999084472656
+      }
+    }
+  },
+  {
+    "name": "t1_fs11_mul1.5",
+    "pages": 2,
+    "positions": {
+      "BEFORE": {
+        "page": 1,
+        "y": 127.99198913574219
+      },
+      "TARGET": {
+        "page": 2,
+        "y": 72.52999114990234
+      }
+    }
+  }
+]

@@ -1,0 +1,776 @@
+[
+  {
+    "name": "11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "11_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "11_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "15_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "15_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_11_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_11_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_15_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "kern_15_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_11_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_11_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_15_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_15_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_11_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_11_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_15_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "compress_nokern_15_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_11_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_11_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_15_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_15_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_11_MS_PMincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_11_MS_PMincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_11_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_11_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_15_MS_PMincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_15_MS_PMincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_15_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "proportional_15_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a",
+      "\u8f9b"
+    ]
+  },
+  {
+    "name": "middle-dot_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot_11_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot_11_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot_15_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot_15_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_11_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_11_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_15_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-justify_15_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_11_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_11_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_15_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "middle-dot-ja_15_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity_97.5_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity_97.5_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u2610"
+    ]
+  },
+  {
+    "name": "symbol-capacity_97.5_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity_97.5_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb\u2610"
+    ]
+  },
+  {
+    "name": "symbol-capacity_95_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity_95_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u2610"
+    ]
+  },
+  {
+    "name": "symbol-capacity_95_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity_95_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u2610"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_97.5_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_97.5_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u2610"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_97.5_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_97.5_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u2610"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_95_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_95_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u2610"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_95_Yu_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u5e9a"
+    ]
+  },
+  {
+    "name": "symbol-capacity-legacy_95_Yu_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u30fb\u4e19\u4e01\u30fb\u620a\u5df1\u30fb",
+      "\u2610"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_11_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_11_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_11_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_11_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_15_MS_Mincho_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_15_MS_Mincho_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_15_BIZ_UDPGothic_0",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  },
+  {
+    "name": "justify_compress_nokern_15_BIZ_UDPGothic_1",
+    "lines": [
+      "\u7532\u4e59\u3001\u300c\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\u3002\uff09\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b",
+      "\u7532\u4e59\uff08\uff08\u4e19\u4e01\u620a\u5df1\u5e9a\u8f9b"
+    ]
+  }
+]

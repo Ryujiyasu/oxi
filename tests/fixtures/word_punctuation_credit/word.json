@@ -1,0 +1,208 @@
+[
+  {
+    "name": "probe-fee-number-tail_left_compressPunctuation_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail_left_compressPunctuation_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail_justify_compressPunctuation_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail_justify_compressPunctuation_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail_left_doNotCompress_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail_left_doNotCompress_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail_justify_doNotCompress_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail_justify_doNotCompress_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_left_compressPunctuation_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_left_compressPunctuation_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_justify_compressPunctuation_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_justify_compressPunctuation_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_left_doNotCompress_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_left_doNotCompress_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_justify_doNotCompress_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy_justify_doNotCompress_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_left_compressPunctuation_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_left_compressPunctuation_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_justify_compressPunctuation_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_justify_compressPunctuation_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_left_doNotCompress_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_left_doNotCompress_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_justify_doNotCompress_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-number-tail-legacy-nogrid_justify_doNotCompress_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_number_close_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_number_close_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_number_open_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_number_open_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe57,500"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_letters_close_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe5abcde\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_letters_close_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe5abcde\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_letters_open_width523.3",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe5abcde"
+    ]
+  },
+  {
+    "name": "probe-fee-token-kind_letters_open_width540.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe5abcde"
+    ]
+  }
+]

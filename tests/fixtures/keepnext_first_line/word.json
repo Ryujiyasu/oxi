@@ -1,0 +1,1298 @@
+[
+  {
+    "name": "first-line_widow0_remaining15",
+    "sha256": "6ba39ae9cf25026e95ec602756635fa2f492909449de2cac603ae912fb015188",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 42.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow0_remaining20",
+    "sha256": "46c6d4a605fc63fdcb44c13e48abcf9a7a9ba4c63cbd16bc4c3f9b91bb56f652",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 42.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow0_remaining25",
+    "sha256": "9bd614d72c5727cf7bda70c57894078565c01ab8138704c4f6e1e4dbb78715fb",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 245.25,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 257.25,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow0_remaining30",
+    "sha256": "06ae24f1bb5274ae499af20225a05ca4092e4e15e0070715d48237f07137fa74",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 240.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 252.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow0_remaining35",
+    "sha256": "1a3bc3abe0e0731cc900fbb2c66f14ec842b673bf3d6ce6082049daa193ac686",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 234.75,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 246.75,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow0_remaining40",
+    "sha256": "2cc2cd8294c5b29e954954728f4f7d6b0459efee401dfdc6d2619816b7e871a7",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 230.25,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 242.25,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow1_remaining15",
+    "sha256": "763dc8bd99f6edb9bba193696193358dd848951a8a3ea11a5b850f4f95cbca8d",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 42.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow1_remaining20",
+    "sha256": "f1cca0602511c0480d4bb6fbbc9b62a437b0e6cedba645421917ac6ac032ac9c",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 42.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow1_remaining25",
+    "sha256": "880781f4fa965bc31cc5df4510a7f39859a7cf382fc26bf752ae2c9d5ef2e0eb",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 42.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow1_remaining30",
+    "sha256": "a851e142633ccaa296377f1c3f00ff0798cd22468aa1c2bc57f7ce8bb44528e9",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 42.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow1_remaining35",
+    "sha256": "52df8b9b35720b1b0a761af35f0478e27c1d4a44937feb9b2fd958e1cfa55080",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 42.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line_widow1_remaining40",
+    "sha256": "f22aefd747b0071ae28d8d8dcc52bd6eb568e9285a5cefa140de2822ecb6c0c0",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 230.25,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 242.25,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow0_remaining15",
+    "sha256": "9417d4a66a9a28a007178ffc13602c2da65eb1f0b93f8a36e8d3505fdfa4ed71",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow0_remaining20",
+    "sha256": "5d1b043f79aa622d3880b5c2dd226603dd6b9c1d846b87b9f7312610e2a5cbb0",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow0_remaining25",
+    "sha256": "901ee489fa4c950b37f1fe2365fb27776d1e0c38037456351f1e21e0ebccc5f1",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow0_remaining30",
+    "sha256": "745483a879283781f528ead344a9e6bd214ef5d63ef6771b33eb81002759609a",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow0_remaining35",
+    "sha256": "d748af3c11b3a85684fb117ad2e01b194891f13c94e8731f9931118d9a5e3b50",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 240.75,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 256.5,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow0_remaining40",
+    "sha256": "9c5bebb93d4a4ec402bbc0fa22699a686df9103971facc28961622b52d0160db",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 236.25,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 251.25,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow1_remaining15",
+    "sha256": "8f3aa2bab6913b066cd54abefbcd4133b8cb137504114c32fd1daa81938da75f",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow1_remaining20",
+    "sha256": "403113bc1a75d0e20be36c57fdd125bd3cca699f325fda3388440318152d8c62",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow1_remaining25",
+    "sha256": "b6c2379fc84d6834caa923d1100562c8a3ab605ae07fcf72be36c635d2841664",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow1_remaining30",
+    "sha256": "3b5476fd63b2e683968282854351a95530286ca0d683278c553696f02610e9af",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow1_remaining35",
+    "sha256": "685a3bc30edd1d1181258b226d6ced73935d6447d52d11ec656eb7b90f96ac3d",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-auto_widow1_remaining40",
+    "sha256": "bb363abd77d78766205c8217a8e57cf523079d2c452e9499d26e4a3e0366daa4",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow0_remaining15",
+    "sha256": "5981c05885407d4b348e01e4fb2cdba3451f7b447758e5f7d8dc95f4863dde60",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow0_remaining20",
+    "sha256": "61e07773ca1be714bb21060d6e4a905730cd175c19df75c24f692da73e2ee60c",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow0_remaining25",
+    "sha256": "0fe9ca5d1ca907ea51b94e8c2f97de92eebe84bc6a79179131d771021cebe224",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow0_remaining30",
+    "sha256": "62880adf9a2ec178ddaead339cf543de654fa17c470210ca8c3c080ccb34ee00",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow0_remaining35",
+    "sha256": "00b39fbf3cbf4c9731512351201b4bc8279cf57c5c666dfed92999b15a2bc4f8",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 240.75,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 256.5,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow0_remaining40",
+    "sha256": "107c00a61fa19a8c395e0feb0f5b544ac3e7285b0b5bc0eb0a89bc6f9b8b0d18",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 1,
+      "y": 236.25,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 1,
+      "y": 251.25,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow1_remaining15",
+    "sha256": "ca82a8c7aa3e39ba75c45d4c776e374083a9e7e80b36a2091bd1e365d66657ad",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow1_remaining20",
+    "sha256": "0682aca71cac73e8f56fb949c9c78ec058719a244f01d4e619e8a7514e604726",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow1_remaining25",
+    "sha256": "2f73f283de20c0d8f4d3188296dd46097cee0ca12a0526870db4419218cf4696",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow1_remaining30",
+    "sha256": "7c7b6ea7fcdf05f1a8ce10e4b95d30d199d35e855343b2caf3cb2bd0403924af",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow1_remaining35",
+    "sha256": "dc31df3a3e0e8268e3590b2fd560a80b2c21af480bb74f2275a02b54dffce1f9",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "first-line-short_widow1_remaining40",
+    "sha256": "d3990aec3a6309624ae7f7e45c3a42c28c2d3ca9eeb9cb2cfaee73c9fd98ac27",
+    "pages": 2,
+    "heading": {
+      "i": 2,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 3,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow0_remaining15",
+    "sha256": "5ab1e2b8bdab7d894a2ce201bfe5239b07585623065780f957c49dcabda7cac0",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow0_remaining20",
+    "sha256": "ecb4fb2a58681ed2bf3258fc8918c219407351eab8cf34b194b232b714d12110",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow0_remaining25",
+    "sha256": "4f438d790721005d4d31b2db4d7a570af5945b8230c19b498baa9446320088db",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow0_remaining30",
+    "sha256": "1705c8187e522c9c5b05a483018b37d306561ba0037c064bb7e493a4c845786e",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow0_remaining35",
+    "sha256": "00c9a374d68f4818ebb80e046126a6757023af3f8958c738b14210fa15681616",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow0_remaining40",
+    "sha256": "05bd6a2a185783fb17972b80c6be5667c9cb9c8b03ea4ac99be173cd1f4673ac",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow1_remaining15",
+    "sha256": "3d0a21c263cc61aef3e5fe54ec6d67fddca4699d2de3c21c3ae2fa7a84fdeeea",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow1_remaining20",
+    "sha256": "850d82f88d021c0d65dac6f9ffd348b08b86e5fbf9f9602cea3bf7e3980810dd",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow1_remaining25",
+    "sha256": "99d4a5b398eed59aa8246a4ac3fb082760fc021778f79450af948cd04a4fc638",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow1_remaining30",
+    "sha256": "d38af84308d0f6417a84c1e47c89d389912189f2310645367d8307b702138df9",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow1_remaining35",
+    "sha256": "0a57434691b35a29cf91600f6e2665e13532bbb97f937e28eccd4e36f6922755",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  },
+  {
+    "name": "last-column_widow1_remaining40",
+    "sha256": "97ab138cadd29e612bb45299430628ff93cd5dc0d383ab3f85603c98127559a7",
+    "pages": 2,
+    "heading": {
+      "i": 3,
+      "page": 2,
+      "y": 30.0,
+      "x": 30.0,
+      "text": "Kept heading",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    },
+    "body": {
+      "i": 4,
+      "page": 2,
+      "y": 45.0,
+      "x": 30.0,
+      "text": "Body text for testing the firs",
+      "in_table": false,
+      "cell_row": null,
+      "cell_col": null,
+      "table_start": null
+    }
+  }
+]

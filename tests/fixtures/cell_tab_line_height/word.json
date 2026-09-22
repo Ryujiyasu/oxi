@@ -1,0 +1,186 @@
+[
+  {
+    "name": "cell-mixed-lines_first12_second11_tab0",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-mixed-lines_first12_second11_tab12",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-mixed-lines_first12_second11_tab20",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-mixed-lines_first11_second12_tab0",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-mixed-lines_first11_second12_tab12",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-mixed-lines_first11_second12_tab20",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-mixed-lines_first12_second12_tab0",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "cell-mixed-lines_first12_second12_tab12",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "cell-mixed-lines_first12_second12_tab20",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "cell-mixed-lines_first11_second11_tab0",
+    "extent": 39.1199951171875
+  },
+  {
+    "name": "cell-mixed-lines_first11_second11_tab12",
+    "extent": 39.1199951171875
+  },
+  {
+    "name": "cell-mixed-lines_first11_second11_tab20",
+    "extent": 39.1199951171875
+  },
+  {
+    "name": "cell-tab-positions_leading_tab11",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-tab-positions_leading_tab20",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-tab-positions_middle_tab11",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-tab-positions_middle_tab20",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "cell-tab-positions_only_tab11",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "cell-tab-positions_only_tab20",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "tab-mark_mark11_tab11",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "tab-mark_mark11_tab20",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "tab-mark_mark20_tab11",
+    "extent": 50.6400146484375
+  },
+  {
+    "name": "tab-mark_mark20_tab20",
+    "extent": 50.6400146484375
+  },
+  {
+    "name": "probe-tab-mark-spacing_Arial_multiple_mark11_tab20",
+    "extent": 53.52001953125
+  },
+  {
+    "name": "probe-tab-mark-spacing_Arial_multiple_mark20_tab11",
+    "extent": 69.0
+  },
+  {
+    "name": "probe-tab-mark-spacing_Arial_exact_mark11_tab20",
+    "extent": 43.79998779296875
+  },
+  {
+    "name": "probe-tab-mark-spacing_Arial_exact_mark20_tab11",
+    "extent": 43.79998779296875
+  },
+  {
+    "name": "probe-tab-mark-spacing_Arial_atLeast_mark11_tab20",
+    "extent": 43.79998779296875
+  },
+  {
+    "name": "probe-tab-mark-spacing_Arial_atLeast_mark20_tab11",
+    "extent": 51.84002685546875
+  },
+  {
+    "name": "probe-tab-mark-spacing_Calibri_multiple_mark11_tab20",
+    "extent": 56.760009765625
+  },
+  {
+    "name": "probe-tab-mark-spacing_Calibri_multiple_mark20_tab11",
+    "extent": 73.20001220703125
+  },
+  {
+    "name": "probe-tab-mark-spacing_Calibri_exact_mark11_tab20",
+    "extent": 44.6400146484375
+  },
+  {
+    "name": "probe-tab-mark-spacing_Calibri_exact_mark20_tab11",
+    "extent": 44.6400146484375
+  },
+  {
+    "name": "probe-tab-mark-spacing_Calibri_atLeast_mark11_tab20",
+    "extent": 44.6400146484375
+  },
+  {
+    "name": "probe-tab-mark-spacing_Calibri_atLeast_mark20_tab11",
+    "extent": 54.1199951171875
+  },
+  {
+    "name": "space_first12_second11_tab0",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "space_first12_second11_tab12",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "space_first12_second11_tab20",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "space_first11_second12_tab0",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "space_first11_second12_tab12",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "space_first11_second12_tab20",
+    "extent": 40.20001220703125
+  },
+  {
+    "name": "space_first12_second12_tab0",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "space_first12_second12_tab12",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "space_first12_second12_tab20",
+    "extent": 41.4000244140625
+  },
+  {
+    "name": "space_first11_second11_tab0",
+    "extent": 39.1199951171875
+  },
+  {
+    "name": "space_first11_second11_tab12",
+    "extent": 39.1199951171875
+  },
+  {
+    "name": "space_first11_second11_tab20",
+    "extent": 39.1199951171875
+  }
+]
