@@ -204,5 +204,61 @@
     "lines": [
       "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a\uffe5abcde"
     ]
+  },
+  {
+    "name": "probe-fee-entry-closing_mode15_number_close_width494.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "7\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-entry-closing_mode15_currency_number_close_width494.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-entry-closing_mode15_currency_number_close_width496.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-entry-no-auto_mode15_number_close_width486.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "7\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-entry-no-auto_mode15_currency_number_close_width486.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-entry-no-auto_mode15_currency_number_close_width488.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-entry-no-auto_mode15_currency_number_close_width490.0",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57\uff09"
+    ]
+  },
+  {
+    "name": "probe-fee-entry-fine-no-auto_mode15_currency_number_close_width491.65",
+    "lines": [
+      "\u6708\uff12\u56de\uff08\u6708\u4f1a\u8cbb\u5236\uff09\uffe5\uff11\uff16\uff0c\uff12\uff10\uff10\uff081\u56de\u3042\u305f\u308a",
+      "\uffe57\uff09"
+    ]
   }
 ]

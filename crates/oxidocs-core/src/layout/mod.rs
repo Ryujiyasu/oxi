@@ -30120,6 +30120,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // read inside flush_word).
         let s1346_regime_credit: std::cell::Cell<i32> = std::cell::Cell::new(0);
         let word_full_punctuation_credit = std::cell::Cell::new(false);
+        let ideographic_closing_spacing = s476_body && is_justified && self.compress_punctuation
+            && grid_char_pitch.is_none() && !vertical;
+        let mut ideographic_closing_lines = std::collections::BTreeSet::new();
+        let ideographic_space_capacity = |line: &Line| -> f32 {
+            line.fragments.iter()
+                .skip_while(|f| f.text.chars().all(char::is_whitespace))
+                .filter(|f| !f.text.is_empty() && f.text.chars().all(|c| c == '\u{3000}'))
+                .map(|f| (f.width - f.natural_width * 0.25).max(0.0)).sum()
+        };
         macro_rules! flush_word {
             ($style:expr) => {
                 if !word.is_empty() {
@@ -34243,7 +34252,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // S1490 v13: a unit whose extra marks push it past the cap is
                     // wrapped even when the character alone fits naturally.
                     let mut s1490_unit_refused = false;
-                    let (s1318_force_fit, s1318_refuse_here) = if !s1318_regime {
+                    let (mut s1318_force_fit, mut s1318_refuse_here) = if !s1318_regime {
                         (false, false)
                     } else if s1318_prev_open {
                         // S1346 (N_/Q_ arms): after an OPENING BRACKET the overflowing
@@ -34337,6 +34346,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         };
                         (fit, !fit)
                     };
+                    // A closing mark can consume internal blank space after its
+                    // preceding word has already passed the word-fit decision.
+                    if !s1318_force_fit && !s1490_unit_refused && s1318_regime
+                        && ideographic_closing_spacing && s1318_ch_mark && s1318_prev_latin
+                        && s1318_natural_over_tw > 0
+                        && {
+                            let word_width: f32 = current_line.fragments.iter().rev()
+                                .take_while(|f| !f.text.is_empty() && f.text.chars().all(|c|
+                                    !c.is_whitespace() && (c.is_ascii() || matches!(c, '¥' | '￥'))))
+                                .map(|f| f.width).sum();
+                            let expansion = s1318_avail_tw - current_width_tw + pt_to_tw(word_width);
+                            let compression = (s1318_natural_over_tw - s1318_n_solo as i32 * s1318_half_cell_tw).max(0);
+                            word_width > 0.0 && expansion >= 0 && compression * 2 <= expansion
+                        }
+                        && s1318_natural_over_tw <= pt_to_tw(ideographic_space_capacity(&current_line))
+                    {
+                        s1318_force_fit = true;
+                        s1318_refuse_here = false;
+                        ideographic_closing_lines.insert(lines.len());
+                    }
                     if s1318_regime && std::env::var("OXI_DBG1318").is_ok() {
                         eprintln!("[S1318] ch={:?} idx={} cur_tw={} cw_tw={} avail_tw={} over_tw={} cap_tw={} half_tw={} n_elect={} prev_latin={} next_mark={} ch_mark={} force_fit={} refuse={} s475={} r1490={} cap90={}/{} joined={:?} prev_open={} line={:?}",
                             ch, char_index, current_width_tw, s1317_cw_tw, s1318_avail_tw, s1318_natural_over_tw, s1318_cap_tw, s1318_half_cell_tw, s1318_n_solo, s1318_prev_latin, s1318_next_mark, s1318_ch_mark, s1318_force_fit, s1318_refuse_here, s475_break,
@@ -35609,6 +35638,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 fragments: vec![],
                 ..Default::default()
             });
+        }
+
+        // Reconcile only the lines admitted by the closing-mark space reserve.
+        for (line_index, line) in lines.iter_mut().enumerate() {
+            if !ideographic_closing_lines.contains(&line_index) { continue; }
+            let capacity = ideographic_space_capacity(line);
+            let target = available_width - if line_index == 0 { first_line_indent } else { 0.0 };
+            let natural: f32 = line.fragments.iter().map(|f| f.natural_width).sum();
+            let needed = (natural - target).max(0.0).min(capacity);
+            if needed <= 0.0 || capacity <= 0.0 { continue; }
+            let fraction = needed / capacity;
+            let mut leading = true;
+            for fragment in &mut line.fragments {
+                if leading && fragment.text.chars().all(char::is_whitespace) { continue; }
+                leading = false;
+                if !fragment.text.is_empty() && fragment.text.chars().all(|c| c == '\u{3000}') {
+                    let reduction = (fragment.width - fragment.natural_width * 0.25).max(0.0) * fraction;
+                    fragment.width -= reduction;
+                    fragment.natural_width -= reduction;
+                }
+            }
         }
 
         // 2-pass wrap (Stage 1): compute per-line natural_total_width and
