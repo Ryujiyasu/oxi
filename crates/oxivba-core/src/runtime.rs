@@ -8944,10 +8944,10 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Currency(value) => Ok(*value as f64 / 10_000.0),
         Value::Date(value) => Ok(*value),
         Value::Error(value) => Ok(*value as f64),
-        Value::String(value) => value
-            .trim()
-            .parse()
-            .map_err(|_| "type mismatch converting String to number".to_string()),
+        // The same reading IsNumeric makes: measured, `CLng("1,234")` is
+        // 1234, grouping marks and all.
+        Value::String(value) => numeric_text(value)
+            .ok_or_else(|| "type mismatch converting String to number".to_string()),
         Value::Null => Err("invalid use of Null".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
         Value::Nothing => Err("object variable or With block variable not set".to_string()),
@@ -9196,8 +9196,24 @@ fn binary(
             };
             Ok(Value::String(format!("{}{}", side(&lhs)?, side(&rhs)?)))
         }
+        // Two Strings joined by `+` are joined, not added: measured,
+        // `"a" + "b"` is "ab", and Empty beside a String is "" to it:
+        // `"x" + Empty` is "x", a String.
+        Add if matches!(
+            (&lhs, &rhs),
+            (Value::String(_), Value::String(_) | Value::Empty) | (Value::Empty, Value::String(_))
+        ) => {
+            Ok(Value::String(format!("{}{}", text(&lhs).map_err(mismatch)?, text(&rhs).map_err(mismatch)?)))
+        }
         Add | Sub | Mul | Div | IntDiv | Mod | Pow => {
             let (a, b) = numbers()?;
+            // `\` and `Mod` make both sides whole first, half to even:
+            // measured, `5.5 Mod 2` is 0.
+            let (a, b) = if matches!(op, IntDiv | Mod) {
+                (a.round_ties_even(), b.round_ties_even())
+            } else {
+                (a, b)
+            };
             if matches!(op, Div | IntDiv | Mod) && b == 0.0 {
                 return Err((
                     RuntimeErrorKind::DivisionByZero,
@@ -9541,8 +9557,13 @@ fn arithmetic_result(
             NumRank::Double.hold(answer, None)
         }
         (Some(left), Some(right)) => left.max(right).hold(answer, None),
-        // A side this ladder does not know — a numeric String, most often —
-        // answers the way it always did.
+        // A String read as a number is read as a Double: measured,
+        // `"10" + 5` and `1 + "2"` are both Double.
+        _ if matches!(lhs, Value::String(_)) || matches!(rhs, Value::String(_)) => {
+            Ok(Value::Double(answer))
+        }
+        // Any other side this ladder does not know answers the way it
+        // always did.
         _ => Ok(numeric_literal(answer)),
     }
 }
@@ -15225,6 +15246,22 @@ mod tests {
         assert_eq!(
             run(source, "Ask", vec![]).unwrap(),
             Value::String("Integer|0001-10|00".to_string())
+        );
+    }
+
+    /// Strings in arithmetic, and `\` and `Mod` on fractions. Every answer
+    /// here is Excel's.
+    #[test]
+    fn strings_and_fractions_in_arithmetic_go_excels_way() {
+        let source = "Public Function Ask() As String
+                        Ask = CLng(\"1,234\") & \"|\" & TypeName(\"10\" + 5) & \"|\" & (\"a\" + \"b\") & \"|\" & _
+                              (\"1\" + \"2\") & \"|\" & TypeName(\"1\" + Empty) & \"|\" & (5.5 Mod 2) & \"|\" & _
+                              (7.5 \\ 2) & \"|\" & TypeName(1 + \"2\") & \"|\" & CLng(\"$1,000\") & \"|\" & (\"10\" - \"3\")
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("1234|Double|ab|12|String|0|4|Double|1000|7".to_string())
         );
     }
 }
