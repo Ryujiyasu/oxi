@@ -211,6 +211,19 @@ fn assemble_sheets(
                 table.columns.clone(),
             );
         }
+        // A hidden row inside the filter's range, below its heading, is one
+        // the filter hid.
+        let filtered = |index: u32| {
+            sheet
+                .auto_filter
+                .as_ref()
+                .is_some_and(|filter| index > filter.start_row && index <= filter.end_row)
+        };
+        for row in &sheet.rows {
+            if row.hidden {
+                book.hide_row(&sheet.name, row.index.saturating_sub(1), filtered(row.index));
+            }
+        }
         for row in &sheet.rows {
             for cell in &row.cells {
                 let addr = a1(cell.col, row.index);

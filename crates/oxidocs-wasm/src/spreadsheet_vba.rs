@@ -358,6 +358,8 @@ enum HostObject {
     Workbooks,
     /// `Worksheet.Sort`, and its `.SortFields`.
     Sort(usize),
+    /// `Worksheet.AutoFilter`: the sheet's filter, while it has one.
+    SheetFilter(usize),
     SortFields(usize),
     /// A shape, a chart, or one of the objects hung off them.
     Drawing(shapes::DrawingPart),
@@ -2042,6 +2044,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Tab(_) => "Tab",
                 HostObject::Workbooks => "Workbooks",
                 HostObject::Sort(_) => "Sort",
+                HostObject::SheetFilter(_) => "AutoFilter",
                 HostObject::SortFields(_) => "SortFields",
                 HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
@@ -2496,6 +2499,9 @@ impl<'a> WorkbookHost<'a> {
         for value in given {
             asked.push(self.engine_argument(value)?);
         }
+        if name.eq_ignore_ascii_case("subtotal") {
+            self.pass_over_for_subtotal(given, &mut asked);
+        }
         // The engine's own dispatch is written in capitals, as the parser
         // hands names to it; a macro writes `Substitute` and would find
         // nothing at all.
@@ -2514,6 +2520,98 @@ impl<'a> WorkbookHost<'a> {
             oxicells_calc::Value::Text(text) => Ok(Value::String(text)),
             oxicells_calc::Value::Logical(state) => Ok(Value::Boolean(state)),
             oxicells_calc::Value::Blank => Ok(Value::Empty),
+        }
+    }
+
+    /// Blank what SUBTOTAL passes over: the rows a filter hid, every hidden
+    /// row from function 101 up, and cells that are SUBTOTALs themselves.
+    /// Measured: `WorksheetFunction.Subtotal(9, C2:C11)` under a filter adds
+    /// only the rows showing.
+    fn pass_over_for_subtotal(&self, given: &[Value], asked: &mut [oxicells_calc::functions::Arg]) {
+        use oxicells_calc::functions::Arg;
+        let by_hand = given.first().and_then(any_number).is_some_and(|kind| kind >= 100.0);
+        for (value, arg) in given.iter().zip(asked.iter_mut()).skip(1) {
+            let (Value::Object(object), Arg::Range(block)) = (value, arg) else {
+                continue;
+            };
+            let Some(range) = self.range(object) else {
+                continue;
+            };
+            let Ok(range) = self.cut_to_contents(range) else {
+                continue;
+            };
+            let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
+                continue;
+            };
+            let filtered = |row: u32| {
+                self.auto_filter.as_ref().is_some_and(|filter| {
+                    filter.range.sheet == range.sheet
+                        && row > filter.range.start_row
+                        && row <= filter.range.end_row
+                }) || sheet
+                    .auto_filter
+                    .as_ref()
+                    .is_some_and(|filter| row > filter.start_row && row <= filter.end_row)
+            };
+            let width = block.width.max(1);
+            for (at, cell) in block.cells.iter_mut().enumerate() {
+                let row = range.start_row + (at / width) as u32;
+                let column = range.start_column + (at % width) as u32;
+                let held = sheet.rows.iter().find(|held| held.index == row);
+                let hidden = held.is_some_and(|held| held.hidden);
+                let nested = held
+                    .and_then(|held| held.cells.iter().find(|cell| cell.col == column))
+                    .and_then(|cell| cell.formula.as_deref())
+                    .is_some_and(|formula| {
+                        formula.trim_start_matches('=').trim_start().to_ascii_uppercase().starts_with("SUBTOTAL(")
+                    });
+                if nested || (hidden && (by_hand || filtered(row))) {
+                    *cell = oxicells_calc::Value::Blank;
+                }
+            }
+        }
+    }
+
+    /// `Worksheet.AutoFilter`: an object while the sheet has a filter, and
+    /// Nothing when it has none, as Excel answers.
+    fn sheet_filter_object(&mut self, sheet: usize) -> Value {
+        if self.auto_filter.as_ref().is_some_and(|filter| filter.range.sheet == sheet) {
+            self.object(HostObject::SheetFilter(sheet))
+        } else {
+            Value::Nothing
+        }
+    }
+
+    /// What the sheet's AutoFilter object answers: the block it covers
+    /// (measured, `$A$1:$D$11` for a filter set on `A1:D11`), whether it is
+    /// hiding anything, and ShowAllData, which is the sheet's own.
+    fn sheet_filter_member(
+        &mut self,
+        sheet: usize,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let Some(range) = self
+            .auto_filter
+            .as_ref()
+            .filter(|filter| filter.range.sheet == sheet)
+            .map(|filter| filter.range)
+        else {
+            return Err(host_error(91, "the sheet's filter has been taken off"));
+        };
+        match name.to_ascii_lowercase().as_str() {
+            "range" => Ok(Some(self.object(HostObject::Range(range)))),
+            "filtermode" => Ok(Some(Value::Boolean(
+                self.auto_filter.as_ref().is_some_and(|filter| !filter.fields.is_empty()),
+            ))),
+            "showalldata" => {
+                let worksheet = self.object(HostObject::Worksheet(sheet));
+                let Value::Object(worksheet) = worksheet else {
+                    return Ok(None);
+                };
+                self.call(Some(&worksheet), "ShowAllData", args)
+            }
+            _ => Ok(None),
         }
     }
 
@@ -7856,6 +7954,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Outline(sheet) => moved(sheet).map(HostObject::Outline),
                 HostObject::Tab(sheet) => moved(sheet).map(HostObject::Tab),
                 HostObject::Sort(sheet) => moved(sheet).map(HostObject::Sort),
+                HostObject::SheetFilter(sheet) => moved(sheet).map(HostObject::SheetFilter),
                 HostObject::SortFields(sheet) => moved(sheet).map(HostObject::SortFields),
                 HostObject::Drawing(part) => part.renumbered(moved).map(HostObject::Drawing),
                 HostObject::Blocks(_)
@@ -14298,6 +14397,9 @@ impl Host for WorkbookHost<'_> {
             if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
                 return self.sort_object_call(sheet, name, args).map(Some);
             }
+            if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+                return self.sheet_filter_member(sheet, name, args);
+            }
             if let Some(HostObject::SortFields(sheet)) = self.objects.get(receiver.handle as usize).copied() {
                 return self.sort_fields_call(sheet, name, args).map(Some);
             }
@@ -15477,6 +15579,9 @@ impl Host for WorkbookHost<'_> {
         if let Some(sheet) = self.tab_sheet(receiver) {
             return Ok(self.tab_member(sheet, name));
         }
+        if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            return self.sheet_filter_member(sheet, name, &[]);
+        }
         if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
             let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
             return Ok(match name.to_ascii_lowercase().as_str() {
@@ -16216,6 +16321,9 @@ impl Host for WorkbookHost<'_> {
                     .as_ref()
                     .is_some_and(|filter| filter.range.sheet == sheet);
                 return Ok(Some(Value::Boolean(filtering)));
+            }
+            if name.eq_ignore_ascii_case("autofilter") {
+                return Ok(Some(self.sheet_filter_object(sheet)));
             }
             // Measured: FilterMode is True while a filter hides anything, and
             // False again after ShowAllData, with AutoFilterMode still True.
@@ -32812,6 +32920,41 @@ End Sub
                  String|General~String|General~Date|mmm-yy~=1+1|3/1/2024"
                     .to_string()
             )
+        );
+    }
+
+    /// SUBTOTAL under a filter counts only what is showing, and the sheet's
+    /// AutoFilter object names its block. Every answer here is Excel's.
+    #[test]
+    fn subtotal_under_a_filter_adds_what_is_showing() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim i As Long
+               Range(\"A1:C1\").Value = Array(\"name\", \"dept\", \"amount\")
+               For i = 2 To 11
+                 Cells(i, 1).Value = \"P\" & i
+                 Cells(i, 2).Value = Choose((i Mod 3) + 1, \"a\", \"b\", \"c\")
+                 Cells(i, 3).Value = i * 1000
+               Next i
+               Range(\"A1:C11\").AutoFilter Field:=2, Criteria1:=\"a\"
+               Range(\"E1\").Formula = \"=SUBTOTAL(9,C2:C11)\"
+               Ask = WorksheetFunction.Subtotal(9, Range(\"C2:C11\")) & \"|\" & _
+                     WorksheetFunction.Sum(Range(\"C2:C11\")) & \"|\" & _
+                     ActiveSheet.AutoFilter.Range.Address & \"|\" & TypeName(ActiveSheet.AutoFilter)
+               ActiveSheet.AutoFilterMode = False
+               Ask = Ask & \"|\" & (ActiveSheet.AutoFilter Is Nothing)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("18000|65000|$A$1:$C$11|AutoFilter|True".to_string())
         );
     }
 

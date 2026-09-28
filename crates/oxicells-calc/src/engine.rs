@@ -100,6 +100,14 @@ fn parse_range_string(address: &str) -> Option<RangeRef> {
 }
 
 type At = Option<(u32, u32)>;
+
+/// What a range read inside SUBTOTAL passes over.
+#[derive(Clone, Copy)]
+enum Skip {
+    Nothing,
+    /// Other SUBTOTALs and the filtered rows; with `by_hand`, every hidden row.
+    Subtotals { by_hand: bool },
+}
 use crate::lexer::ParseError;
 use crate::parser::parse;
 use crate::reference::{parse_a1, CellRef, RangeRef, MAX_COL, MAX_ROW};
@@ -161,6 +169,10 @@ struct Sheet {
     /// Keyed by `(col, row)`, both 0-based. `BTreeMap` so that iteration — and
     /// therefore recalculation order among independent cells — is deterministic.
     cells: BTreeMap<(u32, u32), Cell>,
+    /// Rows out of sight, 0-based, and which of them a filter hid. SUBTOTAL
+    /// passes over the filtered ones always and the rest from 101 up.
+    hidden_rows: BTreeSet<u32>,
+    filtered_rows: BTreeSet<u32>,
 }
 
 /// What a recalculation did.
@@ -243,6 +255,15 @@ impl Workbook {
 
     pub fn add_sheet(&mut self, name: &str) {
         self.sheets.entry(name.to_string()).or_default();
+    }
+
+    /// Say that a row (0-based) is hidden, and whether a filter hid it.
+    pub fn hide_row(&mut self, sheet: &str, row: u32, by_filter: bool) {
+        let held = self.sheets.entry(sheet.to_string()).or_default();
+        held.hidden_rows.insert(row);
+        if by_filter {
+            held.filtered_rows.insert(row);
+        }
     }
 
     /// Fix what NOW and TODAY answer, instead of asking the clock.
@@ -708,7 +729,7 @@ impl Workbook {
     }
 
     fn eval_arg(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Arg {
-        self.eval_arg_inner(expr, sheet, depth, false, at)
+        self.eval_arg_inner(expr, sheet, depth, Skip::Nothing, at)
     }
 
     /// `skip_subtotals` drops cells that are themselves `SUBTOTAL` formulas when
@@ -718,7 +739,7 @@ impl Workbook {
         expr: &Expr,
         sheet: &str,
         depth: u32,
-        skip_subtotals: bool,
+        skip: Skip,
         at: At,
     ) -> Arg {
         if depth > MAX_EVAL_DEPTH {
@@ -768,7 +789,7 @@ impl Workbook {
                 // the two differently: `SUM("5")` is 5, but `SUM(A1)` where A1
                 // holds text is 0. `Arg::scalar` unwraps a 1x1 range
                 // transparently, so nothing else has to care.
-                Arg::Range(self.materialise(target, &reference.range, skip_subtotals))
+                Arg::Range(self.materialise(target, &reference.range, skip))
             }
 
             Expr::Table { name, asked } => self.a_table_column(name, asked, at),
@@ -845,10 +866,22 @@ impl Workbook {
                 // summed by a grand total without double counting. That cannot
                 // be decided from the values alone, so the exclusion has to
                 // happen here, while the range is still a reference.
-                let nested = name == "SUBTOTAL";
+                //
+                // It also passes over the rows a filter hid, and from function
+                // 101 up the rows hidden by hand as well: measured through VBA,
+                // SUBTOTAL(9, ...) under a filter adds only what is showing.
+                let skip = if name == "SUBTOTAL" {
+                    let kind = args
+                        .first()
+                        .map(|a| self.eval_arg_inner(a, sheet, depth + 1, Skip::Nothing, at).scalar());
+                    let by_hand = matches!(kind, Some(Value::Number(n)) if n >= 100.0);
+                    Skip::Subtotals { by_hand }
+                } else {
+                    Skip::Nothing
+                };
                 let evaluated: Vec<Arg> = args
                     .iter()
-                    .map(|a| self.eval_arg_inner(a, sheet, depth + 1, nested, at))
+                    .map(|a| self.eval_arg_inner(a, sheet, depth + 1, skip, at))
                     .collect();
                 functions::call_arg(name, &evaluated)
             }
@@ -864,7 +897,7 @@ impl Workbook {
     /// heading named, so the two are worked out separately and put together.
     fn a_table_column(&self, name: &str, asked: &str, at: At) -> Arg {
         match self.table_range(name, asked, at) {
-            Ok((sheet, range)) => Arg::Range(self.materialise(&sheet, &range, false)),
+            Ok((sheet, range)) => Arg::Range(self.materialise(&sheet, &range, Skip::Nothing)),
             Err(why) => Arg::Value(Value::Error(why)),
         }
     }
@@ -1102,7 +1135,7 @@ impl Workbook {
 
     fn offset_reference(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Arg {
         match self.offset_range(args, sheet, depth, at) {
-            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, false)),
+            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, Skip::Nothing)),
             Err(why) => Arg::Value(Value::Error(why)),
         }
     }
@@ -1156,7 +1189,7 @@ impl Workbook {
 
     fn indirect_reference(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Arg {
         match self.indirect_range(args, sheet, depth, at) {
-            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, false)),
+            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, Skip::Nothing)),
             Err(why) => Arg::Value(Value::Error(why)),
         }
     }
@@ -1174,10 +1207,21 @@ impl Workbook {
     /// 1,048,576 and this says however many rows the sheet has. That is a
     /// wrong answer to a rare question in exchange for a right answer to a
     /// common one.
-    fn materialise(&self, sheet: &str, range: &RangeRef, skip_subtotals: bool) -> RangeData {
+    fn materialise(&self, sheet: &str, range: &RangeRef, skip: Skip) -> RangeData {
         let range = &self.cut_to_fit(sheet, range);
+        let held = self.sheets.get(sheet);
         RangeData::from_range(range, |col, row| {
-            if skip_subtotals && self.is_subtotal_cell(sheet, col, row) {
+            let passed_over = match skip {
+                Skip::Nothing => false,
+                Skip::Subtotals { by_hand } => {
+                    self.is_subtotal_cell(sheet, col, row)
+                        || held.is_some_and(|held| {
+                            held.filtered_rows.contains(&row)
+                                || (by_hand && held.hidden_rows.contains(&row))
+                        })
+                }
+            };
+            if passed_over {
                 Value::Blank
             } else {
                 self.value_at(sheet, col, row)
@@ -2045,6 +2089,25 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "I1"), Value::Number(10.0));
         // Every member answers with the whole formula.
         assert_eq!(wb.formula("Sheet1", "D3"), Some("=A1:A3*2"));
+    }
+
+    #[test]
+    fn subtotal_passes_over_filtered_rows_and_from_101_hidden_ones() {
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        for (row, value) in [(1, 1.0), (2, 10.0), (3, 100.0), (4, 1000.0)] {
+            wb.set_value("Sheet1", &format!("A{row}"), Value::Number(value)).unwrap();
+        }
+        // Row 2 hidden by a filter, row 3 hidden by hand (0-based rows).
+        wb.hide_row("Sheet1", 1, true);
+        wb.hide_row("Sheet1", 2, false);
+        wb.set_formula("Sheet1", "B1", "=SUBTOTAL(9,A1:A4)").unwrap();
+        wb.set_formula("Sheet1", "B2", "=SUBTOTAL(109,A1:A4)").unwrap();
+        wb.set_formula("Sheet1", "B3", "=SUM(A1:A4)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "B1"), Value::Number(1101.0));
+        assert_eq!(wb.value("Sheet1", "B2"), Value::Number(1001.0));
+        assert_eq!(wb.value("Sheet1", "B3"), Value::Number(1111.0));
     }
 
     #[test]
