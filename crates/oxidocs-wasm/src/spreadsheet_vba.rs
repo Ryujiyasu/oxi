@@ -1891,6 +1891,10 @@ struct WorkbookHost<'a> {
     file_name: Option<String>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
+    /// One handle apiece for the workbook, the application and each sheet,
+    /// so `ActiveWorkbook Is ThisWorkbook` and `ws Is ActiveSheet` are True
+    /// as in Excel. Keyed by kind (0 workbook, 1 application, 2 a sheet).
+    singletons: BTreeMap<(u8, usize), u64>,
 }
 
 impl<'a> WorkbookHost<'a> {
@@ -1975,12 +1979,28 @@ impl<'a> WorkbookHost<'a> {
             file_name: None,
             debug_output: Vec::new(),
             messages: Vec::new(),
+            singletons: BTreeMap::new(),
         })
     }
 
     fn object(&mut self, object: HostObject) -> Value {
-        let handle = self.objects.len() as u64;
-        self.objects.push(object);
+        let single = match object {
+            HostObject::Workbook => Some((0, 0)),
+            HostObject::Application => Some((1, 0)),
+            HostObject::Worksheet(sheet) => Some((2, sheet)),
+            _ => None,
+        };
+        let handle = match single.and_then(|key| self.singletons.get(&key)) {
+            Some(handle) => *handle,
+            None => {
+                let handle = self.objects.len() as u64;
+                self.objects.push(object);
+                if let Some(key) = single {
+                    self.singletons.insert(key, handle);
+                }
+                handle
+            }
+        };
         Value::Object(ObjectRef {
             handle,
             kind: match object {
@@ -2638,6 +2658,13 @@ impl<'a> WorkbookHost<'a> {
             return Err("WorksheetFunction was handed something that is not a Range".to_string());
         }
         if let Value::Array(array) = value {
+            if let Some((height, width, values)) = rows_of_arrays(array)? {
+                return Ok(Arg::Range(RangeData {
+                    width,
+                    height,
+                    cells: values.iter().map(engine_value).collect(),
+                }));
+            }
             let (width, height) = match array.dimensions.as_slice() {
                 [rows] => (1, rows.length),
                 [rows, columns] => (columns.length, rows.length),
@@ -2746,7 +2773,7 @@ impl<'a> WorkbookHost<'a> {
                 _ => Err("Areas takes one number".to_string()),
             };
         }
-        if name.eq_ignore_ascii_case("address") {
+        if name.eq_ignore_ascii_case("address") || name.eq_ignore_ascii_case("addresslocal") {
             let mut written = Vec::with_capacity(areas.len());
             for block in &areas {
                 written.push(self.range_address_from_args(*block, args)?);
@@ -7744,6 +7771,15 @@ impl<'a> WorkbookHost<'a> {
     /// `Range` held across it still writes there -- and the ones on a deleted
     /// sheet answer 424 from then on.
     fn sheets_renumbered(&mut self, moved: &dyn Fn(usize) -> Option<usize>) {
+        // The handles themselves are renumbered below; their keys follow the
+        // sheets they name, and a deleted sheet's is dropped.
+        let singletons = std::mem::take(&mut self.singletons);
+        for ((kind, sheet), handle) in singletons {
+            let sheet = if kind == 2 { moved(sheet) } else { Some(sheet) };
+            if let Some(sheet) = sheet {
+                self.singletons.insert((kind, sheet), handle);
+            }
+        }
         let address = |at: CellAddress| moved(at.sheet).map(|sheet| CellAddress { sheet, ..at });
         let range = |held: CellRange| moved(held.sheet).map(|sheet| CellRange { sheet, ..held });
 
@@ -9248,6 +9284,9 @@ impl<'a> WorkbookHost<'a> {
                 })
             }
             Value::Array(array) => {
+                if let Some((rows, columns, values)) = rows_of_arrays(array)? {
+                    return Ok(LookupTable { rows, columns, held_columns: columns, values });
+                }
                 let (rows, columns) = match array.dimensions.as_slice() {
                     [columns] => (1, columns.length),
                     [rows, columns] => (rows.length, columns.length),
@@ -10515,47 +10554,69 @@ impl<'a> WorkbookHost<'a> {
             );
         }
 
-        let mut addresses = if search_order == 1 {
-            range.addresses().collect::<Vec<_>>()
-        } else {
-            let mut addresses = Vec::with_capacity(Self::range_cell_count(range)?);
-            for column in range.start_column..=range.end_column {
-                for row in range.start_row..=range.end_row {
-                    addresses.push(CellAddress {
-                        sheet: range.sheet,
-                        row,
-                        column,
-                    });
-                }
+        // The order Excel walks: along the rows, or down the columns.
+        let key = |address: &CellAddress| {
+            if search_order == 1 {
+                (address.row, address.column)
+            } else {
+                (address.column, address.row)
             }
-            addresses
+        };
+        let inside = |address: &CellAddress| {
+            (range.start_row..=range.end_row).contains(&address.row)
+                && (range.start_column..=range.end_column).contains(&address.column)
         };
         let after = match args.get(1) {
-            None | Some(Value::Missing) => addresses[0],
+            None | Some(Value::Missing) => range.first(),
             Some(Value::Object(object)) => {
                 let after = self
                     .range(object)
                     .filter(|range| range.is_single())
                     .ok_or_else(|| "Range.Find After must be a single cell".to_string())?;
-                let address = after.addresses().next().unwrap();
-                if !addresses.contains(&address) {
+                let address = after.first();
+                if address.sheet != range.sheet || !inside(&address) {
                     return Err("Range.Find After cell must be inside the search range".to_string());
                 }
                 address
             }
             _ => return Err("Range.Find After must be a single cell".to_string()),
         };
-        let after_index = addresses
-            .iter()
-            .position(|address| *address == after)
-            .unwrap();
-        if search_direction == 1 {
-            let address_count = addresses.len();
-            addresses.rotate_left((after_index + 1) % address_count);
+        // Only a cell holding something can match something, so a search of
+        // a whole sheet -- `Cells.Find("b")` -- looks where the sheet is used
+        // rather than at seventeen billion addresses.
+        let needle_text = find_value_text(what);
+        let searched = if needle_text.is_empty() {
+            Self::range_cell_count(range)?;
+            Some(range)
         } else {
-            addresses.rotate_left(after_index);
-            addresses.reverse();
-        }
+            let used = self.used_range(range.sheet)?;
+            let start_row = range.start_row.max(used.start_row);
+            let end_row = range.end_row.min(used.end_row);
+            let start_column = range.start_column.max(used.start_column);
+            let end_column = range.end_column.min(used.end_column);
+            (start_row <= end_row && start_column <= end_column).then_some(CellRange {
+                sheet: range.sheet,
+                start_row,
+                end_row,
+                start_column,
+                end_column,
+            })
+        };
+        let mut candidates: Vec<CellAddress> =
+            searched.map(|searched| searched.addresses().collect()).unwrap_or_default();
+        candidates.sort_by_key(|address| key(address));
+        let pivot = key(&after);
+        // Onward from the cell after `After`, round to `After` itself last;
+        // or backward from the cell before it, round to it last.
+        let addresses: Vec<CellAddress> = if search_direction == 1 {
+            let (upto, beyond): (Vec<_>, Vec<_>) =
+                candidates.into_iter().partition(|address| key(address) <= pivot);
+            beyond.into_iter().chain(upto).collect()
+        } else {
+            let (before, from): (Vec<_>, Vec<_>) =
+                candidates.into_iter().partition(|address| key(address) < pivot);
+            before.into_iter().rev().chain(from.into_iter().rev()).collect()
+        };
         let needle = find_value_text(what);
         let found = addresses.into_iter().find(|address| {
             let candidate = self.find_cell_text(*address, look_in);
@@ -15230,7 +15291,7 @@ impl Host for WorkbookHost<'_> {
                     }
                     return self.current_region_object(range).map(Some);
                 }
-                if name.eq_ignore_ascii_case("address") {
+                if name.eq_ignore_ascii_case("address") || name.eq_ignore_ascii_case("addresslocal") {
                     return self
                         .range_address_from_args(range, args)
                         .map(Value::String)
@@ -15486,7 +15547,7 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowOffset", "ColumnOffset"][..])
         } else if name.eq_ignore_ascii_case("resize") {
             Some(&["RowSize", "ColumnSize"][..])
-        } else if name.eq_ignore_ascii_case("address") {
+        } else if name.eq_ignore_ascii_case("address") || name.eq_ignore_ascii_case("addresslocal") {
             Some(
                 &[
                     "RowAbsolute",
@@ -16824,7 +16885,7 @@ impl Host for WorkbookHost<'_> {
                 },
             )))));
         }
-        if name.eq_ignore_ascii_case("address") {
+        if name.eq_ignore_ascii_case("address") || name.eq_ignore_ascii_case("addresslocal") {
             return Ok(Some(Value::String(format_range_address(range, true, true))));
         }
         if name.eq_ignore_ascii_case("currentregion") {
@@ -17917,6 +17978,38 @@ fn index_answer(whole: Value, args: &[Value]) -> Result<Value, String> {
         offset = offset * dimension.length + from as usize;
     }
     Ok(array.values.get(offset).cloned().unwrap_or(Value::Empty))
+}
+
+/// An array of arrays read as a table, one inner array to a row.
+///
+/// Measured: `Transpose(Array(Array(1, 2, 3), Array(4, 5, 6)))` is three rows
+/// by two, and transposing that again gives the rows back -- the idiom a
+/// macro uses to turn a list of records into a block. Rows of different
+/// lengths are 13. None when the array is not one of these.
+fn rows_of_arrays(array: &ArrayValue) -> Result<Option<(usize, usize, Vec<Value>)>, String> {
+    let [_] = array.dimensions.as_slice() else {
+        return Ok(None);
+    };
+    if array.values.is_empty() || !array.values.iter().all(|value| matches!(value, Value::Array(_))) {
+        return Ok(None);
+    }
+    let mut width = None;
+    let mut values = Vec::new();
+    for row in &array.values {
+        let Value::Array(row) = row else { unreachable!() };
+        let [_] = row.dimensions.as_slice() else {
+            return Err(host_error(13, "a row of the array is not one-dimensional"));
+        };
+        match width {
+            None => width = Some(row.values.len()),
+            Some(held) if held != row.values.len() => {
+                return Err(host_error(13, "the rows of the array are not the same length"));
+            }
+            Some(_) => {}
+        }
+        values.extend(row.values.iter().cloned());
+    }
+    Ok(Some((array.values.len(), width.unwrap_or(0), values)))
 }
 
 fn cells_index(value: &Value) -> Result<i64, String> {
@@ -33164,6 +33257,40 @@ End Sub
         assert_eq!(
             answer,
             Value::String("30|20|=A1*2|t4|10|$A$1|13|9|451".to_string())
+        );
+    }
+
+    /// A whole-sheet Find, arrays of arrays, and one object apiece for the
+    /// workbook and each sheet. Every answer here is Excel's.
+    #[test]
+    fn whole_sheet_find_record_arrays_and_object_identity() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim t As Variant, a As Worksheet, out As String
+               Range(\"A1:C2\").Value = Application.Transpose(Application.Transpose( _
+                   Array(Array(1, \"a\", 80), Array(2, \"b\", 95))))
+               t = Application.Transpose(Array(Array(1, 2, 3), Array(4, 5, 6)))
+               out = Cells.Find(\"b\").Address & \"|\" & Range(\"C2\").Value & \"|\" & _
+                     UBound(t, 1) & \"x\" & UBound(t, 2) & \"|\" & t(3, 2) & \"|\" & Range(\"A1\").AddressLocal
+               Set a = Worksheets(1)
+               out = out & \"|\" & (a Is ActiveSheet) & (ThisWorkbook Is ActiveWorkbook) & (Range(\"A1\") Is Range(\"A1\"))
+               Worksheets.Add Before:=Worksheets(1)
+               out = out & (a Is Worksheets(2))
+               On Error Resume Next
+               t = Application.Transpose(Array(Array(1, 2), Array(3, 4, 5)))
+               Ask = out & \"|\" & Err.Number
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("$B$2|95|3x2|6|$A$1|TrueTrueFalseTrue|13".to_string())
         );
     }
 
