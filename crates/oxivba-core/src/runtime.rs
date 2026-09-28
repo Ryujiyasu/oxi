@@ -886,9 +886,17 @@ impl<'a> Runtime<'a> {
         {
             return Err(failure);
         }
+        let number = runtime_error_number(&failure);
+        // A macro that shows `Err.Description` shows VBA's own words for the
+        // errors the language raises; the engine's message says more, but it
+        // is for whoever reads an unhandled failure, not for the macro.
+        let description = match failure.kind {
+            RuntimeErrorKind::UserDefined | RuntimeErrorKind::Host => failure.message.clone(),
+            _ => vba_error_description(number).to_string(),
+        };
         frame.error_state = ErrorState {
-            number: runtime_error_number(&failure),
-            description: failure.message.clone(),
+            number,
+            description,
             source: failure
                 .vba_source
                 .clone()
@@ -3023,7 +3031,11 @@ impl<'a> Runtime<'a> {
                 frame.error_state.line.unwrap_or(0) as i64
             }));
         }
-        let read_args = if builtin_reads_values(name)
+        // Only VBA's own functions read a Range for its value. `Intersect`,
+        // `Union` and every other name the host answers take the object, and
+        // reading one first would cost a million cells for `Range("A:A")`.
+        let read_args = if is_builtin_function(name)
+            && builtin_reads_values(name)
             && args.iter().any(|value| matches!(value, Value::Object(_)))
         {
             let mut read = Vec::with_capacity(args.len());
@@ -6693,26 +6705,94 @@ fn number_picture(value: f64, picture: &str) -> String {
         (sections[0].as_str(), negative)
     };
 
-    let tokens = picture_tokens(section);
-    let scale = if tokens.iter().any(|t| matches!(t, Token::Percent)) {
-        100.0
-    } else {
-        1.0
-    };
-    let exponent_at = tokens
-        .iter()
-        .position(|t| matches!(t, Token::Exponent { .. }));
-
-    let magnitude = value.abs() * scale;
-    let written = match exponent_at {
-        Some(at) => exponent_form(magnitude, &tokens, at),
-        None => plain_form(magnitude, &tokens),
-    };
+    let (magnitude, tokens) = section_magnitude(value, section);
+    // A negative number that rounds to nothing is written as a zero, by the
+    // zero section when there is one and with no minus: measured,
+    // `Format(-0.4, "0")` is `0` and `Format(-400, "0,;(0,)")` is `0`.
+    if (negative && !zero) && rounds_to_nothing(magnitude, &tokens) {
+        let section = if sections.len() > 2 && !sections[2].is_empty() {
+            sections[2].as_str()
+        } else {
+            sections[0].as_str()
+        };
+        let (magnitude, tokens) = section_magnitude(0.0, section);
+        return picture_form(magnitude, &tokens);
+    }
+    let written = picture_form(magnitude, &tokens);
     if sign {
         format!("-{written}")
     } else {
         written
     }
+}
+
+/// A section's tokens, and the magnitude it writes once its `%` and its
+/// scaling commas have had their say.
+fn section_magnitude(value: f64, section: &str) -> (f64, Vec<Token>) {
+    let (tokens, thousands) = scaling_commas(picture_tokens(section));
+    let mut magnitude = value.abs() / 1000_f64.powi(thousands);
+    if tokens.iter().any(|t| matches!(t, Token::Percent)) {
+        magnitude *= 100.0;
+    }
+    (magnitude, tokens)
+}
+
+fn picture_form(magnitude: f64, tokens: &[Token]) -> String {
+    match tokens
+        .iter()
+        .position(|t| matches!(t, Token::Exponent { .. }))
+    {
+        Some(at) => exponent_form(magnitude, tokens, at),
+        None => plain_form(magnitude, tokens),
+    }
+}
+
+fn rounds_to_nothing(magnitude: f64, tokens: &[Token]) -> bool {
+    if tokens.iter().any(|t| matches!(t, Token::Exponent { .. })) {
+        return magnitude == 0.0;
+    }
+    let (_, _, fraction, _, _) = digit_places(tokens, tokens.len());
+    (magnitude * 10_f64.powi(fraction as i32)).round() == 0.0
+}
+
+/// What each comma in a picture means, which depends on where it stands.
+///
+/// Measured against Excel: in the whole part, a comma with a digit place on
+/// both sides groups (`0,0`, and `#,,##0` still only groups); one after the
+/// last whole digit place divides by a thousand, once per comma (`0,` `0,,`
+/// `#,##0,.0` `0 ,` `0,"K"` `0,E+00` `0,%`); one before any digit place is
+/// just a comma (`,0` `"a",0,`). A comma among the decimals is dropped.
+fn scaling_commas(tokens: Vec<Token>) -> (Vec<Token>, i32) {
+    let whole_end = tokens
+        .iter()
+        .position(|t| matches!(t, Token::Point | Token::Exponent { .. }))
+        .unwrap_or(tokens.len());
+    let is_digit = |t: &Token| matches!(t, Token::Zero | Token::Hash);
+    let mut thousands = 0;
+    let mut kept = Vec::with_capacity(tokens.len());
+    for (index, token) in tokens.iter().enumerate() {
+        if !matches!(token, Token::Comma) {
+            kept.push(token.clone());
+            continue;
+        }
+        if index > whole_end {
+            if matches!(tokens[whole_end], Token::Point)
+                && !tokens[whole_end..index]
+                    .iter()
+                    .any(|t| matches!(t, Token::Exponent { .. }))
+            {
+                continue;
+            }
+            kept.push(token.clone());
+        } else if !tokens[..index].iter().any(is_digit) {
+            kept.push(Token::Literal(",".to_string()));
+        } else if tokens[index + 1..whole_end].iter().any(is_digit) {
+            kept.push(token.clone());
+        } else {
+            thousands += 1;
+        }
+    }
+    (kept, thousands)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -6875,11 +6955,20 @@ fn exponent_form(magnitude: f64, tokens: &[Token], at: usize) -> String {
         let raw = magnitude.log10().floor() as i32;
         raw - (mantissa_places as i32 - 1)
     };
-    let mantissa = if magnitude == 0.0 {
+    let mut power = power;
+    let mut mantissa = if magnitude == 0.0 {
         0.0
     } else {
         magnitude / 10_f64.powi(power)
     };
+    // A mantissa that rounds up into one more digit moves the point instead:
+    // measured, `Format(999, "0E+00")` is `1E+03` and `Format(99999,
+    // "00E+00")` is `10E+04`.
+    let places = 10_f64.powi(fraction as i32);
+    if (mantissa * places).round() / places >= 10_f64.powi(mantissa_places as i32) {
+        power += 1;
+        mantissa /= 10.0;
+    }
     let (digits, decimals) =
         laid_out(mantissa, whole, whole_required.max(1), fraction, fraction_required, grouped);
 
@@ -9004,6 +9093,24 @@ fn binary(
             RuntimeErrorKind::ObjectVariableNotSet,
             "Object variable or With block variable not set".to_string(),
         ));
+    }
+    // Two error values compare by their numbers -- the idiom
+    // `If c.Value = CVErr(xlErrNA)` depends on it. Measured: `CVErr(2007) =
+    // CVErr(2007)` is True and `CVErr(2007) < CVErr(2042)` is True, while an
+    // error against anything else, `2007` and Empty included, is 13.
+    if let (Value::Error(left), Value::Error(right)) = (&lhs, &rhs) {
+        let answer = match op {
+            Eq => Some(left == right),
+            Ne => Some(left != right),
+            Lt => Some(left < right),
+            Le => Some(left <= right),
+            Gt => Some(left > right),
+            Ge => Some(left >= right),
+            _ => None,
+        };
+        if let Some(answer) = answer {
+            return Ok(Value::Boolean(answer));
+        }
     }
     if matches!(
         lhs,
@@ -11569,7 +11676,7 @@ mod tests {
 
         assert_eq!(
             value,
-            Value::String("11|13|type mismatch converting String to number".to_string())
+            Value::String("11|13|Type mismatch".to_string())
         );
     }
 
@@ -12609,7 +12716,7 @@ mod tests {
         assert_eq!(
             value,
             Value::String(
-                "Division by zero|Application-defined or object-defined error|[]|division by zero"
+                "Division by zero|Application-defined or object-defined error|[]|Division by zero"
                     .to_string()
             )
         );
@@ -15018,4 +15125,63 @@ mod tests {
         assert_eq!(run(source, "Ask", vec![]).unwrap(), Value::String("6".to_string()));
     }
 
+    /// A comma's meaning in a `Format` picture depends on where it stands.
+    /// Every answer here is Excel's.
+    #[test]
+    fn a_picture_comma_groups_scales_or_stands() {
+        let source = "Public Function Ask() As String
+                        Ask = Format(1234567, \"#,##0,\") & \"~\" & Format(1234567, \"0,,\") & \"~\" & _
+                              Format(1234567, \"#,##0,.0\") & \"~\" & Format(1234567, \"#,,##0\") & \"~\" & _
+                              Format(1234567, \"0,\"\"K\"\"\") & \"~\" & Format(1234567, \"0,%\") & \"~\" & _
+                              Format(1234567, \"0.0,\") & \"~\" & Format(1234567, \",0\") & \"~\" & _
+                              Format(1234567, \"\"\"a\"\",0,\") & \"~\" & Format(1234.5, \"0,.0,\") & \"~\" & _
+                              Format(1234567, \"0,E+00\") & \"~\" & Format(-2500, \"#,##0,;(#,##0,)\")
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String(
+                "1,235~1~1,234.6~1,234,567~1235K~123457%~1234567.0~,1234567~a,1235~1.2~1E+03~(3)"
+                    .to_string()
+            )
+        );
+    }
+
+    /// A negative that rounds to nothing is a plain zero, and a mantissa that
+    /// rounds up a digit moves the point. Every answer here is Excel's.
+    #[test]
+    fn a_picture_rounds_before_it_signs_and_carries() {
+        let source = "Public Function Ask() As String
+                        Ask = Format(-0.4, \"0\") & \"~\" & Format(-0.0004, \"0.0\") & \"~\" & _
+                              Format(-0.4, \"#\") & \"~\" & Format(-400, \"0,;(0,)\") & \"~\" & _
+                              Format(-0.04, \"0%\") & \"~\" & Format(999, \"0E+00\") & \"~\" & _
+                              Format(9.99, \"0.0E+00\") & \"~\" & Format(99999, \"00E+00\") & \"~\" & _
+                              Format(950, \"#E+0\") & \"~\" & Format(-999, \"0.00E+00\")
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("0~0.0~~0~-4%~1E+03~1.0E+01~10E+04~1E+3~-9.99E+02".to_string())
+        );
+    }
+
+    /// Two error values compare by their numbers; an error against anything
+    /// else is a type mismatch. Measured in Excel.
+    #[test]
+    fn error_values_compare_with_each_other_only() {
+        let source = "Public Function Ask() As String
+                        Dim a As Variant, b As Variant
+                        a = CVErr(2007): b = CVErr(2042)
+                        Ask = (a = CVErr(2007)) & \"|\" & (a = b) & \"|\" & (a <> b) & \"|\" & (a < b)
+                        On Error Resume Next
+                        Dim c As Variant
+                        c = (a = 2007)
+                        Ask = Ask & \"|\" & Err.Number & \"|\" & Err.Description
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("True|False|True|True|13|Type mismatch".to_string())
+        );
+    }
 }
