@@ -3257,7 +3257,10 @@ impl<'a> Runtime<'a> {
                 )),
             };
         }
-        self.let_value(value, line)
+        // What it names comes back as it is -- `TypeName([A1])` is Range,
+        // measured -- and a place that wants a value reads the default
+        // member, as it does of `Range("A1")`.
+        Ok(value)
     }
 
     /// An object used where VBA wants a value stands for its default member, so

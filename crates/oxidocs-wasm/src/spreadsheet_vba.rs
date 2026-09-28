@@ -8767,7 +8767,9 @@ impl<'a> WorkbookHost<'a> {
             reference,
             self.now,
         ) {
-            Some(oxicells_calc::Value::Number(number)) => Ok(numeric_result(number)),
+            // Every number is a Double: measured, `TypeName(Evaluate("1+1"))`
+            // and of `Evaluate("3")` are Double.
+            Some(oxicells_calc::Value::Number(number)) => Ok(Value::Double(number)),
             Some(oxicells_calc::Value::Text(text)) => Ok(Value::String(text)),
             Some(oxicells_calc::Value::Logical(state)) => Ok(Value::Boolean(state)),
             Some(oxicells_calc::Value::Blank) => Ok(Value::Empty),
@@ -11331,13 +11333,14 @@ impl<'a> WorkbookHost<'a> {
         down: i64,
         across: i64,
     ) -> Result<String, String> {
-        match style {
+        let placed = match style {
             FormulaStyle::R1C1 => {
                 formula_from_r1c1(&formula, address.row.saturating_sub(1), address.column)
             }
             FormulaStyle::A1 if down == 0 && across == 0 => Ok(formula),
             FormulaStyle::A1 => translate_formula_references(&formula, down, across),
-        }
+        }?;
+        Ok(oxicells_calc::normalise_formula_ranges(&placed))
     }
 
     fn set_range_style(
@@ -21717,7 +21720,7 @@ fn vba_has_its_own(name: &str) -> bool {
         // each of these is a VBA function of its own
         "ABS", "CHAR", "CODE", "DATE", "DAY", "HOUR", "INT", "LEFT", "LEN", "LOWER", "MID",
         "MINUTE", "MOD", "MONTH", "NOT", "RIGHT", "SECOND", "SQRT", "TIME", "UPPER", "VALUE",
-        "YEAR",
+        "YEAR", "DATEVALUE", "TIMEVALUE",
         // and each of these is said another way in VBA: `&` for CONCATENATE,
         // `=` for EXACT, `IsEmpty` for ISBLANK, `Range.Rows.Count` for ROWS
         "COLUMNS", "CONCATENATE", "DATEDIF", "EXACT", "HYPERLINK", "ISBLANK", "ISREF", "ROWS",
