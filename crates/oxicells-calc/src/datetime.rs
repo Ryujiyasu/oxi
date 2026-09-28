@@ -211,6 +211,13 @@ pub fn text_as_datetime(text: &str) -> Option<f64> {
     if said.last().is_some_and(|last| last.contains(':')) {
         time = clock(said.pop()?, afternoon)?;
         told_the_time = true;
+    } else if afternoon.is_some()
+        && said.last().is_some_and(|last| !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()))
+    {
+        // An hour alone before its AM or PM: measured, "10 AM" is 10:00 and
+        // "10 PM" 22:00, where "10PM" run together is not a time at all.
+        time = clock(&format!("{}:00", said.pop()?), afternoon)?;
+        told_the_time = true;
     } else if afternoon.is_some() {
         // An AM with nothing before it is not a time.
         return None;
@@ -230,7 +237,11 @@ fn clock(text: &str, afternoon: Option<bool>) -> Option<f64> {
         Some(held) => held.trim().parse().ok()?,
         None => 0.0,
     };
-    if parts.next().is_some() || !(0.0..60.0).contains(&minutes) || !(0.0..60.0).contains(&seconds) {
+    // Minutes and seconds carry into the hour as the hours carry into the
+    // day, up to four figures: measured, "1:60" is 2:00, "1:30:100" is taken
+    // and "0:10000" is not. Beside an AM or PM they stay under 60.
+    let limit = if afternoon.is_some() { 60.0 } else { 10_000.0 };
+    if parts.next().is_some() || !(0.0..limit).contains(&minutes) || !(0.0..limit).contains(&seconds) {
         return None;
     }
     let hours = match afternoon {
@@ -238,12 +249,16 @@ fn clock(text: &str, afternoon: Option<bool>) -> Option<f64> {
         Some(true) if hours == 12.0 => 12.0,
         Some(true) if (1.0..12.0).contains(&hours) => hours + 12.0,
         Some(false) if hours == 12.0 => 0.0,
-        Some(false) if (1.0..12.0).contains(&hours) => hours,
+        Some(false) if (0.0..12.0).contains(&hours) => hours,
         Some(_) => return None,
-        None if (0.0..=23.0).contains(&hours) => hours,
+        // Without AM or PM the hours run on past a day: measured, "25:00" is
+        // a day and an hour and "9999:00" is taken, where "10000:00" is not.
+        None if (0.0..=9999.0).contains(&hours) => hours,
         None => return None,
     };
-    Some(fraction_from_time(hours, minutes, seconds))
+    // Not `fraction_from_time`, which goes round the clock as TIME does: a
+    // written "25:00" is more than a day.
+    Some((hours * 3600.0 + minutes * 60.0 + seconds) / 86_400.0)
 }
 
 /// The day a date names, however it is spelled out.

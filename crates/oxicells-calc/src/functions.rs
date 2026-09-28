@@ -2705,6 +2705,21 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 _ => Err(ExcelError::Value),
             }
         }
+        // The time of day a text names, with any date dropped and a clock
+        // past 24 hours taken round again. Measured: "2024/1/1 6:00" is 0.25,
+        // "25:00" is 1/24, a date alone is 0, and a number is #VALUE!.
+        "TIMEVALUE" => {
+            if matches!(args[0].scalar(), Value::Number(_)) {
+                return Err(ExcelError::Value);
+            }
+            let s = text(&args[0])?;
+            match datetime::text_as_datetime(&s) {
+                // Round the clock in seconds, not days, so "25:00" is exactly
+                // an hour rather than a day's worth of rounding short of one.
+                Some(serial) => Ok(Value::Number((serial * 86_400.0).rem_euclid(86_400.0) / 86_400.0)),
+                None => Err(ExcelError::Value),
+            }
+        }
         // The fraction of a year between two dates, on one of five day-count
         // bases. Symmetric in its dates. All five verified against Excel.
         "YEARFRAC" => {
@@ -4548,6 +4563,24 @@ mod tests {
         assert_eq!(call("DATEVALUE", &[t("3/15/2024")]), Value::Number(serial));
         assert_eq!(call("DATEVALUE", &[t("15-Mar-2024")]), Value::Number(serial));
         assert_eq!(call("DATEVALUE", &[t("not a date")]), Value::Error(ExcelError::Value));
+        // TIMEVALUE, every answer Excel's.
+        for (text, want) in [
+            ("1:00", 1.0 / 24.0),
+            ("1:00 PM", 13.0 / 24.0),
+            ("2024/1/1 6:00", 0.25),
+            ("25:00", 1.0 / 24.0),
+            ("12:00 AM", 0.0),
+            ("2024/1/1", 0.0),
+            ("1:60", 2.0 / 24.0),
+            ("10 PM", 22.0 / 24.0),
+            ("0 AM", 0.0),
+        ] {
+            assert_eq!(call("TIMEVALUE", &[t(text)]), Value::Number(want), "{text}");
+        }
+        for text in ["abc", "10PM", "13 PM", "1:60 PM", "10000:00"] {
+            assert_eq!(call("TIMEVALUE", &[t(text)]), Value::Error(ExcelError::Value), "{text}");
+        }
+        assert_eq!(call("TIMEVALUE", &[v(0.5)]), Value::Error(ExcelError::Value));
         // TEXTBEFORE / TEXTAFTER on the nth delimiter, from either end.
         assert_eq!(call("TEXTBEFORE", &[t("a-b-c"), t("-")]), Value::text("a"));
         assert_eq!(call("TEXTAFTER", &[t("a-b-c"), t("-"), v(2.0)]), Value::text("c"));

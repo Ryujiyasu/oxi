@@ -357,6 +357,10 @@ mod tests {
             ("12:30:45", 0.521_354_166_666_666_7),
             ("1:00 PM", 0.541_666_666_666_666_6),
             ("2004-08-15 12:30", 38_214.520_833_333_336),
+            // Measured: `"25:00"+0` is a day and an hour, and "10 PM" is 22:00.
+            ("25:00", 25.0 / 24.0),
+            ("10 PM", 22.0 / 24.0),
+            ("12:60", 13.0 / 24.0),
         ] {
             assert_eq!(read(text), Ok(want), "{text}");
         }
@@ -371,7 +375,7 @@ mod tests {
         ] {
             assert_eq!(read(text), Ok(want), "{text}");
         }
-        for text in ["", "not a date", "2004-13-01", "31/02/2004", "25:00", "12:60"] {
+        for text in ["", "not a date", "2004-13-01", "31/02/2004", "10000:00", "0:10000", "1:60 PM", "10PM", "13 PM"] {
             assert!(read(text).is_err(), "{text} is not a number");
         }
     }

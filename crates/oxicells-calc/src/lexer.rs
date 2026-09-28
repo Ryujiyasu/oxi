@@ -283,6 +283,111 @@ pub fn translate_formula_references(
     Ok(output)
 }
 
+/// Write every range top-left first, the way Excel stores it.
+///
+/// Measured through VBA's `.Formula`: `SUM(B6:A5)` is kept as `SUM(A5:B6)`,
+/// `C:A` as `A:C` and `6:5` as `5:6`. Rows and columns are put in order each
+/// on its own, and a `$` goes with the coordinate it was written on:
+/// `B$6:$A5` becomes `$A5:B$6`. A formula with nothing out of order, or one
+/// that will not tokenize, comes back exactly as it was given.
+pub fn normalise_formula_ranges(input: &str) -> String {
+    let Ok(tokens) = tokenize(input) else {
+        return input.to_string();
+    };
+    let mut changed = false;
+    let mut written: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if let (Some(near), Some(Token::Colon), Some(far)) =
+            (tokens.get(index), tokens.get(index + 1), tokens.get(index + 2))
+        {
+            if let Some((first, second)) = ordered_range(near, far) {
+                changed = true;
+                written.push(first);
+                written.push(Token::Colon);
+                written.push(second);
+                index += 3;
+                continue;
+            }
+        }
+        written.push(tokens[index].clone());
+        index += 1;
+    }
+    if !changed {
+        return input.to_string();
+    }
+    let mut output = String::new();
+    if input.trim_start().starts_with('=') {
+        output.push('=');
+    }
+    for token in written {
+        render_token(&mut output, token);
+    }
+    output
+}
+
+/// The two ends of a range put in order, or None when they already are (or
+/// are not the ends of a range at all).
+fn ordered_range(near: &Token, far: &Token) -> Option<(Token, Token)> {
+    let (sheet, start, far_sheet, end) = (&far_sheet(near), far_text(near)?, far_sheet(far), far_text(far)?);
+    let start = start.as_str();
+    let rebuilt = |sheet: &Option<String>, name: String| Token::Name { sheet: sheet.clone(), name };
+    if let (Some(mut low), Some(mut high)) = (parse_a1(start), parse_a1(&end)) {
+        if low.row <= high.row && low.col <= high.col {
+            return None;
+        }
+        if low.row > high.row {
+            std::mem::swap(&mut low.row, &mut high.row);
+            std::mem::swap(&mut low.row_absolute, &mut high.row_absolute);
+        }
+        if low.col > high.col {
+            std::mem::swap(&mut low.col, &mut high.col);
+            std::mem::swap(&mut low.col_absolute, &mut high.col_absolute);
+        }
+        return Some((rebuilt(sheet, low.to_a1()), rebuilt(&far_sheet, high.to_a1())));
+    }
+    // A whole column or a whole row: `C:A`, `$6:5`.
+    let line = |text: &str| -> Option<(bool, u32, bool)> {
+        let (absolute, rest) = match text.strip_prefix('$') {
+            Some(rest) => (true, rest),
+            None => (false, text),
+        };
+        if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+            return Some((false, rest.parse().ok()?, absolute));
+        }
+        if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphabetic()) {
+            let column = rest
+                .bytes()
+                .fold(0u32, |held, b| held * 26 + u32::from(b.to_ascii_uppercase() - b'A' + 1));
+            return Some((true, column, absolute));
+        }
+        None
+    };
+    let (Some(one), Some(other)) = (line(start), line(&end)) else {
+        return None;
+    };
+    if one.0 != other.0 || one.1 <= other.1 {
+        return None;
+    }
+    let text_of = |held: &str| held.to_string();
+    Some((rebuilt(sheet, text_of(&end)), rebuilt(&far_sheet, text_of(start))))
+}
+
+fn far_sheet(far: &Token) -> Option<String> {
+    match far {
+        Token::Name { sheet, .. } => sheet.clone(),
+        _ => None,
+    }
+}
+
+fn far_text(far: &Token) -> Option<String> {
+    match far {
+        Token::Name { name, .. } => Some(name.clone()),
+        Token::Number(value) if value.fract() == 0.0 && *value >= 1.0 => Some(format!("{value}")),
+        _ => None,
+    }
+}
+
 /// Rewrite every reference to the sheet named `old` so it names `new` instead,
 /// leaving string literals, other sheets and unqualified references untouched.
 ///
@@ -1797,5 +1902,22 @@ mod shift_tests {
             move_formula_references("=Sheet1!A1", &carried).unwrap(),
             "=Sheet1!A1"
         );
+    }
+
+    /// Every pair here is what Excel stored for what VBA's `.Formula` wrote.
+    #[test]
+    fn a_range_is_stored_top_left_first() {
+        for (written, stored) in [
+            ("=SUM(B6:A5)", "=SUM(A5:B6)"),
+            ("=SUM($A6:A$5)", "=SUM($A$5:A6)"),
+            ("=SUM(A6:B5)", "=SUM(A5:B6)"),
+            ("=SUM(Sheet1!A6:A5)", "=SUM(Sheet1!A5:A6)"),
+            ("=SUM(6:5)", "=SUM(5:6)"),
+            ("=SUM(C:A)", "=SUM(A:C)"),
+            ("=SUM(B$6:$A5)", "=SUM($A5:B$6)"),
+            ("=SUM(A1:B2)+1.50", "=SUM(A1:B2)+1.50"),
+        ] {
+            assert_eq!(super::normalise_formula_ranges(written), stored, "{written}");
+        }
     }
 }
