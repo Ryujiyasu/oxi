@@ -302,3 +302,22 @@ fn a_table_is_read_with_the_colour_its_style_dresses_it_in() {
     assert!(table.banded_rows);
     assert_eq!((table.start_row, table.start_col), (2, 0));
 }
+
+#[test]
+fn an_apostrophe_mark_is_saved() {
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.set_cell_style(
+        0,
+        1,
+        0,
+        CellStyle {
+            quote_prefix: true,
+            ..CellStyle::default()
+        },
+    );
+    let saved = editor.save().expect("the workbook saves");
+
+    let workbook = parse_xlsx(&saved).expect("the saved workbook parses");
+    assert!(style_at(&workbook, 1, 0).quote_prefix);
+    assert!(!style_at(&workbook, 2, 0).quote_prefix);
+}

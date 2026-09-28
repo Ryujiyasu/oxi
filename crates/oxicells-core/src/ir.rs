@@ -1052,6 +1052,11 @@ pub struct CellStyle {
     /// conformance corpus are this one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stacked_text: bool,
+    /// True when an apostrophe typed first told Excel to keep the entry as
+    /// text -- `quotePrefix="1"` on the cell's format, which
+    /// `Range.PrefixCharacter` answers as `'`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quote_prefix: bool,
     pub border_top: Option<BorderLine>,
     pub border_bottom: Option<BorderLine>,
     pub border_left: Option<BorderLine>,

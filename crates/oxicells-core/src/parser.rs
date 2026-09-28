@@ -531,6 +531,8 @@ struct XfRecord {
     wrap_text: bool,
     stacked_text: bool,
     shrink_to_fit: bool,
+    /// `quotePrefix="1"`: the entry was typed behind an apostrophe.
+    quote_prefix: bool,
     /// Whether the cell may still be edited once its sheet is protected.
     /// Excel locks every cell by default and unlocks the few a form wants
     /// typed into, so the negative is the one worth holding: it keeps this
@@ -1034,6 +1036,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             wrap_text: false,
                             stacked_text: false,
                             shrink_to_fit: false,
+                            quote_prefix: is_true(get_attr(&e, "quotePrefix").as_deref()),
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
                             applies_font: unless_denied(
                                 get_attr(&e, "applyFont").as_deref(),
@@ -1282,6 +1285,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             wrap_text: false,
                             stacked_text: false,
                             shrink_to_fit: false,
+                            quote_prefix: is_true(get_attr(&e, "quotePrefix").as_deref()),
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
                             applies_font: unless_denied(
                                 get_attr(&e, "applyFont").as_deref(),
@@ -1486,6 +1490,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         wrap_text: xf.wrap_text,
         stacked_text: xf.stacked_text,
         shrink_to_fit: xf.shrink_to_fit,
+        quote_prefix: xf.quote_prefix,
         unlocked: xf.unlocked,
         border_top: border.top.clone(),
         border_bottom: border.bottom.clone(),

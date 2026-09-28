@@ -11042,6 +11042,30 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    /// Whether a cell's number format is `@`, which keeps whatever is typed
+    /// into it as text.
+    fn cell_format_is_text(&self, address: CellAddress) -> bool {
+        let format = match self.cell_here(address.sheet, address.row, address.column) {
+            Some(cell) => cell.style.number_format,
+            None => self.template_style(address).number_format,
+        };
+        format.as_deref() == Some("@")
+    }
+
+    /// Put the apostrophe mark on a cell, or take it off.
+    fn mark_quoted(&mut self, address: CellAddress, quoted: bool) {
+        let Some(cell) = self
+            .workbook
+            .sheets
+            .get_mut(address.sheet)
+            .and_then(|sheet| sheet.rows.iter_mut().find(|row| row.index == address.row))
+            .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == address.column))
+        else {
+            return;
+        };
+        cell.style.quote_prefix = quoted;
+    }
+
     fn ask_cell_format(&mut self, address: CellAddress, shown: &str) {
         let Some(sheet) = self.workbook.sheets.get_mut(address.sheet) else {
             return;
@@ -11305,6 +11329,22 @@ impl<'a> WorkbookHost<'a> {
                     self.set_cell_value(address, CellValue::Error("#N/A".to_string()))?;
                     continue;
                 };
+                // An apostrophe first marks the cell as holding text, and the
+                // mark stays through later text and goes with anything else.
+                // Measured: `'0123` then `"text"` keeps PrefixCharacter `'`,
+                // where `5`, `"46"` and ClearContents take it off.
+                let quoted = matches!(&value, Value::String(written) if written.starts_with(APOSTROPHE));
+                // A cell formatted as text keeps what is written as text:
+                // measured, `"12"` into an `@` cell is the String "12".
+                let value = match value {
+                    Value::String(written)
+                        if !written.starts_with('=') && self.cell_format_is_text(address) =>
+                    {
+                        self.set_cell_value(address, CellValue::String(written))?;
+                        continue;
+                    }
+                    other => other,
+                };
                 match cell_input(value, self.this_year())? {
                     CellInput::Formula(formula) => {
                         let placed = self.placed_formula(
@@ -11333,9 +11373,13 @@ impl<'a> WorkbookHost<'a> {
                         }
                     }
                     CellInput::Constant(value, shown) => {
+                        let text = matches!(value, CellValue::String(_));
                         self.set_cell_value(address, value)?;
                         if let Some(shown) = shown {
                             self.ask_cell_format(address, shown);
+                        }
+                        if quoted || !text {
+                            self.mark_quoted(address, quoted);
                         }
                     }
                 }
@@ -16384,6 +16428,24 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("hasformula") {
             return self.range_has_formula(range).map(Some);
+        }
+        // `'` on a cell written behind an apostrophe, "" otherwise; over
+        // several cells the one answer they share, or Null where they differ.
+        if name.eq_ignore_ascii_case("prefixcharacter") {
+            let mut shared: Option<bool> = None;
+            for address in range.addresses() {
+                let quoted = self
+                    .cell_here(address.sheet, address.row, address.column)
+                    .is_some_and(|cell| cell.style.quote_prefix);
+                match shared {
+                    None => shared = Some(quoted),
+                    Some(held) if held != quoted => return Ok(Some(Value::Null)),
+                    Some(_) => {}
+                }
+            }
+            return Ok(Some(Value::String(
+                if shared == Some(true) { "'" } else { "" }.to_string(),
+            )));
         }
         if name.eq_ignore_ascii_case("hasarray") {
             // Measured: C1:D2, with only C1:C2 an array, answers True -- a
@@ -32955,6 +33017,44 @@ End Sub
         assert_eq!(
             answer,
             Value::String("18000|65000|$A$1:$C$11|AutoFilter|True".to_string())
+        );
+    }
+
+    /// An apostrophe marks a cell as text, and the mark comes and goes as
+    /// Excel's does. Every answer here is Excel's.
+    #[test]
+    fn an_apostrophe_marks_a_cell_as_text() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               Range(\"A1\").Value = \"'0123\"
+               out = Range(\"A1\").Value & \"|\" & Range(\"A1\").PrefixCharacter & \"|\" & Range(\"A1\").Formula
+               Range(\"A1\").Value = \"text\"
+               out = out & \"|\" & Range(\"A1\").PrefixCharacter
+               Range(\"A1\").Value = \"46\"
+               out = out & \"|\" & TypeName(Range(\"A1\").Value) & Range(\"A1\").PrefixCharacter
+               Range(\"A2\").Value = \"'45\"
+               Range(\"A2\").Copy Range(\"B2\")
+               out = out & \"|\" & Range(\"B2\").PrefixCharacter & TypeName(Range(\"B2\").Value)
+               Range(\"A2\").ClearContents
+               out = out & \"|\" & Range(\"A2\").PrefixCharacter
+               Range(\"A3:A4\").Value = \"'7\"
+               out = out & \"|\" & Range(\"A3:A4\").PrefixCharacter & \"|\" & IsNull(Range(\"A1:A3\").PrefixCharacter)
+               Range(\"A5\").NumberFormat = \"@\"
+               Range(\"A5\").Value = \"12\"
+               Ask = out & \"|\" & TypeName(Range(\"A5\").Value) & Range(\"A5\").PrefixCharacter
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("0123|'|0123|'|Double|'String||'|True|String".to_string())
         );
     }
 

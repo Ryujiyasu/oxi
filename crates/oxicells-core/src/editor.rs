@@ -1339,6 +1339,9 @@ fn xf_xml(
     if number_format_id != 0 {
         xf.push_str(" applyNumberFormat=\"1\"");
     }
+    if style.quote_prefix {
+        xf.push_str(" quotePrefix=\"1\"");
+    }
     // Everything an `<alignment>` can say goes in one element, so it is built
     // up rather than written from the first part that happens to be set. Wrap,
     // indent and the vertical part were read all along and never written: a
