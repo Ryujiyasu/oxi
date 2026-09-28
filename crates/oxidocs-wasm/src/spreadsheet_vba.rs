@@ -9015,16 +9015,31 @@ impl<'a> WorkbookHost<'a> {
         let [row, column] = args else {
             return Err("Range.Cells expects an index, or a row and a column".to_string());
         };
-        let row = positive_index(row, "row")? - 1;
-        let column = column_index(column)? - 1;
-        let row = range
-            .start_row
-            .checked_add(row)
-            .ok_or_else(|| "Range.Cells row is too large".to_string())?;
-        let column = range
-            .start_column
-            .checked_add(column)
-            .ok_or_else(|| "Range.Cells column is too large".to_string())?;
+        // A row or column of nought or less counts back from the range's
+        // corner: measured, `Range("B2:C3")(0, 0)` is A1. Off the sheet is
+        // refused.
+        let signed = |value: &Value, label: &str| -> Result<i64, String> {
+            match any_number(value) {
+                Some(number) if number.is_finite() && number.fract() == 0.0 && number < 1.0 => {
+                    Ok(number as i64)
+                }
+                _ => positive_index(value, label).map(i64::from),
+            }
+        };
+        let row = i64::from(range.start_row) + signed(row, "row")? - 1;
+        let column = match column {
+            Value::String(_) => i64::from(column_index(column)?),
+            _ => signed(column, "column")?,
+        } + i64::from(range.start_column)
+            - 1;
+        if row < 1
+            || column < 0
+            || row > i64::from(MAX_WORKSHEET_ROW)
+            || column > i64::from(MAX_WORKSHEET_COLUMN)
+        {
+            return Err("Range.Cells has no cell there".to_string());
+        }
+        let (row, column) = (row as u32, column as u32);
         Ok(
             self.object(HostObject::Range(CellRange::single(CellAddress {
                 sheet: range.sheet,
@@ -14979,6 +14994,39 @@ impl Host for WorkbookHost<'_> {
                 // As with Count, every other call a range takes it takes too.
             }
             if let Some(range) = self.range(receiver) {
+                // A property that takes no arguments hands its answer to the
+                // brackets: measured, `Range("A1:B5").Value2(3, 1)` is A3 and
+                // `.Formula(1, 3)` the third formula, where a single cell's
+                // `.Value2(1, 1)` is 13 and one past the end 9. `Value`'s own
+                // argument is the kind of value, of which only the default, 10,
+                // is anything a browser can give.
+                let lower = name.to_ascii_lowercase();
+                // Empty brackets are the property itself: `.Value2()(4, 2)`.
+                if matches!(args, [] | [Value::Missing])
+                    && matches!(lower.as_str(), "value2" | "formula" | "formular1c1" | "formula2" | "formulalocal" | "value" | "text")
+                {
+                    return self.get(receiver, name);
+                }
+                if !args.is_empty()
+                    && matches!(lower.as_str(), "value2" | "formula" | "formular1c1" | "formula2" | "formulalocal" | "value")
+                {
+                    if lower == "value" {
+                        if let [kind] = args {
+                            if any_whole_number(kind) == Some(10) {
+                                return self.get(receiver, "Value");
+                            }
+                        }
+                        return Err(format!("Range.Value cannot give the kind of value {args:?}"));
+                    }
+                    let _ = range;
+                    // A row or column taken from `Rows` or `Columns` refuses
+                    // the brackets: measured, `.Rows(2).Value2(1, 2)` is 451.
+                    if self.range_sense(receiver).is_some() {
+                        return Err(host_error(451, "a row or column cannot be indexed through its value"));
+                    }
+                    let whole = self.get(receiver, name)?.unwrap_or(Value::Empty);
+                    return index_answer(whole, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("borders") {
                     return self.borders_object(range, args).map(Some);
                 }
@@ -17850,6 +17898,27 @@ fn format_debug_value(value: &Value) -> String {
 /// (2 and 2), and `Cells(3.5)` is B3 (4); over the sheet, `Cells(1.5)` is B1
 /// and `Cells(2.5)` is B1. A number written as text is read as a number here —
 /// `Cells("3")` is C1 — though the two-index form refuses one.
+/// A property's answer taken apart by the subscripts written after it.
+fn index_answer(whole: Value, args: &[Value]) -> Result<Value, String> {
+    let Value::Array(array) = whole else {
+        return Err(host_error(13, "the answer is not an array to index"));
+    };
+    if args.len() != array.dimensions.len() {
+        return Err(host_error(9, "the answer has another number of dimensions"));
+    }
+    let mut offset = 0usize;
+    for (dimension, wanted) in array.dimensions.iter().zip(args) {
+        let wanted = any_whole_number(wanted)
+            .ok_or_else(|| host_error(13, "a subscript must be a number"))?;
+        let from = wanted - dimension.lower_bound;
+        if from < 0 || from as usize >= dimension.length {
+            return Err(host_error(9, "the subscript is out of range"));
+        }
+        offset = offset * dimension.length + from as usize;
+    }
+    Ok(array.values.get(offset).cloned().unwrap_or(Value::Empty))
+}
+
 fn cells_index(value: &Value) -> Result<i64, String> {
     match value {
         value if any_number(value).is_some() => Ok(any_number(value).unwrap_or_default().round_ties_even() as i64),
@@ -33055,6 +33124,46 @@ End Sub
         assert_eq!(
             answer,
             Value::String("0123|'|0123|'|Double|'String||'|True|String".to_string())
+        );
+    }
+
+    /// Brackets after a property that takes none index its answer, and a
+    /// range's two-index item counts back from its corner. Every answer here
+    /// is Excel's.
+    #[test]
+    fn brackets_index_a_propertys_answer() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim i As Long, out As String
+               For i = 1 To 5
+                 Cells(i, 1).Value = i * 10
+                 Cells(i, 2).Value = \"t\" & i
+               Next i
+               Range(\"C1\").Formula = \"=A1*2\"
+               out = Range(\"A1:B5\").Value2(3, 1) & \"|\" & Range(\"A1:B5\").Value(10)(2, 1) & \"|\" & _
+                     Range(\"A1:C1\").Formula(1, 3) & \"|\" & Range(\"A1:B5\").Value2()(4, 2) & \"|\" & _
+                     Range(\"A1\").Value(10) & \"|\" & Range(\"B2:C3\")(0, 0).Address
+               On Error Resume Next
+               i = Range(\"A1\").Value2(1, 1)
+               out = out & \"|\" & Err.Number
+               Err.Clear
+               i = Range(\"A1:A3\").Value2(4, 1)
+               out = out & \"|\" & Err.Number
+               Err.Clear
+               i = Range(\"A1:B5\").Rows(2).Value2(1, 2)
+               Ask = out & \"|\" & Err.Number
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("30|20|=A1*2|t4|10|$A$1|13|9|451".to_string())
         );
     }
 
