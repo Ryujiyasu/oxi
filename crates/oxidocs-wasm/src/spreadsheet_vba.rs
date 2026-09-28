@@ -10889,6 +10889,58 @@ impl<'a> WorkbookHost<'a> {
     /// Give a cell the way of showing itself that the writing asked for —
     /// but only while the cell is still General. Asked of Excel, writing `50%`
     /// into a cell already showing `0.000` stores 0.5 and leaves `0.000`.
+    /// What a formula written on `sheet` says the cell should wear.
+    fn dress_for(&self, sheet: usize, formula: &str) -> Worn {
+        let Ok(expr) = oxicells_calc::parse(formula) else {
+            return Worn::Silent;
+        };
+        let format_at = |reference: &oxicells_calc::Reference| -> Option<String> {
+            if reference.book.is_some() {
+                return None;
+            }
+            let on = match &reference.sheet {
+                None => sheet,
+                Some(name) => self
+                    .workbook
+                    .sheets
+                    .iter()
+                    .position(|held| held.name.eq_ignore_ascii_case(name))?,
+            };
+            let at = CellAddress {
+                sheet: on,
+                row: reference.range.start.row.min(reference.range.end.row) + 1,
+                column: reference.range.start.col.min(reference.range.end.col),
+            };
+            match self.cell_here(at.sheet, at.row, at.column) {
+                Some(cell) => cell.style.number_format,
+                None => self.template_style(at).number_format,
+            }
+        };
+        formula_dress(&expr, &format_at)
+    }
+
+    /// Put `format` on a cell that is still in General, and leave any other
+    /// alone: measured, a cell given `0.0` first keeps it under `=A1+1`.
+    fn dress_general_cell(&mut self, address: CellAddress, format: &str) {
+        let Some(cell) = self
+            .workbook
+            .sheets
+            .get_mut(address.sheet)
+            .and_then(|sheet| sheet.rows.iter_mut().find(|row| row.index == address.row))
+            .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == address.column))
+        else {
+            return;
+        };
+        let general = cell
+            .style
+            .number_format
+            .as_deref()
+            .is_none_or(|held| held.eq_ignore_ascii_case("general"));
+        if general {
+            cell.style.number_format = Some(format.to_string());
+        }
+    }
+
     fn ask_cell_format(&mut self, address: CellAddress, shown: &str) {
         let Some(sheet) = self.workbook.sheets.get_mut(address.sheet) else {
             return;
@@ -11116,6 +11168,7 @@ impl<'a> WorkbookHost<'a> {
         // writes A5 and then raises 1004. So each unlocked cell is written and
         // the refusal comes at the end.
         let mut refused = false;
+        let mut broadcast_dress: Option<Worn> = None;
         let mut header_writes: Vec<CellAddress> = Vec::new();
         for row_step in 0..=(range.end_row - range.start_row) {
             for column_step in 0..=(range.end_column - range.start_column) {
@@ -11160,7 +11213,23 @@ impl<'a> WorkbookHost<'a> {
                             row_step as i64 - from_row as i64,
                             column_step as i64 - from_column as i64,
                         )?;
+                        // One formula written over a block is dressed once,
+                        // from the top-left cell's reading, and every cell
+                        // wears that: measured, `E1:E3 = "=A1+1"` dresses E3
+                        // as a date though its own `=A3+1` reads a percent.
+                        // Formulas handed over one apiece are dressed apiece.
+                        let one_formula = block.rows == 1 && block.columns == 1;
+                        let dress = match (&broadcast_dress, one_formula) {
+                            (Some(dress), true) => dress.clone(),
+                            _ => self.dress_for(address.sheet, &placed),
+                        };
+                        if one_formula && broadcast_dress.is_none() {
+                            broadcast_dress = Some(dress.clone());
+                        }
                         self.set_cell_formula(address, placed)?;
+                        if let Worn::Format(format) = dress {
+                            self.dress_general_cell(address, &format);
+                        }
                     }
                     CellInput::Constant(value, shown) => {
                         self.set_cell_value(address, value)?;
@@ -18528,6 +18597,82 @@ enum ShownAs {
 /// - Quoted runs and bracketed runs carry no fields at all, so `"d"0` is
 ///   plain, while `\dm` is a date -- the escape kills the `d` and the `m`
 ///   after it is still a month.
+/// What a formula says about the number format of the cell it goes into.
+///
+/// Excel dresses a cell still in General when a formula lands in it, from
+/// what the formula reads. Measured against Excel 16 over some 150 formulas:
+///
+/// - A reference to a cell in General, and any constant, has no opinion. A
+///   reference to a formatted cell offers that format -- a range, its
+///   top-left cell's only (`SUM(A5:A6)` with A5 General and A6 `0.000` stays
+///   General).
+/// - `+` and `-` take the first opinion (`A1+A3` is the date, `A3+A1` the
+///   percent, `A5+A1` the date), except that two dates -- formats with a day,
+///   month or year; times alone do not count -- make General (`A2-A1`,
+///   `A1+TODAY()`), and General met on either side stays General.
+/// - `*`, `/`, `^`, `&`, `%` and a comparison settle on General: `A1*2` and
+///   `A5*1+A1` stay General. A sign or brackets change nothing.
+/// - SUM, MIN, MAX, AVERAGE, MEDIAN, ROUND, ROUNDUP, ROUNDDOWN, INT, TRUNC
+///   and MOD combine their arguments the way `+` does (`SUM(A1,A2)` of two
+///   dates is General). TODAY and DATE give `m/d/yyyy`, NOW `m/d/yyyy h:mm`,
+///   TIME `h:mm AM/PM`, and PMT, FV, PV and NPV the currency format. Every
+///   other function -- ABS, IF, IFERROR, INDEX, VLOOKUP, EDATE, EOMONTH,
+///   YEAR, LARGE and the rest -- has no opinion.
+#[derive(Clone, Debug, PartialEq)]
+enum Worn {
+    Silent,
+    General,
+    Format(String),
+}
+
+fn formula_dress(
+    expr: &oxicells_calc::Expr,
+    format_at: &dyn Fn(&oxicells_calc::Reference) -> Option<String>,
+) -> Worn {
+    use oxicells_calc::{BinaryOp, Expr, UnaryOp};
+    match expr {
+        Expr::Ref(reference) => match format_at(reference) {
+            Some(format) if !format.eq_ignore_ascii_case("general") => Worn::Format(format),
+            _ => Worn::Silent,
+        },
+        Expr::Unary { op: UnaryOp::Percent, .. } => Worn::General,
+        Expr::Unary { operand, .. } => formula_dress(operand, format_at),
+        Expr::Binary { op: BinaryOp::Add | BinaryOp::Sub, lhs, rhs } => {
+            added_dress(formula_dress(lhs, format_at), formula_dress(rhs, format_at))
+        }
+        Expr::Binary { .. } => Worn::General,
+        Expr::Function { name, args } => match name.trim_start_matches("_xlfn.") {
+            "SUM" | "MIN" | "MAX" | "AVERAGE" | "MEDIAN" | "ROUND" | "ROUNDUP" | "ROUNDDOWN"
+            | "INT" | "TRUNC" | "MOD" => args
+                .iter()
+                .map(|arg| formula_dress(arg, format_at))
+                .fold(Worn::Silent, added_dress),
+            "TODAY" | "DATE" => Worn::Format("m/d/yyyy".to_string()),
+            "NOW" => Worn::Format("m/d/yyyy h:mm".to_string()),
+            "TIME" => Worn::Format("h:mm AM/PM".to_string()),
+            "PMT" | "FV" | "PV" | "NPV" => {
+                Worn::Format("$#,##0.00_);[Red]($#,##0.00)".to_string())
+            }
+            _ => Worn::Silent,
+        },
+        _ => Worn::Silent,
+    }
+}
+
+fn added_dress(first: Worn, second: Worn) -> Worn {
+    match (first, second) {
+        (Worn::General, _) | (_, Worn::General) => Worn::General,
+        (Worn::Format(one), Worn::Format(other))
+            if shown_as(Some(&one)) == ShownAs::Moment
+                && shown_as(Some(&other)) == ShownAs::Moment =>
+        {
+            Worn::General
+        }
+        (Worn::Format(one), _) => Worn::Format(one),
+        (Worn::Silent, other) => other,
+    }
+}
+
 /// How much of what follows an `a` spells out the rest of `AM/PM` or `A/P`,
 /// so the whole token can be stepped over as the one thing it is.
 fn meridiem_length(rest: &std::iter::Peekable<std::str::Chars<'_>>) -> usize {
@@ -18565,10 +18710,18 @@ fn shown_as(format: Option<&str>) -> ShownAs {
                 }
             }
             '[' => {
+                let mut inside = String::new();
                 for bracketed in characters.by_ref() {
                     if bracketed == ']' {
                         break;
                     }
+                    inside.push(bracketed.to_ascii_lowercase());
+                }
+                // `[h]`, `[mm]` and `[ss]` are elapsed time: a clock beside
+                // the `m` that follows, which is then a minute. Measured,
+                // a cell under `[h]:mm` hands back a Double, not a Date.
+                if !inside.is_empty() && inside.chars().all(|held| matches!(held, 'h' | 'm' | 's')) {
+                    fields.push('h');
                 }
             }
             '$' => money = true,
@@ -32480,6 +32633,56 @@ End Sub
             answer,
             Value::String(
                 "3|8|1048568|24|24|8|6|12|21|4|5|8|$A:$A,$C:$C|$B$1:$B$8|$A:$A|af6|True|True"
+                    .to_string()
+            )
+        );
+    }
+
+    /// A formula dresses a cell still in General from what it reads. Every
+    /// answer here is Excel 16's, from the same macro.
+    #[test]
+    fn a_formula_dresses_its_cell_from_what_it_reads() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Range(\"A1\").Value = DateSerial(2024, 1, 31)
+               Range(\"A2\").Value = DateSerial(2024, 3, 1)
+               Range(\"A3\").Value = 0.25: Range(\"A3\").NumberFormat = \"0%\"
+               Range(\"A4\").Value = 1234.5: Range(\"A4\").NumberFormat = \"$#,##0.00\"
+               Range(\"A5\").Value = 7
+               Range(\"A6\").Value = 3.5: Range(\"A6\").NumberFormat = \"0.000\"
+               Range(\"A13\").Value = 0.5: Range(\"A13\").NumberFormat = \"[h]:mm\"
+               Dim f As Variant, i As Long, out As String
+               f = Array(\"=A1+30\", \"=A1*2\", \"=A2-A1\", \"=A5+A1\", \"=A3+A1\", \"=A5*1+A1\", \"=A1+(A5*1)\", _
+                         \"=SUM(A5,A3)\", \"=SUM(A1,A2)\", \"=SUM(A5:A6)\", \"=ROUND(A4,0)\", \"=ABS(A1)+A1\", _
+                         \"=IFERROR(A1+1,0)\", \"=TODAY()\", \"=NOW()\", \"=TIME(1,2,3)\", \"=PMT(0.1,10,1000)\", \"=A13+A13\", \"=-A1\")
+               For i = 0 To UBound(f)
+                 Cells(i + 1, 3).Formula = f(i)
+                 out = out & Cells(i + 1, 3).NumberFormat & \"~\"
+               Next i
+               Range(\"E1:E3\").Formula = \"=A1+1\"
+               Range(\"F2\").NumberFormat = \"0.0\"
+               Range(\"F1:F3\").Formula = \"=A1+1\"
+               Range(\"G1:G3\").Formula = \"=A5+1\"
+               Range(\"H1:H3\").Formula = Application.Transpose(Array(\"=A5+1\", \"=A1+1\", \"=A3+1\"))
+               Ask = out & Range(\"E3\").NumberFormat & \"|\" & Range(\"F2\").NumberFormat & \"|\" & _
+                     Range(\"G2\").NumberFormat & \"|\" & Range(\"H1\").NumberFormat & \",\" & _
+                     Range(\"H2\").NumberFormat & \",\" & Range(\"H3\").NumberFormat & \"|\" & TypeName(Range(\"A13\").Value)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "m/d/yyyy~General~General~m/d/yyyy~0%~General~General~0%~General~General~\
+                 $#,##0.00~m/d/yyyy~General~m/d/yyyy~m/d/yyyy h:mm~h:mm AM/PM~\
+                 $#,##0.00_);[Red]($#,##0.00)~[h]:mm~m/d/yyyy~\
+                 m/d/yyyy|0.0|General|General,m/d/yyyy,0%|Double"
                     .to_string()
             )
         );
