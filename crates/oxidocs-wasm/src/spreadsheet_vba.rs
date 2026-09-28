@@ -96,13 +96,20 @@ enum LookupOrientation {
 struct LookupTable {
     rows: usize,
     columns: usize,
+    /// How many columns `values` holds per row. A whole column is searched
+    /// at its full length -- the sorted search's path depends on it -- but
+    /// only what the sheet holds is read, and past that every cell is Empty.
+    held_columns: usize,
     values: Vec<Value>,
 }
 
 impl LookupTable {
     fn get(&self, row: usize, column: usize) -> Value {
+        if column >= self.held_columns {
+            return Value::Empty;
+        }
         self.values
-            .get(row * self.columns + column)
+            .get(row * self.held_columns + column)
             .cloned()
             .unwrap_or(Value::Empty)
     }
@@ -2251,7 +2258,10 @@ impl<'a> WorkbookHost<'a> {
     fn blocks_object(&mut self, given: Vec<CellRange>) -> Result<Value, String> {
         let mut areas: Vec<CellRange> = Vec::with_capacity(given.len());
         for block in given {
-            Self::range_cell_count(block)?;
+            // Naming whole columns is fine -- `Union(Columns(1), Columns(3))`
+            // is `$A:$A,$C:$C` -- and whatever walks the cells keeps its own
+            // limit.
+            Self::range_cell_count_large(block)?;
             let mut block = block;
             // Joining one may let it join another, so go round until nothing
             // more comes together.
@@ -2281,7 +2291,7 @@ impl<'a> WorkbookHost<'a> {
     /// touch — has two against Union's one, and even `Range("A1,A1")` has two.
     fn written_blocks_object(&mut self, given: Vec<CellRange>) -> Result<Value, String> {
         for block in &given {
-            Self::range_cell_count(*block)?;
+            Self::range_cell_count_large(*block)?;
         }
         if given.len() == 1 {
             return Ok(self.object(HostObject::Range(given[0])));
@@ -2397,10 +2407,28 @@ impl<'a> WorkbookHost<'a> {
                 column: used.end_column,
             }))));
         }
+        let used = self.used_range(range.sheet)?;
+        // Excel looks for constants, formulas and blanks only inside the used
+        // range: measured, `A1:A20` with the sheet used to row 4 finds blanks
+        // to A4, `F1:F5` beside it finds none (1004), and `Range("A:A")`
+        // costs nothing. Visible cells are the block itself, less what is
+        // hidden: `Range("A:A")` answers `$A:$A`.
         let hunted = if range.is_single() {
-            self.used_range(range.sheet)?
-        } else {
+            used
+        } else if kind == 12 {
+            if !self.hides_any(range) {
+                return Ok(self.object(HostObject::Range(range)));
+            }
             range
+        } else {
+            let start_row = range.start_row.max(used.start_row);
+            let end_row = range.end_row.min(used.end_row);
+            let start_column = range.start_column.max(used.start_column);
+            let end_column = range.end_column.min(used.end_column);
+            if start_row > end_row || start_column > end_column {
+                return Err("Range.SpecialCells found no cells like that".to_string());
+            }
+            CellRange { sheet: range.sheet, start_row, end_row, start_column, end_column }
         };
         Self::range_cell_count(hunted)?;
 
@@ -2495,6 +2523,7 @@ impl<'a> WorkbookHost<'a> {
         use oxicells_calc::functions::{Arg, RangeData};
         if let Value::Object(object) = value {
             if let Some(range) = self.range(object) {
+                let range = self.cut_to_contents(range)?;
                 Self::range_cell_count(range)?;
                 let width = (range.end_column - range.start_column + 1) as usize;
                 let height = (range.end_row - range.start_row + 1) as usize;
@@ -2524,6 +2553,35 @@ impl<'a> WorkbookHost<'a> {
             }));
         }
         Ok(Arg::Value(engine_value(value)))
+    }
+
+    /// A range reaching the sheet's last row or column, cut back to what the
+    /// sheet holds -- the formula engine's `cut_to_fit`, for the same reason:
+    /// `WorksheetFunction.Max(Range("B:B"))` is an ordinary macro line, and a
+    /// million blanks are not what it asks about. Only ever cuts back.
+    fn cut_to_contents(&self, range: CellRange) -> Result<CellRange, String> {
+        if range.end_row < MAX_WORKSHEET_ROW && range.end_column < MAX_WORKSHEET_COLUMN {
+            return Ok(range);
+        }
+        let held = self.used_range(range.sheet)?;
+        let mut cut = range;
+        cut.end_row = cut.end_row.min(held.end_row.max(cut.start_row));
+        cut.end_column = cut.end_column.min(held.end_column.max(cut.start_column));
+        Ok(cut)
+    }
+
+    /// Whether any row or column of `range` is out of sight.
+    fn hides_any(&self, range: CellRange) -> bool {
+        let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
+            return false;
+        };
+        sheet
+            .hidden_cols
+            .iter()
+            .any(|column| (range.start_column..=range.end_column).contains(column))
+            || sheet.rows.iter().any(|row| {
+                row.hidden && (range.start_row..=range.end_row).contains(&row.index)
+            })
     }
 
     /// Whether a cell is out of sight, by its row or by its column.
@@ -9061,11 +9119,13 @@ impl<'a> WorkbookHost<'a> {
                         object.kind
                     ));
                 };
-                Self::range_cell_count(range)?;
+                let held = self.cut_to_contents(range)?;
+                Self::range_cell_count(held)?;
                 Ok(LookupTable {
                     rows: (range.end_row - range.start_row + 1) as usize,
                     columns: (range.end_column - range.start_column + 1) as usize,
-                    values: range
+                    held_columns: (held.end_column - held.start_column + 1) as usize,
+                    values: held
                         .addresses()
                         .map(|address| self.cell_value(address))
                         .collect(),
@@ -9084,12 +9144,14 @@ impl<'a> WorkbookHost<'a> {
                 Ok(LookupTable {
                     rows,
                     columns,
+                    held_columns: columns,
                     values: array.values.clone(),
                 })
             }
             value => Ok(LookupTable {
                 rows: 1,
                 columns: 1,
+                held_columns: 1,
                 values: vec![value.clone()],
             }),
         }
@@ -9512,6 +9574,47 @@ impl<'a> WorkbookHost<'a> {
             .unwrap_or(Value::Error(ERROR_NA)))
     }
 
+    /// `Lookup(value, vector, [result])`: the same sorted search as `Match`
+    /// with 1, and so the same answer on data that is not sorted -- measured,
+    /// `Lookup("c", A1:A8, B1:B8)` over b a d c a e b f is B4, and over
+    /// A1:A20 it is B7. With no result vector the array form answers from
+    /// the last row of a wide block or the last column of a tall one.
+    fn worksheet_vector_lookup(&self, args: &[Value]) -> Result<Value, String> {
+        let (needle, searched, result) = match args {
+            [needle, searched] => (needle, searched, None),
+            [needle, searched, result] => (needle, searched, Some(result)),
+            _ => return Err("WorksheetFunction.Lookup expects two or three arguments".to_string()),
+        };
+        let table = self.lookup_table(searched, "Lookup")?;
+        let wide = table.columns > table.rows;
+        let count = if wide { table.columns } else { table.rows };
+        let key = |index: usize| {
+            if wide {
+                table.get(0, index)
+            } else {
+                table.get(index, 0)
+            }
+        };
+        let Some(position) = sorted_lookup_position(count, false, key, needle) else {
+            return Ok(Value::Error(ERROR_NA));
+        };
+        let at = position - 1;
+        match result {
+            Some(result) => {
+                let answers = self.lookup_table(result, "Lookup")?;
+                if answers.rows > 1 && answers.columns > 1 {
+                    return Err("WorksheetFunction.Lookup needs a single row or column of answers".to_string());
+                }
+                if at >= answers.rows * answers.columns {
+                    return Ok(Value::Error(ERROR_NA));
+                }
+                Ok(answers.get(at / answers.columns, at % answers.columns))
+            }
+            None if wide => Ok(table.get(table.rows - 1, at)),
+            None => Ok(table.get(at, table.columns - 1)),
+        }
+    }
+
     /// The worksheet functions that read their arguments by position rather than
     /// aggregating everything handed to them.
     ///
@@ -9858,6 +9961,41 @@ impl<'a> WorkbookHost<'a> {
                 "WorksheetFunction.{name} expects at least one argument"
             ));
         }
+        // A whole column or row is read as far as the sheet holds, the way
+        // the formula engine reads one. `Index` hands back a cell of the range
+        // rather than a value, so it keeps the range as given; `CountBlank`
+        // counts the blanks that were cut away.
+        let mut cut_blanks = 0u64;
+        let cut_args;
+        let args = if ["index", "match", "vlookup", "hlookup", "lookup"]
+            .iter()
+            .any(|kept| name.eq_ignore_ascii_case(kept))
+        {
+            args
+        } else {
+            let mut cut = Vec::with_capacity(args.len());
+            for value in args {
+                let range = match value {
+                    Value::Object(object) if self.blocks(object).is_none() => self.range(object),
+                    _ => None,
+                };
+                match range {
+                    Some(range) => {
+                        let held = self.cut_to_contents(range)?;
+                        if (held.end_row, held.end_column) == (range.end_row, range.end_column) {
+                            cut.push(value.clone());
+                        } else {
+                            cut_blanks += Self::range_cell_count_large(range)?
+                                - Self::range_cell_count_large(held)?;
+                            cut.push(self.object(HostObject::Range(held)));
+                        }
+                    }
+                    None => cut.push(value.clone()),
+                }
+            }
+            cut_args = cut;
+            &cut_args[..]
+        };
         // What it is about to work over may be a formula the macro has only
         // just written, and Excel would have settled that before answering.
         // This sits at the one door every function comes through, native and
@@ -9871,6 +10009,9 @@ impl<'a> WorkbookHost<'a> {
         }
         if name.eq_ignore_ascii_case("match") {
             return self.worksheet_match(args);
+        }
+        if name.eq_ignore_ascii_case("lookup") {
+            return self.worksheet_vector_lookup(args);
         }
         if name.eq_ignore_ascii_case("index") {
             return self.worksheet_index(args);
@@ -9921,7 +10062,7 @@ impl<'a> WorkbookHost<'a> {
                     )
                 })
                 .count();
-            return Ok(Value::Integer(count as i64));
+            return Ok(Value::Integer(count as i64 + cut_blanks as i64));
         }
 
         if name.eq_ignore_ascii_case("count") {
@@ -12624,6 +12765,9 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn sort_range(&mut self, range: CellRange, args: &[Value]) -> Result<(), String> {
+        // Blank rows sort to the end either way, so `Range("A:C").Sort` is the
+        // sort of what the columns hold.
+        let range = self.cut_to_contents(range)?;
         self.guard_sort(range)?;
         let given = |index: usize| match args.get(index) {
             Some(Value::Missing) | None => None,
@@ -14840,6 +14984,15 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Range.ClearContents does not accept arguments".to_string());
                     }
+                    // Emptying cells that hold nothing does nothing, so a
+                    // whole column is cleared as far as the sheet holds --
+                    // unless the sheet is protected, where an empty locked
+                    // cell still refuses.
+                    let range = if self.cell_protection(range.sheet).is_none() {
+                        self.cut_to_contents(range)?
+                    } else {
+                        range
+                    };
                     // Measured: clearing one cell of an array is 1004, where
                     // writing to it is quietly nothing.
                     self.arrays_allow(range, false)?;
@@ -19528,6 +19681,21 @@ fn end_direction(value: &Value) -> Result<EndDirection, String> {
 fn host_constant(name: &str) -> Option<Value> {
     let value = match name.to_ascii_lowercase().as_str() {
         "xlup" => -4162,
+        // XlCVError: what `CVErr` takes to make a worksheet error value.
+        "xlerrnull" => 2000,
+        "xlerrdiv0" => 2007,
+        "xlerrvalue" => 2015,
+        "xlerrref" => 2023,
+        "xlerrname" => 2029,
+        "xlerrnum" => 2036,
+        "xlerrna" => 2042,
+        "xlerrgettingdata" => 2043,
+        "xlerrspill" => 2045,
+        "xlerrconnect" => 2046,
+        "xlerrblocked" => 2047,
+        "xlerrunknown" => 2048,
+        "xlerrfield" => 2049,
+        "xlerrcalc" => 2050,
         "xldown" => -4121,
         "xltoleft" => -4159,
         "xltoright" => -4161,
@@ -30317,7 +30485,9 @@ End Sub
         assert_eq!(
             result,
             Value::String(
-                "A1:A2,A5:A6|A1,A5|A2|A1:A2,A5|A6|A4|A3,A7:A8|2|A1:A8|C6".to_string()
+                // Blanks are looked for inside the used range only (A1:C6):
+                // measured, Excel answers A3 and one area, not A3,A7:A8.
+                "A1:A2,A5:A6|A1,A5|A2|A1:A2,A5|A6|A4|A3|1|A1:A8|C6".to_string()
             )
         );
     }
@@ -32267,5 +32437,88 @@ End Sub
                 "for {written}"
             );
         }
+    }
+
+    /// Whole columns and rows, as ordinary macros name them. Every answer is
+    /// Excel's, from the same macro run in Excel 16.
+    #[test]
+    fn whole_columns_are_read_searched_cleared_and_sorted() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim i As Long, n As Long, c As Range, out As String
+               For i = 1 To 8
+                 Cells(i, 1).Value = Choose(i, \"b\", \"a\", \"d\", \"c\", \"a\", \"e\", \"b\", \"f\")
+                 Cells(i, 2).Value = i * 3
+                 Cells(i, 4).Value = Choose(i, 5, 1, 9, 3, 7, 2, 8, 4)
+               Next i
+               With WorksheetFunction
+                 out = .Match(\"d\", Range(\"A:A\"), 0) & \"|\" & .CountA(Columns(1)) & \"|\" & _
+                       .CountBlank(Range(\"A:A\")) & \"|\" & .SumIf(Range(\"A:A\"), \"b\", Range(\"B:B\")) & \"|\" & _
+                       .Max(Columns(\"B\")) & \"|\" & .Match(6, Range(\"D:D\"), 1) & \"|\" & _
+                       .Match(6, Range(\"D1:D8\"), 1) & \"|\" & .Lookup(\"c\", Range(\"A1:A8\"), Range(\"B1:B8\")) & \"|\" & _
+                       .Lookup(\"c\", Range(\"A1:A20\"), Range(\"B1:B20\")) & \"|\" & .Lookup(6, Range(\"D:D\")) & \"|\" & _
+                       .HLookup(6, Range(\"1:1\"), 1, True)
+               End With
+               For Each c In Intersect(Range(\"A:A\"), ActiveSheet.UsedRange): n = n + 1: Next c
+               out = out & \"|\" & n & \"|\" & Union(Columns(1), Columns(3)).Address & \"|\" & _
+                     Range(\"B:B\").SpecialCells(xlCellTypeConstants).Address & \"|\" & _
+                     Range(\"A:A\").SpecialCells(xlCellTypeVisible).Address
+               Range(\"A:B\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlNo
+               Range(\"D:D\").ClearContents
+               Ask = out & \"|\" & Range(\"A1\").Value & Range(\"A8\").Value & Range(\"B1\").Value & \"|\" & _
+                     IsEmpty(Range(\"D2\").Value) & \"|\" & (CVErr(xlErrDiv0) = CVErr(2007))
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "3|8|1048568|24|24|8|6|12|21|4|5|8|$A:$A,$C:$C|$B$1:$B$8|$A:$A|af6|True|True"
+                    .to_string()
+            )
+        );
+    }
+
+    /// The Oxi leg of the Excel differential: `OXI_VBA_CASE` names a module
+    /// whose `OxiGenRun` sets the workbook up, runs the case and reports;
+    /// the answer goes to `OXI_VBA_OUT`. Excel runs the same module.
+    #[test]
+    #[ignore]
+    fn zz_differ_case() {
+        let (Ok(case), Ok(out)) = (std::env::var("OXI_VBA_CASE"), std::env::var("OXI_VBA_OUT"))
+        else {
+            return;
+        };
+        let source = std::fs::read_to_string(&case).unwrap();
+        let answer = match parse_module(&source) {
+            Err(error) => format!("!!parse {error}"),
+            Ok(module) => {
+                let mut workbook = workbook();
+                let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+                match execute_with_host(&module, "OxiGenRun", vec![], &mut host) {
+                    // A case that stopped: run it again bare, for the engine's own account.
+                    Ok(Value::String(text)) if text.contains("!!") => {
+                        let mut again = self::workbook();
+                        let mut host = WorkbookHost::new(&mut again, 0).unwrap();
+                        let _ = execute_with_host(&module, "Setup", vec![], &mut host);
+                        match execute_with_host(&module, "Main", vec![], &mut host) {
+                            Err(error) => format!("{text}
+why: {error}"),
+                            Ok(_) => text,
+                        }
+                    }
+                    Ok(Value::String(text)) => text,
+                    Ok(other) => format!("!!value {other:?}"),
+                    Err(error) => format!("!!run {error}"),
+                }
+            }
+        };
+        std::fs::write(out, answer).unwrap();
     }
 }
