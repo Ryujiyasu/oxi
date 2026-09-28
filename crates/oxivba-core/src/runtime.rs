@@ -4627,12 +4627,13 @@ fn call_builtin(
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
             let text_compare = compare_mode(args.get(2), option_compare_text, line, false)?;
             let (left, right) = if text_compare {
-                (left.to_lowercase(), right.to_lowercase())
+                (strcomp_text_key(&left), strcomp_text_key(&right))
             } else {
                 (left, right)
             };
             let ordering = left.encode_utf16().cmp(right.encode_utf16());
-            return Ok(Value::Integer(match ordering {
+            // An Integer, not a Long: measured, `TypeName(StrComp("a", "b"))`.
+            return Ok(Value::Int16(match ordering {
                 std::cmp::Ordering::Less => -1,
                 std::cmp::Ordering::Equal => 0,
                 std::cmp::Ordering::Greater => 1,
@@ -6146,6 +6147,27 @@ fn proper_case(value: &str) -> String {
         }
     }
     result
+}
+
+/// What `StrComp` compares under text comparison.
+///
+/// Wider than the case-folding `InStr` and `Replace` do: measured, StrComp
+/// with vbTextCompare finds `ａ` and `a`, `ｱ` and `ア`, `あ` and `ア`, and
+/// `ｶﾞ` and `ガ` equal, and `が` still after `か`, where `InStr(1, "アイウ",
+/// "い", vbTextCompare)` is 0 and `InStr(1, "ABC", "ｂ", vbTextCompare)` is 0.
+/// Kana go to full-width katakana and Latin back to ASCII, so Latin still
+/// sorts before kana.
+fn strcomp_text_key(value: &str) -> String {
+    let widened = convert_width_unicode(value, true);
+    let latin: String = widened
+        .chars()
+        .map(|character| match character as u32 {
+            code @ 0xFF01..=0xFF5E => char::from_u32(code - 0xFEE0).unwrap_or(character),
+            0x3000 => ' ',
+            _ => character,
+        })
+        .collect();
+    convert_kana_script(&latin, true).to_lowercase()
 }
 
 fn convert_kana_script(value: &str, katakana: bool) -> String {
@@ -15185,6 +15207,24 @@ mod tests {
         assert_eq!(
             run(source, "Ask", vec![]).unwrap(),
             Value::String("True|False|True|True|13|Type mismatch".to_string())
+        );
+    }
+
+    /// StrComp's text comparison folds width and kana, where InStr's does
+    /// not. Every answer here is Excel's.
+    #[test]
+    fn strcomp_folds_width_and_kana_under_text_comparison() {
+        let source = "Public Function Ask() As String
+                        Ask = TypeName(StrComp(\"a\", \"b\")) & \"|\" & StrComp(\"ａ\", \"a\", vbTextCompare) & _
+                              StrComp(\"ｱ\", \"ア\", vbTextCompare) & StrComp(\"A\", \"ａ\", vbTextCompare) & _
+                              StrComp(\"が\", \"か\", vbTextCompare) & StrComp(\"あ\", \"ア\", vbBinaryCompare) & _
+                              StrComp(\"ｶﾞ\", \"ガ\", vbTextCompare) & \"|\" & InStr(1, \"アイウ\", \"い\", vbTextCompare) & _
+                              InStr(1, \"ABC\", \"ｂ\", vbTextCompare)
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("Integer|0001-10|00".to_string())
         );
     }
 }

@@ -21044,6 +21044,61 @@ fn written_time(text: &str) -> Option<(f64, &'static str)> {
     Some((fraction, shown))
 }
 
+/// A date or a time written with its kanji units.
+///
+/// Measured on the same machine as the rest: `3月5日` and `12月31日` are this
+/// year's, shown `m"月"d"日"`; `2024年3月` and `24年3月` are the first of the
+/// month, shown `yyyy"年"m"月"`; `12時30分` is a time shown `h"時"mm"分"` and
+/// `1時2分3秒` one shown `h"時"mm"分"ss"秒"`. `13月1日`, `2月30日`,
+/// `2024年13月`, `25時30分`, `12時`, `30分`, `3月`, `5日` and even
+/// `2024年3月5日` stay text.
+fn written_kanji_moment(text: &str, this_year: i64) -> Option<(f64, &'static str)> {
+    let number = |part: &str| -> Option<i64> {
+        (!part.is_empty() && part.len() <= 4 && part.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| part.parse().ok())
+            .flatten()
+    };
+    if let Some(rest) = text.strip_suffix('日') {
+        let (month, day) = rest.split_once('月')?;
+        let (month, day) = (number(month)?, number(day)?);
+        if month.to_string().len() > 2 || day.to_string().len() > 2 {
+            return None;
+        }
+        let serial = excel_serial(this_year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)?;
+        return Some((serial, "m\"月\"d\"日\""));
+    }
+    if let Some(rest) = text.strip_suffix('月') {
+        let (year, month) = rest.split_once('年')?;
+        if !matches!(year.len(), 2 | 4) {
+            return None;
+        }
+        let year = widened_year(number(year)?, year.len());
+        let serial = excel_serial(year, u32::try_from(number(month)?).ok()?, 1)?;
+        return Some((serial, "yyyy\"年\"m\"月\""));
+    }
+    let clock = |hours: &str, minutes: &str, seconds: Option<&str>| -> Option<f64> {
+        let (hours, minutes) = (number(hours)?, number(minutes)?);
+        let seconds = match seconds {
+            Some(seconds) => number(seconds)?,
+            None => 0,
+        };
+        if hours > 23 || minutes > 59 || seconds > 59 {
+            return None;
+        }
+        Some((hours * 3600 + minutes * 60 + seconds) as f64 / 86_400.0)
+    };
+    if let Some(rest) = text.strip_suffix('秒') {
+        let (hours, rest) = rest.split_once('時')?;
+        let (minutes, seconds) = rest.split_once('分')?;
+        return Some((clock(hours, minutes, Some(seconds))?, "h\"時\"mm\"分\"ss\"秒\""));
+    }
+    if let Some(rest) = text.strip_suffix('分') {
+        let (hours, minutes) = rest.split_once('時')?;
+        return Some((clock(hours, minutes, None)?, "h\"時\"mm\"分\""));
+    }
+    None
+}
+
 /// A calendar date as written, without its time: the serial and the format it
 /// asks for.
 ///
@@ -21082,6 +21137,11 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
                     let year = widened_year(*year, *digits);
                     let serial = excel_serial(year, *month as u32, *day as u32)?;
                     Some((serial, "m/d/yyyy"))
+                }
+                // Measured: `3/2024` is March 2024, shown `mmm-yy`.
+                [(month, _), (year, 4)] if separator == '/' => {
+                    let serial = excel_serial(*year, *month as u32, 1)?;
+                    Some((serial, "mmm-yy"))
                 }
                 [(month, _), (day, _)] => {
                     let serial = excel_serial(this_year, *month as u32, *day as u32)?;
@@ -21149,6 +21209,9 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
 /// past 23 -- measured, `1/5/2024 25:00` -- is a plain number under General.
 fn written_moment(written: &str, this_year: i64) -> Option<(CellValue, Option<&'static str>)> {
     let trimmed = written.trim();
+    if let Some((number, shown)) = written_kanji_moment(trimmed, this_year) {
+        return Some((CellValue::Number(number), Some(shown)));
+    }
     if let Some((fraction, shown)) = written_time(trimmed) {
         return Some((CellValue::Number(fraction), Some(shown)));
     }
@@ -21561,6 +21624,32 @@ fn text_a_cell_keeps(written: &str) -> &str {
 /// everything else — including `"="` on its own, which Excel leaves as the
 /// text `=` — is read the way typing it would be.
 fn cell_input(value: Value, this_year: i64) -> Result<CellInput, String> {
+    // Full-width letters, digits and signs are read as their narrow selves,
+    // and kept as written when that reading is still text. Measured: `１２３`
+    // is 123, `５％` 5%, `（１００）` -100, `ｆａｌｓｅ` False, `１：３０：４５` a
+    // time and `＝１＋１` the formula `=1+1`, while `１２３円` and `＃Ｎ／Ａ`
+    // stay the text they were.
+    if let Value::String(written) = &value {
+        if written.chars().any(|one| matches!(one, '\u{FF01}'..='\u{FF5E}' | '\u{3000}')) {
+            let narrowed: String = written
+                .chars()
+                .map(|one| match one {
+                    '\u{FF01}'..='\u{FF5E}' => char::from_u32(one as u32 - 0xFEE0).unwrap_or(one),
+                    '\u{3000}' => ' ',
+                    _ => one,
+                })
+                .collect();
+            if narrowed.starts_with('=') && narrowed.len() > 1 && !formula_is_malformed(&narrowed[1..]) {
+                return Ok(CellInput::Formula(narrowed));
+            }
+            if !narrowed.starts_with(APOSTROPHE) && !narrowed.starts_with('=') {
+                let (cell, shown) = typed_from_written(text_a_cell_keeps(&narrowed), this_year);
+                if !matches!(cell, CellValue::String(_) | CellValue::Error(_) | CellValue::Empty) {
+                    return Ok(CellInput::Constant(cell, shown));
+                }
+            }
+        }
+    }
     if let Value::String(written) = &value {
         if let Some(rest) = written.strip_prefix('=') {
             if !rest.is_empty() {
@@ -32686,6 +32775,41 @@ End Sub
                  $#,##0.00~m/d/yyyy~General~m/d/yyyy~m/d/yyyy h:mm~h:mm AM/PM~\
                  $#,##0.00_);[Red]($#,##0.00)~[h]:mm~m/d/yyyy~\
                  m/d/yyyy|0.0|General|General,m/d/yyyy,0%|Double"
+                    .to_string()
+            )
+        );
+    }
+
+    /// Full-width and kanji entries, as Excel reads them when a macro writes
+    /// them into cells. Every answer here is Excel's.
+    #[test]
+    fn full_width_and_kanji_entries_are_read_as_excel_reads_them() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim s As Variant, i As Long, out As String
+               s = Array(\"１２３\", \"５％\", \"（１００）\", \"ｆａｌｓｅ\", \"１２３円\", \"＃Ｎ／Ａ\", \"＝１＋１\", _
+                         \"3月5日\", \"2024年3月\", \"24年3月\", \"12時30分\", \"1時2分3秒\", \"25時30分\", \"2024年3月5日\", \"3/2024\")
+               For i = 0 To UBound(s)
+                 Cells(i + 1, 1).Value = s(i)
+                 out = out & TypeName(Cells(i + 1, 1).Value) & \"|\" & Cells(i + 1, 1).NumberFormat & \"~\"
+               Next i
+               Ask = out & Range(\"A7\").Formula & \"|\" & Range(\"A9\").Value
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "Double|General~Double|0%~Double|General~Boolean|General~String|General~\
+                 String|General~Double|General~Date|m\"月\"d\"日\"~Date|yyyy\"年\"m\"月\"~\
+                 Date|yyyy\"年\"m\"月\"~Double|h\"時\"mm\"分\"~Double|h\"時\"mm\"分\"ss\"秒\"~\
+                 String|General~String|General~Date|mmm-yy~=1+1|3/1/2024"
                     .to_string()
             )
         );
