@@ -1988,7 +1988,25 @@ fn lex_number(src: &str, start: usize) -> Result<(f64, usize), ParseError> {
     }
 
     let text = &src[start..i];
-    text.parse::<f64>()
+    // Past fifteen significant digits a number is cut, not rounded: measured,
+    // `=COMPLEX(123456789012345678,0)` reads 123456789012345000.
+    let mut kept = String::with_capacity(text.len());
+    let mut significant = 0;
+    let mut in_exponent = false;
+    for c in text.chars() {
+        if matches!(c, 'e' | 'E') {
+            in_exponent = true;
+        }
+        if !in_exponent && c.is_ascii_digit() && (significant > 0 || c != '0') {
+            significant += 1;
+            if significant > 15 {
+                kept.push('0');
+                continue;
+            }
+        }
+        kept.push(c);
+    }
+    kept.parse::<f64>()
         .map(|n| (n, i))
         .map_err(|_| ParseError::InvalidNumber(text.to_string()))
 }

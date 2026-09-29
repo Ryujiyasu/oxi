@@ -45,6 +45,7 @@ pub mod ast;
 pub mod datetime;
 mod distributions;
 mod functions_more;
+mod complex;
 pub mod engine;
 pub mod functions;
 pub mod lexer;
