@@ -25000,7 +25000,9 @@ pub fn run_spreadsheet_vba(
         .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
     let args: Vec<InputValue> = serde_wasm_bindgen::from_value(args)
         .map_err(|error| JsError::new(&format!("invalid VBA arguments: {error}")))?;
-    let module = parse_module(source).map_err(|error| JsError::new(&error.to_string()))?;
+    // The source may carry class modules after the standard ones, the way
+    // the VBE exports them.
+    let (module, classes) = oxivba_core::parse_project(source).map_err(|error| JsError::new(&error.to_string()))?;
     let mut host =
         WorkbookHost::new(&mut workbook, active_sheet).map_err(|error| JsError::new(&error))?;
     host.file_name = file_name.filter(|name| !name.is_empty());
@@ -25013,6 +25015,7 @@ pub fn run_spreadsheet_vba(
     // macro that recalculates and then reads a date sees one story.
     host.now = Some(current_time);
     let result = Runtime::new(&module)
+        .with_classes(&classes)
         .with_host(&mut host)
         .with_random_seed(random_seed)
         .with_current_time(current_time)
@@ -36205,21 +36208,24 @@ End Sub
             return;
         };
         let source = std::fs::read_to_string(&case).unwrap();
-        let answer = match parse_module(&source) {
+        let run = |module: &oxivba_core::Module, classes: &[(String, oxivba_core::Module)], name: &str, host: &mut WorkbookHost| {
+            Runtime::new(module).with_classes(classes).with_host(host).call(name, vec![])
+        };
+        let answer = match oxivba_core::parse_project(&source) {
             Err(error) => format!("!!parse {error}"),
-            Ok(module) => {
+            Ok((module, classes)) => {
                 let mut workbook = workbook();
                 // The Excel it is compared with opens a new book in 游ゴシック 11.
                 workbook.default_style.font_name = Some("游ゴシック".to_string());
                 workbook.default_style.font_size = Some(11.0);
                 let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
-                match execute_with_host(&module, "OxiGenRun", vec![], &mut host) {
+                match run(&module, &classes, "OxiGenRun", &mut host) {
                     // A case that stopped: run it again bare, for the engine's own account.
                     Ok(Value::String(text)) if text.contains("!!") => {
                         let mut again = self::workbook();
                         let mut host = WorkbookHost::new(&mut again, 0).unwrap();
-                        let _ = execute_with_host(&module, "Setup", vec![], &mut host);
-                        match execute_with_host(&module, "Main", vec![], &mut host) {
+                        let _ = run(&module, &classes, "Setup", &mut host);
+                        match run(&module, &classes, "Main", &mut host) {
                             Err(error) => format!("{text}
 why: {error}"),
                             Ok(_) => text,

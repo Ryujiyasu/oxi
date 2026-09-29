@@ -342,6 +342,21 @@ pub struct Runtime<'a> {
     module_variants: BTreeSet<String>,
     static_values: BTreeMap<(String, String), ValueSlot>,
     module_initialized: bool,
+    /// The class modules, by name in lower case.
+    classes: BTreeMap<String, &'a Module>,
+    /// The standard module, which `module` points back to whenever no
+    /// class instance is running.
+    main_module: &'a Module,
+    /// Whose module-level variables are live: None for the standard
+    /// module, or the handle of the class instance running now.
+    owner: Option<u64>,
+    /// The standard module's variables while an instance's are live.
+    main_state: Option<ModuleState>,
+    /// The instance `Me` stands for.
+    me: Option<ObjectRef>,
+    /// The kinds the next procedure lookup may pick, so that a Property Get
+    /// and a Property Let of one name each find their own.
+    wanted_kinds: Option<&'static [ProcKind]>,
     internal_objects: BTreeMap<u64, InternalObject>,
     next_internal_handle: u64,
     random_state: u32,
@@ -391,6 +406,27 @@ struct ErrorState {
 enum InternalObject {
     Collection(Vec<CollectionEntry>),
     Dictionary(DictionaryObject),
+    /// An instance of one of the project's class modules, with its own
+    /// module-level variables (None while they are the live ones).
+    Instance(ClassInstance),
+}
+
+struct ClassInstance {
+    class: String,
+    state: Option<ModuleState>,
+}
+
+/// One module's module-level variables, as they are set aside while another
+/// module's are live.
+#[derive(Default)]
+struct ModuleState {
+    values: BTreeMap<String, ValueSlot>,
+    constants: BTreeSet<String>,
+    auto_new: BTreeMap<String, String>,
+    fixed_strings: BTreeMap<String, usize>,
+    declared: BTreeMap<String, String>,
+    variants: BTreeSet<String>,
+    initialized: bool,
 }
 
 struct CollectionEntry {
@@ -448,6 +484,12 @@ impl<'a> Runtime<'a> {
             module_variants: BTreeSet::new(),
             static_values: BTreeMap::new(),
             module_initialized: false,
+            classes: BTreeMap::new(),
+            main_module: module,
+            owner: None,
+            main_state: None,
+            me: None,
+            wanted_kinds: None,
             internal_objects: BTreeMap::new(),
             next_internal_handle: 1_u64 << 63,
             random_state: 327_680,
@@ -459,6 +501,210 @@ impl<'a> Runtime<'a> {
     pub fn with_host(mut self, host: &'a mut dyn Host) -> Self {
         self.host = Some(host);
         self
+    }
+
+    /// The project's class modules, each by its name.
+    pub fn with_classes(mut self, classes: &'a [(String, Module)]) -> Self {
+        for (name, module) in classes {
+            self.classes.insert(name.to_ascii_lowercase(), module);
+        }
+        self
+    }
+
+    fn take_state(&mut self) -> ModuleState {
+        let state = ModuleState {
+            values: std::mem::take(&mut self.module_values),
+            constants: std::mem::take(&mut self.module_constants),
+            auto_new: std::mem::take(&mut self.module_auto_new),
+            fixed_strings: std::mem::take(&mut self.module_fixed_strings),
+            declared: std::mem::take(&mut self.module_declared),
+            variants: std::mem::take(&mut self.module_variants),
+            initialized: self.module_initialized,
+        };
+        self.module_initialized = false;
+        state
+    }
+
+    fn put_state(&mut self, state: ModuleState) {
+        self.module_values = state.values;
+        self.module_constants = state.constants;
+        self.module_auto_new = state.auto_new;
+        self.module_fixed_strings = state.fixed_strings;
+        self.module_declared = state.declared;
+        self.module_variants = state.variants;
+        self.module_initialized = state.initialized;
+    }
+
+    /// Make `to`'s module-level variables the live ones -- the standard
+    /// module's for None, else the instance's -- and say whose were.
+    fn switch_owner(&mut self, to: Option<u64>) -> Option<u64> {
+        let from = self.owner;
+        if from == to {
+            return from;
+        }
+        let live = self.take_state();
+        match from {
+            None => self.main_state = Some(live),
+            Some(handle) => {
+                if let Some(InternalObject::Instance(instance)) = self.internal_objects.get_mut(&handle) {
+                    instance.state = Some(live);
+                }
+            }
+        }
+        let (module, state) = match to {
+            None => (self.main_module, self.main_state.take().unwrap_or_default()),
+            Some(handle) => match self.internal_objects.get_mut(&handle) {
+                Some(InternalObject::Instance(instance)) => {
+                    let module = self
+                        .classes
+                        .get(&instance.class.to_ascii_lowercase())
+                        .copied()
+                        .unwrap_or(self.main_module);
+                    (module, instance.state.take().unwrap_or_default())
+                }
+                _ => (self.main_module, ModuleState::default()),
+            },
+        };
+        self.module = module;
+        self.put_state(state);
+        self.owner = to;
+        from
+    }
+
+    fn has_procedure_of(&self, module: &Module, name: &str, kinds: &[ProcKind]) -> bool {
+        module.items.iter().any(|item| {
+            matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name) && kinds.contains(&p.kind))
+        })
+    }
+
+    /// Run `work` as the instance `receiver`, with its variables live and
+    /// `Me` standing for it, and put everything back afterwards.
+    fn as_instance<T>(
+        &mut self,
+        receiver: &ObjectRef,
+        work: impl FnOnce(&mut Self) -> Result<T, RuntimeError>,
+    ) -> Result<T, RuntimeError> {
+        let before = self.switch_owner(Some(receiver.handle));
+        let me = self.me.replace(receiver.clone());
+        let answer = work(self);
+        self.me = me;
+        self.switch_owner(before);
+        answer
+    }
+
+    /// Run `work` in the standard module, for a class calling one of its
+    /// procedures.
+    fn as_main<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, RuntimeError>) -> Result<T, RuntimeError> {
+        let before = self.switch_owner(None);
+        let me = self.me.take();
+        let answer = work(self);
+        self.me = me;
+        self.switch_owner(before);
+        answer
+    }
+
+    fn call_kind(&mut self, name: &str, kinds: &'static [ProcKind], args: Vec<Value>, line: Option<u32>) -> Result<Value, RuntimeError> {
+        self.wanted_kinds = Some(kinds);
+        let answer = self.call_procedure(name, args, line);
+        self.wanted_kinds = None;
+        answer
+    }
+
+    /// `obj.Name(args)` read of an instance: a method, a Property Get, or a
+    /// variable of the class.
+    fn instance_member(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
+        self.as_instance(receiver, |this| {
+            if this.has_procedure_of(this.module, name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet]) {
+                return this.call_kind(name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet], args.to_vec(), Some(line));
+            }
+            if let Some(slot) = this.module_values.get(&key(name)).cloned() {
+                let value = slot.borrow().clone();
+                if args.is_empty() {
+                    return Ok(value);
+                }
+                if let Value::Array(array) = &value {
+                    let mut indexes = Vec::with_capacity(args.len());
+                    for argument in args {
+                        indexes.push(integer_argument(argument, Some(line))?);
+                    }
+                    let offset = array_offset(array, &indexes, line)?;
+                    return Ok(array.values[offset].clone());
+                }
+            }
+            Err(no_such_member(format!("the class has no member {name}"), Some(line)))
+        })
+    }
+
+    /// A method of an instance called with named arguments: each goes to the
+    /// parameter it names.
+    fn instance_member_named(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Value],
+        argument_names: &[Option<String>],
+        line: u32,
+    ) -> Result<Value, RuntimeError> {
+        let class = match self.internal_objects.get(&receiver.handle) {
+            Some(InternalObject::Instance(instance)) => instance.class.to_ascii_lowercase(),
+            _ => String::new(),
+        };
+        let params: Vec<String> = self
+            .classes
+            .get(&class)
+            .and_then(|module| {
+                module.items.iter().find_map(|item| match item {
+                    ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name) => {
+                        Some(p.params.iter().map(|param| param.name.clone()).collect())
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        let mut placed: Vec<Value> = Vec::new();
+        let mut next = 0;
+        for (value, named) in args.iter().zip(argument_names) {
+            let at = match named {
+                Some(named) => params.iter().position(|p| p.eq_ignore_ascii_case(named)).ok_or_else(|| {
+                    error(RuntimeErrorKind::ArgumentCount, format!("named argument not found: {named}"), Some(line))
+                })?,
+                None => {
+                    next += 1;
+                    next - 1
+                }
+            };
+            if placed.len() <= at {
+                placed.resize(at + 1, Value::Missing);
+            }
+            placed[at] = value.clone();
+        }
+        self.instance_member(receiver, name, &placed, line)
+    }
+
+    /// `obj.Name(args) = value` on an instance: a Property Let (Set for an
+    /// object when there is one), else a variable of the class.
+    fn instance_assign(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], value: Value, line: u32) -> Result<bool, RuntimeError> {
+        self.as_instance(receiver, |this| {
+            let object = matches!(value, Value::Object(_) | Value::Nothing);
+            let kinds: &'static [ProcKind] = if object && this.has_procedure_of(this.module, name, &[ProcKind::PropertySet]) {
+                &[ProcKind::PropertySet]
+            } else {
+                &[ProcKind::PropertyLet]
+            };
+            if this.has_procedure_of(this.module, name, kinds) {
+                let mut all = args.to_vec();
+                all.push(value);
+                this.call_kind(name, kinds, all, Some(line))?;
+                return Ok(true);
+            }
+            if args.is_empty() {
+                if let Some(slot) = this.module_values.get(&key(name)).cloned() {
+                    *slot.borrow_mut() = value;
+                    return Ok(true);
+                }
+            }
+            Err(no_such_member(format!("the class has no member {name}"), Some(line)))
+        })
     }
 
     pub fn with_limits(mut self, max_steps: usize, max_depth: usize) -> Self {
@@ -875,12 +1121,16 @@ impl<'a> Runtime<'a> {
         Ok(Flow::Continue)
     }
 
-    fn find_procedure(&self, name: &str, line: Option<u32>) -> Result<Procedure, RuntimeError> {
+    fn find_procedure(&mut self, name: &str, line: Option<u32>) -> Result<Procedure, RuntimeError> {
+        let kinds = self.wanted_kinds.take();
         self.module
             .items
             .iter()
             .find_map(|item| match item {
-                ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name) => {
+                ModuleItem::Procedure(procedure)
+                    if procedure.name.eq_ignore_ascii_case(name)
+                        && kinds.is_none_or(|kinds| kinds.contains(&procedure.kind)) =>
+                {
                     Some(procedure.clone())
                 }
                 _ => None,
@@ -1736,6 +1986,10 @@ impl<'a> Runtime<'a> {
             if let Some(record) = self.new_record(&type_name.name, frame, line, 0)? {
                 return Ok(record);
             }
+            // A variable of one of the project's classes starts as Nothing.
+            if self.classes.contains_key(&type_name.name.to_ascii_lowercase()) {
+                return Ok(Value::Nothing);
+            }
             return Ok(default_value(type_name));
         };
         let length = self.array_index(length, frame, line)?;
@@ -2179,6 +2433,12 @@ impl<'a> Runtime<'a> {
             .values
             .get(&name)
             .or_else(|| self.module_values.get(&name))
+            // A class sees the standard module's Public variables.
+            .or_else(|| {
+                self.owner
+                    .and(self.main_state.as_ref())
+                    .and_then(|state| state.values.get(&name))
+            })
             .cloned()
     }
 
@@ -2189,6 +2449,11 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
         let name_key = key(name);
+        if name_key == "me" {
+            if let Some(me) = &self.me {
+                return Ok(Some(Value::Object(me.clone())));
+            }
+        }
         let Some(slot) = self.lookup_slot(frame, name) else {
             return Ok(None);
         };
@@ -2222,6 +2487,31 @@ impl<'a> Runtime<'a> {
                     compare_text: false,
                 }),
             )
+        } else if let Some(class_module) = self.classes.get(&type_name.to_ascii_lowercase()).copied() {
+            let name = class_module
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    ModuleItem::Attribute { name, value, .. } if name.eq_ignore_ascii_case("VB_Name") => {
+                        Some(value.trim_matches('"').to_string())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| type_name.to_string());
+            let handle = self.next_internal_handle;
+            self.next_internal_handle += 1;
+            self.internal_objects.insert(handle, InternalObject::Instance(ClassInstance { class: name.clone(), state: None }));
+            let made = ObjectRef { handle, kind: name };
+            // Its variables are set up, then Class_Initialize runs, as the
+            // instance comes into being.
+            self.as_instance(&made, |this| {
+                this.initialize_module()?;
+                if this.has_procedure_of(this.module, "Class_Initialize", &[ProcKind::Sub]) {
+                    this.call_kind("Class_Initialize", &[ProcKind::Sub], Vec::new(), Some(line))?;
+                }
+                Ok(())
+            })?;
+            return Ok(Value::Object(made));
         } else {
             return Err(error(
                 RuntimeErrorKind::Unsupported,
@@ -2546,6 +2836,18 @@ impl<'a> Runtime<'a> {
                     if self.module_constants.contains(&name) {
                         return Err(constant_assignment_error(&name, line));
                     }
+                    *existing.borrow_mut() = value;
+                } else if let Some(existing) = self
+                    .owner
+                    .and(self.main_state.as_ref())
+                    .and_then(|state| state.values.get(&name))
+                {
+                    // A class writing the standard module's Public variable.
+                    let declared = self.main_state.as_ref().and_then(|state| state.declared.get(&name)).cloned();
+                    let value = match declared {
+                        Some(declared) => coerce_declared(value, &declared, line, self.this_year())?,
+                        None => value,
+                    };
                     *existing.borrow_mut() = value;
                 } else {
                     if implicit_variant {
@@ -2912,6 +3214,20 @@ impl<'a> Runtime<'a> {
                             Some(span.line),
                         );
                     }
+                    // A class calling a procedure of the standard module.
+                    if self.owner.is_some()
+                        && self.has_procedure_of(self.main_module, name, &[ProcKind::Function, ProcKind::Sub])
+                    {
+                        let mut values = Vec::with_capacity(args.len());
+                        for argument in args.iter() {
+                            values.push(match &argument.value {
+                                Some(expr) => self.eval_expr(expr, frame)?,
+                                None => Value::Missing,
+                            });
+                        }
+                        let line = Some(span.line);
+                        return self.as_main(|this| this.call_procedure(name, values, line));
+                    }
                 }
                 if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
                     if let Some(size) = self.storage_size_asked_of(name, args, frame) {
@@ -3272,6 +3588,10 @@ impl<'a> Runtime<'a> {
             self.err_in = Some(frame.error_state.clone());
             return self.call_procedure(name, args, line);
         }
+        if self.owner.is_some() && self.has_procedure_of(self.main_module, name, &[ProcKind::Function, ProcKind::Sub]) {
+            self.err_in = Some(frame.error_state.clone());
+            return self.as_main(|this| this.call_procedure(name, args, line));
+        }
         if name.eq_ignore_ascii_case("createobject") {
             return self.create_object(&args, line);
         }
@@ -3587,6 +3907,9 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
         if let Some(receiver) = receiver {
+            if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+                return self.instance_member(receiver, name, args, line).map(Some);
+            }
             if self.internal_objects.contains_key(&receiver.handle) {
                 return self.internal_call(receiver, name, args, line).map(Some);
             }
@@ -3646,6 +3969,12 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
         if let Some(receiver) = receiver {
+            if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+                if argument_names.iter().any(Option::is_some) {
+                    return self.instance_member_named(receiver, name, args, argument_names, line).map(Some);
+                }
+                return self.instance_member(receiver, name, args, line).map(Some);
+            }
             if self.internal_objects.contains_key(&receiver.handle) {
                 // A named argument goes to its own place: measured,
                 // `c.Add "w", After:="kx"` puts w after kx rather than
@@ -3702,6 +4031,9 @@ impl<'a> Runtime<'a> {
         name: &str,
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+            return self.instance_member(receiver, name, &[], line).map(Some);
+        }
         if let Some(object) = self.internal_objects.get(&receiver.handle) {
             return match (object, name.to_ascii_lowercase().as_str()) {
                 (InternalObject::Collection(entries), "count") => {
@@ -3754,6 +4086,9 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<bool, RuntimeError> {
         let option_compare_text = self.option_compare_text();
+        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+            return self.instance_assign(receiver, name, &[], value, line);
+        }
         if let Some(object) = self.internal_objects.get_mut(&receiver.handle) {
             return match object {
                 InternalObject::Dictionary(dictionary)
@@ -3795,6 +4130,9 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+            return self.instance_assign(receiver, name, args, value, line);
+        }
         if self.internal_objects.contains_key(&receiver.handle) {
             return self.internal_set_indexed(receiver, name, args, value, line);
         }
@@ -3820,6 +4158,9 @@ impl<'a> Runtime<'a> {
                     .iter()
                     .map(|entry| entry.key.clone())
                     .collect(),
+                InternalObject::Instance(_) => {
+                    return Err(no_such_member("the class cannot be walked with For Each".to_string(), Some(line)))
+                }
             }));
         }
         let Some(host) = self.host.as_deref_mut() else {
@@ -4068,6 +4409,8 @@ impl<'a> Runtime<'a> {
                 format!("Dictionary method is not available: {name}"),
                 Some(line),
             )),
+            // Instances are answered before this is reached.
+            InternalObject::Instance(_) => Err(no_such_member(format!("the class has no member {name}"), Some(line))),
         }
     }
 

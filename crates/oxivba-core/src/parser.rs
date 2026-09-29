@@ -30,6 +30,50 @@
 use crate::ast::*;
 use crate::lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 
+/// A source holding several modules the way the VBE exports them, one after
+/// another: a class starts with `VERSION 1.0 CLASS`, and every module names
+/// itself with `Attribute VB_Name`. The standard modules are read as one
+/// module -- their Public procedures and variables see one another -- and
+/// each class module on its own, by its name.
+pub fn parse_project(source: &str) -> Result<(Module, Vec<(String, Module)>), LexError> {
+    struct Block {
+        class: bool,
+        named: Option<String>,
+        text: String,
+    }
+    let mut blocks = vec![Block { class: false, named: None, text: String::new() }];
+    for line in source.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let upper = trimmed.to_ascii_uppercase();
+        let names = upper.starts_with("ATTRIBUTE VB_NAME");
+        if upper.starts_with("VERSION ") && upper.contains("CLASS") {
+            blocks.push(Block { class: true, named: None, text: String::new() });
+        } else if names && blocks.last().is_some_and(|block| block.named.is_some()) {
+            blocks.push(Block { class: false, named: None, text: String::new() });
+        }
+        let block = blocks.last_mut().expect("there is always a block");
+        if names && block.named.is_none() {
+            let value = trimmed.split_once('=').map(|(_, value)| value.trim().trim_matches('"').to_string());
+            block.named = value;
+        }
+        block.text.push_str(line);
+    }
+    let mut standard = String::new();
+    let mut classes = Vec::new();
+    for block in blocks {
+        if block.class {
+            let name = block.named.clone().unwrap_or_default();
+            classes.push((name, parse_module(&block.text)?));
+        } else {
+            standard.push_str(&block.text);
+            if !standard.ends_with('\n') {
+                standard.push('\n');
+            }
+        }
+    }
+    Ok((parse_module(&standard)?, classes))
+}
+
 pub fn parse_module(source: &str) -> Result<Module, LexError> {
     // A form's designer block carries a `{GUID}` the lexer has no token for,
     // and a class's `BEGIN ... END` block is not VBA either. Blank the region

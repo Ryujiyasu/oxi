@@ -41,7 +41,7 @@ pub use analysis::{analyse, Analysis, Class, Finding};
 pub use ast::{Expr, Module, ModuleItem, Procedure, Statement};
 pub use fingerprint::{compare, fingerprint_module, ModuleFingerprint, Similarity, Strength};
 pub use lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
-pub use parser::parse_module;
+pub use parser::{parse_module, parse_project};
 pub use safety::{assess, assess_project, Capability, SafetyReport, Signal};
 pub use runtime::{
     execute, execute_with_host, host_error, host_error_described, host_error_explained, host_error_from, is_builtin_function, vba_date_text, vba_number_text,
