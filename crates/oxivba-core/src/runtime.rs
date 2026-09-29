@@ -6557,7 +6557,8 @@ fn reads_as_date(pattern: &str) -> bool {
             _ => bare.push(character.to_ascii_lowercase()),
         }
     }
-    bare.contains("a/p")
+    // `ttttt` is the time as a whole; a lone t is only a letter ("True").
+    bare.contains("a/p") || bare.contains("ttttt")
 }
 
 fn format_value(
@@ -6751,8 +6752,9 @@ fn format_date(
             ))
         }
         "medium date" => {
+            // Measured: `Format(#3/5/2024#, "Medium Date")` is 05-Mar-24.
             return Ok(format!(
-                "{}-{}-{:02}",
+                "{:02}-{}-{:02}",
                 parts.day,
                 &month_name(parts.month)[..3],
                 parts.year.rem_euclid(100)
@@ -6807,6 +6809,18 @@ fn format_date(
             (5, said(if parts.hour < 12 { "am" } else { "pm" }))
         } else if remaining.starts_with("a/p") {
             (3, said(if parts.hour < 12 { "a" } else { "p" }))
+        // `dddddd`, `ddddd` and `ttttt` are the long date, the short date
+        // and the time as this machine writes them: measured, Tuesday, March
+        // 5, 2024 / 3/5/2024 / 2:30:05 PM.
+        } else if remaining.starts_with("dddddd") {
+            (
+                6,
+                format!("{}, {} {}, {}", weekday_name(serial), month_name(parts.month), parts.day, parts.year),
+            )
+        } else if remaining.starts_with("ddddd") {
+            (5, format!("{}/{}/{}", parts.month, parts.day, parts.year))
+        } else if remaining.starts_with("ttttt") {
+            (5, clock(parts, true))
         } else if remaining.starts_with("yyyy") {
             (4, format!("{:04}", parts.year))
         } else if remaining.starts_with("mmmm") {
@@ -7621,8 +7635,11 @@ struct DateParts {
 
 fn date_serial(year: i64, month: i64, day: i64) -> Result<f64, String> {
     let year = match year {
-        0..=29 => year + 2_000,
-        30..=99 => year + 1_900,
+        // Two digits read through Windows' window, 1950 to 2049: measured,
+        // `DateSerial(49, 1, 1)` and `CDate("1/1/49")` are 2049, `"1/1/50"`
+        // is 1950.
+        0..=49 => year + 2_000,
+        50..=99 => year + 1_900,
         _ => year,
     };
     let total_months = year
@@ -7790,20 +7807,26 @@ fn parse_date_part(source: &str, this_year: i64) -> Result<f64, String> {
         .split(delimiter)
         .next()
         .is_some_and(|leader| leader.len() == 4);
-    let (year, month, day) = if year_leads {
-        (values[0], values[1], values[2])
-    } else {
-        (values[2], values[0], values[1])
-    };
-    strict_date_serial(year, month, day, source)
+    if year_leads {
+        return strict_date_serial(values[0], values[1], values[2], source);
+    }
+    // Month first; failing that, year first; failing that, day first.
+    // Measured: "31/12/2024" is 12/31/2024, "13/1/2024" 1/13/2024, and
+    // "31-12-24" 12/24/2031 -- year first wins over day first.
+    strict_date_serial(values[2], values[0], values[1], source)
+        .or_else(|_| strict_date_serial(values[0], values[1], values[2], source))
+        .or_else(|_| strict_date_serial(values[2], values[1], values[0], source))
 }
 
 fn strict_date_serial(year: i64, month: i64, day: i64, source: &str) -> Result<f64, String> {
     let serial = date_serial(year, month, day)?;
     let parts = serial_date_parts(serial)?;
     let expected_year = match year {
-        0..=29 => year + 2_000,
-        30..=99 => year + 1_900,
+        // Two digits read through Windows' window, 1950 to 2049: measured,
+        // `DateSerial(49, 1, 1)` and `CDate("1/1/49")` are 2049, `"1/1/50"`
+        // is 1950.
+        0..=49 => year + 2_000,
+        50..=99 => year + 1_900,
         _ => year,
     };
     if parts.year != expected_year || i64::from(parts.month) != month || i64::from(parts.day) != day
