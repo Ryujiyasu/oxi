@@ -562,43 +562,49 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
 /// and those the workbook works out itself. Kept in step with the match
 /// arms by `every_function_the_library_answers_is_known`.
 const KNOWN_FUNCTIONS: &[&str] = &[
-    "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC", "ASIN",
-    "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF",
-    "AVERAGEIFS", "BASE", "BIN2DEC", "BIN2HEX", "BIN2OCT", "BINOM.DIST", "BINOMDIST", "BITAND",
-    "BITOR", "BITXOR", "CEILING", "CEILING.MATH", "CELL", "CHAR", "CHOOSE", "CHOOSECOLS",
-    "CHOOSEROWS", "CLEAN", "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT",
-    "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CORREL", "COS", "COSH", "COUNT", "COUNTA",
-    "COUNTBLANK", "COUNTIF", "COUNTIFS", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "D", "DATE",
-    "DATEDIF", "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA",
-    "DDB", "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET",
-    "DMAX", "DMIN", "DOLLAR", "DPRODUCT", "DROP", "DSUM", "EDATE", "EOMONTH", "ERROR.TYPE",
-    "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST", "FACT", "FACTDOUBLE", "FALSE",
-    "FIND", "FINDB", "FIXED", "FLOOR", "FLOOR.MATH", "FORECAST", "FORECAST.LINEAR", "FV",
-    "GAUSS", "GCD", "GEOMEAN", "GESTEP", "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP",
-    "HOUR", "HSTACK", "HYPERLINK", "IF", "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT",
-    "INTERCEPT", "IPMT", "IRR", "ISBLANK", "ISERR", "ISERROR", "ISEVEN", "ISFORMULA",
-    "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER", "ISODD", "ISOWEEKNUM", "ISREF", "ISTEXT",
-    "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB", "LEN", "LENB", "LET", "LN", "LOG",
-    "LOG10", "LOOKUP", "LOWER", "M", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MEDIAN", "MID",
-    "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MIRR", "MMULT", "MOD", "MODE", "MODE.MULT", "MODE.SNGL",
-    "MONTH", "MROUND", "MULTINOMIAL", "N", "NA", "NETWORKDAYS", "NETWORKDAYS.INTL",
-    "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST",
-    "NORMSINV", "NOT", "NOW", "NPER", "NPV", "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX",
-    "ODD", "OFFSET", "OR", "PEARSON", "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC",
-    "PERCENTRANK", "PERCENTRANK.INC", "PERMUT", "PHI", "PI", "PMT", "POISSON", "POISSON.DIST",
-    "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC", "QUARTILE.INC",
-    "QUOTIENT", "RADIANS", "RAND", "RANDARRAY", "RANDBETWEEN", "RANK", "RANK.AVG", "RANK.EQ",
-    "RATE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN",
-    "ROUNDUP", "ROW", "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND", "SEQUENCE", "SHEET",
-    "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT",
-    "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STEYX",
-    "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2",
-    "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.TEST", "TAKE", "TAN", "TANH", "TEXT",
-    "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL", "TODAY",
-    "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR", "UNICODE",
-    "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VLOOKUP", "VSTACK",
-    "WEEKDAY", "WEEKNUM", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XLOOKUP",
-    "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
+    "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC",
+    "ASIN", "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF",
+    "AVERAGEIFS", "BASE", "BETA.DIST", "BETA.INV", "BETADIST", "BETAINV", "BIN2DEC", "BIN2HEX",
+    "BIN2OCT", "BINOM.DIST", "BINOM.INV", "BINOMDIST", "BITAND", "BITOR", "BITXOR", "BYCOL",
+    "BYROW", "CEILING", "CEILING.MATH", "CELL", "CHAR", "CHIDIST", "CHIINV", "CHISQ.DIST",
+    "CHISQ.DIST.RT", "CHISQ.INV", "CHISQ.INV.RT", "CHOOSE", "CHOOSECOLS", "CHOOSEROWS", "CLEAN",
+    "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT", "CONCATENATE", "CONFIDENCE",
+    "CONFIDENCE.NORM", "CONFIDENCE.T", "CORREL", "COS", "COSH", "COUNT", "COUNTA", "COUNTBLANK",
+    "COUNTIF", "COUNTIFS", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "CRITBINOM", "D", "DATE",
+    "DATEDIF", "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB",
+    "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DMAX", "DMIN",
+    "DOLLAR", "DPRODUCT", "DROP", "DSUM", "EDATE", "EOMONTH", "ERF", "ERF.PRECISE", "ERFC",
+    "ERFC.PRECISE", "ERROR.TYPE", "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST",
+    "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "FACT", "FACTDOUBLE", "FALSE", "FDIST", "FIND",
+    "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED", "FLOOR", "FLOOR.MATH", "FORECAST",
+    "FORECAST.LINEAR", "FV", "GAMMA", "GAMMA.DIST", "GAMMA.INV", "GAMMADIST", "GAMMAINV", "GAMMALN",
+    "GAMMALN.PRECISE", "GAUSS", "GCD", "GEOMEAN", "GESTEP", "HARMEAN", "HEX2BIN", "HEX2DEC",
+    "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK", "HYPGEOM.DIST", "HYPGEOMDIST", "IF",
+    "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT", "INTERCEPT", "IPMT", "IRR", "ISBLANK",
+    "ISERR", "ISERROR", "ISEVEN", "ISFORMULA", "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER",
+    "ISODD", "ISOMITTED", "ISOWEEKNUM", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM", "LEFT",
+    "LEFTB", "LEN", "LENB", "LET", "LN", "LOG", "LOG10", "LOGINV", "LOGNORM.DIST", "LOGNORM.INV",
+    "LOGNORMDIST", "LOOKUP", "LOWER", "M", "MAKEARRAY", "MAP", "MATCH", "MAX", "MAXA", "MAXIFS",
+    "MD", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MIRR", "MMULT", "MOD",
+    "MODE", "MODE.MULT", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "N", "NA", "NEGBINOM.DIST",
+    "NEGBINOMDIST", "NETWORKDAYS", "NETWORKDAYS.INTL", "NORM.DIST", "NORM.INV", "NORM.S.DIST",
+    "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV",
+    "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PEARSON", "PERCENTILE",
+    "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERCENTRANK.INC", "PERMUT", "PHI", "PI",
+    "PMT", "POISSON", "POISSON.DIST", "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE",
+    "QUARTILE.EXC", "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDARRAY", "RANDBETWEEN",
+    "RANK", "RANK.AVG", "RANK.EQ", "RATE", "REDUCE", "REPLACE", "REPLACEB", "REPT", "RIGHT",
+    "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RSQ", "SCAN", "SEARCH",
+    "SEARCHB", "SECOND", "SEQUENCE", "SHEET", "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN",
+    "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P",
+    "STDEV.S", "STDEVA", "STDEVP", "STEYX", "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS",
+    "SUMPRODUCT", "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.DIST",
+    "T.DIST.2T", "T.DIST.RT", "T.INV", "T.INV.2T", "T.TEST", "TAKE", "TAN", "TANH", "TDIST", "TEXT",
+    "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TINV", "TOCOL",
+    "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR", "UNICODE",
+    "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VLOOKUP",
+    "VSTACK", "WEEKDAY", "WEEKNUM", "WEIBULL", "WEIBULL.DIST", "WORKDAY", "WORKDAY.INTL",
+    "WRAPCOLS", "WRAPROWS", "XLOOKUP", "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
 ];
 
 /// Whether `name` is a function this build knows.
@@ -1610,7 +1616,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             // Measured to the last digit: the point mass by exact products
             // (POISSON.DIST(4,2.5,FALSE) 0.133601885781085), the running sum
             // by logarithms (POISSON.DIST(2,3,TRUE) 0.423190081126843).
-            let by_logs = |j: f64| (j * mean.ln() - mean - ln_gamma(j + 1.0)).exp();
+            let by_logs = |j: f64| (j * mean.ln() - mean - lanczos_ln_gamma(j + 1.0)).exp();
             let answer = if cumulative { (0..=x as i64).map(|j| by_logs(j as f64)).sum() } else { mass(x) };
             Ok(Value::Number(answer))
         }
@@ -1926,6 +1932,23 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Num);
             }
             Ok(Value::Number(norm_s_inv(1.0 - alpha / 2.0) * sd / size.sqrt()))
+        }
+
+        // ---- the other continuous and discrete distributions -------------
+        // Measured against Excel: T.DIST(1.5,10,TRUE) 0.91774633677728,
+        // CHISQ.DIST.RT(3,4) 0.557825400371075, F.DIST(2,3,10,TRUE)
+        // 0.821992592624824, GAMMA.DIST(2,3,1,TRUE) 0.323323583816937,
+        // BETA.DIST(0.4,2,3,TRUE) 0.5248, ERF(1) 0.842700792949715.
+        "T.DIST" | "T.DIST.RT" | "T.DIST.2T" | "TDIST" | "T.INV" | "T.INV.2T" | "TINV"
+        | "CHISQ.DIST" | "CHISQ.DIST.RT" | "CHIDIST" | "CHISQ.INV" | "CHISQ.INV.RT" | "CHIINV"
+        | "F.DIST" | "F.DIST.RT" | "FDIST" | "F.INV" | "F.INV.RT" | "FINV"
+        | "GAMMA.DIST" | "GAMMADIST" | "GAMMA.INV" | "GAMMAINV" | "GAMMALN" | "GAMMALN.PRECISE" | "GAMMA"
+        | "BETA.DIST" | "BETADIST" | "BETA.INV" | "BETAINV"
+        | "LOGNORM.DIST" | "LOGNORMDIST" | "LOGNORM.INV" | "LOGINV"
+        | "HYPGEOM.DIST" | "HYPGEOMDIST" | "NEGBINOM.DIST" | "NEGBINOMDIST"
+        | "WEIBULL.DIST" | "WEIBULL" | "FISHER" | "FISHERINV"
+        | "ERF" | "ERF.PRECISE" | "ERFC" | "ERFC.PRECISE" | "BINOM.INV" | "CRITBINOM" | "CONFIDENCE.T" => {
+            distribution(name, args).map(Value::Number)
         }
 
         // Multiply the arrays together elementwise and add up the lot. Text and
@@ -3937,7 +3960,7 @@ fn norm_pdf(x: f64) -> f64 {
 /// The standard normal cumulative distribution, by West's (2004) rational
 /// approximation -- accurate to about 1e-16, which is what Excel's eight
 /// printed digits need even out in the tails.
-fn norm_cdf(x: f64) -> f64 {
+pub(crate) fn norm_cdf(x: f64) -> f64 {
     let z = x.abs();
     if z > 37.0 {
         return if x > 0.0 { 1.0 } else { 0.0 };
@@ -4005,6 +4028,336 @@ fn norm_s_inv(p: f64) -> f64 {
     let u = error / norm_pdf(x);
     x -= u / (1.0 + x * u / 2.0);
     x
+}
+
+/// The distributions of the arm above, each checked the way Excel checks
+/// its arguments: degrees of freedom are cut to whole numbers and must be
+/// at least one, a probability must lie in (0, 1], and so on, #NUM!
+/// otherwise.
+fn distribution(name: &str, args: &[Arg]) -> Result<f64, ExcelError> {
+    use crate::distributions as d;
+    let at = |i: usize| -> Result<f64, ExcelError> {
+        match args.get(i) {
+            Some(arg) => num(arg),
+            None => Err(ExcelError::Value),
+        }
+    };
+    let flag = |i: usize| -> Result<bool, ExcelError> {
+        match args.get(i) {
+            Some(arg) => arg.scalar().to_logical(),
+            None => Err(ExcelError::Value),
+        }
+    };
+    let count = |low: usize, high: usize| {
+        if args.len() < low || args.len() > high {
+            Err(ExcelError::Value)
+        } else {
+            Ok(())
+        }
+    };
+    let freedom = |value: f64| {
+        let value = value.trunc();
+        if value < 1.0 {
+            Err(ExcelError::Num)
+        } else {
+            Ok(value)
+        }
+    };
+    let chance = |p: f64| if p <= 0.0 || p > 1.0 { Err(ExcelError::Num) } else { Ok(p) };
+    let answer = match name {
+        "T.DIST" => {
+            count(3, 3)?;
+            let (x, df) = (at(0)?, freedom(at(1)?)?);
+            if flag(2)? { d::t_cdf(x, df) } else { d::t_pdf(x, df) }
+        }
+        "T.DIST.RT" => {
+            count(2, 2)?;
+            1.0 - d::t_cdf(at(0)?, freedom(at(1)?)?)
+        }
+        "T.DIST.2T" => {
+            count(2, 2)?;
+            let x = at(0)?;
+            if x < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            d::t_two_tailed(x, freedom(at(1)?)?)
+        }
+        "TDIST" => {
+            count(3, 3)?;
+            let (x, df, tails) = (at(0)?, freedom(at(1)?)?, at(2)?.trunc());
+            if x < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            match tails as i64 {
+                1 => 0.5 * d::t_two_tailed(x, df),
+                2 => d::t_two_tailed(x, df),
+                _ => return Err(ExcelError::Num),
+            }
+        }
+        "T.INV" => {
+            count(2, 2)?;
+            let p = at(0)?;
+            if p <= 0.0 || p >= 1.0 {
+                return Err(ExcelError::Num);
+            }
+            d::t_inv(p, freedom(at(1)?)?)
+        }
+        "T.INV.2T" | "TINV" => {
+            count(2, 2)?;
+            let p = chance(at(0)?)?;
+            d::t_inv(1.0 - p / 2.0, freedom(at(1)?)?).abs()
+        }
+        "CHISQ.DIST" => {
+            count(3, 3)?;
+            let (x, k) = (at(0)?, freedom(at(1)?)?);
+            if x < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            if flag(2)? { d::regularized_gamma_p(k / 2.0, x / 2.0) } else { d::chisq_pdf(x, k) }
+        }
+        "CHISQ.DIST.RT" | "CHIDIST" => {
+            count(2, 2)?;
+            let (x, k) = (at(0)?, freedom(at(1)?)?);
+            if x < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            d::regularized_gamma_q(k / 2.0, x / 2.0)
+        }
+        "CHISQ.INV" => {
+            count(2, 2)?;
+            let (p, k) = (at(0)?, freedom(at(1)?)?);
+            if !(0.0..1.0).contains(&p) {
+                return Err(ExcelError::Num);
+            }
+            d::invert(p, 0.0, k.max(1.0), |x| d::regularized_gamma_p(k / 2.0, x / 2.0))
+        }
+        "CHISQ.INV.RT" | "CHIINV" => {
+            count(2, 2)?;
+            let (p, k) = (chance(at(0)?)?, freedom(at(1)?)?);
+            d::invert_upper(p, 0.0, k.max(1.0), |x| d::regularized_gamma_q(k / 2.0, x / 2.0))
+        }
+        "F.DIST" => {
+            count(4, 4)?;
+            let (x, d1, d2) = (at(0)?, freedom(at(1)?)?, freedom(at(2)?)?);
+            if x < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            if flag(3)? { d::f_cdf(x, d1, d2) } else { d::f_pdf(x, d1, d2) }
+        }
+        "F.DIST.RT" | "FDIST" => {
+            count(3, 3)?;
+            let (x, d1, d2) = (at(0)?, freedom(at(1)?)?, freedom(at(2)?)?);
+            if x < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            d::f_upper(x, d1, d2)
+        }
+        "F.INV" => {
+            count(3, 3)?;
+            let (p, d1, d2) = (at(0)?, freedom(at(1)?)?, freedom(at(2)?)?);
+            if !(0.0..1.0).contains(&p) {
+                return Err(ExcelError::Num);
+            }
+            d::invert(p, 0.0, 1.0, |x| d::f_cdf(x, d1, d2))
+        }
+        "F.INV.RT" | "FINV" => {
+            count(3, 3)?;
+            let (p, d1, d2) = (chance(at(0)?)?, freedom(at(1)?)?, freedom(at(2)?)?);
+            d::invert_upper(p, 0.0, 1.0, |x| d::f_upper(x, d1, d2))
+        }
+        "GAMMA.DIST" | "GAMMADIST" => {
+            count(4, 4)?;
+            let (x, alpha, beta) = (at(0)?, at(1)?, at(2)?);
+            if x < 0.0 || alpha <= 0.0 || beta <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            if flag(3)? { d::regularized_gamma_p(alpha, x / beta) } else { d::gamma_pdf(x, alpha, beta) }
+        }
+        "GAMMA.INV" | "GAMMAINV" => {
+            count(3, 3)?;
+            let (p, alpha, beta) = (at(0)?, at(1)?, at(2)?);
+            if !(0.0..1.0).contains(&p) || alpha <= 0.0 || beta <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            beta * d::invert(p, 0.0, alpha.max(1.0), |x| d::regularized_gamma_p(alpha, x))
+        }
+        "GAMMALN" | "GAMMALN.PRECISE" => {
+            count(1, 1)?;
+            let x = at(0)?;
+            if x <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            ln_gamma(x)
+        }
+        "GAMMA" => {
+            count(1, 1)?;
+            let x = at(0)?;
+            if x <= 0.0 && x.fract() == 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let value = d::gamma(x);
+            if !value.is_finite() {
+                return Err(ExcelError::Num);
+            }
+            value
+        }
+        "BETA.DIST" | "BETADIST" => {
+            let legacy = name == "BETADIST";
+            if legacy { count(3, 5)? } else { count(4, 6)? }
+            let (x, a, b) = (at(0)?, at(1)?, at(2)?);
+            let bounds_from = if legacy { 3 } else { 4 };
+            let low = match args.get(bounds_from) { Some(arg) => num(arg)?, None => 0.0 };
+            let high = match args.get(bounds_from + 1) { Some(arg) => num(arg)?, None => 1.0 };
+            if a <= 0.0 || b <= 0.0 || x < low || x > high || low == high {
+                return Err(ExcelError::Num);
+            }
+            let scaled = (x - low) / (high - low);
+            if legacy || flag(3)? {
+                regularized_beta(scaled, a, b)
+            } else {
+                d::beta_pdf(scaled, a, b) / (high - low)
+            }
+        }
+        "BETA.INV" | "BETAINV" => {
+            count(3, 5)?;
+            let (p, a, b) = (at(0)?, at(1)?, at(2)?);
+            let low = match args.get(3) { Some(arg) => num(arg)?, None => 0.0 };
+            let high = match args.get(4) { Some(arg) => num(arg)?, None => 1.0 };
+            if p <= 0.0 || p > 1.0 || a <= 0.0 || b <= 0.0 || low >= high {
+                return Err(ExcelError::Num);
+            }
+            let mut lo = 0.0;
+            let mut hi = 1.0;
+            for _ in 0..200 {
+                let middle = 0.5 * (lo + hi);
+                if middle <= lo || middle >= hi {
+                    break;
+                }
+                if regularized_beta(middle, a, b) < p { lo = middle } else { hi = middle }
+            }
+            low + 0.5 * (lo + hi) * (high - low)
+        }
+        "LOGNORM.DIST" | "LOGNORMDIST" => {
+            let legacy = name == "LOGNORMDIST";
+            if legacy { count(3, 3)? } else { count(4, 4)? }
+            let (x, mean, sd) = (at(0)?, at(1)?, at(2)?);
+            if x <= 0.0 || sd <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let z = (x.ln() - mean) / sd;
+            if legacy || flag(3)? { norm_cdf(z) } else { norm_pdf(z) / (x * sd) }
+        }
+        "LOGNORM.INV" | "LOGINV" => {
+            count(3, 3)?;
+            let (p, mean, sd) = (at(0)?, at(1)?, at(2)?);
+            if p <= 0.0 || p >= 1.0 || sd <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            (mean + sd * norm_s_inv(p)).exp()
+        }
+        "HYPGEOM.DIST" | "HYPGEOMDIST" => {
+            let legacy = name == "HYPGEOMDIST";
+            if legacy { count(4, 4)? } else { count(5, 5)? }
+            let (s, n, k, total) = (at(0)?.trunc(), at(1)?.trunc(), at(2)?.trunc(), at(3)?.trunc());
+            if s < 0.0 || s > n || s > k || n > total || k > total || n <= 0.0 || k <= 0.0 || total <= 0.0 || s < n - total + k {
+                return Err(ExcelError::Num);
+            }
+            let mass = |s: f64| (ln_choose(k, s) + ln_choose(total - k, n - s) - ln_choose(total, n)).exp();
+            if !legacy && flag(4)? {
+                let first = (n - total + k).max(0.0) as i64;
+                (first..=s as i64).map(|one| mass(one as f64)).sum()
+            } else {
+                mass(s)
+            }
+        }
+        "NEGBINOM.DIST" | "NEGBINOMDIST" => {
+            let legacy = name == "NEGBINOMDIST";
+            if legacy { count(3, 3)? } else { count(4, 4)? }
+            let (f, s, p) = (at(0)?.trunc(), at(1)?.trunc(), at(2)?);
+            if !(0.0..=1.0).contains(&p) || f < 0.0 || s < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            if !legacy && flag(3)? {
+                regularized_beta(p, s, f + 1.0)
+            } else {
+                (ln_choose(f + s - 1.0, s - 1.0) + s * p.ln() + f * (1.0 - p).ln()).exp()
+            }
+        }
+        "WEIBULL.DIST" | "WEIBULL" => {
+            count(4, 4)?;
+            let (x, alpha, beta) = (at(0)?, at(1)?, at(2)?);
+            if x < 0.0 || alpha <= 0.0 || beta <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let power = (x / beta).powf(alpha);
+            if flag(3)? {
+                -(-power).exp_m1()
+            } else {
+                alpha / beta.powf(alpha) * x.powf(alpha - 1.0) * (-power).exp()
+            }
+        }
+        "FISHER" => {
+            count(1, 1)?;
+            let x = at(0)?;
+            if x <= -1.0 || x >= 1.0 {
+                return Err(ExcelError::Num);
+            }
+            0.5 * ((1.0 + x) / (1.0 - x)).ln()
+        }
+        "FISHERINV" => {
+            count(1, 1)?;
+            at(0)?.tanh()
+        }
+        "ERF" => {
+            count(1, 2)?;
+            let low = at(0)?;
+            match args.get(1) {
+                Some(arg) => d::erf(num(arg)?) - d::erf(low),
+                None => d::erf(low),
+            }
+        }
+        "ERF.PRECISE" => {
+            count(1, 1)?;
+            d::erf(at(0)?)
+        }
+        "ERFC" | "ERFC.PRECISE" => {
+            count(1, 1)?;
+            d::erfc(at(0)?)
+        }
+        "BINOM.INV" | "CRITBINOM" => {
+            count(3, 3)?;
+            let (n, p, alpha) = (at(0)?.trunc(), at(1)?, at(2)?);
+            if n < 0.0 || !(0.0..=1.0).contains(&p) || !(0.0..=1.0).contains(&alpha) {
+                return Err(ExcelError::Num);
+            }
+            let mut total = 0.0;
+            let mut k = 0.0;
+            loop {
+                total += (ln_choose(n, k) + k * p.ln() + (n - k) * (1.0 - p).ln()).exp();
+                if total >= alpha || k >= n {
+                    break k;
+                }
+                k += 1.0;
+            }
+        }
+        "CONFIDENCE.T" => {
+            count(3, 3)?;
+            let (alpha, sd, size) = (at(0)?, at(1)?, at(2)?.trunc());
+            if alpha <= 0.0 || alpha >= 1.0 || sd <= 0.0 || size < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            if size == 1.0 {
+                return Err(ExcelError::DivZero);
+            }
+            d::t_inv(1.0 - alpha / 2.0, size - 1.0) * sd / size.sqrt()
+        }
+        _ => return Err(ExcelError::Name),
+    };
+    if answer.is_finite() {
+        Ok(answer)
+    } else {
+        Err(ExcelError::Num)
+    }
 }
 
 /// n!, refusing a negative and overflowing to #NUM!.
@@ -4097,8 +4450,43 @@ pub(crate) fn excel_power(x: f64, y: f64) -> f64 {
     x.powf(y)
 }
 
-/// ln Γ(x), Lanczos.
-fn ln_gamma(x: f64) -> f64 {
+/// ln Γ(x): the log of the factorial for a whole number, else the
+/// Stirling series once x has been walked up past 15, which holds every
+/// digit a double has (Lanczos below one half, through the reflection).
+pub(crate) fn ln_gamma(x: f64) -> f64 {
+    if x >= 0.5 {
+        if x.fract() == 0.0 && x <= 171.0 {
+            let mut product = 1.0f64;
+            let mut k = 2.0;
+            while k < x {
+                product *= k;
+                k += 1.0;
+            }
+            return product.ln();
+        }
+        let mut shift = 0.0f64;
+        let mut z = x;
+        let mut product = 1.0f64;
+        while z < 15.0 {
+            product *= z;
+            z += 1.0;
+        }
+        if product != 1.0 {
+            shift = product.ln();
+        }
+        let inverse = 1.0 / z;
+        let square = inverse * inverse;
+        let series = inverse
+            * (1.0 / 12.0
+                - square
+                    * (1.0 / 360.0
+                        - square * (1.0 / 1260.0 - square * (1.0 / 1680.0 - square * (1.0 / 1188.0 - square * 691.0 / 360_360.0)))));
+        return (z - 0.5) * z.ln() - z + 0.5 * (2.0 * std::f64::consts::PI).ln() + series - shift;
+    }
+    lanczos_ln_gamma(x)
+}
+
+fn lanczos_ln_gamma(x: f64) -> f64 {
     const G: [f64; 9] = [
         0.999_999_999_999_809_9,
         676.520_368_121_885_1,
@@ -4127,12 +4515,32 @@ fn ln_choose(n: f64, k: f64) -> f64 {
 }
 
 /// The regularised incomplete beta function I_x(a, b), by continued fraction.
-fn regularized_beta(x: f64, a: f64, b: f64) -> f64 {
+pub(crate) fn regularized_beta(x: f64, a: f64, b: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
     if x >= 1.0 {
         return 1.0;
+    }
+    // A whole-numbered b makes it a finite sum, which keeps every digit:
+    // I_x(a, b) = x^a * sum_{j<b} Γ(a+j)/(Γ(a) j!) (1-x)^j. A whole a is the
+    // same from the other side.
+    let finite = |x: f64, a: f64, b: f64| {
+        let mut term = 1.0f64;
+        let mut sum = 1.0f64;
+        let mut j = 1.0;
+        while j < b {
+            term *= (a + j - 1.0) / j * (1.0 - x);
+            sum += term;
+            j += 1.0;
+        }
+        x.powf(a) * sum
+    };
+    if b.fract() == 0.0 && b <= 1000.0 {
+        return finite(x, a, b);
+    }
+    if a.fract() == 0.0 && a <= 1000.0 {
+        return 1.0 - finite(1.0 - x, b, a);
     }
     let front = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
     let fraction = |x: f64, a: f64, b: f64| {

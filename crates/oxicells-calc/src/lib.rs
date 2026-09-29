@@ -43,6 +43,7 @@
 
 pub mod ast;
 pub mod datetime;
+mod distributions;
 pub mod engine;
 pub mod functions;
 pub mod lexer;
