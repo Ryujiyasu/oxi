@@ -3018,18 +3018,180 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             database_function(name, args)
         }
         // ---- more dates --------------------------------------------------
-        "NETWORKDAYS" => {
+        // The working days between two dates, both counted, less the weekend
+        // and less the holidays given -- which the plain form used to ignore.
+        "NETWORKDAYS" | "NETWORKDAYS.INTL" => {
+            let intl = name == "NETWORKDAYS.INTL";
             let (start, end) = (serial(&args[0])?, serial(&args[1])?);
+            let weekend = weekend_days(if intl { args.get(2) } else { None })?;
+            let holidays = holiday_serials(args.get(if intl { 3 } else { 2 }))?;
             let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
             let mut days = 0i64;
             for day in lo..=hi {
-                // weekday_sunday_one: 1 Sunday .. 7 Saturday.
-                let w = datetime::weekday_sunday_one(day);
-                if w != 1 && w != 7 {
+                if !weekend[monday_zero(day)?] && !holidays.contains(&day) {
                     days += 1;
                 }
             }
             Ok(Value::Number(if start <= end { days } else { -days } as f64))
+        }
+        "WORKDAY.INTL" => {
+            let start = serial(&args[0])?;
+            let days = num(args.get(1).ok_or(ExcelError::Value)?)? as i64;
+            let weekend = weekend_days(args.get(2))?;
+            // With no working day in the week there is no day to land on.
+            if weekend.iter().all(|off| *off) {
+                return Err(ExcelError::Value);
+            }
+            let holidays = holiday_serials(args.get(3))?;
+            let step = if days < 0 { -1 } else { 1 };
+            let mut at = start;
+            let mut left = days.abs();
+            while left > 0 {
+                at += step;
+                if at < 0 {
+                    return Err(ExcelError::Num);
+                }
+                if weekend[monday_zero(at)?] || holidays.contains(&at) {
+                    continue;
+                }
+                left -= 1;
+            }
+            Ok(Value::Number(at as f64))
+        }
+        // Byte-counting text functions: a character is one byte when it is
+        // ASCII or half-width katakana and two otherwise, as in Shift_JIS;
+        // half of a two-byte character cut off is a space. Measured:
+        // LENB("東京abc") is 7, LEFTB(,3) "東 ", RIGHTB(,4) " abc",
+        // MIDB(,2,3) " 京", FINDB("a",) 5, SEARCHB("B",) 6.
+        "LENB" => Ok(Value::Number(bytes_of(&text(one_arg(args)?)?) as f64)),
+        "LEFTB" | "RIGHTB" => {
+            let t = text(one_arg(args)?)?;
+            let n = match args.get(1) {
+                Some(a) => num(a)?.trunc(),
+                None => 1.0,
+            };
+            if n < 0.0 {
+                return Err(ExcelError::Value);
+            }
+            let total = bytes_of(&t);
+            let n = (n as usize).min(total);
+            Ok(Value::Text(if name == "LEFTB" {
+                bytes_between(&t, 1, n)
+            } else {
+                bytes_between(&t, total - n + 1, n)
+            }))
+        }
+        "MIDB" => {
+            expect(args, 3)?;
+            let t = text(&args[0])?;
+            let (start, n) = (num(&args[1])?.trunc(), num(&args[2])?.trunc());
+            if start < 1.0 || n < 0.0 {
+                return Err(ExcelError::Value);
+            }
+            Ok(Value::Text(bytes_between(&t, start as usize, n as usize)))
+        }
+        "REPLACEB" => {
+            expect(args, 4)?;
+            let t = text(&args[0])?;
+            let (start, n) = (num(&args[1])?.trunc(), num(&args[2])?.trunc());
+            if start < 1.0 || n < 0.0 {
+                return Err(ExcelError::Value);
+            }
+            let (start, n) = (start as usize, n as usize);
+            let total = bytes_of(&t);
+            let head = bytes_between(&t, 1, start - 1);
+            let tail_from = start + n;
+            let tail = if tail_from > total {
+                String::new()
+            } else {
+                bytes_between(&t, tail_from, total - tail_from + 1)
+            };
+            Ok(Value::Text(format!("{head}{}{tail}", text(&args[3])?)))
+        }
+        "FINDB" | "SEARCHB" => {
+            expect(args, 2)?;
+            let within = text(&args[1])?;
+            let start_byte = match args.get(2) {
+                Some(a) => num(a)?.trunc(),
+                None => 1.0,
+            };
+            if start_byte < 1.0 {
+                return Err(ExcelError::Value);
+            }
+            // The character the starting byte falls in or before.
+            let mut seen = 0usize;
+            let mut start_char = within.chars().count() + 1;
+            for (at, c) in within.chars().enumerate() {
+                if seen + 1 >= start_byte as usize {
+                    start_char = at + 1;
+                    break;
+                }
+                seen += byte_width(c);
+            }
+            let found = dispatch(
+                if name == "FINDB" { "FIND" } else { "SEARCH" },
+                &[args[0].clone(), args[1].clone(), Arg::Value(Value::Number(start_char as f64))],
+            )?;
+            let Value::Number(at) = found else {
+                return Ok(found);
+            };
+            let before: String = within.chars().take(at as usize - 1).collect();
+            Ok(Value::Number((bytes_of(&before) + 1) as f64))
+        }
+        "ISNONTEXT" => Ok(Value::Logical(!matches!(one_value(args), Value::Text(_)))),
+        "DELTA" => {
+            let a = one(args)?;
+            let b = match args.get(1) {
+                Some(x) => num(x)?,
+                None => 0.0,
+            };
+            Ok(Value::Number(if a == b { 1.0 } else { 0.0 }))
+        }
+        "GESTEP" => {
+            let a = one(args)?;
+            let step = match args.get(1) {
+                Some(x) => num(x)?,
+                None => 0.0,
+            };
+            Ok(Value::Number(if a >= step { 1.0 } else { 0.0 }))
+        }
+        "BITXOR" => {
+            expect(args, 2)?;
+            let a = num(&args[0])?.trunc();
+            let b = num(&args[1])?.trunc();
+            let limit = 281_474_976_710_655.0;
+            if a < 0.0 || b < 0.0 || a > limit || b > limit {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(((a as u64) ^ (b as u64)) as f64))
+        }
+        // MIRR: the positive flows carried forward at the reinvestment rate,
+        // the negative ones brought back at the finance rate.
+        "MIRR" => {
+            expect(args, 3)?;
+            let flows: Vec<f64> = args[0]
+                .flatten()
+                .into_iter()
+                .filter_map(|v| if let Value::Number(n) = v { Some(n) } else { None })
+                .collect();
+            let (finance, reinvest) = (num(&args[1])?, num(&args[2])?);
+            let n = flows.len();
+            if n < 2 {
+                return Err(ExcelError::DivZero);
+            }
+            let mut future = 0.0;
+            let mut present = 0.0;
+            for (at, flow) in flows.iter().enumerate() {
+                if *flow > 0.0 {
+                    future += flow * (1.0 + reinvest).powi((n - 1 - at) as i32);
+                } else {
+                    present += flow / (1.0 + finance).powi(at as i32);
+                }
+            }
+            if future == 0.0 || present == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            fin_finite((future / -present).powf(1.0 / (n as f64 - 1.0)) - 1.0)
         }
         _ => Err(ExcelError::Name),
     }
@@ -4091,6 +4253,107 @@ fn frequency(args: &[Arg]) -> Result<RangeData, ExcelError> {
     })
 }
 
+/// Monday 0 .. Sunday 6.
+fn monday_zero(day: i64) -> Result<usize, ExcelError> {
+    Ok((weekday_with_type(day, 2)? - 1) as usize)
+}
+
+/// Which days of the week are the weekend, Monday first: a code 1-7 for a
+/// pair (1 Saturday and Sunday, 2 Sunday and Monday ...), 11-17 for one day
+/// (11 Sunday, 12 Monday ...), or seven 0s and 1s from Monday.
+fn weekend_days(arg: Option<&Arg>) -> Result<[bool; 7], ExcelError> {
+    let mut days = [false; 7];
+    let Some(arg) = arg else {
+        days[5] = true;
+        days[6] = true;
+        return Ok(days);
+    };
+    match arg.scalar() {
+        Value::Blank => {
+            days[5] = true;
+            days[6] = true;
+        }
+        Value::Text(mask) => {
+            // Every day a weekend is allowed: measured, NETWORKDAYS.INTL
+            // with "1111111" is 0.
+            if mask.len() != 7 || !mask.chars().all(|c| c == '0' || c == '1') {
+                return Err(ExcelError::Value);
+            }
+            for (at, c) in mask.chars().enumerate() {
+                days[at] = c == '1';
+            }
+        }
+        other => {
+            let code = other.to_number()? as i64;
+            match code {
+                // 1 is Saturday-Sunday; each code after moves the pair a day on.
+                1..=7 => {
+                    let first = (code as usize + 4) % 7;
+                    days[first] = true;
+                    days[(first + 1) % 7] = true;
+                }
+                11..=17 => days[(code as usize + 2) % 7] = true,
+                _ => return Err(ExcelError::Num),
+            }
+        }
+    }
+    Ok(days)
+}
+
+fn holiday_serials(arg: Option<&Arg>) -> Result<Vec<i64>, ExcelError> {
+    let mut held = Vec::new();
+    if let Some(given) = arg {
+        for one in given.flatten() {
+            if one.is_blank() {
+                continue;
+            }
+            held.push(serial(&Arg::Value(one))?);
+        }
+    }
+    Ok(held)
+}
+
+/// A character's width in Shift_JIS bytes.
+fn byte_width(c: char) -> usize {
+    let code = c as u32;
+    if code < 0x80 || (0xFF61..=0xFF9F).contains(&code) {
+        1
+    } else {
+        2
+    }
+}
+
+fn bytes_of(t: &str) -> usize {
+    t.chars().map(byte_width).sum()
+}
+
+/// The bytes `from` (1-based) onward for `count`, a character cut in two
+/// written as a space for the half inside.
+fn bytes_between(t: &str, from: usize, count: usize) -> String {
+    if count == 0 || from == 0 {
+        return String::new();
+    }
+    let last = from + count - 1;
+    let mut out = String::new();
+    let mut at = 1usize;
+    for c in t.chars() {
+        let width = byte_width(c);
+        let end = at + width - 1;
+        if end >= from && at <= last {
+            if at >= from && end <= last {
+                out.push(c);
+            } else {
+                out.push(' ');
+            }
+        }
+        at += width;
+        if at > last {
+            break;
+        }
+    }
+    out
+}
+
 fn expect(args: &[Arg], n: usize) -> Result<(), ExcelError> {
     if args.len() < n {
         Err(ExcelError::Value)
@@ -4948,6 +5211,36 @@ mod tests {
         close(call("SKEW", &[a.clone()]), -0.172562731898406);
         close(call("KURT", &[a.clone()]), -1.34119207860588);
         close(call("HARMEAN", &[a]), 3.03006012024048);
+        // Shift_JIS byte functions and the weekend patterns, every answer Excel's.
+        let tokyo = || Arg::Value(Value::text("東京abc"));
+        assert_eq!(call("LENB", &[tokyo()]), Value::Number(7.0));
+        assert_eq!(call("LENB", &[Arg::Value(Value::text("ｱｲｳ"))]), Value::Number(3.0));
+        assert_eq!(call("LEFTB", &[tokyo(), v(3.0)]), Value::text("東 "));
+        assert_eq!(call("RIGHTB", &[tokyo(), v(4.0)]), Value::text(" abc"));
+        assert_eq!(call("MIDB", &[tokyo(), v(2.0), v(3.0)]), Value::text(" 京"));
+        assert_eq!(call("FINDB", &[Arg::Value(Value::text("a")), tokyo()]), Value::Number(5.0));
+        assert_eq!(call("SEARCHB", &[Arg::Value(Value::text("B")), tokyo()]), Value::Number(6.0));
+        assert_eq!(
+            call("REPLACEB", &[tokyo(), v(1.0), v(2.0), Arg::Value(Value::text("x"))]),
+            Value::text("x京abc")
+        );
+        let (jan1, jan31) = (v(45292.0), v(45322.0));
+        for (weekend, want) in [(1.0, 23.0), (11.0, 27.0)] {
+            assert_eq!(
+                call("NETWORKDAYS.INTL", &[jan1.clone(), jan31.clone(), v(weekend)]),
+                Value::Number(want)
+            );
+        }
+        assert_eq!(
+            call("NETWORKDAYS.INTL", &[jan1.clone(), jan31.clone(), Arg::Value(Value::text("0000011"))]),
+            Value::Number(23.0)
+        );
+        assert_eq!(
+            call("NETWORKDAYS.INTL", &[jan1, jan31, Arg::Value(Value::text("1111111"))]),
+            Value::Number(0.0)
+        );
+        assert_eq!(call("WORKDAY.INTL", &[v(45296.0), v(1.0), v(7.0)]), Value::Number(45298.0));
+        assert_eq!(call("BITXOR", &[v(12.0), v(10.0)]), Value::Number(6.0));
         // TIMEVALUE, every answer Excel's.
         for (text, want) in [
             ("1:00", 1.0 / 24.0),
