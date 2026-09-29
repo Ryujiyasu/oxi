@@ -1124,7 +1124,14 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 None => 0,
             };
             let factor = 10f64.powi(digits);
+            // Scaled as the fifteen-digit decimal Excel keeps, so a binary
+            // shortfall does not decide it: measured, ROUND(0.285,2) is 0.29.
             let scaled = n * factor;
+            let scaled = if scaled.is_finite() && scaled != 0.0 {
+                format!("{scaled:.14e}").parse::<f64>().unwrap_or(scaled)
+            } else {
+                scaled
+            };
             let rounded = match name {
                 // Excel rounds halves away from zero, which is what f64::round does.
                 "ROUND" => scaled.round(),
@@ -2041,8 +2048,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     let value = if column.len() == 1 { &column[0] } else { &column[at] };
                     running *= match value {
                         Value::Number(n) => *n,
-                        Value::Logical(true) => 1.0,
-                        Value::Logical(false) | Value::Blank | Value::Text(_) => 0.0,
+                        // A Boolean counts for nothing, as text does:
+                        // measured, TRUE among the cells adds 0.
+                        Value::Logical(_) | Value::Blank | Value::Text(_) => 0.0,
                         Value::Error(e) => return Err(*e),
                     };
                     if running == 0.0 {
@@ -2133,6 +2141,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 None if name.ends_with(".MATH") => 1.0,
                 None => return Err(ExcelError::Value),
             };
+            // FLOOR by nothing divides by nothing: measured, FLOOR(5,0) is
+            // #DIV/0! where CEILING(0,0) is 0.
+            if step == 0.0 && name == "FLOOR" && value != 0.0 {
+                return Err(ExcelError::DivZero);
+            }
             if step == 0.0 {
                 return Ok(Value::Number(0.0));
             }
@@ -7552,15 +7565,17 @@ mod tests {
 
     #[test]
     fn sumproduct_weighs_a_condition_as_one_or_nothing() {
-        // This is what the function is nearly always for: a column of TRUE and
-        // FALSE picking out which of another column to add. Text and blanks
-        // have to weigh nothing rather than spoil the sum.
+        // A column of TRUE and FALSE handed over as it is weighs NOTHING --
+        // it has to be made numbers first with `--` or `*`: measured,
+        // SUMPRODUCT((A1:A3>0),B1:B3) and SUMPRODUCT({TRUE,FALSE,TRUE},{1,2,3})
+        // are 0 where SUMPRODUCT(--(A1:A3>0),B1:B3) is 40. Text and blanks
+        // weigh nothing too rather than spoil the sum.
         let flags = range(
             &[Value::Logical(true), Value::Logical(false), Value::Logical(true)],
             1,
         );
         let amounts = range(&[n(10.0), n(20.0), n(30.0)], 1);
-        assert_eq!(call("SUMPRODUCT", &[flags, amounts]), Value::Number(40.0));
+        assert_eq!(call("SUMPRODUCT", &[flags, amounts]), Value::Number(0.0));
         let mixed = range(&[n(2.0), Value::text("x"), Value::Blank], 1);
         let ones = range(&[n(1.0), n(1.0), n(1.0)], 1);
         assert_eq!(call("SUMPRODUCT", &[mixed, ones]), Value::Number(2.0));

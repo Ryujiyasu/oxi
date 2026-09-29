@@ -1428,6 +1428,13 @@ impl Workbook {
             // `REDUCE(0,A1:A4,LAMBDA(a,v,a+v))` 7, `SCAN` 3,4,6,7,
             // `BYROW(A1:C2,LAMBDA(r,SUM(r)))` 4,3 (text is not summed) and
             // `MAKEARRAY(2,2,LAMBDA(r,c,r*c))` 1,2,2,4.
+            // The ranking functions rank within a reference and nothing else:
+            // measured, RANK.AVG(5,{1,5,5,9}) is #VALUE!.
+            Expr::Function { name, args }
+                if matches!(name.as_str(), "RANK" | "RANK.EQ" | "RANK.AVG") && matches!(args.get(1), Some(Expr::Array(_))) =>
+            {
+                Arg::Value(Value::Error(ExcelError::Value))
+            }
             Expr::Function { name, args } if name == "GROUPBY" => self.group_by(args, sheet, depth, skip, at),
             Expr::Function { name, args } if name == "PIVOTBY" => self.pivot_by(args, sheet, depth, skip, at),
             Expr::Function { name, args }
