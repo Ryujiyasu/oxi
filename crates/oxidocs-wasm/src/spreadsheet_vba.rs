@@ -10315,11 +10315,8 @@ impl<'a> WorkbookHost<'a> {
     /// Excel, which returns DBNull for a pair showing different strings and
     /// the string itself for a pair showing the same one.
     ///
-    /// One case this cannot answer: Excel shows `##` where a column is too
-    /// narrow for the number in it, and says so through `.Text` as well. That
-    /// needs the width of the rendered digits, which this side has no way to
-    /// measure. Everything else — formats, dates, Booleans, errors, blanks —
-    /// is the string Excel gives.
+    /// A number is shown as it fits its column: General shortens itself and
+    /// anything else becomes a row of `#` -- see `general_fit`.
     fn range_text(&self, range: CellRange) -> Value {
         let mut seen: Option<String> = None;
         for address in range.addresses() {
@@ -10329,10 +10326,7 @@ impl<'a> WorkbookHost<'a> {
                 .find(|row| row.index == address.row)
                 .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
             {
-                Some(cell) => shown_text(
-                    &from_cell_value(&cell.value),
-                    cell.style.number_format.as_deref(),
-                ),
+                Some(cell) => self.shown_in_column(address, cell),
                 None => String::new(),
             };
             match &seen {
@@ -10342,6 +10336,45 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         Value::String(seen.unwrap_or_default())
+    }
+
+    /// A cell's text as its column shows it. Measured against Excel over
+    /// twenty numbers and eleven widths: the room is the column's pixels less
+    /// five; General gives up decimals, then turns to an exponent, then to
+    /// `#`s; any other format, a date among them, goes straight to `#`s.
+    fn shown_in_column(&self, address: CellAddress, cell: &Cell) -> String {
+        let value = from_cell_value(&cell.value);
+        let format = cell.style.number_format.as_deref();
+        let shown = shown_text(&value, format);
+        let CellValue::Number(number) = cell.value else {
+            return shown;
+        };
+        let (normal_face, normal_size) = self.normal_font();
+        let face = cell.style.font_name.clone().unwrap_or(normal_face);
+        let size = cell.style.font_size.unwrap_or(normal_size);
+        let bold = cell.style.bold;
+        // Bold wants two pixels more than its glyphs: measured, bold 1234
+        // (36 px) shows in 38 pixels of room and not in 37, and bold
+        // ¥281,292 (67 px) in 69 and not in 68.
+        let measure = |text: &str| text_px(text, &face, size, bold) + if bold { 2 } else { 0 };
+        let room = (self.column_px(address.sheet, address.column) - 5.0).max(0.0) as u32;
+        let general = format.is_none_or(|format| format.eq_ignore_ascii_case("general"));
+        // The #s fill the room less the bold margin, at their own width:
+        // measured, bold in 36 pixels is ### and in 58 ######.
+        let hash = text_px("#", &face, size, bold).max(1);
+        let hashes = (room.saturating_sub(if bold { 2 } else { 0 }) / hash) as usize;
+        if general {
+            let fitted = general_fit(number, Some(room), &measure);
+            if fitted.starts_with('#') {
+                return "#".repeat(hashes);
+            }
+            return fitted;
+        }
+        if measure(&shown) <= room {
+            shown
+        } else {
+            "#".repeat(hashes)
+        }
     }
 
     /// What a cell would show in the formula bar.
@@ -12788,27 +12821,33 @@ impl<'a> WorkbookHost<'a> {
                 let Some(cell) = self.cell_here(range.sheet, row, column) else {
                     continue;
                 };
-                let shown = shown_text(
-                    &from_cell_value(&cell.value),
-                    cell.style.number_format.as_deref(),
-                );
+                let face = cell.style.font_name.clone().unwrap_or_else(|| normal_face.clone());
+                let size = cell.style.font_size.unwrap_or(normal_size);
+                let bold = cell.style.bold;
+                // A General number is measured as General writes it with no
+                // column to fit: at most eleven characters, 1.23457E+12.
+                let general = cell
+                    .style
+                    .number_format
+                    .as_deref()
+                    .is_none_or(|format| format.eq_ignore_ascii_case("general"));
+                let shown = match cell.value {
+                    CellValue::Number(number) if general => {
+                        general_fit(number, None, &|text: &str| text_px(text, &face, size, bold))
+                    }
+                    _ => shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref()),
+                };
                 if shown.is_empty() {
                     continue;
                 }
-                let face = cell.style.font_name.clone().unwrap_or_else(|| normal_face.clone());
-                let size = cell.style.font_size.unwrap_or(normal_size);
-                widest = widest.max(text_px(&shown, &face, size, cell.style.bold));
+                widest = widest.max(text_px(&shown, &face, size, bold));
             }
-            // Measured over forty strings in 游ゴシック and in Calibri: a short
-            // text gets twelve pixels of room, and a long one about a tenth of
-            // itself and five -- whichever is more. The column is then that
-            // many pixels, less the five every column has, in digit widths.
+            // The column is the fitted pixels, less the five every column
+            // has, in digit widths.
             let width = if widest == 0 {
                 FLOOR
             } else {
-                let ext = f64::from(widest);
-                let px = (ext + 12.0).max((ext * 1.107 + 5.0).round());
-                ((px - 5.0) / digit * 100.0).round() / 100.0
+                ((fitted_px(widest) - 5.0) / digit * 100.0).round() / 100.0
             };
             let lane = CellRange {
                 sheet: range.sheet,
@@ -12820,6 +12859,58 @@ impl<'a> WorkbookHost<'a> {
             self.set_range_column_width(lane, Value::Double(width))?;
         }
         Ok(Value::Boolean(true))
+    }
+
+    /// A number given a format it no longer fits widens a column that was
+    /// never given a width, to what AutoFit would make it. Measured: 45000
+    /// then `yyyy-mm-dd` widens 8.38 to 10.75, the same as AutoFit for nine
+    /// formats; a format given before the value, a column with a width of its
+    /// own, and a text that still fits (3/5/2024) leave the column be.
+    fn widen_for_format(&mut self, range: CellRange) -> Result<(), String> {
+        let (normal_face, normal_size) = self.normal_font();
+        let digit = f64::from(self.digit_width());
+        let cells: Vec<(CellAddress, Cell)> = self.workbook.sheets[range.sheet]
+            .rows
+            .iter()
+            .filter(|row| (range.start_row..=range.end_row).contains(&row.index))
+            .flat_map(|row| {
+                row.cells
+                    .iter()
+                    .filter(|cell| (range.start_column..=range.end_column).contains(&cell.col))
+                    .map(move |cell| {
+                        (CellAddress { sheet: range.sheet, row: row.index, column: cell.col }, cell.clone())
+                    })
+            })
+            .collect();
+        for (address, cell) in cells {
+            if !matches!(cell.value, CellValue::Number(_)) {
+                continue;
+            }
+            let own_width = self.workbook.sheets[range.sheet]
+                .col_widths
+                .get(address.column as usize)
+                .is_some_and(|width| *width > 0.0);
+            if own_width || self.workbook.sheets[range.sheet].hidden_cols.contains(&address.column) {
+                continue;
+            }
+            if !self.shown_in_column(address, &cell).starts_with('#') {
+                continue;
+            }
+            let face = cell.style.font_name.clone().unwrap_or_else(|| normal_face.clone());
+            let size = cell.style.font_size.unwrap_or(normal_size);
+            let shown = shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref());
+            let px = fitted_px(text_px(&shown, &face, size, cell.style.bold));
+            let width = ((px - 5.0) / digit * 100.0).round() / 100.0;
+            let lane = CellRange {
+                sheet: range.sheet,
+                start_row: address.row,
+                end_row: address.row,
+                start_column: address.column,
+                end_column: address.column,
+            };
+            self.set_range_column_width(lane, Value::Double(width))?;
+        }
+        Ok(())
     }
 
     /// The Normal style's face and size: the workbook's default style, else
@@ -17857,6 +17948,9 @@ impl Host for WorkbookHost<'_> {
                 _ => return Err("Range.NumberFormat must be a string".to_string()),
             };
             self.set_range_style(range, |_, style| style.number_format = value.clone())?;
+            if value.is_some() {
+                self.widen_for_format(range)?;
+            }
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("horizontalalignment") {
@@ -18151,7 +18245,112 @@ fn rows_of_arrays(array: &ArrayValue) -> Result<Option<(usize, usize, Vec<Value>
     Ok(Some((array.values.len(), width.unwrap_or(0), values)))
 }
 
-/// GDI advance widths of printable ASCII in 游ゴシック, by pixel size.
+/// A number written plainly to `decimals` places, trailing zeros dropped.
+fn general_plain(magnitude: f64, decimals: usize) -> String {
+    // Halves go away from zero, as Excel rounds: -0.5 in one place is -1.
+    let scale = 10f64.powi(decimals as i32);
+    let rounded = (magnitude * scale).round() / scale;
+    let text = format!("{rounded:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        text
+    }
+}
+
+/// A number in exponent form with up to `decimals` in the mantissa, trailing
+/// zeros dropped: 1.23E+08, 1E+11, 1.234E-07.
+fn general_exponent(magnitude: f64, decimals: usize) -> String {
+    let text = format!("{magnitude:.decimals$e}");
+    let (mantissa, power) = text.split_once('e').unwrap_or((&text, "0"));
+    let mantissa = if mantissa.contains('.') {
+        mantissa.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        mantissa
+    };
+    let power: i32 = power.parse().unwrap_or(0);
+    format!("{mantissa}E{}{:02}", if power < 0 { '-' } else { '+' }, power.abs())
+}
+
+fn general_significance(text: &str) -> usize {
+    let digits: String = text.chars().take_while(|c| *c != 'E').filter(char::is_ascii_digit).collect();
+    digits.trim_start_matches('0').len()
+}
+
+/// General in a cell: eleven characters at most, not counting the sign, and
+/// fitted to `room` pixels when there is a column to fit.
+///
+/// Measured against Excel. With no column: the plain form to as many
+/// decimals as eleven characters allow, unless the exponent form keeps more
+/// significant digits (0.0000001234 is 1.234E-07, 0.000001234 stays plain)
+/// or the whole part is past eleven digits (123456789012 is 1.23457E+11).
+/// In a column: decimals are given up one by one (1234.5678901 is 1234.568
+/// in 67 pixels, 1235 in 32); a number whose whole part will not fit, or
+/// that would round away to 0, turns to its exponent form with as many
+/// mantissa digits as fit (1.23E+08, 1E-04); and failing that it is `#`s.
+fn general_fit(value: f64, room: Option<u32>, measure: &dyn Fn(&str) -> u32) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let sign = if value < 0.0 { "-" } else { "" };
+    let magnitude = value.abs();
+    let whole_digits = if magnitude < 1.0 { 1 } else { magnitude.log10().floor() as usize + 1 };
+    // Eleven characters: the whole digits, the point, and the decimals.
+    let plain = (whole_digits <= 11).then(|| {
+        let decimals = 11usize.saturating_sub(whole_digits + 1);
+        general_plain(magnitude, decimals)
+    });
+    let plain = plain.filter(|text| text.split('.').next().map_or(0, str::len) <= 11 && text != "0");
+    let power_digits = if (magnitude.log10().abs()) >= 99.5 { 3 } else { 2 };
+    let exponent = general_exponent(magnitude, 11usize.saturating_sub(4 + power_digits));
+    let full = match &plain {
+        Some(text) if general_significance(text) >= general_significance(&exponent) => text.clone(),
+        _ => exponent.clone(),
+    };
+    let full_is_plain = !full.contains('E');
+    // The minus is given a digit's room: measured, -123456.8 does not go into
+    // the 67 pixels its own glyphs would fit, where -123457 goes into 56.
+    let sign_px = if sign.is_empty() { 0 } else { measure("0") };
+    let fits = |text: &str| room.is_none_or(|room| measure(text) + sign_px <= room);
+    if fits(&full) {
+        return format!("{sign}{full}");
+    }
+    let room = room.unwrap_or(0);
+    if full_is_plain {
+        let decimals = full.split_once('.').map_or(0, |(_, tail)| tail.len());
+        for keep in (0..decimals).rev() {
+            let shorter = general_plain(magnitude, keep);
+            if shorter == "0" {
+                break;
+            }
+            if fits(&shorter) {
+                return format!("{sign}{shorter}");
+            }
+        }
+    }
+    for keep in (0..=5).rev() {
+        let shorter = general_exponent(magnitude, keep);
+        if fits(&shorter) {
+            return format!("{sign}{shorter}");
+        }
+    }
+    // Too small to show even as an exponent: a nought, where one fits.
+    if magnitude < 0.5 && fits("0") {
+        return "0".to_string();
+    }
+    "#".repeat((room / measure("#").max(1)) as usize)
+}
+
+/// The pixels AutoFit gives a column whose widest text is `ext` pixels.
+/// Fitted to 78 widths measured in Excel (游ゴシック and Calibri, text and
+/// formatted numbers): twelve pixels of room for a short text, and for a
+/// long one a little over a tenth of itself and five, whichever is more.
+fn fitted_px(ext: u32) -> f64 {
+    let ext = f64::from(ext);
+    (ext + 12.0).max((ext * 1.109 + 5.0).floor())
+}
+
+/// GDI advance widths of U+0020 to U+00FF in 游ゴシック, by pixel size.
 static YU_GOTHIC_GDI: std::sync::OnceLock<BTreeMap<String, BTreeMap<u32, Vec<u32>>>> =
     std::sync::OnceLock::new();
 
@@ -18199,13 +18398,13 @@ fn text_px(text: &str, face: &str, size: f32, bold: bool) -> u32 {
             if (0xFF61..=0xFF9F).contains(&code) {
                 return ppem.div_ceil(2);
             }
-            if code > 0x7F && !(0xA0..0x2000).contains(&code) {
-                return ppem;
-            }
             if let Some(widths) = table {
-                if (0x20..=0x7E).contains(&code) {
+                if (0x20..=0xFF).contains(&code) {
                     return widths[(code - 0x20) as usize];
                 }
+            }
+            if code > 0x7F && !(0xA0..0x2000).contains(&code) {
+                return ppem;
             }
             if let Some(widths) = gdi {
                 if let Some(width) = widths.get(&code) {
@@ -27343,6 +27542,10 @@ mod tests {
     #[test]
     fn vba_dresses_whole_sheets_columns_and_rows_and_answers_the_eighth_batch() {
         let mut workbook = workbook();
+        // Measured in a book whose Normal style is 游ゴシック 11: the width of
+        // its columns decides whether Meiryo's 3/5/2024 fits.
+        workbook.default_style.font_name = Some("游ゴシック".to_string());
+        workbook.default_style.font_size = Some(11.0);
         let module = parse_module(
             "Public Sub Act()\n\
                Dim v As Variant, c As Object\n\
@@ -33564,6 +33767,46 @@ End Sub
             execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
         };
         assert_eq!(answer, Value::String("1.88,15.5,4.88,14.5,10.88,5.88,35.88,".to_string()));
+    }
+
+    /// A number's text is fitted to its column. Every answer here is Excel's,
+    /// in a book whose Normal style is 游ゴシック 11.
+    #[test]
+    fn a_numbers_text_is_fitted_to_its_column() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("游ゴシック".to_string());
+        workbook.default_style.font_size = Some(11.0);
+        let module = parse_module(
+            "Private Function Show(v As Variant, fmt As String, bold As Boolean, w As Double) As String
+               Cells(1, 1).Value = v
+               Cells(1, 1).NumberFormat = fmt
+               Cells(1, 1).Font.Bold = bold
+               Columns(1).ColumnWidth = w
+               Show = Cells(1, 1).Text & \"~\"
+             End Function
+             Public Function Ask() As String
+               Ask = Show(123456789, \"General\", False, 8.38) & Show(1234.5678901, \"General\", False, 4) & _
+                     Show(1234.5678901, \"General\", False, 8.38) & Show(0.000123456, \"General\", False, 5) & _
+                     Show(-123456.789, \"General\", False, 8.38) & Show(-0.5, \"General\", False, 2) & _
+                     Show(1E-20, \"General\", False, 2) & Show(1234567890123#, \"General\", False, 20) & _
+                     Show(0.0000001234, \"General\", False, 20) & Show(281292, \"#,##0\", False, 6.38) & _
+                     Show(281292, \"#,##0\", True, 7.25) & Show(1234, \"0\", True, 4.75) & _
+                     Show(45657, \"m/d/yyyy\", False, 8.38)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "1.23E+08~1235~1234.568~1E-04~-123457~-1~0~1.23457E+12~1.234E-07~#####~######~1234~#######~"
+                    .to_string()
+            )
+        );
     }
 
     /// The Oxi leg of the Excel differential: `OXI_VBA_CASE` names a module
