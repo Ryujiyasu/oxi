@@ -6928,7 +6928,7 @@ impl<'a> WorkbookHost<'a> {
                     start_column: 0,
                     end_column: MAX_WORKSHEET_COLUMN,
                 };
-                self.set_range_hidden(band, level > shown)?;
+                self.set_range_hidden(band, level > shown, None)?;
             }
         }
         if let Some(shown) = columns.filter(|shown| *shown > 0) {
@@ -6945,7 +6945,7 @@ impl<'a> WorkbookHost<'a> {
                     start_column: index,
                     end_column: index,
                 };
-                self.set_range_hidden(band, level > shown)?;
+                self.set_range_hidden(band, level > shown, None)?;
             }
         }
         Ok(Value::Boolean(true))
@@ -12776,6 +12776,10 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn remove_duplicates(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        // Rows past what the sheet holds are all alike and all empty, and
+        // moving empties up over empties changes nothing: `Range("A:A")` is
+        // the column as far as it is used.
+        let range = self.cut_to_contents(range)?;
         let given = |index: usize| match args.get(index) {
             Some(Value::Missing) | None => None,
             Some(value) => Some(value),
@@ -13535,10 +13539,36 @@ impl<'a> WorkbookHost<'a> {
         Ok(Value::Boolean(hidden))
     }
 
-    fn set_range_hidden(&mut self, range: CellRange, hidden: bool) -> Result<(), String> {
-        let axis = Self::hidden_band(range)?;
+    fn set_range_hidden(
+        &mut self,
+        range: CellRange,
+        hidden: bool,
+        sense: Option<ShiftAxis>,
+    ) -> Result<(), String> {
+        // `Cells.EntireRow` is every row and every column at once, and says
+        // which it means: measured, `Cells.EntireRow.Hidden = False` goes
+        // through where `Cells.Hidden` is refused.
+        let axis = match sense {
+            Some(axis) => axis,
+            None => Self::hidden_band(range)?,
+        };
         let sheet = &mut self.workbook.sheets[range.sheet];
         match axis {
+            // Showing touches only the rows there are; there is nothing to
+            // show among the million that were never written.
+            ShiftAxis::Rows if !hidden => {
+                for row in sheet
+                    .rows
+                    .iter_mut()
+                    .filter(|row| (range.start_row..=range.end_row).contains(&row.index))
+                {
+                    row.hidden = false;
+                    if row.height.is_some_and(|height| height <= 0.0) {
+                        row.height = None;
+                        row.custom_height = false;
+                    }
+                }
+            }
             ShiftAxis::Rows => {
                 for index in range.start_row..=range.end_row {
                     match sheet.rows.iter_mut().find(|row| row.index == index) {
@@ -14176,7 +14206,6 @@ impl<'a> WorkbookHost<'a> {
         let destination = self
             .range(destination)
             .ok_or_else(|| "Range.Copy destination must be a Range".to_string())?;
-        Self::range_cell_count(source)?;
         let row_count = source.end_row - source.start_row + 1;
         let column_count = source.end_column - source.start_column + 1;
         let end_row = destination
@@ -14200,6 +14229,19 @@ impl<'a> WorkbookHost<'a> {
             end_row,
             end_column,
         };
+        // A whole sheet, column or row is copied as far as it is used, and
+        // the rest of where it lands is emptied, as the blanks copied over it
+        // would have: measured, `Cells.Copy` onto a sheet holding "stale" at
+        // A10 and Z1 leaves neither, and takes a fill off C3.
+        let whole_destination = destination;
+        let held = self.cut_to_contents(source)?;
+        let source = held;
+        let destination = CellRange {
+            end_row: destination.start_row + (held.end_row - held.start_row),
+            end_column: destination.start_column + (held.end_column - held.start_column),
+            ..destination
+        };
+        Self::range_cell_count(source)?;
         let row_offset = i64::from(destination.start_row) - i64::from(source.start_row);
         let column_offset = i64::from(destination.start_column) - i64::from(source.start_column);
         self.guard_locked_cells(destination, "Range.Copy")?;
@@ -14292,6 +14334,21 @@ impl<'a> WorkbookHost<'a> {
             self.carry_side_tables(source, destination);
         } else if !self.objects_protected(destination.sheet) {
             self.carry_notes(source, destination);
+        }
+        if (whole_destination.end_row, whole_destination.end_column)
+            != (destination.end_row, destination.end_column)
+        {
+            let beyond = |row: u32, column: u32| row > destination.end_row || column > destination.end_column;
+            let sheet = &mut self.workbook.sheets[destination.sheet];
+            for row in sheet.rows.iter_mut().filter(|row| {
+                (whole_destination.start_row..=whole_destination.end_row).contains(&row.index)
+            }) {
+                let index = row.index;
+                row.cells.retain(|cell| {
+                    !((whole_destination.start_column..=whole_destination.end_column).contains(&cell.col)
+                        && beyond(index, cell.col))
+                });
+            }
         }
         Ok(Value::Empty)
     }
@@ -15902,9 +15959,9 @@ impl Host for WorkbookHost<'_> {
                 return self.uniform_border_colour(range, selection).map(|colour| {
                     Some(match colour {
                         Some(EdgeColour::Named(colour)) => {
-                            Value::Integer(colour_to_packed(Some(&colour)).unwrap_or(0))
+                            Value::Double(colour_to_packed(Some(&colour)).unwrap_or(0) as f64)
                         }
-                        Some(_) => Value::Integer(0),
+                        Some(_) => Value::Double(0.0),
                         None => Value::Double(0.0),
                     })
                 });
@@ -16086,7 +16143,7 @@ impl Host for WorkbookHost<'_> {
                         // that disagree: a block of mixed fills answers 0,
                         // where `Font.Color` in the same shape answers Null.
                         Some(match value {
-                            None => Value::Integer(BLACK),
+                            None => Value::Double(BLACK as f64),
                             held => style_color_value(held, WHITE),
                         })
                     });
@@ -17741,7 +17798,11 @@ impl Host for WorkbookHost<'_> {
             // The odd one out: a hidden row given `Null` comes back, so
             // nothing-back means False here rather than "leave it".
             let hidden = style_face_boolean(&value, "Range.Hidden")?.unwrap_or(false);
-            self.set_range_hidden(range, hidden)?;
+            let sense = self.range_sense(receiver).map(|axis| match axis {
+                RangeAxis::Rows => ShiftAxis::Rows,
+                RangeAxis::Columns => ShiftAxis::Columns,
+            });
+            self.set_range_hidden(range, hidden, sense)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("mergecells") {
@@ -19617,22 +19678,24 @@ fn style_color_value(value: Option<Option<String>>, bare: i64) -> Value {
         return Value::Null;
     };
     let Some(value) = value else {
-        return Value::Integer(bare);
+        return Value::Double(bare as f64);
     };
     // The file writes a colour as six hex digits with nothing in front, and
     // that is the form the IR keeps; a `#` in front is taken as well so that
     // nothing written the other way is read as colourless.
     let hex = value.strip_prefix('#').unwrap_or(&value);
     if hex.len() != 6 {
-        return Value::Integer(bare);
+        return Value::Double(bare as f64);
     }
     let Ok(rgb) = u32::from_str_radix(hex, 16) else {
-        return Value::Integer(bare);
+        return Value::Double(bare as f64);
     };
     let red = (rgb >> 16) & 0xff;
     let green = (rgb >> 8) & 0xff;
     let blue = rgb & 0xff;
-    Value::Integer(i64::from(red | (green << 8) | (blue << 16)))
+    // A Double, as Excel hands every `.Color` back: measured, TypeName of
+    // Interior.Color, Font.Color and Borders(n).Color are all Double.
+    Value::Double(f64::from(red | (green << 8) | (blue << 16)))
 }
 
 fn horizontal_alignment(value: &Value) -> Result<Option<String>, String> {
@@ -33292,6 +33355,41 @@ End Sub
             answer,
             Value::String("$B$2|95|3x2|6|$A$1|TrueTrueFalseTrue|13".to_string())
         );
+    }
+
+    /// Whole-sheet operations go through as they do in Excel, and a colour
+    /// comes back a Double. Every answer here is Excel's.
+    #[test]
+    fn whole_sheet_operations_go_through() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               Range(\"A1:B2\").Value = 1
+               Range(\"A3:A6\").Value = Application.Transpose(Array(\"x\", \"y\", \"x\", \"y\"))
+               Range(\"A1\").Interior.Color = RGB(1, 2, 3)
+               Worksheets.Add After:=Worksheets(1)
+               Worksheets(2).Range(\"A10\").Value = \"stale\"
+               Worksheets(2).Range(\"Z1\").Value = \"stale\"
+               Worksheets(1).Activate
+               Worksheets(1).Cells.Copy Worksheets(2).Range(\"A1\")
+               out = Worksheets(2).Range(\"A10\").Value & \"|\" & Worksheets(2).Range(\"Z1\").Value & \"|\" & _
+                     Worksheets(2).Range(\"B2\").Value
+               Worksheets(1).Columns(\"A\").Copy Worksheets(2).Columns(\"C\")
+               Range(\"A:A\").RemoveDuplicates Columns:=1, Header:=xlNo
+               Rows(3).Hidden = True
+               Cells.EntireRow.Hidden = False
+               Ask = out & \"|\" & Worksheets(2).Range(\"C4\").Value & \"|\" & Cells(Rows.Count, 1).End(xlUp).Row & \"|\" & _
+                     Rows(3).Hidden & \"|\" & TypeName(Range(\"A1\").Interior.Color)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(answer, Value::String("||1|y|3|False|Double".to_string()));
     }
 
     /// The Oxi leg of the Excel differential: `OXI_VBA_CASE` names a module
