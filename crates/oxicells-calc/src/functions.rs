@@ -579,13 +579,13 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "CEILING.MATH", "CEILING.PRECISE", "CELL", "CHAR", "CHIDIST", "CHIINV", "CHISQ.DIST",
     "CHISQ.DIST.RT", "CHISQ.INV", "CHISQ.INV.RT", "CHISQ.TEST", "CHITEST", "CHOOSE", "CHOOSECOLS",
     "CHOOSEROWS", "CLEAN", "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "COMPLEX", "CONCAT",
-    "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CONFIDENCE.T", "CORREL", "COS", "COSH", "COT",
-    "COTH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "COVAR", "COVARIANCE.P",
-    "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "D", "DATE", "DATEDIF",
-    "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB", "DEC2BIN",
-    "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX", "DMIN",
-    "DOLLAR", "DOLLARDE", "DOLLARFR", "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM", "DVAR",
-    "DVARP", "ECMA.CEILING", "EDATE", "EFFECT", "EOMONTH", "ERF", "ERF.PRECISE", "ERFC",
+    "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CONFIDENCE.T", "CONVERT", "CORREL", "COS",
+    "COSH", "COT", "COTH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "COVAR",
+    "COVARIANCE.P", "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "D", "DATE",
+    "DATEDIF", "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB",
+    "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX",
+    "DMIN", "DOLLAR", "DOLLARDE", "DOLLARFR", "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM",
+    "DVAR", "DVARP", "ECMA.CEILING", "EDATE", "EFFECT", "EOMONTH", "ERF", "ERF.PRECISE", "ERFC",
     "ERFC.PRECISE", "ERROR.TYPE", "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST",
     "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "F.TEST", "FACT", "FACTDOUBLE", "FALSE", "FDIST",
     "FIND", "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED", "FLOOR", "FLOOR.MATH", "FLOOR.PRECISE",
@@ -3441,6 +3441,12 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         | "DVAR" | "DVARP" => database_function(name, args),
         name if crate::functions_more::NAMES.contains(&name) => crate::functions_more::call(name, args),
         name if crate::complex::NAMES.contains(&name) => crate::complex::call(name, args),
+        "CONVERT" => {
+            if args.len() != 3 {
+                return Err(ExcelError::Value);
+            }
+            crate::convert::convert(num(&args[0])?, &text(&args[1])?, &text(&args[2])?)
+        }
         // ---- more dates --------------------------------------------------
         // The working days between two dates, both counted, less the weekend
         // and less the holidays given -- which the plain form used to ignore.
