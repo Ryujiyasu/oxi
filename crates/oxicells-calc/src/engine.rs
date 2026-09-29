@@ -572,7 +572,7 @@ impl Workbook {
     pub fn evaluate_reference(&self, sheet: &str, formula: &str) -> Option<(String, RangeRef)> {
         let expr = parse(formula).ok()?;
         match &expr {
-            Expr::Function { name, .. } if matches!(name.as_str(), "INDEX" | "OFFSET" | "INDIRECT") => {
+            Expr::Function { name, .. } if matches!(name.as_str(), "INDEX" | "OFFSET" | "INDIRECT" | "TRIMRANGE") => {
                 self.reference_of(&expr, sheet, 0, None)
             }
             _ => None,
@@ -1201,6 +1201,30 @@ impl Workbook {
                 }
             }
 
+            Expr::Function { name, args } if name == "TRIMRANGE" => match self.trimmed_range(args, sheet, depth + 1, at) {
+                Some((target, range)) => Arg::Range(self.materialise(&target, &range, skip)),
+                None => Arg::Value(Value::Error(ExcelError::Ref)),
+            },
+            // INFO: facts about the environment, as Excel 16 on Windows gives
+            // them. Measured: numfile 1 (the sheets), release "16.0", system
+            // "pcdos", origin "$A:$A$1", osversion "Windows (64-bit) NT
+            // 10.00"; an unknown type is #VALUE!.
+            Expr::Function { name, args } if name == "INFO" && args.len() == 1 => {
+                let asked = match self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at).scalar() {
+                    Value::Text(text) => text.to_ascii_lowercase(),
+                    Value::Error(why) => return Arg::Value(Value::Error(why)),
+                    _ => return Arg::Value(Value::Error(ExcelError::Value)),
+                };
+                Arg::Value(match asked.as_str() {
+                    "numfile" => Value::Number(self.sheet_order.len().max(1) as f64),
+                    "release" => Value::Text("16.0".to_string()),
+                    "system" => Value::Text("pcdos".to_string()),
+                    "origin" => Value::Text("$A:$A$1".to_string()),
+                    "osversion" => Value::Text("Windows (64-bit) NT 10.00".to_string()),
+                    "directory" => Value::Text(String::new()),
+                    _ => Value::Error(ExcelError::Value),
+                })
+            }
             Expr::Function { name, args } if name == "INDEX" && self.index_range(args, sheet, depth + 1, at).is_some() => {
                 let (target, range) = self.index_range(args, sheet, depth + 1, at).expect("just asked");
                 Arg::Range(self.materialise(&target, &range, skip))
@@ -1974,6 +1998,7 @@ impl Workbook {
                 self.indirect_range(args, sheet, depth, at).ok()
             }
             Expr::Function { name, args } if name == "INDEX" => self.index_range(args, sheet, depth, at),
+            Expr::Function { name, args } if name == "TRIMRANGE" => self.trimmed_range(args, sheet, depth, at),
             Expr::Function { name, args } if name == "_ISECT" && args.len() == 2 => {
                 let (left_sheet, left) = self.reference_of(&args[0], sheet, depth, at)?;
                 let (right_sheet, right) = self.reference_of(&args[1], sheet, depth, at)?;
@@ -1997,6 +2022,52 @@ impl Workbook {
             }
             _ => None,
         }
+    }
+
+    /// TRIMRANGE(range, [rows], [columns]): the range less its empty
+    /// outer rows and columns -- 0 keeps them, 1 trims the leading ones, 2
+    /// the trailing, 3 (the default) both. Measured over B3:C5 filled inside
+    /// A1:F10: $B$3:$C$5; rows 1 → $B$3:$C$10, rows 2 → $B$1:$C$5, rows 0
+    /// → $B$1:$C$10; all empty is #REF!.
+    fn trimmed_range(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Option<(String, RangeRef)> {
+        let (target, range) = self.reference_of(args.first()?, sheet, depth + 1, at)?;
+        let mode = |i: usize| -> Option<u32> {
+            match args.get(i) {
+                None => Some(3),
+                Some(expr) => match self.eval_arg(expr, sheet, depth + 1, at).scalar() {
+                    Value::Blank => Some(3),
+                    value => value.to_number().ok().map(|n| n as u32).filter(|n| *n <= 3),
+                },
+            }
+        };
+        let (rows, columns) = (mode(1)?, mode(2)?);
+        let held = self.sheets.get(&target)?;
+        let (mut low_row, mut high_row, mut low_col, mut high_col) = (u32::MAX, 0u32, u32::MAX, 0u32);
+        for ((col, row), cell) in &held.cells {
+            if *col < range.start.col || *col > range.end.col || *row < range.start.row || *row > range.end.row {
+                continue;
+            }
+            let empty = matches!(cell, Cell::Literal(Value::Blank)) || matches!(cell, Cell::Literal(Value::Text(t)) if t.is_empty());
+            if empty {
+                continue;
+            }
+            low_row = low_row.min(*row);
+            high_row = high_row.max(*row);
+            low_col = low_col.min(*col);
+            high_col = high_col.max(*col);
+        }
+        if low_row == u32::MAX {
+            return None;
+        }
+        let pick = |mode: u32, start: u32, end: u32, low: u32, high: u32| match mode {
+            1 => (low, end),
+            2 => (start, high),
+            3 => (low, high),
+            _ => (start, end),
+        };
+        let (r0, r1) = pick(rows, range.start.row, range.end.row, low_row, high_row);
+        let (c0, c1) = pick(columns, range.start.col, range.end.col, low_col, high_col);
+        Some((target, RangeRef::normalised(CellRef::new(c0, r0), CellRef::new(c1, r1))))
     }
 
     /// `Jan:Mar!A1` as the one reference on each sheet from Jan to Mar, in
