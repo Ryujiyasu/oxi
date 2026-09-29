@@ -11793,6 +11793,22 @@ impl<'a> WorkbookHost<'a> {
             FormulaStyle::A1 if down == 0 && across == 0 => Ok(formula),
             FormulaStyle::A1 => translate_formula_references(&formula, down, across),
         }?;
+        let sheet_case = |asked: &str| {
+            self.workbook
+                .sheets
+                .iter()
+                .find(|sheet| sheet.name.eq_ignore_ascii_case(asked))
+                .map(|sheet| sheet.name.clone())
+        };
+        let name_case = |asked: &str| {
+            self.workbook
+                .defined_names
+                .iter()
+                .map(|(called, _)| called.rsplit('!').next().unwrap_or(called))
+                .find(|called| called.eq_ignore_ascii_case(asked))
+                .map(str::to_string)
+        };
+        let placed = oxicells_calc::canonical_formula(&placed, &sheet_case, &name_case);
         Ok(oxicells_calc::normalise_formula_ranges(&placed))
     }
 

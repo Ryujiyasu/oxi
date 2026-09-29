@@ -298,6 +298,98 @@ pub fn implied_intersections(input: &str, multi_name: &dyn Fn(&str) -> bool) -> 
     output
 }
 
+/// A formula as Excel keeps it once written: cell references, function
+/// names, TRUE and FALSE upper-cased; a sheet and a defined name spelt as
+/// they were defined (`sheet_case` and `name_case` say how, or None where
+/// there is no such thing); numbers written plainly; and no space before a
+/// comma. Measured through `.Formula`: `=sum( a1 , b1 )` reads back
+/// `=SUM( A1, B1 )`, `=sheet1!a1` `=Sheet1!A1`, `=myname` `=MyName`,
+/// `=1.50+0.0` `=1.5+0`, `=1e3` `=1000`, `=.5` `=0.5`, `=#n/a` `=#N/A`.
+/// Other spacing is kept. A formula that will not tokenize comes back as it
+/// was.
+pub fn canonical_formula(
+    input: &str,
+    sheet_case: &dyn Fn(&str) -> Option<String>,
+    name_case: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    let Ok(tokens) = tokenize_spanned(input) else {
+        return input.to_string();
+    };
+    if tokens.is_empty() {
+        return input.to_string();
+    }
+    let mut output = String::with_capacity(input.len());
+    output.push_str(&input[..tokens[0].1]);
+    for (index, (token, start)) in tokens.iter().enumerate() {
+        let next = tokens.get(index + 1).map_or(input.len(), |(_, at)| *at);
+        let written = &input[*start..next];
+        let text = written.trim_end();
+        let gap = &written[text.len()..];
+        let calls = matches!(tokens.get(index + 1), Some((Token::LParen, _)));
+        let beside_colon = matches!(tokens.get(index + 1), Some((Token::Colon, _)))
+            || (index > 0 && matches!(tokens.get(index - 1), Some((Token::Colon, _))));
+        match token {
+            Token::Name { sheet, name } => {
+                // A function this build does not know keeps its spelling:
+                // measured, `=nosuchfn()` reads back as written.
+                let name = if calls {
+                    if crate::functions::is_known_function(name) {
+                        name.to_ascii_uppercase()
+                    } else {
+                        name.clone()
+                    }
+                } else if let Some(cell) = absolute_r1c1(name) {
+                    cell
+                } else if parse_a1(name).is_some()
+                    || name.eq_ignore_ascii_case("TRUE")
+                    || name.eq_ignore_ascii_case("FALSE")
+                    || (beside_colon && name.trim_start_matches('$').chars().all(|ch| ch.is_ascii_alphabetic()))
+                {
+                    name.to_ascii_uppercase()
+                } else if sheet.is_none() {
+                    name_case(name).unwrap_or_else(|| name.clone())
+                } else {
+                    name.clone()
+                };
+                let sheet = sheet.as_ref().map(|sheet| sheet_case(sheet).unwrap_or_else(|| sheet.clone()));
+                render_token(&mut output, Token::Name { sheet, name });
+            }
+            Token::Number(value) if value.is_finite() && (*value == 0.0 || (1e-4..1e15).contains(&value.abs())) => {
+                output.push_str(&value.to_string());
+            }
+            Token::ErrorLit(_) => render_token(&mut output, token.clone()),
+            _ => output.push_str(text),
+        }
+        if !matches!(tokens.get(index + 1), Some((Token::Comma, _))) {
+            output.push_str(gap);
+        }
+    }
+    output
+}
+
+/// `R2C3` written in an A1 formula is the cell it names, absolutely:
+/// measured, `=R2C3+r10c1` reads back `=$C$2+$A$10`.
+fn absolute_r1c1(name: &str) -> Option<String> {
+    let upper = name.to_ascii_uppercase();
+    let rest = upper.strip_prefix('R')?;
+    let (row, col) = rest.split_once('C')?;
+    if row.is_empty() || col.is_empty() || !row.bytes().all(|b| b.is_ascii_digit()) || !col.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (row, col): (u32, u32) = (row.parse().ok()?, col.parse().ok()?);
+    if !(1..=MAX_ROW + 1).contains(&row) || !(1..=MAX_COL + 1).contains(&col) {
+        return None;
+    }
+    let mut letters = String::new();
+    let mut left = col;
+    while left > 0 {
+        let digit = (left - 1) % 26;
+        letters.insert(0, (b'A' + digit as u8) as char);
+        left = (left - 1) / 26;
+    }
+    Some(format!("${letters}${row}"))
+}
+
 /// A formula as `.Formula` shows it: every `@` taken out. Measured, `=@A1:A3`
 /// written through `.Formula` reads back `=A1:A3`.
 pub fn without_intersections(input: &str) -> String {
@@ -1758,6 +1850,38 @@ mod tests {
         );
         // Nothing to rename comes back unchanged.
         assert_eq!(rename_sheet_in_formula("=A1+B2", "Data", "Z"), "=A1+B2");
+    }
+
+    /// A written formula reads back as Excel keeps it. Every pair measured
+    /// through `.Formula`, with a sheet Sheet1 and a name MyName.
+    #[test]
+    fn a_formula_reads_back_as_excel_keeps_it() {
+        let sheet = |asked: &str| asked.eq_ignore_ascii_case("Sheet1").then(|| "Sheet1".to_string());
+        let name = |asked: &str| asked.eq_ignore_ascii_case("MyName").then(|| "MyName".to_string());
+        for (written, kept) in [
+            ("=a1+b1", "=A1+B1"),
+            ("=sum(a1:b2)", "=SUM(A1:B2)"),
+            ("=$a$1*2", "=$A$1*2"),
+            ("=sheet1!a1", "=Sheet1!A1"),
+            ("=SHEET1!A1", "=Sheet1!A1"),
+            ("=Sum( a1 , b1 )", "=SUM( A1, B1 )"),
+            ("=a:a", "=A:A"),
+            ("=if(true,1,0)", "=IF(TRUE,1,0)"),
+            ("=vlookup(a1,a1:b3,2,false)", "=VLOOKUP(A1,A1:B3,2,FALSE)"),
+            ("=myname", "=MyName"),
+            ("=A1 + B1", "=A1 + B1"),
+            ("=sum(A1:B2)*1.50", "=SUM(A1:B2)*1.5"),
+            ("=1.50+0.0", "=1.5+0"),
+            ("=1e3", "=1000"),
+            ("=.5", "=0.5"),
+            ("=#n/a", "=#N/A"),
+            ("=iferror(1/0,#div/0!)", "=IFERROR(1/0,#DIV/0!)"),
+            ("=sheet1!$b$2:$c$3", "=Sheet1!$B$2:$C$3"),
+            ("=R2C3+r10c1", "=$C$2+$A$10"),
+            ("=a1&\"abc\"", "=A1&\"abc\""),
+        ] {
+            assert_eq!(canonical_formula(written, &sheet, &name), kept, "{written}");
+        }
     }
 
     /// A legacy formula takes `@` where Excel's `.Formula2` shows it. Every

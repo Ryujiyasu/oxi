@@ -482,6 +482,53 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
     }
 }
 
+/// Every function this build knows the name of: those the library answers
+/// and those the workbook works out itself. Kept in step with the match
+/// arms by `every_function_the_library_answers_is_known`.
+const KNOWN_FUNCTIONS: &[&str] = &[
+    "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ASC", "ASIN",
+    "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF",
+    "AVERAGEIFS", "BASE", "BIN2DEC", "BIN2HEX", "BIN2OCT", "BITAND", "BITOR", "BITXOR",
+    "CEILING", "CEILING.MATH", "CHAR", "CHOOSE", "CHOOSECOLS", "CHOOSEROWS", "CLEAN", "CODE",
+    "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT", "CONCATENATE", "CONFIDENCE",
+    "CONFIDENCE.NORM", "CORREL", "COS", "COSH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF",
+    "COUNTIFS", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "D", "DATE", "DATEDIF", "DATEVALUE",
+    "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB", "DEC2BIN",
+    "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DMAX", "DMIN",
+    "DOLLAR", "DPRODUCT", "DROP", "DSUM", "EDATE", "EOMONTH", "ERROR.TYPE", "EVEN", "EXACT",
+    "EXP", "EXPAND", "FACT", "FACTDOUBLE", "FALSE", "FIND", "FINDB", "FIXED", "FLOOR",
+    "FLOOR.MATH", "FORECAST", "FORECAST.LINEAR", "FV", "GAUSS", "GCD", "GEOMEAN", "GESTEP",
+    "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK", "IF",
+    "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT", "INTERCEPT", "IPMT", "IRR",
+    "ISBLANK", "ISERR", "ISERROR", "ISEVEN", "ISFORMULA", "ISLOGICAL", "ISNA", "ISNONTEXT",
+    "ISNUMBER", "ISODD", "ISOWEEKNUM", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM",
+    "LEFT", "LEFTB", "LEN", "LENB", "LET", "LN", "LOG", "LOG10", "LOOKUP", "LOWER", "M",
+    "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS",
+    "MINUTE", "MIRR", "MOD", "MODE", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "N", "NA",
+    "NETWORKDAYS", "NETWORKDAYS.INTL", "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV",
+    "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV", "NUMBERVALUE",
+    "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PEARSON", "PERCENTILE",
+    "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERMUT", "PHI", "PI", "PMT", "POWER",
+    "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC", "QUARTILE.INC", "QUOTIENT",
+    "RADIANS", "RAND", "RANDBETWEEN", "RANK", "RANK.AVG", "RANK.EQ", "RATE", "REPLACE",
+    "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW",
+    "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND", "SEQUENCE", "SHEET", "SHEETS", "SIGN", "SIN",
+    "SINH", "SKEW", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE",
+    "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STEYX", "SUBSTITUTE", "SUBTOTAL",
+    "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2",
+    "SWITCH", "SYD", "T", "TAKE", "TAN", "TANH", "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN",
+    "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL", "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE",
+    "TRUNC", "TYPE", "UNICHAR", "UNICODE", "UNIQUE", "UPPER", "VALUE", "VAR", "VAR.P", "VAR.S",
+    "VARA", "VARP", "VLOOKUP", "VSTACK", "WEEKDAY", "WEEKNUM", "WORKDAY", "WORKDAY.INTL",
+    "WRAPCOLS", "WRAPROWS", "XLOOKUP", "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
+];
+
+/// Whether `name` is a function this build knows.
+pub fn is_known_function(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    KNOWN_FUNCTIONS.binary_search(&upper.as_str()).is_ok()
+}
+
 pub fn call(name: &str, args: &[Arg]) -> Value {
     let name = plain(name);
     match dispatch(name, args) {
@@ -5185,6 +5232,29 @@ impl Criteria {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every quoted name a match arm of this file answers to is in
+    /// KNOWN_FUNCTIONS, which is kept sorted for its binary search.
+    #[test]
+    fn every_function_the_library_answers_is_known() {
+        let mut sorted = KNOWN_FUNCTIONS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, KNOWN_FUNCTIONS, "KNOWN_FUNCTIONS must stay sorted");
+        let source = include_str!("functions.rs");
+        for line in source.lines() {
+            let trimmed = line.trim_start().trim_start_matches('|').trim_start();
+            if !trimmed.starts_with('"') || !(trimmed.trim_end().ends_with("=>") || trimmed.trim_end().ends_with('|') || trimmed.contains("\" =>") || trimmed.contains("\" |")) {
+                continue;
+            }
+            for piece in trimmed.split('"').skip(1).step_by(2) {
+                let is_name = piece.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
+                    && piece.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '.' || ch == '_');
+                if is_name {
+                    assert!(is_known_function(piece), "{piece} is answered but not in KNOWN_FUNCTIONS");
+                }
+            }
+        }
+    }
 
     fn v(n: f64) -> Arg {
         Arg::Value(Value::Number(n))
