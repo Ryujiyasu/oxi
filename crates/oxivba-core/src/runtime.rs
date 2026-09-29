@@ -4438,7 +4438,10 @@ fn dictionary_keys_equal(left: &Value, right: &Value, text_compare: bool) -> boo
         (left, right) if dictionary_number(left).is_some() && dictionary_number(right).is_some() => {
             dictionary_number(left) == dictionary_number(right)
         }
+        // Empty is the empty string: measured, a key added as Empty answers
+        // `Exists("")`.
         (Value::Empty, Value::Empty) => true,
+        (Value::Empty, Value::String(text)) | (Value::String(text), Value::Empty) => text.is_empty(),
         _ => false,
     }
 }
@@ -4449,7 +4452,9 @@ fn dictionary_number(value: &Value) -> Option<f64> {
         Value::Integer(number) | Value::LongLong(number) => Some(*number as f64),
         Value::Byte(number) => Some(f64::from(*number)),
         Value::Single(number) => Some(f64::from(*number)),
-        Value::Double(number) => Some(*number),
+        // A date is its serial: measured, a key added as #1/1/2024# is
+        // found by 45292.
+        Value::Double(number) | Value::Date(number) => Some(*number),
         Value::Currency(number) => Some(*number as f64 / 10_000.0),
         _ => None,
     }
@@ -4459,7 +4464,7 @@ fn dictionary_duplicate_key_error(line: u32) -> RuntimeError {
     raised_error(
         457,
         "Scripting.Dictionary".to_string(),
-        "this key is already associated with an element of this collection".to_string(),
+        "This key is already associated with an element of this collection".to_string(),
         line,
     )
 }
@@ -4468,7 +4473,8 @@ fn dictionary_missing_key_error(line: u32) -> RuntimeError {
     raised_error(
         32_811,
         "Scripting.Dictionary".to_string(),
-        "element not found".to_string(),
+        // Measured: `d.Remove "nope"` describes itself as Excel's 1004 does.
+        "Application-defined or object-defined error".to_string(),
         line,
     )
 }
