@@ -946,7 +946,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if numbers.is_empty() || numbers.iter().any(|n| *n <= 0.0) {
                 return Err(ExcelError::Num);
             }
-            Ok(Value::Number(numbers.len() as f64 / numbers.iter().map(|n| 1.0 / n).sum::<f64>()))
+            // One over the mean of the reciprocals, in that order: measured,
+            // HARMEAN(1,3,2,5,4,6) is 2.44897959183674 (n / sum gives ...673).
+            let mean = numbers.iter().map(|n| 1.0 / n).sum::<f64>() / numbers.len() as f64;
+            Ok(Value::Number(1.0 / mean))
         }
         "SKEW" | "KURT" => {
             let numbers = numeric_operands(args)?;
@@ -4516,8 +4519,10 @@ fn factorial(n: f64) -> Result<f64, ExcelError> {
     if n < 0.0 {
         return Err(ExcelError::Num);
     }
+    // Multiplied from the top down: measured, FACT(170) is
+    // 7.257415615308E+306, where counting up gives ...7994 (…799).
     let mut acc = 1.0f64;
-    for i in 2..=(n.trunc() as u64) {
+    for i in (2..=(n.trunc() as u64)).rev() {
         acc *= i as f64;
         if !acc.is_finite() {
             return Err(ExcelError::Num);
