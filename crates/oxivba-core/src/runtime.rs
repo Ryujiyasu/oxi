@@ -54,6 +54,8 @@ pub enum Value {
     /// VBA's `Currency`, held as ten-thousandths so the four decimal
     /// places it promises are exact.
     Currency(i64),
+    /// VBA's `Decimal`: see `crate::decimal`.
+    Decimal(crate::decimal::Dec),
     /// A moment, held as the OLE serial VBA holds it as. Separate from
     /// `Double` only so that `VarType` and `TypeName` can tell the truth
     /// and `IsDate` can tell a date from the number 37623.
@@ -5080,6 +5082,11 @@ fn call_builtin(
                     line,
                 ));
             }
+            // A Decimal rounds as itself, a half to the even neighbour:
+            // measured, `Round(CDec("2.345"), 2)` is 2.34.
+            if let Value::Decimal(held) = &args[0] {
+                return Ok(Value::Decimal(held.round(places as u32)));
+            }
             let value = number(&args[0])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
             if places > 15 {
@@ -5325,6 +5332,7 @@ fn call_builtin(
             // Excel, `Abs(-1)` is an Integer, because the literal -1 is one.
             "abs" => match value {
                 Value::Null => Ok(Value::Null),
+                Value::Decimal(held) => Ok(Value::Decimal(held.abs())),
                 Value::Integer(value) => value
                     .checked_abs()
                     .map(Value::Integer)
@@ -5398,16 +5406,14 @@ fn call_builtin(
                 }
             }
             "cdec" => {
-                let value = number(value).map_err(mismatch)?;
-                const LIMIT: f64 = 79_228_162_514_264_337_593_543_950_335.0;
-                if !value.is_finite() || value.abs() > LIMIT {
-                    Err(error(
-                        RuntimeErrorKind::Overflow,
-                        "overflow converting value to Decimal",
-                        line,
-                    ))
-                } else {
-                    Ok(Value::Double(value))
+                let overflow = || error(RuntimeErrorKind::Overflow, "overflow converting value to Decimal", line);
+                match to_decimal(value) {
+                    Some(Ok(held)) => Ok(Value::Decimal(held)),
+                    Some(Err(_)) => Err(overflow()),
+                    None => {
+                        let _ = number(value).map_err(mismatch)?;
+                        Err(overflow())
+                    }
                 }
             }
             "cdbl" => Ok(Value::Double(
@@ -5459,6 +5465,7 @@ fn call_builtin(
             "cvar" => Ok(value.clone()),
             "fix" | "int" => match value {
                 Value::Null => Ok(Value::Null),
+                Value::Decimal(held) => Ok(Value::Decimal(held.whole(name == "int"))),
                 _ => {
                     // They keep the type, the way Abs and Round do. Asked of
                     // Excel, `Int(#1/2/2003#)` is a Date and says `1/2/2003`,
@@ -9234,6 +9241,7 @@ fn value_type_name(value: &Value) -> String {
         Value::Double(_) => "Double".to_string(),
         Value::LongLong(_) => "LongLong".to_string(),
         Value::Currency(_) => "Currency".to_string(),
+        Value::Decimal(_) => "Decimal".to_string(),
         Value::Date(_) => "Date".to_string(),
         Value::Error(_) => "Error".to_string(),
         Value::String(_) => "String".to_string(),
@@ -9260,6 +9268,7 @@ fn value_var_type(value: &Value) -> i64 {
         Value::Double(_) => 5,
         Value::LongLong(_) => 20,
         Value::Currency(_) => 6,
+        Value::Decimal(_) => 14,
         Value::Date(_) => 7,
         Value::Byte(_) => 17,
         Value::Error(_) => 10,
@@ -9303,6 +9312,7 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Double(value) => Ok(*value),
         Value::LongLong(value) => Ok(*value as f64),
         Value::Currency(value) => Ok(*value as f64 / 10_000.0),
+        Value::Decimal(value) => Ok(value.to_f64()),
         Value::Date(value) => Ok(*value),
         Value::Error(value) => Ok(*value as f64),
         // The same reading IsNumeric makes: measured, `CLng("1,234")` is
@@ -9401,6 +9411,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
         Value::Double(value) => Ok(*value != 0.0),
         Value::LongLong(value) => Ok(*value != 0),
         Value::Currency(value) => Ok(*value != 0),
+        Value::Decimal(value) => Ok(value.magnitude != 0),
         Value::Date(value) => Ok(*value != 0.0),
         // An EMPTY string is not a Boolean at all. Asked of Excel, both
         // `CBool("")` and `IIf("", 1, 2)` are error 13, and so is `CBool(" ")`
@@ -9427,6 +9438,26 @@ fn truthy(value: &Value) -> Result<bool, String> {
     }
 }
 
+/// A value as a Decimal, where it can be one: a whole number exactly, a
+/// Currency exactly, a Double through its fifteen significant digits, text
+/// that reads as a number. None for anything else.
+fn to_decimal(value: &Value) -> Option<Result<crate::decimal::Dec, crate::decimal::Overflow>> {
+    use crate::decimal::Dec;
+    Some(match value {
+        Value::Decimal(held) => Ok(*held),
+        Value::Empty => Ok(Dec::zero()),
+        Value::Boolean(state) => Dec::from_i128(if *state { -1 } else { 0 }),
+        Value::Byte(held) => Dec::from_i128(*held as i128),
+        Value::Int16(held) => Dec::from_i128(*held as i128),
+        Value::Integer(held) | Value::LongLong(held) => Dec::from_i128(*held as i128),
+        Value::Currency(held) => Ok(Dec { negative: *held < 0, magnitude: held.unsigned_abs() as u128, scale: 4 }),
+        Value::Single(held) => Dec::from_f64(*held as f64),
+        Value::Double(held) | Value::Date(held) => Dec::from_f64(*held),
+        Value::String(text) => return Dec::parse(text).map(Ok),
+        _ => return None,
+    })
+}
+
 fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
     if matches!(value, Value::Error(_)) {
         return Err("type mismatch using Error value as an operand".to_string());
@@ -9436,6 +9467,10 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
         // Integer just as `1` is. It can overflow: the one Integer that
         // has no positive twin is -32768.
         UnaryOp::Plus => Ok(keep_rank(number(&value)?, &value)?),
+        UnaryOp::Neg if matches!(value, Value::Decimal(_)) => match value {
+            Value::Decimal(held) => Ok(Value::Decimal(held.neg())),
+            _ => unreachable!(),
+        },
         UnaryOp::Neg => Ok(keep_rank(-number(&value)?, &value)?),
         UnaryOp::Not => match value {
             Value::Boolean(value) => Ok(Value::Boolean(!value)),
@@ -9509,6 +9544,46 @@ fn binary(
             RuntimeErrorKind::TypeMismatch,
             "VBA arrays and objects cannot be used as scalar operands".to_string(),
         ));
+    }
+    // A Decimal on either side makes the answer a Decimal for + - * /, and
+    // compares exactly: measured, `TypeName(CDec(1) + 1.5)` is Decimal and
+    // `CDec(0.1) + CDec(0.2) = 0.3` is True. `^`, `\` and `Mod` go the
+    // ordinary way (Double, Long).
+    if matches!(lhs, Value::Decimal(_)) || matches!(rhs, Value::Decimal(_)) {
+        if !matches!(lhs, Value::Null) && !matches!(rhs, Value::Null) && op != Concat {
+            if let (Some(left), Some(right)) = (to_decimal(&lhs), to_decimal(&rhs)) {
+                let overflow = || (RuntimeErrorKind::Overflow, "overflow".to_string());
+                let (left, right) = (left.map_err(|_| overflow())?, right.map_err(|_| overflow())?);
+                let answer = match op {
+                    Add => Some(left.add(&right)),
+                    Sub => Some(left.sub(&right)),
+                    Mul => Some(left.mul(&right)),
+                    Div => Some(match left.div(&right) {
+                        Some(answer) => answer,
+                        None => {
+                            return Err((RuntimeErrorKind::DivisionByZero, "division by zero".to_string()))
+                        }
+                    }),
+                    _ => None,
+                };
+                if let Some(answer) = answer {
+                    return answer.map(Value::Decimal).map_err(|_| overflow());
+                }
+                let ordering = left.cmp(&right);
+                let compared = match op {
+                    Eq => Some(ordering.is_eq()),
+                    Ne => Some(!ordering.is_eq()),
+                    Lt => Some(ordering.is_lt()),
+                    Le => Some(ordering.is_le()),
+                    Gt => Some(ordering.is_gt()),
+                    Ge => Some(ordering.is_ge()),
+                    _ => None,
+                };
+                if let Some(compared) = compared {
+                    return Ok(Value::Boolean(compared));
+                }
+            }
+        }
     }
     // Joining is the one operator that does not pass a Null along: it counts
     // one as a zero-length string. Asked of Excel, `Null & "a"` and
@@ -10124,6 +10199,7 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Double(value) => vba_number_text(*value),
         Value::LongLong(value) => value.to_string(),
         Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
+        Value::Decimal(value) => value.to_string(),
         Value::Date(value) => vba_date_text(*value),
         // The ONE string on this whole surface that follows the Office UI
         // language rather than always being US English. Measured against a
@@ -13877,6 +13953,29 @@ mod tests {
         assert_eq!(
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
+        );
+    }
+
+    /// Decimal as Excel's VBA has it: 28 places, exact sums, a Decimal from
+    /// any arithmetic it takes part in, Long from Mod, Double from ^.
+    #[test]
+    fn decimal_is_its_own_type() {
+        let value = run(
+            "Public Function Ask() As String
+               Ask = (CDec(1) / 3) & \"|\" & TypeName(CDec(1) + 1.5) & \"|\" & (CDec(0.1) + CDec(0.2) = 0.3) & \"|\"
+               Ask = Ask & Round(CDec(\"2.345\"), 2) & \"|\" & TypeName(CDec(10) Mod 3) & TypeName(CDec(2) ^ 2) & \"|\" & VarType(CDec(1)) & \"|\"
+               On Error Resume Next
+               Ask = Ask & CDec(1E+30)
+               Ask = Ask & Err.Number
+             End Function
+",
+            "Ask",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String("0.3333333333333333333333333333|Decimal|True|2.34|LongDouble|14|6".to_string())
         );
     }
 

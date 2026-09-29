@@ -29,6 +29,7 @@
 
 pub mod analysis;
 pub mod ast;
+pub mod decimal;
 pub mod fingerprint;
 pub mod lexer;
 pub mod parser;
