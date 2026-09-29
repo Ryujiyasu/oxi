@@ -1624,6 +1624,8 @@ struct SortState {
     match_case: bool,
     sideways: bool,
     fields: Vec<(u32, bool)>,
+    /// Each field's `CustomOrder` list, lined up with `fields`.
+    orders: Vec<Option<Vec<String>>>,
 }
 
 /// The colour of a sheet's tab: a plain colour, or one from the theme with
@@ -14142,7 +14144,7 @@ impl<'a> WorkbookHost<'a> {
                     0 => self.guessed_header(range, state.sideways),
                     _ => false,
                 };
-                self.apply_sort(range, &state.fields, header, state.match_case, state.sideways)?;
+                self.apply_sort(range, &state.fields, &state.orders, header, state.match_case, state.sideways)?;
                 Ok(Value::Empty)
             }
             _ => Ok(Value::Empty),
@@ -14152,7 +14154,9 @@ impl<'a> WorkbookHost<'a> {
     fn sort_fields_call(&mut self, sheet: usize, name: &str, args: &[Value]) -> Result<Value, String> {
         match name.to_ascii_lowercase().as_str() {
             "clear" => {
-                self.sorts.entry(sheet).or_default().fields.clear();
+                let state = self.sorts.entry(sheet).or_default();
+                state.fields.clear();
+                state.orders.clear();
                 Ok(Value::Empty)
             }
             "count" => Ok(Value::Integer(
@@ -14170,7 +14174,17 @@ impl<'a> WorkbookHost<'a> {
                 let lane = if sideways { key.start_row } else { key.start_column };
                 // Order is the third argument: xlAscending 1, xlDescending 2.
                 let descending = matches!(args.get(2).and_then(any_whole_number), Some(2));
-                self.sorts.entry(sheet).or_default().fields.push((lane, descending));
+                // CustomOrder "Sales,IT,HR": measured, rows go Sales, IT, HR.
+                let order = match args.get(3) {
+                    Some(Value::String(list)) if !list.is_empty() => {
+                        Some(list.split(',').map(|item| item.to_lowercase()).collect())
+                    }
+                    _ => None,
+                };
+                let state = self.sorts.entry(sheet).or_default();
+                state.orders.resize(state.fields.len(), None);
+                state.fields.push((lane, descending));
+                state.orders.push(order);
                 Ok(Value::Empty)
             }
             _ => Ok(Value::Empty),
@@ -14180,7 +14194,15 @@ impl<'a> WorkbookHost<'a> {
     /// Reorder a range by its keys, each a (lane, descending) within the
     /// range -- a column top-to-bottom, a row when it runs sideways.
     /// Shared by `Range.Sort` and the recorder's `Worksheet.Sort` object.
-    fn apply_sort(&mut self, range: CellRange, keys: &[(u32, bool)], header: bool, match_case: bool, sideways: bool) -> Result<(), String> {
+    fn apply_sort(
+        &mut self,
+        range: CellRange,
+        keys: &[(u32, bool)],
+        orders: &[Option<Vec<String>>],
+        header: bool,
+        match_case: bool,
+        sideways: bool,
+    ) -> Result<(), String> {
         // Sorted by what the formulas answer now.
         self.settle_book();
         // Each line is one row of the range, or one column when sorting sideways.
@@ -14210,13 +14232,24 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         lines.sort_by(|left, right| {
-            for (lane, descending) in keys {
-                let ordering = sort_compare_cased(
-                    &self.cell_value(cell_at(*left, *lane)),
-                    &self.cell_value(cell_at(*right, *lane)),
-                    *descending,
-                    match_case,
-                );
+            for (at, (lane, descending)) in keys.iter().enumerate() {
+                let (left, right) = (self.cell_value(cell_at(*left, *lane)), self.cell_value(cell_at(*right, *lane)));
+                // A custom list ranks its items first, in its own order;
+                // anything else follows, ordered as usual.
+                if let Some(Some(list)) = orders.get(at) {
+                    let place = |value: &Value| {
+                        let text = find_value_text(value).to_lowercase();
+                        list.iter().position(|item| *item == text).unwrap_or(list.len())
+                    };
+                    let mut ordering = place(&left).cmp(&place(&right));
+                    if *descending {
+                        ordering = ordering.reverse();
+                    }
+                    if ordering != Ordering::Equal {
+                        return ordering;
+                    }
+                }
+                let ordering = sort_compare_cased(&left, &right, *descending, match_case);
                 if ordering != Ordering::Equal {
                     return ordering;
                 }
@@ -14367,7 +14400,7 @@ impl<'a> WorkbookHost<'a> {
             return Err("Range.Sort expects at least one key".to_string());
         }
 
-        self.apply_sort(range, &keys, header, match_case, sideways)
+        self.apply_sort(range, &keys, &[], header, match_case, sideways)
     }
 
     fn fill_clipboard(&mut self, source: CellRange) -> Result<(), String> {
