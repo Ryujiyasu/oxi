@@ -1921,6 +1921,8 @@ struct WorkbookHost<'a> {
     now: Option<f64>,
     /// The blocks of every many-block range handed out.
     blocks: Vec<Vec<CellRange>>,
+    /// What `Range.ID` has been set to, cell by cell.
+    cell_ids: std::collections::HashMap<CellAddress, String>,
     /// The text of every name a `Name` object was handed out for.
     name_handles: Vec<String>,
     /// Whether the workbook counts as saved: `ThisWorkbook.Saved`, False
@@ -1998,6 +2000,7 @@ impl<'a> WorkbookHost<'a> {
             shape_clipboard: None,
             shape_selection: Vec::new(),
             shape_ranges: Vec::new(),
+            cell_ids: std::collections::HashMap::new(),
             regexps: Vec::new(),
             regexp_hits: Vec::new(),
             rotations: std::collections::HashMap::new(),
@@ -2387,6 +2390,82 @@ impl<'a> WorkbookHost<'a> {
     /// A2:A4 answers `A1:A4` with one area, and so does `Union` of A1:A2 and
     /// A3:A4, which only touch. What is left is a range with as many areas as
     /// there are blocks — or, where they all came to one, an ordinary range.
+    /// The references a cell's formula makes on its own sheet.
+    fn formula_refs(&self, sheet: usize, row: u32, column: u32) -> Vec<CellRange> {
+        let Some(cell) = self.cell_here(sheet, row, column) else {
+            return Vec::new();
+        };
+        let Some(formula) = cell.formula.as_deref() else {
+            return Vec::new();
+        };
+        let Ok(expr) = oxicells_calc::parse(&format!("={}", formula.trim_start_matches('='))) else {
+            return Vec::new();
+        };
+        let own = &self.workbook.sheets[sheet].name;
+        expr.references()
+            .into_iter()
+            .filter(|reference| {
+                reference.book.is_none()
+                    && reference.sheet.as_deref().is_none_or(|named| named.eq_ignore_ascii_case(own))
+            })
+            .map(|reference| CellRange {
+                sheet,
+                start_row: reference.range.start.row + 1,
+                start_column: reference.range.start.col,
+                end_row: reference.range.end.row + 1,
+                end_column: reference.range.end.col,
+            })
+            .collect()
+    }
+
+    /// The cells linked to `range` by formulas: what its formulas read
+    /// (precedents) or which formulas read it (dependents), one step or all
+    /// the way.
+    fn formula_links(&self, range: CellRange, precedents: bool, direct: bool) -> Vec<CellRange> {
+        let sheet = range.sheet;
+        let formulas: Vec<(u32, u32)> = self.workbook.sheets[sheet]
+            .rows
+            .iter()
+            .flat_map(|row| row.cells.iter().filter(|cell| cell.formula.is_some()).map(move |cell| (row.index, cell.col)))
+            .collect();
+        // Level by level, each level in the order it was found: Excel adds
+        // them to the answer that way, joining as it goes -- measured,
+        // D1 = C1+Z9, C1 = B1+A2, B1 = A1*2 gives $Z$9,$B$1:$C$1,$A$1:$A$2.
+        let mut found: Vec<CellRange> = Vec::new();
+        let mut frontier: std::collections::VecDeque<CellRange> = std::collections::VecDeque::from([range]);
+        let mut seen_cells: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+        while let Some(current) = frontier.pop_front() {
+            let mut next: Vec<CellRange> = Vec::new();
+            if precedents {
+                for (row, column) in current.addresses().map(|a| (a.row, a.column)) {
+                    if !seen_cells.insert((row, column)) {
+                        continue;
+                    }
+                    next.extend(self.formula_refs(sheet, row, column));
+                }
+            } else {
+                for (row, column) in &formulas {
+                    if seen_cells.contains(&(*row, *column)) {
+                        continue;
+                    }
+                    if self.formula_refs(sheet, *row, *column).iter().any(|r| ranges_overlap(*r, current)) {
+                        seen_cells.insert((*row, *column));
+                        next.push(CellRange::single(CellAddress { sheet, row: *row, column: *column }));
+                    }
+                }
+            }
+            for block in next {
+                if !found.iter().any(|held| (held.sheet, held.start_row, held.start_column, held.end_row, held.end_column) == (block.sheet, block.start_row, block.start_column, block.end_row, block.end_column)) {
+                    found.push(block);
+                    if !direct {
+                        frontier.push_back(block);
+                    }
+                }
+            }
+        }
+        found
+    }
+
     fn blocks_object(&mut self, given: Vec<CellRange>) -> Result<Value, String> {
         let mut areas: Vec<CellRange> = Vec::with_capacity(given.len());
         for block in given {
@@ -2398,7 +2477,7 @@ impl<'a> WorkbookHost<'a> {
             // Joining one may let it join another, so go round until nothing
             // more comes together.
             loop {
-                match areas.iter().position(|held| joined(*held, block).is_some()) {
+                match areas.iter().rposition(|held| joined(*held, block).is_some()) {
                     Some(at) => {
                         block = joined(areas.remove(at), block).expect("just found");
                     }
@@ -18684,6 +18763,27 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("hidden") {
             return self.range_hidden(range).map(Some);
         }
+        // Precedents and Dependents on the one sheet, direct or all the way
+        // down. Measured: `Range("A1").Precedents.Address` over `=SUM(B1:C1)`
+        // is $B$1:$C$1, `Range("B1").Dependents.Address` $A$1, and
+        // `DirectPrecedents.Count` 2.
+        if ["precedents", "directprecedents", "dependents", "directdependents"]
+            .iter()
+            .any(|wanted| name.eq_ignore_ascii_case(wanted))
+        {
+            self.settle(range);
+            let lower = name.to_ascii_lowercase();
+            let found = self.formula_links(range, lower.contains("precedents"), lower.starts_with("direct"));
+            if found.is_empty() {
+                return Err(oxivba_core::host_error_explained(1004, "No cells were found.", "nothing on this sheet is linked"));
+            }
+            return self.blocks_object(found).map(Some);
+        }
+        // `ID`: a label the macro may give a cell, empty until it does.
+        if name.eq_ignore_ascii_case("id") {
+            let address = CellAddress { sheet: range.sheet, row: range.start_row, column: range.start_column };
+            return Ok(Some(Value::String(self.cell_ids.get(&address).cloned().unwrap_or_default())));
+        }
         if name.eq_ignore_ascii_case("mergearea") {
             // The block a cell belongs to, or the range itself where it
             // belongs to none: asked of Excel, `Range("B2").MergeArea` inside
@@ -19655,6 +19755,11 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("rowheight") {
             self.set_range_row_height(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("id") {
+            let address = CellAddress { sheet: range.sheet, row: range.start_row, column: range.start_column };
+            self.cell_ids.insert(address, find_value_text(&value));
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("hidden") {
@@ -36219,6 +36324,10 @@ End Sub
                 // The Excel it is compared with opens a new book in 游ゴシック 11.
                 workbook.default_style.font_name = Some("游ゴシック".to_string());
                 workbook.default_style.font_size = Some(11.0);
+                // ...whose rows stand 18.75 points.
+                for sheet in &mut workbook.sheets {
+                    sheet.default_row_height = 18.75;
+                }
                 let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
                 match run(&module, &classes, "OxiGenRun", &mut host) {
                     // A case that stopped: run it again bare, for the engine's own account.
