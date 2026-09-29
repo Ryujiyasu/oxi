@@ -11227,6 +11227,14 @@ impl<'a> WorkbookHost<'a> {
                 Some(cell) => self.shown_in_column(address, cell),
                 None => String::new(),
             };
+            // What a cell shows stops at 8,221 characters: measured for
+            // text of 8,300, 9,000 and 20,000, under General and under @.
+            let shown = if shown.encode_utf16().count() > 8_221 {
+                let kept: Vec<u16> = shown.encode_utf16().take(8_221).collect();
+                String::from_utf16_lossy(&kept)
+            } else {
+                shown
+            };
             match &seen {
                 None => seen = Some(shown),
                 Some(held) if *held == shown => {}
@@ -12479,7 +12487,22 @@ impl<'a> WorkbookHost<'a> {
                     }
                     CellInput::Constant(value, shown) => {
                         let text = matches!(value, CellValue::String(_));
+                        // A cell holds 32,767 characters at most, and text
+                        // with a line feed in it turns on wrapping: measured,
+                        // a 40,000-character string reads back 32,767 long,
+                        // and "a" & vbLf & "b" leaves WrapText True.
+                        let value = match value {
+                            CellValue::String(held) if held.encode_utf16().count() > 32_767 => {
+                                let kept: Vec<u16> = held.encode_utf16().take(32_767).collect();
+                                CellValue::String(String::from_utf16_lossy(&kept))
+                            }
+                            other => other,
+                        };
+                        let wraps = matches!(&value, CellValue::String(held) if held.contains('\n'));
                         self.set_cell_value(address, value)?;
+                        if wraps {
+                            self.set_range_style(CellRange::single(address), |_, style| style.wrap_text = true)?;
+                        }
                         if let Some(shown) = shown {
                             self.ask_cell_format(address, shown);
                         }
