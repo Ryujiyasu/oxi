@@ -47,6 +47,7 @@ mod distributions;
 mod functions_more;
 mod complex;
 mod convert;
+mod bonds;
 pub mod engine;
 pub mod functions;
 pub mod lexer;

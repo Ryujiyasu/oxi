@@ -18,7 +18,6 @@ enum Kind {
     Energy,
     Power,
     Magnetism,
-    Temperature,
     Volume,
     Area,
     Information,

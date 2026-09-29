@@ -571,20 +571,21 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
 /// and those the workbook works out itself. Kept in step with the match
 /// arms by `every_function_the_library_answers_is_known`.
 const KNOWN_FUNCTIONS: &[&str] = &[
-    "ABS", "ACOS", "ACOSH", "ACOT", "ACOTH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS",
-    "ARRAYTOTEXT", "ASC", "ASIN", "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE",
-    "AVERAGEA", "AVERAGEIF", "AVERAGEIFS", "BASE", "BETA.DIST", "BETA.INV", "BETADIST", "BETAINV",
-    "BIN2DEC", "BIN2HEX", "BIN2OCT", "BINOM.DIST", "BINOM.DIST.RANGE", "BINOM.INV", "BINOMDIST",
-    "BITAND", "BITLSHIFT", "BITOR", "BITRSHIFT", "BITXOR", "BYCOL", "BYROW", "CEILING",
+    "ABS", "ACCRINT", "ACCRINTM", "ACOS", "ACOSH", "ACOT", "ACOTH", "ADDRESS", "AGGREGATE", "AND",
+    "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC", "ASIN", "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV",
+    "AVERAGE", "AVERAGEA", "AVERAGEIF", "AVERAGEIFS", "BASE", "BETA.DIST", "BETA.INV", "BETADIST",
+    "BETAINV", "BIN2DEC", "BIN2HEX", "BIN2OCT", "BINOM.DIST", "BINOM.DIST.RANGE", "BINOM.INV",
+    "BINOMDIST", "BITAND", "BITLSHIFT", "BITOR", "BITRSHIFT", "BITXOR", "BYCOL", "BYROW", "CEILING",
     "CEILING.MATH", "CEILING.PRECISE", "CELL", "CHAR", "CHIDIST", "CHIINV", "CHISQ.DIST",
     "CHISQ.DIST.RT", "CHISQ.INV", "CHISQ.INV.RT", "CHISQ.TEST", "CHITEST", "CHOOSE", "CHOOSECOLS",
     "CHOOSEROWS", "CLEAN", "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "COMPLEX", "CONCAT",
     "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CONFIDENCE.T", "CONVERT", "CORREL", "COS",
-    "COSH", "COT", "COTH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "COVAR",
-    "COVARIANCE.P", "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "D", "DATE",
-    "DATEDIF", "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB",
-    "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX",
-    "DMIN", "DOLLAR", "DOLLARDE", "DOLLARFR", "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM",
+    "COSH", "COT", "COTH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "COUPDAYBS",
+    "COUPDAYS", "COUPDAYSNC", "COUPNCD", "COUPNUM", "COUPPCD", "COVAR", "COVARIANCE.P",
+    "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "D", "DATE", "DATEDIF",
+    "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB", "DEC2BIN",
+    "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX", "DMIN",
+    "DOLLAR", "DOLLARDE", "DOLLARFR", "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM", "DURATION",
     "DVAR", "DVARP", "ECMA.CEILING", "EDATE", "EFFECT", "EOMONTH", "ERF", "ERF.PRECISE", "ERFC",
     "ERFC.PRECISE", "ERROR.TYPE", "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST",
     "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "F.TEST", "FACT", "FACTDOUBLE", "FALSE", "FDIST",
@@ -601,30 +602,31 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "ISOWEEKNUM", "ISPMT", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB",
     "LEN", "LENB", "LET", "LINEST", "LN", "LOG", "LOG10", "LOGEST", "LOGINV", "LOGNORM.DIST",
     "LOGNORM.INV", "LOGNORMDIST", "LOOKUP", "LOWER", "M", "MAKEARRAY", "MAP", "MATCH", "MAX",
-    "MAXA", "MAXIFS", "MD", "MDETERM", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS", "MINUTE",
-    "MINVERSE", "MIRR", "MMULT", "MOD", "MODE", "MODE.MULT", "MODE.SNGL", "MONTH", "MROUND",
-    "MULTINOMIAL", "MUNIT", "N", "NA", "NEGBINOM.DIST", "NEGBINOMDIST", "NETWORKDAYS",
-    "NETWORKDAYS.INTL", "NOMINAL", "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV", "NORMDIST",
-    "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV", "NUMBERVALUE", "OCT2BIN",
-    "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PDURATION", "PEARSON", "PERCENTILE",
-    "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERCENTRANK.EXC", "PERCENTRANK.INC",
-    "PERMUT", "PERMUTATIONA", "PHI", "PI", "PMT", "POISSON", "POISSON.DIST", "POWER", "PPMT",
-    "PRICEDISC", "PROB", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC", "QUARTILE.INC",
-    "QUOTIENT", "RADIANS", "RAND", "RANDARRAY", "RANDBETWEEN", "RANK", "RANK.AVG", "RANK.EQ",
-    "RATE", "RECEIVED", "REDUCE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN",
-    "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RRI", "RSQ", "SCAN", "SEARCH", "SEARCHB",
-    "SEC", "SECH", "SECOND", "SEQUENCE", "SERIESSUM", "SHEET", "SHEETS", "SIGN", "SIN", "SINH",
-    "SKEW", "SKEW.P", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE",
-    "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STDEVPA", "STEYX", "SUBSTITUTE", "SUBTOTAL",
-    "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH",
-    "SYD", "T", "T.DIST", "T.DIST.2T", "T.DIST.RT", "T.INV", "T.INV.2T", "T.TEST", "TAKE", "TAN",
-    "TANH", "TBILLEQ", "TBILLPRICE", "TBILLYIELD", "TDIST", "TEXT", "TEXTAFTER", "TEXTBEFORE",
-    "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TINV", "TOCOL", "TODAY", "TOROW", "TRIM",
-    "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR", "UNICODE", "UNIQUE", "UPPER", "VALUE",
-    "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VARPA", "VDB", "VLOOKUP", "VSTACK",
-    "WEEKDAY", "WEEKNUM", "WEIBULL", "WEIBULL.DIST", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS",
-    "WRAPROWS", "XIRR", "XLOOKUP", "XMATCH", "XNPV", "XOR", "Y", "YD", "YEAR", "YEARFRAC",
-    "YIELDDISC", "YM", "Z.TEST", "ZTEST",
+    "MAXA", "MAXIFS", "MD", "MDETERM", "MDURATION", "MEDIAN", "MID", "MIDB", "MIN", "MINA",
+    "MINIFS", "MINUTE", "MINVERSE", "MIRR", "MMULT", "MOD", "MODE", "MODE.MULT", "MODE.SNGL",
+    "MONTH", "MROUND", "MULTINOMIAL", "MUNIT", "N", "NA", "NEGBINOM.DIST", "NEGBINOMDIST",
+    "NETWORKDAYS", "NETWORKDAYS.INTL", "NOMINAL", "NORM.DIST", "NORM.INV", "NORM.S.DIST",
+    "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV",
+    "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PDURATION", "PEARSON",
+    "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERCENTRANK.EXC",
+    "PERCENTRANK.INC", "PERMUT", "PERMUTATIONA", "PHI", "PI", "PMT", "POISSON", "POISSON.DIST",
+    "POWER", "PPMT", "PRICE", "PRICEDISC", "PRICEMAT", "PROB", "PRODUCT", "PROPER", "PV",
+    "QUARTILE", "QUARTILE.EXC", "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDARRAY",
+    "RANDBETWEEN", "RANK", "RANK.AVG", "RANK.EQ", "RATE", "RECEIVED", "REDUCE", "REPLACE",
+    "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS",
+    "RRI", "RSQ", "SCAN", "SEARCH", "SEARCHB", "SEC", "SECH", "SECOND", "SEQUENCE", "SERIESSUM",
+    "SHEET", "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SKEW.P", "SLN", "SLOPE", "SMALL", "SORT",
+    "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP",
+    "STDEVPA", "STEYX", "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ",
+    "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.DIST", "T.DIST.2T", "T.DIST.RT",
+    "T.INV", "T.INV.2T", "T.TEST", "TAKE", "TAN", "TANH", "TBILLEQ", "TBILLPRICE", "TBILLYIELD",
+    "TDIST", "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE",
+    "TINV", "TOCOL", "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE",
+    "UNICHAR", "UNICODE", "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S",
+    "VARA", "VARP", "VARPA", "VDB", "VLOOKUP", "VSTACK", "WEEKDAY", "WEEKNUM", "WEIBULL",
+    "WEIBULL.DIST", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XIRR", "XLOOKUP", "XMATCH",
+    "XNPV", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YIELD", "YIELDDISC", "YIELDMAT", "YM", "Z.TEST",
+    "ZTEST",
 ];
 
 /// Whether `name` is a function this build knows.
@@ -3441,6 +3443,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         | "DVAR" | "DVARP" => database_function(name, args),
         name if crate::functions_more::NAMES.contains(&name) => crate::functions_more::call(name, args),
         name if crate::complex::NAMES.contains(&name) => crate::complex::call(name, args),
+        name if crate::bonds::NAMES.contains(&name) => crate::bonds::call(name, args),
         "CONVERT" => {
             if args.len() != 3 {
                 return Err(ExcelError::Value);
@@ -5969,7 +5972,7 @@ fn days360(start: i64, end: i64, european: bool) -> Result<i64, ExcelError> {
 /// The 30/360 day count. In the US (NASD) form the order matters and the D2
 /// test reads the ORIGINAL D1 -- measured: 29 Feb 2024 -> 31 Mar 2024 is 31
 /// days, not 30. The European form just pulls any 31 down to 30.
-fn days_30_360(start: i64, end: i64, european: bool) -> Result<i64, ExcelError> {
+pub(crate) fn days_30_360(start: i64, end: i64, european: bool) -> Result<i64, ExcelError> {
     let (a, b) = (datetime::date_from_serial(start)?, datetime::date_from_serial(end)?);
     let (mut d1, mut d2) = (a.day, b.day);
     if european {
