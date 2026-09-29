@@ -1424,6 +1424,7 @@ impl Workbook {
             // `REDUCE(0,A1:A4,LAMBDA(a,v,a+v))` 7, `SCAN` 3,4,6,7,
             // `BYROW(A1:C2,LAMBDA(r,SUM(r)))` 4,3 (text is not summed) and
             // `MAKEARRAY(2,2,LAMBDA(r,c,r*c))` 1,2,2,4.
+            Expr::Function { name, args } if name == "GROUPBY" => self.group_by(args, sheet, depth, skip, at),
             Expr::Function { name, args }
                 if matches!(name.as_str(), "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY") =>
             {
@@ -1828,6 +1829,154 @@ impl Workbook {
             (range.start.col, range.end.col)
         };
         Arg::Value(Value::Number((to.saturating_sub(from) + 1) as f64))
+    }
+
+    /// GROUPBY(row_fields, values, function, [field_headers], [total_depth],
+    /// [sort_order], [filter_array]). Measured: groups in ascending order of
+    /// their fields, one aggregate column per value column, a "Total" row
+    /// (total_depth 1, the default) aggregating every row kept, subtotals
+    /// plus a "Grand Total" at depth 2, none at 0; headers 3 shows the first
+    /// row as headings; sort_order n sorts by output column |n|, descending
+    /// when negative; filter_array keeps the TRUE rows.
+    fn group_by(&self, args: &[Expr], sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        let bad = |why: ExcelError| Arg::Value(Value::Error(why));
+        if args.len() < 3 {
+            return bad(ExcelError::Value);
+        }
+        let fields = block_of(&self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at));
+        let values = block_of(&self.eval_arg_inner(&args[1], sheet, depth + 1, skip, at));
+        if fields.height != values.height || fields.height == 0 {
+            return bad(ExcelError::Value);
+        }
+        let number = |i: usize, default: f64| -> Result<f64, ExcelError> {
+            match args.get(i) {
+                None => Ok(default),
+                Some(expr) => match self.eval_arg_inner(expr, sheet, depth + 1, skip, at).scalar() {
+                    Value::Blank => Ok(default),
+                    value => value.to_number(),
+                },
+            }
+        };
+        let headers_given = args.get(3).map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at).scalar());
+        let headers = match headers_given {
+            None | Some(Value::Blank) => {
+                // Left out, the first row is headings when the values'
+                // first cell is text.
+                if matches!(values.at(0, 0), Value::Text(_)) { 3 } else { 0 }
+            }
+            Some(value) => match value.to_number() {
+                Ok(n) => n as i64,
+                Err(why) => return bad(why),
+            },
+        };
+        let total_depth = match number(4, 1.0) {
+            Ok(n) => n as i64,
+            Err(why) => return bad(why),
+        };
+        let sort_by = match number(5, 0.0) {
+            Ok(n) => n as i64,
+            Err(why) => return bad(why),
+        };
+        let first_row = if headers == 1 || headers == 3 { 1 } else { 0 };
+        let keep: Vec<bool> = match args.get(6) {
+            None => vec![true; fields.height],
+            Some(expr) => {
+                let filter = block_of(&self.eval_arg_inner(expr, sheet, depth + 1, skip, at));
+                (0..fields.height).map(|row| filter.at(0, row).to_logical().unwrap_or(false)).collect()
+            }
+        };
+        let rows: Vec<usize> = (first_row..fields.height).filter(|row| keep.get(*row).copied().unwrap_or(false)).collect();
+        let aggregate = |picked: &[usize], column: usize| -> Value {
+            let cells: Vec<Value> = picked.iter().map(|row| values.at(column, *row)).collect();
+            let block = Arg::Range(RangeData { width: 1, height: cells.len(), cells });
+            match &args[2] {
+                Expr::Name(function) => crate::functions::call(&function.to_uppercase(), &[block]),
+                lambda => match self.call_lambda(lambda, vec![block], sheet, depth, skip, at) {
+                    Arg::Value(value) => value,
+                    Arg::Range(range) => range.cells.first().cloned().unwrap_or(Value::Blank),
+                },
+            }
+        };
+        let key_of = |row: usize| -> Vec<Value> { (0..fields.width).map(|col| fields.at(col, row)).collect() };
+        let order = |a: &Value, b: &Value| crate::value::compare(a, b).unwrap_or(std::cmp::Ordering::Equal);
+        // Distinct keys, each with its rows.
+        let mut groups: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
+        for row in &rows {
+            let key = key_of(*row);
+            match groups.iter_mut().find(|(held, _)| held.iter().zip(&key).all(|(x, y)| order(x, y).is_eq())) {
+                Some((_, members)) => members.push(*row),
+                None => groups.push((key, vec![*row])),
+            }
+        }
+        groups.sort_by(|(a, _), (b, _)| {
+            for (x, y) in a.iter().zip(b) {
+                let o = order(x, y);
+                if !o.is_eq() {
+                    return o;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+        let width = fields.width + values.width;
+        let line = |key: &[Value], picked: &[usize]| -> Vec<Value> {
+            let mut out: Vec<Value> = key.to_vec();
+            for column in 0..values.width {
+                out.push(aggregate(picked, column));
+            }
+            out
+        };
+        let mut body: Vec<Vec<Value>> = groups.iter().map(|(key, members)| line(key, members)).collect();
+        if sort_by != 0 {
+            let column = (sort_by.unsigned_abs() as usize).saturating_sub(1).min(width - 1);
+            body.sort_by(|a, b| {
+                let o = order(&a[column], &b[column]);
+                if sort_by < 0 { o.reverse() } else { o }
+            });
+        }
+        let mut out: Vec<Vec<Value>> = Vec::new();
+        if headers == 3 {
+            let mut heading: Vec<Value> = (0..fields.width).map(|col| fields.at(col, 0)).collect();
+            heading.extend((0..values.width).map(|col| values.at(col, 0)));
+            out.push(heading);
+        }
+        let blank_key = |label: &str, first: Option<Value>| -> Vec<Value> {
+            let mut key = vec![Value::Text(String::new()); fields.width];
+            key[0] = first.unwrap_or_else(|| Value::Text(label.to_string()));
+            key
+        };
+        if total_depth.abs() >= 2 && fields.width >= 2 {
+            // Subtotals after each group of the first field.
+            let mut i = 0;
+            while i < body.len() {
+                let lead = body[i][0].clone();
+                let mut j = i;
+                while j < body.len() && order(&body[j][0], &lead).is_eq() {
+                    out.push(body[j].clone());
+                    j += 1;
+                }
+                let members: Vec<usize> = groups
+                    .iter()
+                    .filter(|(key, _)| order(&key[0], &lead).is_eq())
+                    .flat_map(|(_, members)| members.clone())
+                    .collect();
+                out.push(line(&blank_key("", Some(lead)), &members));
+                i = j;
+            }
+            out.push(line(&blank_key("Grand Total", None), &rows));
+        } else {
+            out.extend(body);
+            if total_depth != 0 {
+                let total = line(&blank_key("Total", None), &rows);
+                if total_depth < 0 {
+                    let at_top = if headers == 3 { 1 } else { 0 };
+                    out.insert(at_top, total);
+                } else {
+                    out.push(total);
+                }
+            }
+        }
+        let height = out.len();
+        Arg::Range(RangeData { width, height, cells: out.into_iter().flatten().collect() })
     }
 
     /// Call a LAMBDA written in place with these values for its
