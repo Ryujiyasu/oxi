@@ -2974,8 +2974,60 @@ impl<'a> WorkbookHost<'a> {
                 .range_collection_object_or_item(areas[0], axis, args)
                 .map(Some);
         }
+        // Measured: `Range("A1:B2,C4").Cells.Count` is 5 -- the cells of
+        // every block -- while `.Cells(5)` counts on from the first block.
         if name.eq_ignore_ascii_case("cells") {
+            if args.is_empty() {
+                return Ok(Some(self.object(HostObject::Blocks(handle))));
+            }
             return self.range_cells_object(areas[0], args).map(Some);
+        }
+        // Every block moves: measured, `Range("A1:B2,C4").Offset(1, 1)` is
+        // `$B$2:$C$3,$D$5`; a many-block range cannot be resized (1004).
+        if name.eq_ignore_ascii_case("offset") {
+            let step = |at: usize| -> Result<i64, String> {
+                match args.get(at) {
+                    None | Some(Value::Missing) => Ok(0),
+                    Some(value) => any_whole_number(value).ok_or_else(|| "Offset takes numbers".to_string()),
+                }
+            };
+            let (down, across) = (step(0)?, step(1)?);
+            let mut moved = Vec::with_capacity(areas.len());
+            for block in &areas {
+                let shift = |value: u32, by: i64, low: i64, high: i64| -> Result<u32, String> {
+                    let next = i64::from(value) + by;
+                    if next < low || next > high {
+                        return Err(host_error(1004, "Application-defined or object-defined error"));
+                    }
+                    Ok(next as u32)
+                };
+                moved.push(CellRange {
+                    start_row: shift(block.start_row, down, 1, i64::from(MAX_WORKSHEET_ROW))?,
+                    end_row: shift(block.end_row, down, 1, i64::from(MAX_WORKSHEET_ROW))?,
+                    start_column: shift(block.start_column, across, 0, i64::from(MAX_WORKSHEET_COLUMN))?,
+                    end_column: shift(block.end_column, across, 0, i64::from(MAX_WORKSHEET_COLUMN))?,
+                    ..*block
+                });
+            }
+            return self.written_blocks_object(moved).map(Some);
+        }
+        if name.eq_ignore_ascii_case("resize") {
+            return Err(host_error(1004, "Application-defined or object-defined error"));
+        }
+        // Measured: `Range("A1:B2,C4").EntireRow` is `$1:$2,$4:$4`.
+        if name.eq_ignore_ascii_case("entirerow") || name.eq_ignore_ascii_case("entirecolumn") {
+            let rows = name.eq_ignore_ascii_case("entirerow");
+            let bands = areas
+                .iter()
+                .map(|block| {
+                    if rows {
+                        CellRange { start_column: 0, end_column: MAX_WORKSHEET_COLUMN, ..*block }
+                    } else {
+                        CellRange { start_row: 1, end_row: MAX_WORKSHEET_ROW, ..*block }
+                    }
+                })
+                .collect();
+            return self.blocks_object(bands).map(Some);
         }
         if name.eq_ignore_ascii_case("worksheet") || name.eq_ignore_ascii_case("parent") {
             return Ok(Some(self.object(HostObject::Worksheet(areas[0].sheet))));
@@ -10314,7 +10366,10 @@ impl<'a> WorkbookHost<'a> {
     /// The single-argument answer is the odd one: Excel does not complain, it
     /// simply has nothing to hand back.
     fn intersect_ranges(&mut self, args: &[Value]) -> Result<Value, String> {
-        let mut held: Option<CellRange> = None;
+        // Each argument is one block or several; what they share is every
+        // pairing of their blocks. Measured: `Intersect(Range("A1:B2,C4"),
+        // Range("B:C"))` is `$B$1:$B$2,$C$4`.
+        let mut held: Option<Vec<CellRange>> = None;
         let mut seen = 0;
         for value in args {
             if matches!(value, Value::Missing) {
@@ -10323,46 +10378,55 @@ impl<'a> WorkbookHost<'a> {
             let Value::Object(object) = value else {
                 return Err("Application.Intersect takes ranges".to_string());
             };
-            let Some(range) = self.range(object) else {
-                return Err(format!(
-                    "Application.Intersect cannot take a {} object",
-                    object.kind
-                ));
+            let blocks: Vec<CellRange> = match self.range(object) {
+                Some(range) => vec![range],
+                None => match self.blocks(object) {
+                    Some(blocks) => blocks.to_vec(),
+                    None => {
+                        return Err(format!(
+                            "Application.Intersect cannot take a {} object",
+                            object.kind
+                        ))
+                    }
+                },
             };
             seen += 1;
             let Some(so_far) = held else {
-                held = Some(range);
+                held = Some(blocks);
                 continue;
             };
             // Excel raises a run-time error rather than answering Nothing when
             // the ranges are not on one sheet, so the two are not the same
             // question and must not be answered the same way.
-            if so_far.sheet != range.sheet {
+            if so_far.iter().chain(&blocks).any(|block| block.sheet != so_far[0].sheet) {
                 return Err(
                     "Application.Intersect needs ranges on the same worksheet".to_string(),
                 );
             }
-            let start_row = so_far.start_row.max(range.start_row);
-            let end_row = so_far.end_row.min(range.end_row);
-            let start_column = so_far.start_column.max(range.start_column);
-            let end_column = so_far.end_column.min(range.end_column);
-            if start_row > end_row || start_column > end_column {
+            let mut shared = Vec::new();
+            for one in &so_far {
+                for other in &blocks {
+                    let start_row = one.start_row.max(other.start_row);
+                    let end_row = one.end_row.min(other.end_row);
+                    let start_column = one.start_column.max(other.start_column);
+                    let end_column = one.end_column.min(other.end_column);
+                    if start_row <= end_row && start_column <= end_column {
+                        shared.push(CellRange { sheet: one.sheet, start_row, end_row, start_column, end_column });
+                    }
+                }
+            }
+            if shared.is_empty() {
                 return Ok(Value::Nothing);
             }
-            held = Some(CellRange {
-                sheet: so_far.sheet,
-                start_row,
-                end_row,
-                start_column,
-                end_column,
-            });
+            held = Some(shared);
         }
         // One range has nothing to be intersected with.
         if seen < 2 {
             return Ok(Value::Nothing);
         }
         match held {
-            Some(range) => Ok(self.object(HostObject::Range(range))),
+            Some(blocks) if blocks.len() == 1 => Ok(self.object(HostObject::Range(blocks[0]))),
+            Some(blocks) => self.written_blocks_object(blocks),
             None => Ok(Value::Nothing),
         }
     }
