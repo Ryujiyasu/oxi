@@ -23,8 +23,48 @@ pub(crate) const NAMES: &[&str] = &[
     "ISPMT", "MDETERM", "NOMINAL", "PDURATION", "PERCENTRANK.EXC", "PERMUTATIONA", "PRICEDISC", "PROB",
     "RECEIVED", "RRI", "SEC", "SECH", "SERIESSUM", "SKEW.P", "STDEVPA", "TBILLEQ", "TBILLPRICE",
     "TBILLYIELD", "VARPA", "VDB", "XIRR", "XNPV", "YIELDDISC", "Z.TEST", "ZTEST", "PERCENTOF", "ENCODEURL",
-    "AMORLINC", "AMORDEGRC", "PHONETIC", "REGEXTEST", "REGEXREPLACE",
+    "AMORLINC", "AMORDEGRC", "PHONETIC", "REGEXTEST", "REGEXREPLACE", "BAHTTEXT",
 ];
+
+/// A whole number in Thai words, millions in blocks of six digits. A final
+/// one is เอ็ด when anything stands above it, หนึ่ง alone.
+fn thai_words(n: u64, above: bool) -> String {
+    if n >= 1_000_000 {
+        let mut out = thai_words(n / 1_000_000, above);
+        out.push_str("ล้าน");
+        out.push_str(&thai_block(n % 1_000_000, true));
+        return out;
+    }
+    thai_block(n, above)
+}
+
+fn thai_block(n: u64, above: bool) -> String {
+    const DIGITS: [&str; 10] = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+    const PLACES: [&str; 4] = ["แสน", "หมื่น", "พัน", "ร้อย"];
+    let mut out = String::new();
+    for (i, place) in PLACES.iter().enumerate() {
+        let digit = (n / 10u64.pow(5 - i as u32) % 10) as usize;
+        if digit > 0 {
+            out.push_str(DIGITS[digit]);
+            out.push_str(place);
+        }
+    }
+    match n / 10 % 10 {
+        0 => {}
+        1 => out.push_str("สิบ"),
+        2 => out.push_str("ยี่สิบ"),
+        digit => {
+            out.push_str(DIGITS[digit as usize]);
+            out.push_str("สิบ");
+        }
+    }
+    match n % 10 {
+        0 => {}
+        1 if above || n >= 10 => out.push_str("เอ็ด"),
+        digit => out.push_str(DIGITS[digit as usize]),
+    }
+    out
+}
 
 /// A pattern of REGEXTEST, REGEXEXTRACT or REGEXREPLACE, case-blind when
 /// the flag at `flag` is 1; one that will not compile is #VALUE!.
@@ -654,6 +694,37 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::DivZero);
             }
             finite(part.iter().sum::<f64>() / whole)
+        }
+        // BAHTTEXT: the amount in Thai words, baht then satang rounded to
+        // two places. Measured: 1234 หนึ่งพันสองร้อยสามสิบสี่บาทถ้วน, 1000001
+        // หนึ่งล้านเอ็ดบาทถ้วน, 0.5 ห้าสิบสตางค์ (no baht), -5 ลบห้าบาทถ้วน,
+        // 1.005 หนึ่งบาทหนึ่งสตางค์.
+        "BAHTTEXT" => {
+            count(args, 1, 1)?;
+            let amount = at(args, 0)?;
+            // Rounded as the decimal the number shows, so 1.005 is 1.01.
+            let cents: f64 = format!("{:.13}", amount.abs() * 100.0).parse::<f64>().unwrap_or(0.0).round();
+            if cents >= 1e19 {
+                return Err(ExcelError::Num);
+            }
+            let cents = cents as u64;
+            let (baht, satang) = (cents / 100, cents % 100);
+            let mut out = String::new();
+            if amount < 0.0 && cents > 0 {
+                out.push_str("ลบ");
+            }
+            if baht > 0 || satang == 0 {
+                out.push_str(if baht == 0 { "ศูนย์" } else { "" });
+                out.push_str(&thai_words(baht, false));
+                out.push_str("บาท");
+            }
+            if satang == 0 {
+                out.push_str("ถ้วน");
+            } else {
+                out.push_str(&thai_block(satang, false));
+                out.push_str("สตางค์");
+            }
+            Ok(Value::Text(out))
         }
         // ENCODEURL: UTF-8, every byte but A-Z a-z 0-9 - _ . written %XX.
         // Measured: "a b&c" is a%20b%26c and ~ becomes %7E.

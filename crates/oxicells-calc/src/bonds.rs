@@ -15,7 +15,7 @@ use crate::value::{ExcelError, Value};
 
 pub(crate) const NAMES: &[&str] = &[
     "ACCRINT", "ACCRINTM", "COUPDAYBS", "COUPDAYS", "COUPDAYSNC", "COUPNCD", "COUPNUM", "COUPPCD", "DURATION",
-    "MDURATION", "PRICE", "PRICEMAT", "YIELD", "YIELDMAT",
+    "MDURATION", "PRICE", "PRICEMAT", "YIELD", "YIELDMAT", "ODDFPRICE", "ODDFYIELD", "ODDLPRICE", "ODDLYIELD",
 ];
 
 /// A coupon date: its year and month, the day of the month maturity has,
@@ -168,6 +168,104 @@ fn duration(settle: i64, maturity: i64, coupon: f64, yld: f64, frequency: i64, b
     weighted += (coupons + shift) * (cash + 100.0) / growth.powf(coupons + shift);
     present += (cash + 100.0) / growth.powf(coupons + shift);
     Ok(weighted / present / f)
+}
+
+/// The length of a quasi-coupon period on the basis: its actual days on
+/// the actual basis, else the basis's year over the frequency.
+fn normal_length(start: i64, end: i64, frequency: i64, basis: i64) -> f64 {
+    match basis {
+        1 => (end - start) as f64,
+        3 => 365.0 / frequency as f64,
+        _ => 360.0 / frequency as f64,
+    }
+}
+
+/// A bond whose first period is odd, short or long, as Excel documents it
+/// with quasi-coupon periods stepped back from the first coupon:
+/// P = rv/v^(N+t) + c*sum(DC_i/NL_i)/v^t + sum_{k=1..N} c/v^(k+t)
+///     - c*sum(A_i/NL_i), t = Nq + DSC/E.
+/// Measured: ODDFPRICE(11 Nov 2008, 1 Mar 2021, 15 Oct 2008, 1 Mar 2009,
+/// 7.85%, 6.25%, 100, 2, 1) 113.597717474079.
+#[allow(clippy::too_many_arguments)]
+fn odd_first_price(
+    settle: i64,
+    maturity: i64,
+    issue: i64,
+    first: i64,
+    rate: f64,
+    yld: f64,
+    redemption: f64,
+    frequency: i64,
+    basis: i64,
+) -> Result<f64, ExcelError> {
+    let f = frequency as f64;
+    let mut dates = vec![first];
+    let mut date = CouponDate::from_serial(first)?;
+    loop {
+        date.add_months(-12 / frequency);
+        let serial = date.serial()?;
+        dates.push(serial);
+        if serial <= issue {
+            break;
+        }
+    }
+    dates.reverse();
+    let periods = dates.len() - 1;
+    let (mut counted, mut accrued) = (0.0, 0.0);
+    let (mut whole, mut dsc, mut e) = (0.0, 0.0, 1.0);
+    for i in 0..periods {
+        let (from, to) = (dates[i], dates[i + 1]);
+        let length = normal_length(from, to, frequency, basis);
+        let start = from.max(issue);
+        counted += days_between(start, to, basis)? / length;
+        if settle > start {
+            accrued += days_between(start, settle.min(to), basis)? / length;
+        }
+        if from <= settle && settle < to {
+            whole = (periods - 1 - i) as f64;
+            dsc = days_between(settle, to, basis)?;
+            e = length;
+        }
+    }
+    let n = coupon_number(first, maturity, frequency)?;
+    let c = 100.0 * rate / f;
+    let v = 1.0 + yld / f;
+    let t = whole + dsc / e;
+    let mut answer = redemption / v.powf(n + t) + c * counted / v.powf(t) - c * accrued;
+    let mut k = 1.0;
+    while k <= n {
+        answer += c / v.powf(k + t);
+        k += 1.0;
+    }
+    Ok(answer)
+}
+
+/// The sums over a bond's odd last period, its quasi-coupon periods
+/// stepped forward from the last coupon: (sum DC_i/NL_i, sum A_i/NL_i,
+/// sum DSC_i/NL_i).
+fn odd_last_sums(settle: i64, maturity: i64, last: i64, frequency: i64, basis: i64) -> Result<(f64, f64, f64), ExcelError> {
+    let (mut counted, mut accrued, mut remaining) = (0.0, 0.0, 0.0);
+    let mut date = CouponDate::from_serial(last)?;
+    let mut from = last;
+    while from < maturity {
+        date.add_months(12 / frequency);
+        let to = date.serial()?;
+        // The odd last period counts its quasi-coupon periods at their
+        // actual length on every actual basis: measured, bases 2 and 3 price
+        // as basis 1 (99.8791676815291).
+        let length = normal_length(from, to, frequency, if matches!(basis, 2 | 3) { 1 } else { basis });
+        let end = to.min(maturity);
+        counted += days_between(from, end, basis)? / length;
+        if settle > from {
+            accrued += days_between(from, settle.min(to), basis)? / length;
+        }
+        let start = settle.max(from);
+        if end > start {
+            remaining += days_between(start, end, basis)? / length;
+        }
+        from = to;
+    }
+    Ok((counted, accrued, remaining))
 }
 
 pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
@@ -393,6 +491,60 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 let paid = fourth / 100.0 + a / b * rate;
                 ((1.0 + dim / b * rate) - paid) / paid * (b / dsm)
             })
+        }
+        // ODDFPRICE and ODDFYIELD: settlement, maturity, issue, first
+        // coupon, rate, yield or price, redemption, frequency, [basis];
+        // issue < settlement < first coupon < maturity, else #NUM!.
+        "ODDFPRICE" | "ODDFYIELD" => {
+            count(8, 9)?;
+            let (settle, maturity, issue, first) = (day(0)?, day(1)?, day(2)?, day(3)?);
+            let (rate, given, redemption) = (at(4)?, at(5)?, at(6)?);
+            let (frequency, basis) = (frequency_at(7)?, basis_at(8)?);
+            if !(issue < settle && settle < first && first < maturity) || rate < 0.0 || given < 0.0 || redemption <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let price_at = |yld: f64| odd_first_price(settle, maturity, issue, first, rate, yld, redemption, frequency, basis);
+            if name == "ODDFPRICE" {
+                return number(price_at(given)?);
+            }
+            // The yield that prices the bond at `given`, by Newton's method.
+            let mut yld = rate.max(0.01);
+            for _ in 0..100 {
+                let here = price_at(yld)? - given;
+                let step = 1e-7;
+                let slope = (price_at(yld + step)? - given - here) / step;
+                if slope == 0.0 {
+                    break;
+                }
+                let next = yld - here / slope;
+                if (next - yld).abs() < 1e-12 {
+                    yld = next;
+                    break;
+                }
+                yld = next;
+            }
+            number(yld)
+        }
+        // ODDLPRICE and ODDLYIELD: settlement, maturity, last coupon, rate,
+        // yield or price, redemption, frequency, [basis]; last coupon <
+        // settlement < maturity, else #NUM!. Measured: ODDLPRICE(7 Feb 2008,
+        // 15 Jun 2008, 15 Oct 2007, 3.75%, 4.05%, 100, 2, 0) 99.8782860147213.
+        "ODDLPRICE" | "ODDLYIELD" => {
+            count(7, 8)?;
+            let (settle, maturity, last) = (day(0)?, day(1)?, day(2)?);
+            let (rate, given, redemption) = (at(3)?, at(4)?, at(5)?);
+            let (frequency, basis) = (frequency_at(6)?, basis_at(7)?);
+            if !(last < settle && settle < maturity) || rate < 0.0 || given < 0.0 || redemption <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let f = frequency as f64;
+            let c = 100.0 * rate / f;
+            let (counted, accrued, remaining) = odd_last_sums(settle, maturity, last, frequency, basis)?;
+            if name == "ODDLPRICE" {
+                return number((redemption + counted * c) / (1.0 + remaining * given / f) - accrued * c);
+            }
+            let paid = given + accrued * c;
+            number((redemption + counted * c - paid) / paid * f / remaining)
         }
         _ => Err(ExcelError::Name),
     }

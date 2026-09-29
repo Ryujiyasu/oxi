@@ -1222,6 +1222,10 @@ impl Workbook {
                     "origin" => Value::Text("$A:$A$1".to_string()),
                     "osversion" => Value::Text("Windows (64-bit) NT 10.00".to_string()),
                     "directory" => Value::Text(String::new()),
+                    // Measured: recalc 自動 in Japanese Excel (Automatic);
+                    // the memory types went away with Excel 2007: #N/A.
+                    "recalc" => Value::Text("Automatic".to_string()),
+                    "memavail" | "memused" | "totmem" => Value::Error(ExcelError::NA),
                     _ => Value::Error(ExcelError::Value),
                 })
             }
