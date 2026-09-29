@@ -18125,6 +18125,24 @@ impl Host for WorkbookHost<'_> {
                     .uniform_font(range, |dress| dress.bold)
                     .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
             }
+            // The face's style in words, from its Bold and Italic: measured,
+            // a plain cell reads Regular (標準 in a Japanese Excel).
+            if name.eq_ignore_ascii_case("fontstyle") {
+                let bold = self.uniform_font(range, |dress| dress.bold)?;
+                let italic = self.uniform_font(range, |dress| dress.italic)?;
+                return Ok(Some(match (bold, italic) {
+                    (Some(bold), Some(italic)) => Value::String(
+                        match (bold, italic) {
+                            (false, false) => "Regular",
+                            (true, false) => "Bold",
+                            (false, true) => "Italic",
+                            (true, true) => "Bold Italic",
+                        }
+                        .to_string(),
+                    ),
+                    _ => Value::Null,
+                }));
+            }
             if name.eq_ignore_ascii_case("italic") {
                 return self
                     .uniform_font(range, |dress| dress.italic)
@@ -19666,6 +19684,18 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         }
         if let Some(range) = self.range_font(receiver) {
+            // Measured: FontStyle = "Bold Italic" sets both.
+            if name.eq_ignore_ascii_case("fontstyle") {
+                let Value::String(asked) = &value else {
+                    return Err("Font.FontStyle takes a style's name".to_string());
+                };
+                let lower = asked.to_lowercase();
+                let bold = lower.contains("bold") || lower.contains("太字");
+                let italic = lower.contains("italic") || lower.contains("斜体");
+                self.set(receiver, "Bold", Value::Boolean(bold))?;
+                self.set(receiver, "Italic", Value::Boolean(italic))?;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("themecolor") {
                 let theme = theme_colour(&value)?;
                 self.paint_from_theme(range, Paint::Font, Some(theme), None)?;
@@ -20112,7 +20142,11 @@ impl Host for WorkbookHost<'_> {
                 // Indenting a cell that was left to its own devices makes it
                 // left-aligned: asked of Excel, a General cell given an indent
                 // reads back xlLeft.
-                if indent > 0 && style.horizontal_align.is_none() {
+                // So does one centred: measured, xlCenter then IndentLevel 2
+                // reads xlLeft. Right and distributed keep theirs.
+                if indent > 0
+                    && !matches!(style.horizontal_align.as_deref(), Some("left" | "right" | "distributed"))
+                {
                     style.horizontal_align = Some("left".to_string());
                 }
             })?;
@@ -36795,6 +36829,8 @@ End Sub
                 // The Excel it is compared with opens a new book in 游ゴシック 11.
                 workbook.default_style.font_name = Some("游ゴシック".to_string());
                 workbook.default_style.font_size = Some(11.0);
+                // ...centred top to bottom, as a Japanese Excel's Normal style is.
+                workbook.default_style.vertical_align = Some("center".to_string());
                 // ...whose rows stand 18.75 points.
                 for sheet in &mut workbook.sheets {
                     sheet.default_row_height = 18.75;
