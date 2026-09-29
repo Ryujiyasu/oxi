@@ -567,7 +567,10 @@ impl Workbook {
             if name == "TRANSPOSE" && matches!(args.as_slice(), [Expr::Ref(reference)] if reference.range.start == reference.range.end));
         Ok(match self.eval_arg(&expr, sheet, 0, None) {
             Arg::Range(block) => (block.width, block.height, block.cells.into_iter().map(formula_result).collect(), !one_cell),
-            Arg::Value(value) => (1, 1, vec![formula_result(value)], false),
+            // One value is still an array when an array went into it:
+            // measured, Evaluate of `{5}*2`, `A1*{2}`, `IF(A1=1,{7},0)`,
+            // `ROW()` and `ROW(A1)+0` are all Variant().
+            Arg::Value(value) => (1, 1, vec![formula_result(value)], arrayish(&expr)),
         })
     }
 
@@ -577,7 +580,7 @@ impl Workbook {
     pub fn evaluate_reference(&self, sheet: &str, formula: &str) -> Option<(String, RangeRef)> {
         let expr = parse(formula).ok()?;
         match &expr {
-            Expr::Function { name, .. } if matches!(name.as_str(), "INDEX" | "OFFSET" | "INDIRECT" | "TRIMRANGE") => {
+            Expr::Function { name, .. } if matches!(name.as_str(), "INDEX" | "OFFSET" | "INDIRECT" | "TRIMRANGE" | "XLOOKUP") => {
                 self.reference_of(&expr, sheet, 0, None)
             }
             _ => None,
@@ -2425,6 +2428,32 @@ impl Workbook {
             Expr::Function { name, args } if name == "INDEX" => self.index_range(args, sheet, depth, at),
             Expr::Function { name, args } if name == "TRIMRANGE" => self.trimmed_range(args, sheet, depth, at),
             Expr::Function { name, args } if matches!(name.as_str(), "TAKE" | "DROP") => self.taken_range(name, args, sheet, depth, at),
+            // XLOOKUP answering out of a reference answers the cell it found
+            // there: measured, TypeName(Evaluate("XLOOKUP(3,A1:A6,A1:A6)")) is
+            // Range.
+            Expr::Function { name, args } if name == "XLOOKUP" && args.len() >= 3 => {
+                let (target, returned) = self.reference_of(&args[2], sheet, depth + 1, at)?;
+                let mut asked = vec![args[0].clone(), args[1].clone()];
+                asked.push(args.get(4).cloned().unwrap_or(Expr::Literal(Value::Number(0.0))));
+                asked.push(args.get(5).cloned().unwrap_or(Expr::Literal(Value::Number(1.0))));
+                let found = self.eval(&Expr::Function { name: "XMATCH".to_string(), args: asked }, sheet, depth + 1, at);
+                let Value::Number(position) = found else { return None };
+                let offset = position as u32 - 1;
+                let (_, looked) = self.reference_of(&args[1], sheet, depth + 1, at)?;
+                let down = looked.end.row > looked.start.row;
+                let range = if down {
+                    RangeRef::normalised(
+                        CellRef::new(returned.start.col, returned.start.row + offset),
+                        CellRef::new(returned.end.col, returned.start.row + offset),
+                    )
+                } else {
+                    RangeRef::normalised(
+                        CellRef::new(returned.start.col + offset, returned.start.row),
+                        CellRef::new(returned.start.col + offset, returned.end.row),
+                    )
+                };
+                Some((target, range))
+            }
             Expr::Function { name, args } if name == "_ISECT" && args.len() == 2 => {
                 let (left_sheet, left) = self.reference_of(&args[0], sheet, depth, at)?;
                 let (right_sheet, right) = self.reference_of(&args[1], sheet, depth, at)?;
@@ -2963,6 +2992,20 @@ fn fifteen_digits(x: f64) -> f64 {
         return x;
     }
     format!("{x:.14e}").parse().unwrap_or(x)
+}
+
+/// Whether a formula's answer is an array by its making, whatever its size:
+/// an array written out, ROW and COLUMN (which always answer arrays), or an
+/// operator or IF with one of those among its parts.
+fn arrayish(expr: &Expr) -> bool {
+    match expr {
+        Expr::Array(_) => true,
+        Expr::Function { name, .. } if matches!(name.as_str(), "ROW" | "COLUMN") => true,
+        Expr::Function { name, args } if name == "IF" => args.iter().any(arrayish),
+        Expr::Unary { operand, .. } => arrayish(operand),
+        Expr::Binary { lhs, rhs, .. } => arrayish(lhs) || arrayish(rhs),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

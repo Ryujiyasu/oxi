@@ -373,6 +373,21 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
         if let Some(line) = a_whole_line(args) {
             return line;
         }
+        // Indexes handed as an array pick one cell each: measured,
+        // Evaluate("INDEX({1;2},{1;2})") is an array.
+        if let [table, Arg::Range(rows)] = args {
+            if rows.cells.len() > 1 {
+                let cells = rows
+                    .cells
+                    .iter()
+                    .map(|row| match call_arg("INDEX", &[table.clone(), Arg::Value(row.clone()), Arg::Value(Value::Number(1.0))]) {
+                        Arg::Value(value) => value,
+                        Arg::Range(block) => block.cells.first().cloned().unwrap_or(Value::Blank),
+                    })
+                    .collect();
+                return Arg::Range(RangeData { width: rows.width, height: rows.height, cells });
+            }
+        }
         // One index into an array of several rows is that whole row, a
         // column's one cell included: measured, `SUM(INDEX({1,2;3,4},2))`
         // is 7 and `Evaluate("INDEX({1;2;3},1)")` an array of one. (A
