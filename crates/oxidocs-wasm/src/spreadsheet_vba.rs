@@ -11058,6 +11058,15 @@ impl<'a> WorkbookHost<'a> {
         // This sits at the one door every function comes through, native and
         // engine-carried alike.
         self.settle_arguments(args);
+        // Mode takes only ranges and arrays from a macro: measured, one plain
+        // value anywhere among its arguments -- `Mode(1, 2, 2, 3)`,
+        // `Mode(Array(2, 2), 5, 5, 5)` -- answers #N/A, where
+        // `Mode(Array(1, 2), Array(2, 3))` is 2.
+        if ["mode", "mode_sngl", "mode.sngl"].iter().any(|one| name.eq_ignore_ascii_case(one))
+            && args.iter().any(|value| !matches!(value, Value::Object(_) | Value::Array(_) | Value::Missing))
+        {
+            return Ok(Value::Error(ERROR_NA));
+        }
         if name.eq_ignore_ascii_case("vlookup") {
             return self.worksheet_lookup(name, args, LookupOrientation::Vertical);
         }
@@ -11177,11 +11186,10 @@ impl<'a> WorkbookHost<'a> {
         for value in values {
             match value {
                 value if any_number(&value).is_some() => numbers.push(any_number(&value).unwrap_or_default()),
-                Value::Error(value) => {
-                    return Err(format!(
-                        "WorksheetFunction.{name} encountered Error {value}"
-                    ));
-                }
+                // Passed on as the answer: measured, `Application.Sum` of a
+                // range holding #DIV/0! is that error, where
+                // `WorksheetFunction.Sum` raises 1004 over it.
+                Value::Error(value) => return Ok(Value::Error(value)),
                 _ => {}
             }
         }
