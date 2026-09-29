@@ -6830,7 +6830,15 @@ fn format_date(
         }
         "short date" => return Ok(format!("{}/{}/{}", parts.month, parts.day, parts.year)),
         "long time" => return Ok(clock(parts, true)),
-        "medium time" => return Ok(clock(parts, false)),
+        // Measured: 9:02 AM is "09:02 AM", midnight "12:00 AM".
+        "medium time" => {
+            return Ok(format!(
+                "{:02}:{:02} {}",
+                hour_value(parts.hour, true),
+                parts.minute,
+                if parts.hour < 12 { "AM" } else { "PM" }
+            ))
+        }
         "short time" => return Ok(format!("{:02}:{:02}", parts.hour, parts.minute)),
         _ => {}
     }
@@ -7631,7 +7639,10 @@ fn call_date_builtin(
                 return Err(wrong_count("3 arguments"));
             }
             let interval = text(&args[0]).map_err(mismatch)?.to_ascii_lowercase();
-            let amount = integer_argument(&args[1], line)?;
+            // The number is cut toward zero, not rounded: measured,
+            // `DateAdd("d", 1.5, ..)` adds one day, `DateAdd("d", -0.6, ..)`
+            // none and `DateAdd("m", 1.9, ..)` one month.
+            let amount = number(&args[1]).map_err(mismatch)?.trunc() as i64;
             let serial = value_date_serial(&args[2], this_year).map_err(mismatch)?;
             date_add(&interval, amount, serial)
                 .map(Value::Date)
@@ -8188,8 +8199,11 @@ fn week_of_year(
     if day_number < start {
         return week_of_year(day_number, year - 1, first_day, first_week);
     }
+    // Counted from January 1st, the last days of December stay in the old
+    // year's count: measured, `DatePart("ww", #12/30/2024#)` is 53, where
+    // the first-four-days and first-full-week counts roll over.
     let next_start = first_week_start(year + 1, first_day, first_week);
-    if day_number >= next_start {
+    if day_number >= next_start && !matches!(first_week, 0 | 1) {
         return Ok((day_number - next_start).div_euclid(7) + 1);
     }
     Ok((day_number - start).div_euclid(7) + 1)
