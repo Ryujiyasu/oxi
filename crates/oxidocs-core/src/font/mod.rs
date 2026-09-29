@@ -1574,6 +1574,24 @@ impl FontMetricsRegistry {
         }
         // Try base name
         let base = base_family_name(family);
+        // S1610 (2026-09-29, default ON, opt-out OXI_S1610_DISABLE): a WEIGHT
+        // name ("Roboto Light") is a different face, not its base family with a
+        // style flag. Stripping the suffix handed Roboto Light runs the shipped
+        // Roboto (Regular) table, 1.6% wider: EN policies__006d8118 wraps
+        // "…comments on" onto a third line where Word's PDF (font Roboto Light)
+        // fits it in 259.25pt -- the installed Light file's advances sum to
+        // 259.16. When the exact face is installed, read it before the strip.
+        if base != family
+            && base != normalized
+            && self.fonts.contains_key(&base)
+            && std::env::var_os("OXI_S1610_DISABLE").is_none()
+        {
+            if let Some(m) = catalog::resolve(family, false, false)
+                .or_else(|| runtime::resolve(family, false, false))
+            {
+                return m;
+            }
+        }
         if let Some(m) = self.fonts.get(&base) {
             return m;
         }

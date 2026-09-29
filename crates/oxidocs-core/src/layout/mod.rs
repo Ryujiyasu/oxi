@@ -10252,7 +10252,32 @@ cells={} pitch={:.2} text={:?}",
                         rows2.sort_by(|a, b| a.partial_cmp(b).unwrap());
                         let n1 = rows1.len();
                         let n2 = rows2.len();
-                        if n1 >= 2 && n1 > n2 + 1 {
+                        // S1608 (2026-09-29): balancing cannot move content into a
+                        // last column that already reaches the page bottom -- the
+                        // balanced height is then the full column and Word leaves the
+                        // band as filled. blind-G policies__1e87d3e6 p26: col 1 holds
+                        // a table (55 distinct row y's) and col 2 runs to 784.5 of
+                        // 785.2; S750 counted rows, moved 8 into col 2 over its own
+                        // text and started the next 1-column section at 666.8 (Word:
+                        // next page).
+                        let s1608_col2_full = std::env::var_os("OXI_S1608_DISABLE").is_none() && {
+                            let body_bottom = start_y + content_height;
+                            let col2_bottom = elements.iter()
+                                .filter(|e| e.y >= col_band_top - 0.1 && e.x >= split_x
+                                    && matches!(e.content, LayoutContent::Text { .. }))
+                                .map(|e| e.y + e.height)
+                                .fold(f32::NEG_INFINITY, f32::max);
+                            let pitch1 = {
+                                let mut d: Vec<f32> = rows1.windows(2).map(|w| w[1] - w[0]).filter(|d| *d > 1.0).collect();
+                                d.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                                d.get(d.len() / 2).copied().unwrap_or(0.0)
+                            };
+                            col2_bottom > body_bottom - pitch1
+                        };
+                        if std::env::var("OXI_DBG_COL").is_ok() && s1608_col2_full {
+                            eprintln!("[COL] S1608 col2 full -> no S750 balance (n1={} n2={})", n1, n2);
+                        }
+                        if n1 >= 2 && n1 > n2 + 1 && !s1608_col2_full {
                             // uniform row pitch from col1's row diffs (median)
                             let mut diffs: Vec<f32> = rows1
                                 .windows(2)
@@ -43710,7 +43735,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // A terminating merged cell contributes to the atomic row fit
             // before pagination, as well as to its final border height.
             let row_fit_height = if row.cant_split {
-                let bygrid = std::env::var("OXI_S1192G").is_ok();
+                let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
                 vmerge_absolute_ends.iter().fold(row_fit_height, |height, (key, end)| {
                     let is_cont = |c: &TableCell| {
                         matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
@@ -44627,7 +44652,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // Reflow spanning text at the actual row boundary, including
                 // paragraph spacing that cannot fit in the completed fragment.
                 for flow in &mut vmerge_text_flows {
-                    let bygrid = std::env::var("OXI_S1192G").is_ok();
+                    let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
                     let continues = Self::s1192_cell_at(row, flow.key, bygrid).map_or(false,
                         |c| matches!(c.v_merge.as_deref(), Some("continue") | Some("")));
                     if flow.start_row >= row_idx || !continues { continue; }
@@ -51466,7 +51491,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && content_height > s728_hdr_h + pad_t + pad_b;
                 if vmerge_page_flow {
                     let origin = cursor.visual_y + pad_t;
-                    let key = if std::env::var("OXI_S1192G").is_ok() { cell_start_grid } else { cell_idx };
+                    let key = if std::env::var_os("OXI_S1192G_DISABLE").is_none() { cell_start_grid } else { cell_idx };
                     let mut flow = MergedCellTextFlow {
                         identity: std::sync::Arc::new(()), key, start_row: row_idx,
                         source_page: pages.len(), origin, page_top, page_height: content_height,
@@ -51562,7 +51587,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // Word's behaviour); the span's last row pays instead.
                 if is_vmerge_restart && std::env::var("OXI_S1192_DISABLE").is_err() {
                     let need = pad_t + content_h + pad_b;
-                    // S1192c (opt-in `OXI_S1192G`, UNVERIFIED): key the pending
+                    // S1192c (default ON since S1609, opt-out `OXI_S1192G_DISABLE`): key the pending
                     // need on the GRID COLUMN, not the cell's position in its
                     // row. A row's cell list is not a column identity once
                     // `gridSpan` or `gridBefore` are in play, and ed025's vMerge
@@ -51572,7 +51597,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // counts — but the grid key changed NOTHING on ed025, and it
                     // has never been through a corpus gate. Verify before making
                     // it the only path.
-                    let key = if std::env::var("OXI_S1192G").is_ok() {
+                    let key = if std::env::var_os("OXI_S1192G_DISABLE").is_none() {
                         cell_start_grid
                     } else {
                         cell_idx
@@ -52134,7 +52159,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let is_cont = |c: &TableCell| {
                     matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
                 };
-                let bygrid = std::env::var("OXI_S1192G").is_ok();
+                let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
                 for (ci, remaining) in s1192_pending.iter() {
                     let here_cont = Self::s1192_cell_at(row, *ci, bygrid).map_or(false, is_cont);
                     let next_cont = table
@@ -52541,7 +52566,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     });
                 let s819_natural_split = !(lrpb_split_y.is_finite() && lrpb_split_y < page_bottom)
                     && !empty_line_boundary;
-                let s819_q = if !self.doc_body_has_real_cjk
+                // S1606 (2026-09-29): the cell-frame reservation is not Latin-only.
+                // `_pb_vmerge_colbottom_gen.py` (faithful slice of blind-G JA
+                // policies__1e87d3e6, tcMar_b 43tw, sz4 borders, exact 11.5 lines):
+                // Word splits row 14 while line_bottom + 2.15 + bw <= cbot and moves
+                // it one 0.25pt step later, identically with vMerge and vAlign
+                // removed and in a one-column section; Oxi without S819 kept it
+                // 2.5pt longer.
+                let s1606 = std::env::var("OXI_S1606").as_deref() == Ok("1");
+                let s819_q = if (!self.doc_body_has_real_cjk || s1606)
                     && s819_natural_split
                     && std::env::var("OXI_S819_DISABLE").is_err()
                 {
@@ -52825,7 +52858,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // floating-point roundoff, as in whole-row fit: 0.1pt of slack
                 // incorrectly keeps a last line plus after-spacing 0.096pt
                 // beyond the page bottom in the short-cell regression fixture.
-                let fits_fragment = |elem: &LayoutElement| {
+                let fits_at = |elem: &LayoutElement, split_y: f32| {
                     let bottom = if matches!(elem.content, LayoutContent::Image { .. }) {
                         elem.y - elem.flow_line_offset
                             + elem.content_fit_height.unwrap_or(elem.height + elem.flow_line_offset)
@@ -52844,6 +52877,38 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     bottom + after <= split_y + row_fit_epsilon - s819_fit_q
                         && elem.y < widow_limit - 0.1
                 };
+                // S1607 (2026-09-29): when no line of the row (empty lines and images count) fits above the
+                // cut, the row moves WHOLE -- cut at the row top, the S1168 row-top
+                // case, so it keeps its top cell margin and its own height. The
+                // continuation path instead re-anchored the first line to the page
+                // top (row 14 at 81.5, Word 84.75) and closed the fragment on the
+                // lowest element, which for a vMerge-restart row includes the merged
+                // cells' text centred over the rows below (row 15 at 132.55, Word
+                // 101.25; `_pb_vmerge_colbottom_gen.py`, blind-G policies__1e87d3e6).
+                let split_y = if std::env::var_os("OXI_S1607_DISABLE").is_none()
+                    && split_y > row_top + 0.1
+                    && row_elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { .. } | LayoutContent::Image { .. }))
+                    && !row_elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { .. } | LayoutContent::Image { .. })
+                        && fits_at(e, split_y))
+                {
+                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        eprintln!("[SPLIT-S1607] row={} no text line fits above {:.2} -> whole-row move", row_idx, split_y);
+                    }
+                    row_top
+                } else { split_y };
+                // S1607: R7.61 flagged a vMerge-restart cell's later paragraphs
+                // that were laid out past the old page bottom; after a whole-row
+                // move they sit on the next page already, and the post-paginate
+                // sweep would move them a second page (row 14's "１回" at y -601.6).
+                if std::env::var_os("OXI_S1607_DISABLE").is_none() && split_y <= row_top + 0.1 {
+                    let shift = split_y - page_top;
+                    for e in row_elements.iter_mut() {
+                        if e.vmerge_restart_overflow_to_next_page && e.y - shift <= page_bottom + 0.5 {
+                            e.vmerge_restart_overflow_to_next_page = false;
+                        }
+                    }
+                }
+                let fits_fragment = |elem: &LayoutElement| fits_at(elem, split_y);
                 // If the fit rules move the entire row, it is no longer a
                 // split fragment: retain its original vertical alignment.
                 if split_valign && split_y <= row_top + 0.1 {
@@ -53244,7 +53309,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         0.0
                     };
-                if min_overflow_text_y.is_finite() {
+                // S1607: a whole-row move keeps the row's own geometry (top cell
+                // margin included); only a genuine continuation re-anchors.
+                let s1607_whole = std::env::var_os("OXI_S1607_DISABLE").is_none()
+                    && split_y <= row_top + 0.1;
+                if min_overflow_text_y.is_finite() && !s1607_whole {
                     let original_shift = split_y - page_top;
                     let correct_shift =
                         (min_overflow_text_y + original_shift) - (page_top + s817_cont_pad);
@@ -54816,7 +54885,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let is_cont = |c: &TableCell| {
                         matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
                     };
-                    let bygrid = std::env::var("OXI_S1192G").is_ok();
+                    let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
                     for (ci, remaining) in s1192_pending.iter_mut() {
                         if Self::s1192_cell_at(row, *ci, bygrid).is_some() {
                             *remaining -= row_height;
