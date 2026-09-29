@@ -376,6 +376,17 @@ impl Workbook {
         Ok(())
     }
 
+    /// Give a formula cell the answer it already holds, so that a formula
+    /// worked out on its own -- `evaluate` -- reads it without the whole
+    /// book being worked out first. A cell holding no formula is left alone.
+    pub fn set_cached(&mut self, sheet: &str, a1: &str, value: Value) -> Result<(), CalcError> {
+        let cell = self.cell_ref(a1)?;
+        if let Some(Cell::Formula { cached, .. }) = self.sheet_mut(sheet)?.cells.get_mut(&cell.coord()) {
+            *cached = value;
+        }
+        Ok(())
+    }
+
     /// One cell of an ARRAY formula: the formula is worked out once as a
     /// block and this cell shows the element `offset` (columns, rows) into
     /// it. Every member is given the whole formula, which is what Excel
@@ -897,6 +908,11 @@ impl Workbook {
                 }
             }
 
+            Expr::Function { name, args } if name == "INDEX" && self.index_range(args, sheet, depth + 1, at).is_some() => {
+                let (target, range) = self.index_range(args, sheet, depth + 1, at).expect("just asked");
+                Arg::Range(self.materialise(&target, &range, skip))
+            }
+
             Expr::Function { name, args } if name == "ISREF" => match args.as_slice() {
                 [only] => Arg::Value(Value::Logical(self.reference_of(only, sheet, depth + 1, at).is_some())),
                 _ => Arg::Value(Value::Error(ExcelError::Value)),
@@ -1350,8 +1366,39 @@ impl Workbook {
             Expr::Function { name, args } if name == "INDIRECT" => {
                 self.indirect_range(args, sheet, depth, at).ok()
             }
+            Expr::Function { name, args } if name == "INDEX" => self.index_range(args, sheet, depth, at),
             _ => None,
         }
+    }
+
+    /// `INDEX(reference, row, [col])` as the cells it names: a row or column
+    /// of 0, or left empty, is all of them. Measured: `=@INDEX(A1:A3,0)` in
+    /// row 1 is A1, and `=@INDEX(A1:B3,2,0)` in column Z is #VALUE!, the
+    /// answer being A2:B2. Only a plain range is taken; anything else is
+    /// left to the function.
+    fn index_range(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Option<(String, RangeRef)> {
+        if !(2..=3).contains(&args.len()) {
+            return None;
+        }
+        let (target, range) = self.reference_of(&args[0], sheet, depth, at)?;
+        let number = |expr: &Expr| -> Option<u32> {
+            let value = self.eval(expr, sheet, depth + 1, at).to_number().ok()?;
+            (value >= 0.0).then_some(value as u32)
+        };
+        let rows = range.end.row - range.start.row + 1;
+        let cols = range.end.col - range.start.col + 1;
+        let (row, col) = match args.get(2) {
+            Some(col) => (number(&args[1])?, number(col)?),
+            None if rows == 1 => (1, number(&args[1])?),
+            None if cols == 1 => (number(&args[1])?, 1),
+            None => return None,
+        };
+        if row > rows || col > cols {
+            return None;
+        }
+        let (first_row, last_row) = if row == 0 { (range.start.row, range.end.row) } else { (range.start.row + row - 1, range.start.row + row - 1) };
+        let (first_col, last_col) = if col == 0 { (range.start.col, range.end.col) } else { (range.start.col + col - 1, range.start.col + col - 1) };
+        Some((target, RangeRef::normalised(CellRef::new(first_col, first_row), CellRef::new(last_col, last_row))))
     }
 
     /// `OFFSET(reference, rows, cols, [height], [width])`: the base range moved
@@ -2482,6 +2529,40 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "B1"), Value::Number(1101.0));
         assert_eq!(wb.value("Sheet1", "B2"), Value::Number(1001.0));
         assert_eq!(wb.value("Sheet1", "B3"), Value::Number(1111.0));
+    }
+
+    /// An error as the criterion counts the cells holding that error.
+    /// Measured: over 1, 2, 3, #N/A, #DIV/0!, `COUNTIF(A1:A5,C1)` with C1
+    /// #N/A is 1, and `SUMIF` of it over 10s is 10.
+    #[test]
+    fn an_error_criterion_finds_that_error() {
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        for row in 1..=3 {
+            wb.set_value("Sheet1", &format!("A{row}"), Value::Number(row as f64)).unwrap();
+        }
+        for row in 1..=5 {
+            wb.set_value("Sheet1", &format!("B{row}"), Value::Number(10.0)).unwrap();
+        }
+        wb.set_formula("Sheet1", "A4", "=NA()").unwrap();
+        wb.set_formula("Sheet1", "A5", "=1/0").unwrap();
+        wb.set_formula("Sheet1", "C1", "=NA()").unwrap();
+        wb.set_formula("Sheet1", "C2", "=1/0").unwrap();
+        wb.set_formula("Sheet1", "D1", "=COUNTIF(A1:A5,C1)").unwrap();
+        wb.set_formula("Sheet1", "D2", "=COUNTIF(A1:A5,\"#N/A\")").unwrap();
+        wb.set_formula("Sheet1", "D3", "=SUMIF(A1:A5,C1,B1:B5)").unwrap();
+        wb.set_formula("Sheet1", "D4", "=SUMIFS(B1:B5,A1:A5,C2)").unwrap();
+        wb.set_formula("Sheet1", "D5", "=COUNTIFS(A1:A5,#DIV/0!)").unwrap();
+        wb.set_formula("Sheet1", "D6", "=AVERAGEIF(A1:A5,C1,B1:B5)").unwrap();
+        wb.set_formula("Sheet1", "D7", "=AVERAGEIF(A1:A3,C1,B1:B3)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "D2"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "D3"), Value::Number(10.0));
+        assert_eq!(wb.value("Sheet1", "D4"), Value::Number(10.0));
+        assert_eq!(wb.value("Sheet1", "D5"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "D6"), Value::Number(10.0));
+        assert_eq!(wb.value("Sheet1", "D7"), Value::Error(ExcelError::DivZero));
     }
 
     /// `@` takes the cell of a range in line with the asking cell, and

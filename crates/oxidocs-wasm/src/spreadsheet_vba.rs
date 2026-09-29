@@ -9030,7 +9030,12 @@ impl<'a> WorkbookHost<'a> {
             .and_then(|value| value.strip_suffix(']'))
             .unwrap_or(expression)
             .trim();
-        let (sheet, reference) = match expression.rsplit_once('!') {
+        // A `!` inside a formula -- `#DIV/0!`, or `Sheet2!A1` among other
+        // things -- does not make the whole of it a reference to a sheet.
+        let qualified = expression
+            .rsplit_once('!')
+            .filter(|(sheet_name, _)| !sheet_name.contains(['(', ')', ',', '"', '#', '+', '*', '/', '&', '=']));
+        let (sheet, reference) = match qualified {
             Some((sheet_name, reference)) => {
                 let mut sheet_name = sheet_name.trim();
                 if let Some(workbook_end) = sheet_name.rfind(']') {

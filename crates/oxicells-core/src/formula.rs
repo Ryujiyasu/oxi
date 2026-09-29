@@ -121,12 +121,21 @@ pub fn evaluate_expression(
     now: Option<f64>,
 ) -> Option<oxicells_calc::Value> {
     let name = workbook.sheets.get(sheet)?.name.clone();
-    let book = assemble_with_links(
+    let mut book = assemble_with_links(
         &workbook.sheets,
         &workbook.defined_names,
         &workbook.external_books,
         now,
     );
+    // A formula cell read here answers what it holds: measured,
+    // `Evaluate("ISNA(A4)")` with A4 `=NA()` is True.
+    for sheet in &workbook.sheets {
+        for row in &sheet.rows {
+            for cell in row.cells.iter().filter(|cell| cell.formula.is_some()) {
+                let _ = book.set_cached(&sheet.name, &a1(cell.col, row.index), to_calc(&cell.value));
+            }
+        }
+    }
     book.evaluate(&name, formula).ok()
 }
 

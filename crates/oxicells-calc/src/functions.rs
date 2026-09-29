@@ -1068,7 +1068,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // N turns a value into a number: a number stays, a logical is 0/1, a
         // date is its serial (already a number here), and text is 0. An error
         // arrives already handed back by the error check above.
-        "N" => Ok(match one_value(args) {
+        // Of a range, the first cell: measured, `=N(A1:A3)` over 1,2,3 is 1.
+        "N" => Ok(match match args.first() {
+            Some(Arg::Range(block)) => block.cells.first().cloned().unwrap_or(Value::Blank),
+            _ => one_value(args),
+        } {
             Value::Number(n) => Value::Number(n),
             Value::Logical(b) => Value::Number(f64::from(b)),
             _ => Value::Number(0.0),
@@ -1336,11 +1340,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             // COUNTIFS it is the first range to test, and is only used for its
             // length.
             let over = args[0].flatten();
-            for pair in pairs.chunks(2) {
-                if let Some(why) = pair[1].scalar().err() {
-                    return Err(why);
-                }
-            }
+            // An error for a criterion looks for that error, as COUNTIF's
+            // does: measured, `SUMIFS(B1:B5,A1:A5,C2)` with C2 #DIV/0! adds
+            // the row holding #DIV/0!.
             let mut total = 0.0;
             let mut seen = 0.0;
             for at in 0..over.len() {
@@ -1747,12 +1749,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if args.len() < 2 {
                 return Err(ExcelError::Value);
             }
+            // An error for the criterion looks for that error: measured,
+            // SUMIF over a range holding one #N/A, asked for #N/A, adds up
+            // that row.
             let asked = args[1].scalar();
-            // The criterion itself being an error is a different matter from a
-            // range holding one: there is nothing to test against.
-            if let Some(why) = asked.err() {
-                return Err(why);
-            }
             let criteria = Criteria::parse(&asked);
             let tested = args[0].flatten();
             let summed = match args.get(2) {
@@ -5991,19 +5991,13 @@ mod tests {
     }
 
     #[test]
-    fn the_criterion_itself_being_an_error_is_a_different_matter() {
-        // A range holding an error is a fact about a row. A CRITERION that is
-        // an error leaves nothing to test against at all.
+    fn a_criterion_that_is_an_error_looks_for_that_error() {
+        // Measured in Excel: an error for the criterion counts and adds the
+        // rows holding that same error, and here there are none.
         let amounts = range(&[n(10.0), n(20.0), n(30.0)], 1);
         let broken = Arg::Value(Value::Error(ExcelError::Value));
-        assert_eq!(
-            call("SUMIF", &[amounts.clone(), broken.clone()]),
-            Value::Error(ExcelError::Value),
-        );
-        assert_eq!(
-            call("SUMIFS", &[amounts.clone(), amounts, broken]),
-            Value::Error(ExcelError::Value),
-        );
+        assert_eq!(call("SUMIF", &[amounts.clone(), broken.clone()]), n(0.0));
+        assert_eq!(call("SUMIFS", &[amounts.clone(), amounts, broken]), n(0.0));
     }
 
     /// 2 4 4 4 5 5 7 — a set chosen so the mean, the median and the mode are
