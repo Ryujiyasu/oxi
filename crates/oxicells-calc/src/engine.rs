@@ -1425,6 +1425,7 @@ impl Workbook {
             // `BYROW(A1:C2,LAMBDA(r,SUM(r)))` 4,3 (text is not summed) and
             // `MAKEARRAY(2,2,LAMBDA(r,c,r*c))` 1,2,2,4.
             Expr::Function { name, args } if name == "GROUPBY" => self.group_by(args, sheet, depth, skip, at),
+            Expr::Function { name, args } if name == "PIVOTBY" => self.pivot_by(args, sheet, depth, skip, at),
             Expr::Function { name, args }
                 if matches!(name.as_str(), "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY") =>
             {
@@ -1860,9 +1861,9 @@ impl Workbook {
         let headers_given = args.get(3).map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at).scalar());
         let headers = match headers_given {
             None | Some(Value::Blank) => {
-                // Left out, the first row is headings when the values'
-                // first cell is text.
-                if matches!(values.at(0, 0), Value::Text(_)) { 3 } else { 0 }
+                // Left out, the first row is taken as headings, not shown,
+                // when the values' first cell is text (measured on PIVOTBY).
+                if matches!(values.at(0, 0), Value::Text(_)) { 1 } else { 0 }
             }
             Some(value) => match value.to_number() {
                 Ok(n) => n as i64,
@@ -1890,6 +1891,11 @@ impl Workbook {
             let cells: Vec<Value> = picked.iter().map(|row| values.at(column, *row)).collect();
             let block = Arg::Range(RangeData { width: 1, height: cells.len(), cells });
             match &args[2] {
+                Expr::Name(function) if function.eq_ignore_ascii_case("PERCENTOF") => {
+                    let all: Vec<Value> = rows.iter().map(|row| values.at(column, *row)).collect();
+                    let all = Arg::Range(RangeData { width: 1, height: all.len(), cells: all });
+                    crate::functions::call("PERCENTOF", &[block, all])
+                }
                 Expr::Name(function) => crate::functions::call(&function.to_uppercase(), &[block]),
                 lambda => match self.call_lambda(lambda, vec![block], sheet, depth, skip, at) {
                     Arg::Value(value) => value,
@@ -1977,6 +1983,188 @@ impl Workbook {
         }
         let height = out.len();
         Arg::Range(RangeData { width, height, cells: out.into_iter().flatten().collect() })
+    }
+
+    /// PIVOTBY(row_fields, col_fields, values, function, [field_headers],
+    /// [row_total_depth], [row_sort_order], [col_total_depth],
+    /// [col_sort_order], [filter_array], [relative_to]). Measured: a first
+    /// row of the column keys (ascending) after a blank corner, then a row per
+    /// row key (ascending); a "Total" column and row by default, first when
+    /// the depth is negative, none at 0; a missing pairing is blank; headers
+    /// 3 adds a row naming the column field and, below the keys, one naming
+    /// the row field and the value under each column; row_sort n sorts the
+    /// rows by output column |n|, col_sort n the columns by their key;
+    /// PERCENTOF measures each cell against its column's total.
+    fn pivot_by(&self, args: &[Expr], sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        use std::cmp::Ordering;
+        let bad = |why: ExcelError| Arg::Value(Value::Error(why));
+        if args.len() < 4 {
+            return bad(ExcelError::Value);
+        }
+        let block = |i: usize| block_of(&self.eval_arg_inner(&args[i], sheet, depth + 1, skip, at));
+        let (row_fields, col_fields, values) = (block(0), block(1), block(2));
+        let height = values.height;
+        if row_fields.height != height || col_fields.height != height || height == 0 {
+            return bad(ExcelError::Value);
+        }
+        let setting = |i: usize, default: i64| -> Result<i64, ExcelError> {
+            match args.get(i) {
+                None => Ok(default),
+                Some(expr) => match self.eval_arg_inner(expr, sheet, depth + 1, skip, at).scalar() {
+                    Value::Blank => Ok(default),
+                    value => value.to_number().map(|n| n as i64),
+                },
+            }
+        };
+        let headers_default = if matches!(values.at(0, 0), Value::Text(_)) { 1 } else { 0 };
+        let settings = (|| -> Result<[i64; 5], ExcelError> {
+            Ok([setting(4, headers_default)?, setting(5, 1)?, setting(6, 0)?, setting(7, 1)?, setting(8, 0)?])
+        })();
+        let [headers, row_total, row_sort, col_total, col_sort] = match settings {
+            Ok(held) => held,
+            Err(why) => return bad(why),
+        };
+        let first_row = if headers == 1 || headers == 3 { 1 } else { 0 };
+        let keep: Vec<bool> = match args.get(9) {
+            None => vec![true; height],
+            Some(expr) => {
+                let filter = block_of(&self.eval_arg_inner(expr, sheet, depth + 1, skip, at));
+                (0..height).map(|row| filter.at(0, row).to_logical().unwrap_or(false)).collect()
+            }
+        };
+        let rows: Vec<usize> = (first_row..height).filter(|row| keep[*row]).collect();
+        let order = |a: &Value, b: &Value| crate::value::compare(a, b).unwrap_or(Ordering::Equal);
+        let same = |a: &[Value], b: &[Value]| a.iter().zip(b).all(|(x, y)| order(x, y).is_eq());
+        let keys_of = |fields: &RangeData| -> Vec<(Vec<Value>, Vec<usize>)> {
+            let mut groups: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
+            for row in &rows {
+                let key: Vec<Value> = (0..fields.width).map(|col| fields.at(col, *row)).collect();
+                match groups.iter_mut().find(|(held, _)| same(held, &key)) {
+                    Some((_, members)) => members.push(*row),
+                    None => groups.push((key, vec![*row])),
+                }
+            }
+            groups.sort_by(|(a, _), (b, _)| {
+                a.iter().zip(b).map(|(x, y)| order(x, y)).find(|o| !o.is_eq()).unwrap_or(Ordering::Equal)
+            });
+            groups
+        };
+        let row_groups = keys_of(&row_fields);
+        let mut col_groups = keys_of(&col_fields);
+        if col_sort != 0 {
+            let field = (col_sort.unsigned_abs() as usize).saturating_sub(1).min(col_fields.width - 1);
+            col_groups.sort_by(|(a, _), (b, _)| {
+                let o = order(&a[field], &b[field]);
+                if col_sort < 0 { o.reverse() } else { o }
+            });
+        }
+        let blank = || Value::Text(String::new());
+        let aggregate = |picked: &[usize], relative: &[usize], column: usize| -> Value {
+            if picked.is_empty() {
+                return blank();
+            }
+            let range = |members: &[usize]| {
+                let cells: Vec<Value> = members.iter().map(|row| values.at(column, *row)).collect();
+                Arg::Range(RangeData { width: 1, height: cells.len(), cells })
+            };
+            match &args[3] {
+                Expr::Name(function) if function.eq_ignore_ascii_case("PERCENTOF") => {
+                    crate::functions::call("PERCENTOF", &[range(picked), range(relative)])
+                }
+                Expr::Name(function) => crate::functions::call(&function.to_uppercase(), &[range(picked)]),
+                lambda => match self.call_lambda(lambda, vec![range(picked)], sheet, depth, skip, at) {
+                    Arg::Value(value) => value,
+                    Arg::Range(range) => range.cells.first().cloned().unwrap_or(Value::Blank),
+                },
+            }
+        };
+        // The columns in order: each key's rows, the total's (all of them).
+        let mut columns: Vec<(Option<Vec<Value>>, Vec<usize>)> =
+            col_groups.iter().map(|(key, members)| (Some(key.clone()), members.clone())).collect();
+        if col_total != 0 {
+            let total = (None, rows.clone());
+            if col_total < 0 {
+                columns.insert(0, total);
+            } else {
+                columns.push(total);
+            }
+        }
+        let cells_for = |row_members: &[usize]| -> Vec<Value> {
+            let mut out = Vec::new();
+            for (_, col_members) in &columns {
+                let picked: Vec<usize> = row_members.iter().copied().filter(|row| col_members.contains(row)).collect();
+                for column in 0..values.width {
+                    out.push(aggregate(&picked, col_members, column));
+                }
+            }
+            out
+        };
+        let mut body: Vec<Vec<Value>> = row_groups
+            .iter()
+            .map(|(key, members)| {
+                let mut line = key.clone();
+                line.extend(cells_for(members));
+                line
+            })
+            .collect();
+        let width = row_fields.width + columns.len() * values.width;
+        if row_sort != 0 {
+            let column = (row_sort.unsigned_abs() as usize).saturating_sub(1).min(width - 1);
+            // A blank cell sorts last either way (measured).
+            let empty = |v: &Value| matches!(v, Value::Blank) || matches!(v, Value::Text(t) if t.is_empty());
+            body.sort_by(|a, b| match (empty(&a[column]), empty(&b[column])) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => {
+                    let o = order(&a[column], &b[column]);
+                    if row_sort < 0 { o.reverse() } else { o }
+                }
+            });
+        }
+        let label = |fields: usize| -> Vec<Value> {
+            let mut key = vec![blank(); fields];
+            key[0] = Value::Text("Total".to_string());
+            key
+        };
+        if row_total != 0 {
+            let mut total = label(row_fields.width);
+            total.extend(cells_for(&rows));
+            if row_total < 0 {
+                body.insert(0, total);
+            } else {
+                body.push(total);
+            }
+        }
+        let mut out: Vec<Vec<Value>> = Vec::new();
+        if headers == 3 {
+            let mut line = vec![blank(); width];
+            for level in 0..col_fields.width {
+                line[row_fields.width + level] = col_fields.at(level, 0);
+            }
+            out.push(line);
+        }
+        for level in 0..col_fields.width {
+            let mut line = vec![blank(); row_fields.width];
+            for (key, _) in &columns {
+                let name = match key {
+                    Some(key) => key[level].clone(),
+                    None if level == 0 => Value::Text("Total".to_string()),
+                    None => blank(),
+                };
+                line.extend(std::iter::repeat_n(name, values.width));
+            }
+            out.push(line);
+        }
+        if headers == 3 {
+            let mut line: Vec<Value> = (0..row_fields.width).map(|col| row_fields.at(col, 0)).collect();
+            for _ in &columns {
+                line.extend((0..values.width).map(|col| values.at(col, 0)));
+            }
+            out.push(line);
+        }
+        out.extend(body);
+        let tall = out.len();
+        Arg::Range(RangeData { width, height: tall, cells: out.into_iter().flatten().collect() })
     }
 
     /// Call a LAMBDA written in place with these values for its
