@@ -434,7 +434,10 @@ impl<'a> Runtime<'a> {
             module,
             host: None,
             steps: 0,
-            max_steps: 100_000,
+            // Room for a real macro's loops -- a pass over a few thousand
+            // rows is hundreds of thousands of steps -- while still stopping
+            // a loop that never ends.
+            max_steps: 50_000_000,
             depth: 0,
             max_depth: 128,
             module_values: BTreeMap::new(),
