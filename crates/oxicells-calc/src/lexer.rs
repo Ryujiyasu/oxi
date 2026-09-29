@@ -356,6 +356,28 @@ pub fn canonical_formula(
         let calls = matches!(tokens.get(index + 1), Some((Token::LParen, _)));
         let beside_colon = matches!(tokens.get(index + 1), Some((Token::Colon, _)))
             || (index > 0 && matches!(tokens.get(index - 1), Some((Token::Colon, _))));
+        // A sign written straight onto a nought is dropped: measured, `=-0`
+        // reads back `=0`, `=1--0` `=1-0`, `=--0` `=-0` and `=+0` `=0`, while
+        // `=- 0`, `=-5` and `=+A1` keep theirs.
+        if matches!(token, Token::Minus | Token::Plus)
+            && gap.is_empty()
+            && matches!(tokens.get(index + 1), Some((Token::Number(value), _)) if *value == 0.0)
+            && !matches!(
+                index.checked_sub(1).and_then(|before| tokens.get(before)),
+                Some((
+                    Token::Number(_)
+                        | Token::Name { .. }
+                        | Token::Text(_)
+                        | Token::ErrorLit(_)
+                        | Token::RParen
+                        | Token::Percent
+                        | Token::Table { .. },
+                    _
+                ))
+            )
+        {
+            continue;
+        }
         match token {
             // The first sheet of `Qa:Qc!A1` is a sheet, spelt as it was named.
             Token::Name { sheet: None, name }

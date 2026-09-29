@@ -12369,6 +12369,11 @@ impl<'a> WorkbookHost<'a> {
                 .find(|called| called.eq_ignore_ascii_case(asked))
                 .map(str::to_string)
         };
+        // A reference into this very workbook loses the book's name: measured,
+        // `=[Book1]Sheet1!A1` reads back `=Sheet1!A1` and
+        // `='[Book1]My Data'!A1` `='My Data'!A1`.
+        let book = self.file_name.as_deref().unwrap_or("Book1");
+        let placed = without_own_book(&placed, book);
         let placed = oxicells_calc::canonical_formula(&placed, &sheet_case, &name_case);
         Ok(oxicells_calc::normalise_formula_ranges(&placed))
     }
@@ -23066,6 +23071,29 @@ fn from_cell_value(value: &CellValue) -> Value {
         CellValue::Number(value) => Value::Double(*value),
         CellValue::Boolean(value) => Value::Boolean(*value),
     }
+}
+
+/// A formula with every `[book]` naming this workbook taken out, outside its
+/// string literals.
+fn without_own_book(formula: &str, book: &str) -> String {
+    let wanted = format!("[{book}]").to_lowercase();
+    let mut out = String::with_capacity(formula.len());
+    let mut quoted = false;
+    let mut rest = formula;
+    while let Some(ch) = rest.chars().next() {
+        if ch == '"' {
+            quoted = !quoted;
+        }
+        if !quoted && ch == '[' && rest.len() >= wanted.len() && rest.is_char_boundary(wanted.len())
+            && rest[..wanted.len()].to_lowercase() == wanted
+        {
+            rest = &rest[wanted.len()..];
+            continue;
+        }
+        out.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
 }
 
 /// The format a Currency written to a cell puts on it.
