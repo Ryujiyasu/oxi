@@ -103,6 +103,9 @@ pub struct Document {
     /// Keep a floating table together when it fits on a fresh page.
     #[serde(default)]
     pub keep_floating_tables_together: bool,
+    /// Preserve paragraph spacing between same-style neighbors inside cells.
+    #[serde(default)]
+    pub preserve_same_style_cell_spacing: bool,
 }
 
 /// S1553: one merged continuous section's header/footer set (see
@@ -478,6 +481,9 @@ pub struct RunStyle {
     /// East Asian font family (w:rFonts eastAsia) for CJK characters
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family_east_asia: Option<String>,
+    /// Whether this resolved family came from document defaults.
+    #[serde(default)]
+    pub east_asia_from_defaults: bool,
     /// Preferred script slot for ambiguous symbols; None inherits the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_hint_east_asia: Option<bool>,
@@ -524,6 +530,9 @@ pub struct RunStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latin_lang: Option<String>,
     pub font_size: Option<f32>,
+    /// Size inherited from document defaults, below table and named styles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub font_size_from_defaults: bool,
     pub bold: bool,
     /// S976: `w:b` was EXPLICITLY set (the element is present, whatever its
     /// `w:val`) — distinguishes an explicit `<w:b w:val="0"/>`, which must beat
@@ -700,6 +709,7 @@ impl Default for RunStyle {
             font_family_east_asia: None,
             font_family_cs: None,
             has_explicit_east_asia: false,
+            east_asia_from_defaults: false,
             east_asia_hint: false,
             font_hint_east_asia: None,
             east_asia_from_theme: false,
@@ -708,6 +718,7 @@ impl Default for RunStyle {
             east_asia_lang: None,
             latin_lang: None,
             font_size: None,
+            font_size_from_defaults: false,
             bold: false,
             has_explicit_bold: false,
             italic: false,
@@ -939,6 +950,9 @@ pub struct Image {
     /// behindDoc=1 places the object behind body text. Default false.
     #[serde(default)]
     pub behind_doc: bool,
+    /// The floating image may extend outside its containing table cell.
+    #[serde(default)]
+    pub allow_cell_overflow: bool,
     /// S965: the resolved before/after spacing of the image-only HOST paragraph
     /// (S537 lowers that paragraph to a bare `Block::Image`, so without this the
     /// spacing at both of its boundaries is lost). Layout collapses
@@ -2062,6 +2076,9 @@ pub struct TableStyle {
     /// character style / direct rPr.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_font_size: Option<f32>,
+    /// Character properties declared by the table style chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_style: Option<RunStyle>,
     /// Table floating position (w:tblpPr)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<TablePosition>,

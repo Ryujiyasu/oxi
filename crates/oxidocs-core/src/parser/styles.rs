@@ -122,7 +122,12 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                         S1397_IN_RPR_DEFAULT.with(|c| c.set(true));
                         let run_style = parse_run_properties_block(&mut reader, theme);
                         S1397_IN_RPR_DEFAULT.with(|c| c.set(false));
-                        let run_style = run_style?;
+                        let mut run_style = run_style?;
+                        if std::env::var_os("OXI_EA_ORIGIN_DISABLE").is_none() {
+                            // Document defaults are inherited, even when they name a literal face.
+                            run_style.has_explicit_east_asia = false;
+                        }
+                        run_style.east_asia_from_defaults = run_style.font_family_east_asia.is_some();
                         styles.doc_default_run_style = Some(run_style);
                     }
                     "pPr" if in_ppr_default => {
@@ -171,7 +176,7 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                                     },
                                 );
                             } else if typ == "table" {
-                                let (mut tbl_style, cond_fmts) = parse_table_style_definition(&mut reader)?;
+                                let (mut tbl_style, cond_fmts) = parse_table_style_definition(&mut reader, theme)?;
                                 tbl_style.is_custom = is_custom;
                                 if !cond_fmts.is_empty() {
                                     styles.table_conditional_formats.insert(id.clone(), cond_fmts);
@@ -514,6 +519,7 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     }
     if child.font_family_east_asia.is_none() {
         child.font_family_east_asia = parent.font_family_east_asia.clone();
+        child.east_asia_from_defaults = parent.east_asia_from_defaults;
     }
     if child.font_family_cs.is_none() {
         child.font_family_cs = parent.font_family_cs.clone();
@@ -531,6 +537,7 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     }
     if child.font_size.is_none() {
         child.font_size = parent.font_size;
+        child.font_size_from_defaults = parent.font_size_from_defaults;
     }
     if child.color.is_none() {
         child.color = parent.color.clone();
@@ -653,7 +660,10 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                         } else if key == "eastAsiaTheme" {
                             if rs.font_family_east_asia.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                                let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some()
+                                    || (std::env::var_os("OXI_EA_ORIGIN_DISABLE").is_none()
+                                        && S1397_IN_RPR_DEFAULT.with(|c| c.get())
+                                        && !val.contains("EastAsia")) {
                                     resolve_theme_font(&val, theme)
                                 } else if val.starts_with("major") {
                                     theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
@@ -934,7 +944,10 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 } else if key == "eastAsiaTheme" {
                     if rs.font_family_east_asia.is_none() {
                         let val = String::from_utf8_lossy(&attr.value);
-                        let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                        let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some()
+                                    || (std::env::var_os("OXI_EA_ORIGIN_DISABLE").is_none()
+                                        && S1397_IN_RPR_DEFAULT.with(|c| c.get())
+                                        && !val.contains("EastAsia")) {
                                     resolve_theme_font(&val, theme)
                                 } else if val.starts_with("major") {
                             theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
@@ -1441,7 +1454,10 @@ fn parse_style_definition(
                             } else if key == "eastAsiaTheme" {
                                 if run_style.font_family_east_asia.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
-                                    let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                                    let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some()
+                                    || (std::env::var_os("OXI_EA_ORIGIN_DISABLE").is_none()
+                                        && S1397_IN_RPR_DEFAULT.with(|c| c.get())
+                                        && !val.contains("EastAsia")) {
                                     resolve_theme_font(&val, theme)
                                 } else if val.starts_with("major") {
                                         theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
@@ -1644,7 +1660,10 @@ fn parse_style_definition(
                                 } else if key == "eastAsiaTheme" {
                                     if run_style.font_family_east_asia.is_none() {
                                         let val = String::from_utf8_lossy(&attr.value);
-                                        let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some() {
+                                        let font = if std::env::var_os("OXI_THEME_SLOT_SELECTOR").is_some()
+                                    || (std::env::var_os("OXI_EA_ORIGIN_DISABLE").is_none()
+                                        && S1397_IN_RPR_DEFAULT.with(|c| c.get())
+                                        && !val.contains("EastAsia")) {
                                     resolve_theme_font(&val, theme)
                                 } else if val.starts_with("major") {
                                             theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
@@ -2098,6 +2117,11 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                     if child.run_font_size.is_none() {
                         child.run_font_size = parent.run_font_size;
                     }
+                    if let Some(parent_run) = &parent.run_style {
+                        if let Some(child_run) = &mut child.run_style {
+                            merge_run_style(child_run, parent_run);
+                        } else { child.run_style = Some(parent_run.clone()); }
+                    }
                 }
             }
         }
@@ -2107,7 +2131,7 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
 /// Parse a table style definition (type="table") from styles.xml.
 /// Extracts tblBorders, tblCellMar, and tblStylePr conditional formats.
 /// Returns (TableStyle, conditional_formats_map).
-fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyle, std::collections::HashMap<String, TableConditionalFormat>), ParseError> {
+fn parse_table_style_definition(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -> Result<(TableStyle, std::collections::HashMap<String, TableConditionalFormat>), ParseError> {
     let mut style = TableStyle::default();
     let mut conditional_formats: std::collections::HashMap<String, TableConditionalFormat> = std::collections::HashMap::new();
     let mut depth = 0u32;
@@ -2240,35 +2264,9 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                         continue;
                     }
                     "rPr" if depth == 0 && !in_tbl_pr => {
-                        // S935: table style base run properties. w:sz here
-                        // applies to every run in the table (above
-                        // docDefaults, below the paragraph-style chain).
-                        let mut rpr_depth = 0u32;
-                        loop {
-                            match reader.read_event()? {
-                                Event::Empty(pe) => {
-                                    if rpr_depth == 0
-                                        && local_name(pe.name().as_ref()) == "sz"
-                                    {
-                                        for attr in pe.attributes().flatten() {
-                                            if local_name(attr.key.as_ref()) == "val" {
-                                                style.run_font_size = String::from_utf8_lossy(&attr.value)
-                                                    .parse::<f32>()
-                                                    .ok()
-                                                    .map(|v| v / 2.0);
-                                            }
-                                        }
-                                    }
-                                }
-                                Event::Start(_) => { rpr_depth += 1; }
-                                Event::End(pe) => {
-                                    if local_name(pe.name().as_ref()) == "rPr" && rpr_depth == 0 { break; }
-                                    if rpr_depth > 0 { rpr_depth -= 1; }
-                                }
-                                Event::Eof => break,
-                                _ => {}
-                            }
-                        }
+                        let run = parse_run_properties_block(reader, theme)?;
+                        style.run_font_size = run.font_size;
+                        style.run_style = Some(run);
                         continue;
                     }
                     "tblPr" if depth == 0 => { in_tbl_pr = true; }
@@ -2695,5 +2693,35 @@ mod frame_inheritance_tests {
         let mut alignment = Some(read(r#"xAlign="right""#));
         inherit_frame_properties(&mut alignment, &Some(fp));
         assert_eq!(alignment.unwrap().x_align.as_deref(), Some("right"));
+    }
+}
+
+#[cfg(test)]
+mod table_ea_layer_tests {
+    use super::*;
+    #[test]
+    fn same_named_face_keeps_its_origin_when_defaults_are_merged() {
+        let defaults = RunStyle { font_family_east_asia: Some("Yu Mincho".into()),
+            east_asia_from_defaults: true, ..RunStyle::default() };
+        let mut inherited = RunStyle::default();
+        merge_run_style(&mut inherited, &defaults);
+        assert!(inherited.east_asia_from_defaults);
+        let mut explicit = RunStyle { font_family_east_asia: Some("Yu Mincho".into()),
+            ..RunStyle::default() };
+        merge_run_style(&mut explicit, &defaults);
+        assert!(!explicit.east_asia_from_defaults);
+        assert_eq!(inherited.font_family_east_asia, explicit.font_family_east_asia);
+    }
+    #[test]
+    fn table_ea_layer_inherits_parent_face_but_retains_child_size() {
+        let xml = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:style w:type="table" w:styleId="Base"><w:rPr><w:rFonts w:eastAsia="MS Mincho"/><w:sz w:val="22"/></w:rPr></w:style>
+          <w:style w:type="table" w:styleId="Child"><w:basedOn w:val="Base"/><w:rPr><w:sz w:val="18"/></w:rPr></w:style>
+        </w:styles>"#;
+        let sheet = parse_styles(xml, &ThemeColors::default()).unwrap();
+        let child = &sheet.table_styles["Child"];
+        assert_eq!(child.run_font_size, Some(9.0));
+        assert_eq!(child.run_style.as_ref().unwrap().font_family_east_asia.as_deref(), Some("MS Mincho"));
+        assert!(!child.run_style.as_ref().unwrap().east_asia_from_defaults);
     }
 }

@@ -28,7 +28,10 @@ impl Obstacle {
         } else {
             let top = y - image.effect_extent_t.max(0.0);
             let bottom = y + image.height + image.effect_extent_b.max(0.0);
-            vec![(x, top), (x + image.width, top), (x + image.width, bottom), (x, bottom)]
+            let effect = std::env::var_os("OXI_CELL_EMPTY_FLOAT_DISABLE").is_none();
+            let left = x - if effect { position.eff_l.max(0.0) } else { 0.0 };
+            let right = x + image.width + if effect { position.eff_r.max(0.0) } else { 0.0 };
+            vec![(left, top), (right, top), (right, bottom), (left, bottom)]
         };
         let bottom = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
         Some(Self {
@@ -93,6 +96,11 @@ pub(super) struct ParagraphWrap {
 impl ParagraphWrap {
     pub fn frame(&self, index: usize, width: f32, first_width: f32,
         indent: f32, first_indent: f32) -> LineFrame {
+        self.frame_with_minimum(index, width, first_width, indent, first_indent, 0.0)
+    }
+
+    pub fn frame_with_minimum(&self, index: usize, width: f32, first_width: f32,
+        indent: f32, first_indent: f32, minimum: f32) -> LineFrame {
         let mut top = self.top;
         let mut segment = 0;
         loop {
@@ -124,7 +132,7 @@ impl ParagraphWrap {
                 if let Some(first) = intervals.first_mut() {
                     first.0 += inset;
                 }
-                intervals.retain(|(l, r)| r > l);
+                intervals.retain(|(l, r)| r > l && r - l + 0.001 >= minimum);
                 if intervals.is_empty() {
                     if next_bottom.is_finite() && next_bottom > top {
                         top = next_bottom;
@@ -224,4 +232,15 @@ mod tests {
         let frame = wrap.frame(0, 100.0, 100.0, 0.0, 0.0);
         assert_eq!((frame.left, frame.width), (23.0, 67.0));
     }
+    #[test]
+    fn minimum_lane_skips_a_sliver_but_keeps_a_full_narrow_cell() {
+        let wrap = ParagraphWrap { obstacles: vec![rectangle(0.0, 0.0, 82.1, 40.0)],
+            top: 0.0, heights: vec![12.0] };
+        assert_eq!(wrap.frame_with_minimum(0, 100.0, 100.0, 0.0, 0.0, 18.0).top, 40.0);
+        let exact = ParagraphWrap { obstacles: vec![rectangle(0.0, 0.0, 82.0, 40.0)], ..wrap.clone() };
+        assert_eq!(exact.frame_with_minimum(0, 100.0, 100.0, 0.0, 0.0, 18.0).top, 0.0);
+        let narrow = ParagraphWrap { obstacles: vec![], ..wrap };
+        assert_eq!(narrow.frame_with_minimum(0, 10.0, 10.0, 0.0, 0.0, 18.0).top, 0.0);
+    }
+
 }

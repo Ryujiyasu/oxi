@@ -146,6 +146,118 @@ pub fn leaf_char_bbox(c: char, ctx: &MathLayoutContext) -> MathBBox {
     }
 }
 
+/// S1596 (2026-09-29): Cambria Math glyph ink extents (design units), for the
+/// fraction gap test below. Extracted from the installed face's outlines.
+fn glyph_ink_du(c: char) -> Option<(f32, f32)> {
+    static T: std::sync::OnceLock<(f32, std::collections::HashMap<u32, (f32, f32)>)> = std::sync::OnceLock::new();
+    let (upm, map) = T.get_or_init(|| {
+        let v: serde_json::Value = serde_json::from_str(include_str!("../font/data/cambria_math_glyph_heights.json"))
+            .expect("embedded Cambria Math glyph heights should be valid JSON");
+        let upm = v["upm"].as_f64().unwrap_or(2048.0) as f32;
+        let mut m = std::collections::HashMap::new();
+        if let Some(h) = v["heights"].as_object() {
+            for (k, val) in h {
+                if let (Ok(cp), Some(a)) = (k.parse::<u32>(), val.as_array()) {
+                    let top = a.first().and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                    let bot = a.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                    m.insert(cp, (top, bot));
+                }
+            }
+        }
+        (upm, m)
+    });
+    map.get(&(c as u32)).map(|(t, b)| (t / upm, -b / upm))
+}
+
+/// Ink (ascent, descent) of an expression above/below its baseline, in points.
+/// Leaves use the glyph outlines; structures follow the same composition as
+/// `layout_expr`; anything else falls back to the layout box.
+fn ink_extent(expr: &MathExpr, ctx: &MathLayoutContext) -> (f32, f32) {
+    let table = MathTable::cambria_math();
+    match expr {
+        MathExpr::Text(t) | MathExpr::Run { text: t, .. } => {
+            let eff = ctx.effective_font_size();
+            let mut a = 0.0f32;
+            let mut d = 0.0f32;
+            for c in t.chars() {
+                let (ga, gd) = glyph_ink_du(math_substitute(c)).or_else(|| glyph_ink_du(c)).unwrap_or((0.7, 0.2));
+                a = a.max(ga * eff);
+                d = d.max(gd * eff);
+            }
+            (a, d)
+        }
+        MathExpr::Seq(children) => children.iter().map(|c| ink_extent(c, ctx))
+            .fold((0.0f32, 0.0f32), |(a, d), (ca, cd)| (a.max(ca), d.max(cd))),
+        MathExpr::Fraction { num, den, .. } => {
+            let sub_ctx = if ctx.style.is_display() { *ctx } else { ctx.descend_script() };
+            let fs = ctx.font_size;
+            let (up_du, down_du) = if ctx.style.is_display() {
+                (table.constants.FractionNumeratorDisplayStyleShiftUp, table.constants.FractionDenominatorDisplayStyleShiftDown)
+            } else {
+                (table.constants.FractionNumeratorShiftUp, table.constants.FractionDenominatorShiftDown)
+            };
+            let (up, down) = fraction_shifts(&table, fs, ctx.style.is_display(),
+                table.du_to_pt(up_du, fs), table.du_to_pt(down_du, fs), num, den, &sub_ctx);
+            let (na, _) = ink_extent(num, &sub_ctx);
+            let (_, dd) = ink_extent(den, &sub_ctx);
+            (up + na, down + dd)
+        }
+        MathExpr::Radical { radicand, .. } => {
+            let (ra, rd) = ink_extent(radicand, ctx);
+            let fs = ctx.font_size;
+            let gap_du = if ctx.style.is_display() { table.constants.RadicalDisplayStyleVerticalGap } else { table.constants.RadicalVerticalGap };
+            let gap = table.du_to_pt(gap_du, fs);
+            let thk = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
+            (ra + gap + thk, rd)
+        }
+        MathExpr::Superscript { base, sup } => {
+            let (ba, bd) = ink_extent(base, ctx);
+            let (sa, _) = ink_extent(sup, &ctx.descend_script());
+            let up = table.du_to_pt(table.constants.SuperscriptShiftUp, ctx.font_size);
+            (ba.max(sa + up), bd)
+        }
+        MathExpr::Subscript { base, sub } => {
+            let (ba, bd) = ink_extent(base, ctx);
+            let (_, sd) = ink_extent(sub, &ctx.descend_script());
+            let dn = table.du_to_pt(table.constants.SubscriptShiftDown, ctx.font_size);
+            (ba, bd.max(sd + dn))
+        }
+        _ => {
+            let b = layout_expr(expr, ctx);
+            (b.ascent, b.descent)
+        }
+    }
+}
+
+/// S1596 (2026-09-29, default ON, opt-out OXI_S1596_DISABLE): a fraction's
+/// numerator/denominator shifts are the MATH constants OR whatever keeps the
+/// minimum gap between the bar and the numerator's / denominator's INK,
+/// whichever is larger (OpenType MATH FractionNumerator/DenominatorGapMin,
+/// measured from the bar edges around the axis). MEASURED (`_pb_cjkmath_gen.py`,
+/// educational__20d9968b slice, `lines` grid 18pt, Word PDF glyph boxes):
+/// b / sqrt(a^2+b^2) spans two grid cells where a/b spans one; in (a/b)/(c/d) the
+/// denominator sits 5.40 below the baseline = gap 0.68 + (inner shift 4.43 +
+/// ink of `c` at 6pt 2.94) - (axis 3.0 - half bar 0.34), not the constant 5.28
+/// and not a 0.7em box (which would give 3 cells).
+fn fraction_shifts(table: &MathTable, fs: f32, display: bool, up: f32, down: f32,
+                   num: &MathExpr, den: &MathExpr, sub_ctx: &MathLayoutContext) -> (f32, f32) {
+    if std::env::var_os("OXI_S1596_DISABLE").is_some() {
+        return (up, down);
+    }
+    let axis = table.du_to_pt(table.constants.AxisHeight, fs);
+    let half = table.du_to_pt(table.constants.FractionRuleThickness, fs) / 2.0;
+    let (num_gap, den_gap) = if display {
+        (table.constants.FractionNumDisplayStyleGapMin, table.constants.FractionDenomDisplayStyleGapMin)
+    } else {
+        (table.constants.FractionNumeratorGapMin, table.constants.FractionDenominatorGapMin)
+    };
+    let num_gap = table.du_to_pt(num_gap, fs);
+    let den_gap = table.du_to_pt(den_gap, fs);
+    let (_, nd) = ink_extent(num, sub_ctx);
+    let (da, _) = ink_extent(den, sub_ctx);
+    (up.max(axis + half + num_gap + nd), down.max(den_gap + da - (axis - half)))
+}
+
 /// Bounding box for a leaf Text/Run (concatenation of chars).
 pub fn leaf_text_bbox(text: &str, ctx: &MathLayoutContext) -> MathBBox {
     let mut acc = MathBBox::default();
@@ -273,8 +385,9 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 (table.constants.FractionNumeratorShiftUp,
                  table.constants.FractionDenominatorShiftDown)
             };
-            let num_shift_up = table.du_to_pt(num_shift_du, fs);
-            let den_shift_down = table.du_to_pt(den_shift_du, fs);
+            let (num_shift_up, den_shift_down) = fraction_shifts(
+                &table, fs, ctx.style.is_display(),
+                table.du_to_pt(num_shift_du, fs), table.du_to_pt(den_shift_du, fs), num, den, &sub_ctx);
             MathBBox {
                 advance: nb.advance.max(db.advance),
                 ascent: num_shift_up + nb.ascent,
@@ -947,8 +1060,9 @@ fn emit_fraction(
             table.constants.FractionRuleThickness,
         )
     };
-    let num_shift_up = table.du_to_pt(num_shift_du, fs);
-    let den_shift_down = table.du_to_pt(den_shift_du, fs);
+    let (num_shift_up, den_shift_down) = fraction_shifts(
+        &table, fs, ctx.style.is_display(),
+        table.du_to_pt(num_shift_du, fs), table.du_to_pt(den_shift_du, fs), num, den, &sub_ctx);
     let rule_thick = table.du_to_pt(rule_thick_du, fs);
     let axis_height = table.du_to_pt(table.constants.AxisHeight, fs);
 

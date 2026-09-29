@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod runtime;
+pub(crate) mod cjk_fallback;
 mod catalog;
 pub mod shape;
 pub mod math_constants;
@@ -1818,6 +1819,13 @@ impl FontMetricsRegistry {
             return width_tw / 20.0;
         }
 
+        // S1592: the S1519 catalog step, which only the gdi-map path had. Cells
+        // (and every other caller of this function) went straight to the pixel map.
+        if std::env::var_os("OXI_S1592_DISABLE").is_none() {
+            if let Some(w) = self.catalog_width_before_gdi(c, font_size, metrics) {
+                return w;
+            }
+        }
         // GDI hinting override: fallback for fonts not in compact.json
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
         if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
@@ -1859,6 +1867,33 @@ impl FontMetricsRegistry {
     /// Character width using a pre-resolved GDI width map.
     /// This avoids the 2-level HashMap lookup per character that
     /// `char_width_pt_with_fallback` performs.
+    /// S1519 (2026-09-23, opt-out OXI_CATALOG_BEFORE_GDI_DISABLE): a face with NO
+    /// measured advances (HGPGothicM) asks the font catalog before the GDI pixel
+    /// map. S1592 (2026-09-29, opt-out OXI_S1592_DISABLE): the catalog advance is
+    /// used EXACTLY, not snapped to 10tw. Word's PDF of the faithful slice
+    /// `_pb_propgrid_gen.py` (HGPGothicM 12pt, charSpace 0): the kana line spans
+    /// 252.77 where the design widths sum to 252.80 and the 10tw-rounded ones to
+    /// 254.50; katakana 247.61 vs 247.50 / 246.50.
+    fn catalog_width_before_gdi(&self, c: char, font_size: f32, metrics: &FontMetrics) -> Option<f32> {
+        if std::env::var_os("OXI_CATALOG_BEFORE_GDI_DISABLE").is_some()
+            || !metrics.char_widths.is_empty()
+        {
+            return None;
+        }
+        let cat = catalog::resolve(&metrics.family, false, false)?;
+        let &advance_em = cat.char_widths.get(&c)?;
+        let w = if std::env::var_os("OXI_S1592_DISABLE").is_none() {
+            advance_em * font_size
+        } else {
+            (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0 / 20.0
+        };
+        if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
+            eprintln!("[CW] catalog family={:?} em={:.6} fs={} -> {:.4}",
+                metrics.family, advance_em, font_size, w);
+        }
+        Some(w)
+    }
+
     pub fn char_width_pt_with_gdi_map(
         &self,
         c: char,
@@ -1984,19 +2019,8 @@ impl FontMetricsRegistry {
         // ITC has its own table and reaches the pixel map for a few glyphs
         // where GDI is the closer answer; using the catalog there cost
         // educational__00252fa8 a page (785 -> 784).
-        if std::env::var_os("OXI_CATALOG_BEFORE_GDI_DISABLE").is_none()
-            && metrics.char_widths.is_empty()
-        {
-            if let Some(cat) = catalog::resolve(&metrics.family, false, false) {
-                if let Some(&advance_em) = cat.char_widths.get(&c) {
-                    let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
-                    if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
-                        eprintln!("[CW] catalog family={:?} em={:.6} fs={} -> {:.4}",
-                            metrics.family, advance_em, font_size, width_tw / 20.0);
-                    }
-                    return width_tw / 20.0;
-                }
-            }
+        if let Some(w) = self.catalog_width_before_gdi(c, font_size, metrics) {
+            return w;
         }
         // GDI hinting override via pre-resolved map (for fonts without metric data)
         if let Some(char_widths) = gdi_map {
@@ -2242,7 +2266,7 @@ fn s1070_case_insensitive_font_lookup() -> bool {
     *ON.get_or_init(|| std::env::var("OXI_S1070_DISABLE").is_err())
 }
 
-fn normalize_family_name(name: &str) -> String {
+pub(crate) fn normalize_family_name(name: &str) -> String {
     // Comma-separated font lists (e.g. "MS明朝,Times New Roman"): use the first font.
     // Word picks the first available font; we use the same approach.
     if let Some(first) = name.split(',').next() {

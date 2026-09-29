@@ -482,6 +482,7 @@ dependencies = [
 name = "oxidocs-core"
 version = "0.8.0"
 dependencies = [
+ "encoding_rs",
  "flate2",
  "log",
  "oxidocs-common",

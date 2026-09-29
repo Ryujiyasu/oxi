@@ -481,7 +481,7 @@ impl OoxmlParser {
                 let doc_xml = self.read_part("word/styles.xml").unwrap_or_default();
                 let merged = s1425_merge_styles_xml(&doc_xml, tpl_styles_xml);
                 parse_styles(&merged, &theme).map(|mut s| {
-                    s.cjk_substitute_face = theme.minor_font_jpan.clone();
+                    s.cjk_substitute_face = s1594_substitute_face(&theme);
                     s
                 })?
             }
@@ -1207,11 +1207,13 @@ impl OoxmlParser {
             do_not_expand_shift_return,
             balance_single_byte_double_byte_width,
             keep_floating_tables_together: self.parse_compat_bool_flag("doNotBreakWrappedTables"),
+            preserve_same_style_cell_spacing: self.parse_compat_bool_flag("allowSpaceOfSameStyleInTable"),
         };
         // S1008 (2026-07-26): resolve fontTable w:altName substitutions
         // (source unsupported → alternate supported). No-op for the vast
         // majority of docs (empty alias map → byte-identical).
         apply_font_table_aliases(&mut document);
+        // Glyph fallback is resolved once on the private layout copy.
         Ok(document)
     }
 
@@ -1413,14 +1415,14 @@ impl OoxmlParser {
         // inheritance leaves footnote paragraphs grid-snapped to body
         // pitch and causes line wrap to be ~5 chars too narrow.)
         let footnotes = match self.read_part("word/footnotes.xml") {
-            Ok(xml) => parse_notes_xml(&xml, styles)?,
+            Ok(xml) => parse_notes_xml(&xml, styles, &theme)?,
             Err(ParseError::MissingPart(_)) => HashMap::new(),
             Err(e) => return Err(e),
         };
 
         // Parse endnotes
         let endnotes = match self.read_part("word/endnotes.xml") {
-            Ok(xml) => parse_notes_xml(&xml, styles)?,
+            Ok(xml) => parse_notes_xml(&xml, styles, &theme)?,
             Err(ParseError::MissingPart(_)) => HashMap::new(),
             Err(e) => return Err(e),
         };
@@ -1511,10 +1513,17 @@ impl OoxmlParser {
             // LayoutEngine::cjk_ea_family. The theme's minor Jpan face when the
             // theme declares one; the layout falls back to Word's default 游明朝.
             Ok(xml) => parse_styles(&xml, theme).map(|mut s| {
-                s.cjk_substitute_face = theme.minor_font_jpan.clone();
+                s.cjk_substitute_face = s1594_substitute_face(theme);
                 s
             }),
-            Err(ParseError::MissingPart(_)) => Ok(StyleSheet::default()),
+            // S1594: a package without styles.xml still has its theme's face.
+            Err(ParseError::MissingPart(_)) => {
+                let mut s = StyleSheet::default();
+                if std::env::var_os("OXI_S1594_DISABLE").is_none() {
+                    s.cjk_substitute_face = s1594_substitute_face(theme);
+                }
+                Ok(s)
+            }
             Err(e) => Err(e),
         }
     }
@@ -1742,13 +1751,13 @@ impl OoxmlParser {
         let mut reader = Reader::from_str(&xml);
         loop {
             match reader.read_event() {
-                Ok(Event::Empty(e)) => {
+                Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                     if local_name(e.name().as_ref()) == flag_name {
                         // Present → default true unless val="0"
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                return val.as_ref() != "0" && val.as_ref() != "false";
+                                return !matches!(val.as_ref(), "0" | "false" | "off");
                             }
                         }
                         return true; // self-closing with no val = enabled
@@ -4180,6 +4189,7 @@ fn parse_paragraph_with_inline_images_impl(
         if let Some(ref mut para_rs) = style.default_run_style {
             if para_rs.font_size.is_none() {
                 para_rs.font_size = doc_rs.font_size;
+                para_rs.font_size_from_defaults = doc_rs.font_size.is_some();
                 style.font_size_from_doc_defaults = doc_rs.font_size.is_some();
             }
             if para_rs.font_family.is_none() {
@@ -4187,6 +4197,7 @@ fn parse_paragraph_with_inline_images_impl(
             }
             if para_rs.font_family_east_asia.is_none() {
                 para_rs.font_family_east_asia = doc_rs.font_family_east_asia.clone();
+                para_rs.east_asia_from_defaults = doc_rs.east_asia_from_defaults;
             }
             if para_rs.font_hint_east_asia.is_none() {
                 para_rs.font_hint_east_asia = doc_rs.font_hint_east_asia;
@@ -4207,6 +4218,9 @@ fn parse_paragraph_with_inline_images_impl(
             }
         } else {
             style.default_run_style = styles.doc_default_run_style.clone();
+            if let Some(rs) = style.default_run_style.as_mut() {
+                rs.font_size_from_defaults = rs.font_size.is_some();
+            }
             style.font_size_from_doc_defaults = doc_rs.font_size.is_some();
         }
     }
@@ -4814,6 +4828,13 @@ fn parse_paragraph_with_inline_images_impl(
         || s1066_cell_single_flow
         || s1186_object_pair
         || (keep_inline_images && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty()))
+        // Text and inline drawings in a header share a baseline. Keeping the
+        // drawing at its run position lets the common line model account for
+        // text descent and explicit breaks. Empty/tab-only hosts retain their
+        // image-only line model, which has no visible text descent.
+        || (preserve_header_image_host
+            && runs.iter().any(|run| run.text.chars().any(|c| !c.is_whitespace()))
+            && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty()))
     {
         if std::env::var("OXI_DBG_S854").is_ok() {
             let txt: String = runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
@@ -5108,7 +5129,7 @@ fn parse_paragraph_properties(
                                             }
                                         }
                                     } else if l == "b" {
-                                        ppr_rpr.bold = true;
+                                        ppr_rpr.bold = !s1598_val_off(&e2);
                                     } else if l == "vanish" {
                                         // S673v (2026-06-26): the ¶ MARK is hidden. An empty
                                         // paragraph with a hidden mark COLLAPSES to 0 height in
@@ -5118,7 +5139,12 @@ fn parse_paragraph_properties(
                                         // reads ppr_rpr.vanish to skip the para.
                                         // NOTE: webHidden is web-only (rendered in print), so it
                                         // does NOT trigger the collapse — only true w:vanish does.
-                                        ppr_rpr.vanish = true;
+                                        // S1598 (2026-09-29, default ON, opt-out OXI_S1598_DISABLE):
+                                        // an explicit w:val="0" is NOT hidden. blind-G EN
+                                        // creative__03a7fb6a writes `<w:vanish w:val="0"/>` on
+                                        // every mark; its empty Heading 1 (Word 39.75pt at the page
+                                        // top) and an empty separator collapsed, W4/O4 at 0.69.
+                                        ppr_rpr.vanish = !s1598_val_off(&e2);
                                     } else if (l == "ins" || l == "del")
                                         && paragraph_mark_revision.is_none()
                                     {
@@ -6701,6 +6727,7 @@ fn parse_hyperlink_runs(
 fn parse_notes_xml(
     xml: &str,
     styles: &StyleSheet,
+    theme: &ThemeColors,
 ) -> Result<HashMap<String, Vec<Block>>, ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut notes: HashMap<String, Vec<Block>> = HashMap::new();
@@ -6723,7 +6750,13 @@ fn parse_notes_xml(
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
         comments: HashMap::new(),
-        theme: ThemeColors::default(),
+        // S1599 (2026-09-29, default ON, opt-out OXI_S1599_DISABLE): the note
+        // parts resolve theme fonts like the body. With a default theme every
+        // `asciiTheme="minorHAnsi"` note run fell to the docDefaults face:
+        // blind-G EN policies__0097fbf2's endnotes are Calibri 8 (9.77/line in
+        // Word's PDF), Oxi set them in Times New Roman 8 (9.2) and the notes
+        // that overflow onto Word's page 4 fitted on page 3.
+        theme: if std::env::var_os("OXI_S1599_DISABLE").is_none() { theme.clone() } else { ThemeColors::default() },
     };
 
     loop {
@@ -7029,6 +7062,7 @@ fn parse_drawing(
     // behind body text. Default 0 (in front, ordered by relativeHeight).
     let mut relative_height: u32 = 0;
     let mut behind_doc: bool = false;
+    let mut allow_cell_overflow = false;
     let mut pos_x: f32 = 0.0;
     let mut pos_y: f32 = 0.0;
     let mut h_relative: Option<String> = None;
@@ -7226,6 +7260,9 @@ fn parse_drawing(
                             match key.as_str() {
                                 "relativeHeight" => {
                                     relative_height = val.parse::<u32>().unwrap_or(0);
+                                }
+                                "layoutInCell" => {
+                                    allow_cell_overflow = val == "0" || val == "false";
                                 }
                                 "behindDoc" => {
                                     behind_doc = val == "1" || val == "true";
@@ -8523,6 +8560,7 @@ fn parse_drawing(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            allow_cell_overflow,
             host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
@@ -8550,6 +8588,14 @@ fn parse_drawing(
     // Save stroke info for TextBox before Shape takes ownership
     let stroke_color_saved = stroke_color.clone();
     let stroke_width_saved = stroke_width;
+
+    // A picture's unpainted geometry is not a second drawing. Keep standalone
+    // invisible objects, which can still reserve inline flow space.
+    let shape_type = if image.is_some() && has_no_fill && has_no_stroke
+        && shape_text_blocks.is_empty()
+    {
+        None
+    } else { shape_type };
 
     // Build shape if we detected a preset geometry
     let shape = if let Some(ref st) = shape_type {
@@ -8757,6 +8803,7 @@ fn parse_drawing(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            allow_cell_overflow,
             host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
@@ -8788,6 +8835,7 @@ fn parse_drawing(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            allow_cell_overflow,
             host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
@@ -9388,6 +9436,7 @@ fn parse_vml_pict(
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
                 host_paragraph: None,
+                allow_cell_overflow: false,
                 host_exact_line: None,
                 page_break_before: false,
             page_break_after: false,
@@ -9496,6 +9545,7 @@ fn parse_vml_pict(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            allow_cell_overflow: false,
             host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
@@ -9594,6 +9644,7 @@ fn parse_vml_pict(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            allow_cell_overflow: false,
             host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
@@ -9861,6 +9912,7 @@ fn parse_ole_object(
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
+            allow_cell_overflow: false,
             host_exact_line: None,
             page_break_before: false,
             page_break_after: false,
@@ -10257,6 +10309,10 @@ fn parse_run_properties(
                                 if let Some(f) = font {
                                     style.font_family_east_asia = Some(f);
                                     style.east_asia_from_theme = true;
+                                    if std::env::var_os("OXI_EA_ORIGIN_DISABLE").is_none()
+                                        && !val.contains("EastAsia") {
+                                        style.has_explicit_east_asia = true;
+                                    }
                                 }
                             }
                         }
@@ -10412,6 +10468,10 @@ fn parse_run_properties(
                                     if let Some(f) = font {
                                         style.font_family_east_asia = Some(f);
                                         style.east_asia_from_theme = true;
+                                        if std::env::var_os("OXI_EA_ORIGIN_DISABLE").is_none()
+                                            && !val.contains("EastAsia") {
+                                            style.has_explicit_east_asia = true;
+                                        }
                                     }
                                 }
                             }
@@ -10919,8 +10979,8 @@ fn parse_table(
             // table context existed — the font_size_from_doc_defaults
             // provenance flag (set only when the size came from docDefaults,
             // not a named/default paragraph style) marks where the table
-            // style layer may override. Runs are rewritten only when they
-            // carry exactly the docDefaults-merged value.
+            // style layer may override. Run provenance distinguishes an
+            // inherited size from an equal direct or character-style size.
             let dd_sz = styles
                 .doc_default_run_style
                 .as_ref()
@@ -10937,21 +10997,49 @@ fn parse_table(
                             if let Some(drs) = p.style.default_run_style.as_mut() {
                                 if drs.font_size == dd_sz {
                                     drs.font_size = Some(style_sz);
+                                    drs.font_size_from_defaults = false;
                                 }
                             }
                             for run in p.runs.iter_mut() {
-                                if run.style.font_size == dd_sz {
+                                if run.style.font_size_from_defaults {
                                     run.style.font_size = Some(style_sz);
+                                    run.style.font_size_from_defaults = false;
                                 }
                             }
                             if let Some(mark) = p.style.ppr_rpr.as_mut() {
-                                if mark.font_size == dd_sz {
+                                if mark.font_size_from_defaults {
                                     mark.font_size = Some(style_sz);
+                                    mark.font_size_from_defaults = false;
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Table character properties sit above document defaults and below
+    // paragraph/character styles and direct character formatting.
+    if std::env::var_os("OXI_TABLE_EA_LAYER_DISABLE").is_none() {
+        if let Some(table_run) = eff_tbl_style_id.as_ref()
+            .and_then(|sid| styles.table_styles.get(sid))
+            .and_then(|ts| ts.run_style.as_ref()) {
+            if let Some(family) = &table_run.font_family_east_asia {
+                let apply = |run: &mut RunStyle| {
+                    if run.font_family_east_asia.is_none() || run.east_asia_from_defaults {
+                        run.font_family_east_asia = Some(family.clone());
+                        run.has_explicit_east_asia = table_run.has_explicit_east_asia;
+                        run.east_asia_from_defaults = false;
+                    }
+                };
+                for row in &mut rows { for cell in &mut row.cells { for block in &mut cell.blocks {
+                    if let Block::Paragraph(p) = block {
+                        apply(p.style.default_run_style.get_or_insert_with(RunStyle::default));
+                        for run in &mut p.runs { apply(&mut run.style); }
+                        if let Some(mark) = &mut p.style.ppr_rpr { apply(mark); }
+                    }
+                } } }
             }
         }
     }
@@ -11898,6 +11986,7 @@ fn parse_table_cell(
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,
                                 host_paragraph: None,
+                                allow_cell_overflow: false,
                                 host_exact_line: None,
                                 page_break_before: false,
             page_break_after: false,
@@ -13343,7 +13432,7 @@ fn parse_header_footer_xml(
                                         content_depth += 1;
                                         sdt_depth += 1;
                                     } else if content_depth > 0 && sl == "p" {
-                                        let pr = parse_paragraph_with_inline_images(
+                                        let pr = parse_paragraph_with_inline_images_context(
                                             &mut reader,
                                             ctx,
                                             styles,
@@ -13351,6 +13440,7 @@ fn parse_header_footer_xml(
                                             false,
                                             None,
                                             in_footer || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some(),
+                                            !in_footer,
                                         )?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
                                     } else if content_depth > 0 && sl == "tbl" {
@@ -14468,6 +14558,87 @@ mod tests {
     use crate::ir::Block;
 
     #[test]
+    fn same_style_cell_spacing_compat_flag_boolean_forms() {
+        use std::io::Write;
+        let cases = [
+            ("", false),
+            (r#"<w:allowSpaceOfSameStyleInTable/>"#, true),
+            (r#"<w:allowSpaceOfSameStyleInTable w:val="0"/>"#, false),
+            (r#"<w:allowSpaceOfSameStyleInTable w:val="false"/>"#, false),
+            (r#"<w:allowSpaceOfSameStyleInTable w:val="off"/>"#, false),
+            (r#"<w:allowSpaceOfSameStyleInTable w:val="1"/>"#, true),
+            (r#"<w:allowSpaceOfSameStyleInTable w:val="true"/>"#, true),
+            (r#"<w:allowSpaceOfSameStyleInTable w:val="on"/>"#, true),
+            (r#"<w:allowSpaceOfSameStyleInTable w:val="1"></w:allowSpaceOfSameStyleInTable>"#, true),
+        ];
+        for (flag, expected) in cases {
+            let xml = format!(r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat>{flag}</w:compat></w:settings>"#);
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            zip.start_file("word/settings.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            let mut parser = OoxmlParser::new(&bytes).unwrap();
+            assert_eq!(parser.parse_compat_bool_flag("allowSpaceOfSameStyleInTable"), expected, "{flag}");
+        }
+    }
+
+
+    #[test]
+    fn picture_unpainted_geometry_is_not_an_independent_shape() {
+        let mut ctx = ParseContext {
+            _rels: HashMap::new(), media: HashMap::new(),
+            media_types: HashMap::new(), hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
+            footnotes: HashMap::new(), endnotes: HashMap::new(),
+            comments: HashMap::new(), theme: ThemeColors::default(),
+        };
+        ctx.media.insert("rId1".into(), vec![1, 2, 3]);
+        for (picture, painted, expect_shape) in [(true, false, false), (true, true, true), (false, false, true)] {
+            let blip = if picture { r#"<a:blip r:embed="rId1"/>"# } else { "" };
+            let fill = if painted { r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"# } else { "<a:noFill/>" };
+            let xml = format!(r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/>{blip}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{fill}<a:ln><a:noFill/></a:ln></wp:anchor></w:drawing>"#);
+            let mut reader = Reader::from_str(&xml);
+            reader.read_event().unwrap();
+            let drawing = parse_drawing(&mut reader, &ctx, &StyleSheet::default()).unwrap();
+            assert_eq!(drawing.image.is_some(), picture);
+            assert_eq!(drawing.shape.is_some(), expect_shape, "picture={picture}, painted={painted}");
+        }
+    }
+
+    #[test]
+    fn drawing_image_cell_containment_preserves_boolean_forms() {
+        let mut ctx = ParseContext {
+            _rels: HashMap::new(), media: HashMap::new(),
+            media_types: HashMap::new(), hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
+            footnotes: HashMap::new(), endnotes: HashMap::new(),
+            comments: HashMap::new(), theme: ThemeColors::default(),
+        };
+        ctx.media.insert("rId1".into(), vec![1, 2, 3]);
+        for (value, expected) in [("0", true), ("false", true), ("1", false), ("true", false)] {
+            let xml = format!(r#"<w:drawing><wp:anchor layoutInCell="{value}" behindDoc="1"><wp:extent cx="127000" cy="127000"/><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#);
+            let mut reader = Reader::from_str(&xml);
+            reader.read_event().unwrap();
+            let drawing = parse_drawing(&mut reader, &ctx, &StyleSheet::default()).unwrap();
+            let image = drawing.image.unwrap();
+            assert_eq!(image.allow_cell_overflow, expected, "{value}");
+            assert!(image.behind_doc);
+            assert_eq!(image.wrap_type, Some(WrapType::Square));
+            let mut json = serde_json::to_value(&image).unwrap();
+            assert_eq!(serde_json::from_value::<Image>(json.clone()).unwrap().allow_cell_overflow, expected);
+            json.as_object_mut().unwrap().remove("allow_cell_overflow");
+            assert!(!serde_json::from_value::<Image>(json).unwrap().allow_cell_overflow);
+        }
+    }
+
+
+    #[test]
     fn positioned_ole_wrap_survives_both_xml_element_forms() {
         let mut ctx = ParseContext {
             _rels: HashMap::new(), media: HashMap::new(),
@@ -15233,4 +15404,36 @@ mod tests {
         }
     }
 
+}
+
+/// S1594 (2026-09-29, default ON, opt-out OXI_S1594_DISABLE): the face Word
+/// substitutes for CJK characters that no eastAsia font draws (S1370's slot).
+/// It is the theme's East Asian answer -- the minor Jpan face, else the minor
+/// `<a:ea>` face, else (an empty `<a:ea>`) ＭＳ 明朝 -- the S1297 chain, and
+/// only a package WITHOUT a theme falls to 游明朝. MEASURED
+/// (`_pb_unstyled_ea_gen.py` / `_pb_unstyled_ea2_gen.py`, Word PDF span fonts):
+/// creative__6fd5a307 (no styles.xml, theme with empty <a:ea>, no Jpan) paints
+/// MS-Mincho, 7 pages; theme removed -> YuMincho, 9 pages; compatibilityMode 14
+/// or 15 changes nothing. policies__1f014c0f / legal__0adfa250 /
+/// reports__5823d5a8 with run eastAsia stripped: empty <a:ea> + no Jpan ->
+/// MS-Mincho with and without styles.xml (docDefaults eastAsia Times New
+/// Roman), Jpan = ＭＳ Ｐゴシック -> MS-PGothic, no theme -> YuMincho.
+fn s1594_substitute_face(theme: &ThemeColors) -> Option<String> {
+    theme.minor_font_jpan.clone().or_else(|| {
+        if std::env::var_os("OXI_S1594_DISABLE").is_none() {
+            theme.minor_font_ea.clone()
+        } else {
+            None
+        }
+    })
+}
+
+/// S1598: an on/off element's explicit `w:val` of "0"/"false"/"off" (the S1505
+/// test for run properties, now also for the paragraph-mark rPr).
+fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
+    std::env::var_os("OXI_S1598_DISABLE").is_none()
+        && e.attributes().flatten().any(|at| {
+            local_name(at.key.as_ref()) == "val"
+                && matches!(at.value.as_ref(), b"0" | b"false" | b"off")
+        })
 }
