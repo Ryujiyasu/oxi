@@ -2036,6 +2036,13 @@ impl<'a> Runtime<'a> {
             .unwrap_or(1900)
     }
 
+    fn option_explicit(&self) -> bool {
+        self.module
+            .items
+            .iter()
+            .any(|item| matches!(item, ModuleItem::Option(ModuleOption::Explicit, _)))
+    }
+
     fn option_compare_text(&self) -> bool {
         self.module.items.iter().any(|item| {
             matches!(
@@ -2689,6 +2696,22 @@ impl<'a> Runtime<'a> {
                 }
                 if let Some(value) = self.host_call(None, name, &[], span.line)? {
                     return Ok(value);
+                }
+                // Without Option Explicit a name nobody declared is a fresh
+                // Variant: measured, `TypeName(xlNoSuchThing)` is "Empty".
+                if !self.option_explicit() {
+                    return Ok(match expr {
+                        Expr::TypedIdent { suffix, .. } => match suffix {
+                            '%' => Value::Int16(0),
+                            '&' => Value::Integer(0),
+                            '!' => Value::Single(0.0),
+                            '#' => Value::Double(0.0),
+                            '@' => Value::Currency(0),
+                            '$' => Value::String(String::new()),
+                            _ => Value::Empty,
+                        },
+                        _ => Value::Empty,
+                    });
                 }
                 Err(error(
                     RuntimeErrorKind::UndefinedVariable,

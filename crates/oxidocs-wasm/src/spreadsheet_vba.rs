@@ -22609,6 +22609,9 @@ fn host_constant(name: &str) -> Option<Value> {
         "xltextqualifierdoublequote" => 1,
         "xltextqualifiersinglequote" => 2,
         "xltextqualifiernone" => -4142,
+        // Measured: these two exist as well, Long 1 and 2.
+        "xldoublequote" => 1,
+        "xlsinglequote" => 2,
         "xlgeneralformat" => 1,
         "xltextformat" => 2,
         "xlmdyformat" => 3,
