@@ -166,6 +166,20 @@ pub trait Host {
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String>;
 
+    /// The module's public functions, which a worksheet formula may call as
+    /// its own: `=Twice(A1)`. Told once, before the macro starts.
+    fn user_functions(&mut self, _names: &[String]) {}
+
+    /// The calls to those functions a recalculation found it needed and
+    /// had no answer for yet: `(key, function, arguments)`. The runtime works
+    /// each out, hands it back with `answer_user_function`, and asks again
+    /// for what it was asking when the recalculation happened.
+    fn take_user_function_calls(&mut self) -> Vec<(u64, String, Vec<Value>)> {
+        Vec::new()
+    }
+
+    fn answer_user_function(&mut self, _key: u64, _value: Value) {}
+
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
 
     fn set_indexed(
@@ -463,6 +477,22 @@ impl<'a> Runtime<'a> {
     pub fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         self.steps = 0;
         self.depth = 0;
+        let functions: Vec<String> = self
+            .module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ModuleItem::Procedure(procedure)
+                    if procedure.kind == ProcKind::Function && procedure.visibility != crate::ast::Visibility::Private =>
+                {
+                    Some(procedure.name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        if let Some(host) = self.host.as_deref_mut() {
+            host.user_functions(&functions);
+        }
         self.initialize_module()?;
         self.call_procedure(name, args, None)
     }
@@ -3502,11 +3532,47 @@ impl<'a> Runtime<'a> {
                 return self.internal_call(receiver, name, args, line).map(Some);
             }
         }
+        for _ in 0..8 {
+            let Some(host) = self.host.as_deref_mut() else {
+                return Ok(None);
+            };
+            let answer = host.call(receiver, name, args);
+            if !self.work_out_user_functions()? {
+                return answer.map_err(|message| host_failure(message, line));
+            }
+        }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(None);
         };
         host.call(receiver, name, args)
             .map_err(|message| host_failure(message, line))
+    }
+
+    /// Work out the user functions a worksheet recalculation asked for, and
+    /// say whether there were any -- when there were, the host call that set
+    /// the recalculation going is asked again. A function that fails answers
+    /// #VALUE!, as a cell shows it: measured, `=Twice("x")` for a function
+    /// taking a Double is #VALUE!.
+    fn work_out_user_functions(&mut self) -> Result<bool, RuntimeError> {
+        let Some(host) = self.host.as_deref_mut() else {
+            return Ok(false);
+        };
+        let calls = host.take_user_function_calls();
+        if calls.is_empty() {
+            return Ok(false);
+        }
+        for (key, name, args) in calls {
+            let saved = (self.err_in.take(), self.err_out.take());
+            let value = match self.call_procedure(&name, args, None) {
+                Ok(Value::Object(_)) | Err(_) => Value::Error(2015),
+                Ok(value) => value,
+            };
+            (self.err_in, self.err_out) = saved;
+            if let Some(host) = self.host.as_deref_mut() {
+                host.answer_user_function(key, value);
+            }
+        }
+        Ok(true)
     }
 
     fn host_call_named(
@@ -3552,6 +3618,15 @@ impl<'a> Runtime<'a> {
                 return self.internal_call(receiver, name, args, line).map(Some);
             }
         }
+        for _ in 0..8 {
+            let Some(host) = self.host.as_deref_mut() else {
+                return Ok(None);
+            };
+            let answer = host.call_named(receiver, name, args, argument_names);
+            if !self.work_out_user_functions()? {
+                return answer.map_err(|message| host_failure(message, line));
+            }
+        }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(None);
         };
@@ -3592,6 +3667,15 @@ impl<'a> Runtime<'a> {
                 ))),
                 _ => Ok(None),
             };
+        }
+        for _ in 0..8 {
+            let Some(host) = self.host.as_deref_mut() else {
+                return Ok(None);
+            };
+            let answer = host.get(receiver, name);
+            if !self.work_out_user_functions()? {
+                return answer.map_err(|message| host_failure(message, line));
+            }
         }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(None);

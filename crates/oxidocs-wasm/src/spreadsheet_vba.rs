@@ -1775,6 +1775,9 @@ struct WorkbookHost<'a> {
     /// Filtering a second field narrows what the first left showing, so the
     /// tests accumulate and every row is judged against all of them.
     auto_filter: Option<AutoFilter>,
+    /// The module's own functions a formula may call, and what they have
+    /// answered so far.
+    user_functions: std::rc::Rc<std::cell::RefCell<UserFunctions>>,
     /// What `Find` and `Replace` last used for LookIn, LookAt and
     /// SearchOrder: Excel keeps them for the next call that leaves them out.
     /// Measured: after `Find("apple", LookAt:=xlWhole)`, a plain
@@ -1945,6 +1948,7 @@ impl<'a> WorkbookHost<'a> {
             pending_cut: None,
             auto_filter: None,
             find_settings: (-4163, 2, 1),
+            user_functions: Default::default(),
             selection: CellRange::single(CellAddress {
                 sheet: active_sheet,
                 row: 1,
@@ -2231,11 +2235,43 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn recalculate(&mut self) {
+        self.lend_user_functions();
         match self.now {
             Some(now) => oxicells_core::formula::evaluate_workbook_formulas_at(self.workbook, now),
             None => oxicells_core::formula::evaluate_workbook_formulas(self.workbook),
         }
         self.wrote = false;
+    }
+
+    /// Let the formula engine call the module's functions: an answer
+    /// already worked out is handed back, and one not yet is noted for the
+    /// runtime to work out -- the cell reads #VALUE! until then.
+    fn lend_user_functions(&mut self) {
+        let state = self.user_functions.clone();
+        oxicells_calc::set_user_function_hook(Some(Box::new(move |name, args| {
+            let mut held = state.borrow_mut();
+            if !held.names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+                return None;
+            }
+            let key = format!("{}|{:?}", name.to_ascii_uppercase(), args);
+            if let Some(answer) = held.answers.get(&key) {
+                return Some(sheet_arg_of(answer));
+            }
+            if !held.pending.iter().any(|call| call.key == key) {
+                let number = held.next;
+                held.next += 1;
+                held.pending.push(PendingCall {
+                    number,
+                    name: name.to_string(),
+                    key,
+                    args: PendingArgs::Sheet(args),
+                    once: false,
+                });
+            }
+            Some(oxicells_calc::functions::Arg::Value(oxicells_calc::Value::Error(
+                oxicells_calc::ExcelError::Value,
+            )))
+        })));
     }
 
     /// Work the book out, if an answer is about to be given from a formula
@@ -9610,6 +9646,13 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn evaluate_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        self.lend_user_functions();
+        let answer = self.evaluate_object_inner(sheet, args);
+        oxicells_calc::set_user_function_hook(None);
+        answer
+    }
+
+    fn evaluate_object_inner(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
         let [Value::String(expression)] = args else {
             return Err("Evaluate expects one String expression".to_string());
         };
@@ -12565,6 +12608,14 @@ impl<'a> WorkbookHost<'a> {
                 .map(|(called, _)| called.rsplit('!').next().unwrap_or(called))
                 .find(|called| called.eq_ignore_ascii_case(asked))
                 .map(str::to_string)
+                .or_else(|| {
+                    self.user_functions
+                        .borrow()
+                        .names
+                        .iter()
+                        .find(|called| called.eq_ignore_ascii_case(asked))
+                        .cloned()
+                })
         };
         // A reference into this very workbook loses the book's name: measured,
         // `=[Book1]Sheet1!A1` reads back `=Sheet1!A1` and
@@ -15154,6 +15205,43 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// An argument the formula engine handed a module function, as VBA
+    /// takes it: the cells a reference named become a Range.
+    fn vba_of_user_arg(&mut self, arg: &oxicells_calc::UserArg) -> Value {
+        use oxicells_calc::UserArg;
+        let from_sheet = |value: &oxicells_calc::Value| match value {
+            oxicells_calc::Value::Number(number) => Value::Double(*number),
+            oxicells_calc::Value::Text(text) => Value::String(text.clone()),
+            oxicells_calc::Value::Logical(state) => Value::Boolean(*state),
+            oxicells_calc::Value::Blank => Value::Empty,
+            oxicells_calc::Value::Error(why) => Value::Error(spreadsheet_error_number(why.as_str())),
+        };
+        match arg {
+            UserArg::Value(value) => from_sheet(value),
+            UserArg::Block(block) => Value::Array(ArrayValue {
+                dimensions: vec![
+                    ArrayDimension { lower_bound: 1, length: block.height },
+                    ArrayDimension { lower_bound: 1, length: block.width },
+                ],
+                values: block.cells.iter().map(from_sheet).collect(),
+                element_default: Box::new(Value::Empty),
+                resizable: true,
+            }),
+            UserArg::Cells { sheet, range, .. } => {
+                let Some(at) = self.workbook.sheets.iter().position(|held| held.name.eq_ignore_ascii_case(sheet)) else {
+                    return Value::Error(2023);
+                };
+                self.object(HostObject::Range(CellRange {
+                    sheet: at,
+                    start_row: range.start.row + 1,
+                    end_row: range.end.row + 1,
+                    start_column: range.start.col,
+                    end_column: range.end.col,
+                }))
+            }
+        }
+    }
+
     /// The merged blocks of a sheet.
     fn merges_on(&self, sheet: usize) -> Vec<CellRange> {
         self.workbook
@@ -15924,6 +16012,33 @@ impl<'a> WorkbookHost<'a> {
 }
 
 impl Host for WorkbookHost<'_> {
+    fn user_functions(&mut self, names: &[String]) {
+        self.user_functions.borrow_mut().names = names.to_vec();
+    }
+
+    fn take_user_function_calls(&mut self) -> Vec<(u64, String, Vec<Value>)> {
+        let pending = std::mem::take(&mut self.user_functions.borrow_mut().pending);
+        let mut calls = Vec::with_capacity(pending.len());
+        for call in pending {
+            let args = match &call.args {
+                PendingArgs::Vba(args) => args.clone(),
+                PendingArgs::Sheet(args) => args.iter().map(|arg| self.vba_of_user_arg(arg)).collect(),
+            };
+            self.user_functions.borrow_mut().asked.insert(call.number, (call.key.clone(), call.once));
+            calls.push((call.number, call.name, args));
+        }
+        calls
+    }
+
+    fn answer_user_function(&mut self, key: u64, value: Value) {
+        let mut held = self.user_functions.borrow_mut();
+        if let Some((key, _)) = held.asked.remove(&key) {
+            held.answers.insert(key, value);
+        }
+        drop(held);
+        self.wrote = true;
+    }
+
     fn call(
         &mut self,
         receiver: Option<&ObjectRef>,
@@ -16447,6 +16562,29 @@ impl Host for WorkbookHost<'_> {
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("convertformula") {
                 return self.convert_formula(args).map(Some);
+            }
+            // `Application.Run "Twice", 7` runs the module's own procedure:
+            // it is noted for the runtime, which runs it and asks again.
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("run") {
+                let Some((Value::String(called), rest)) = args.split_first() else {
+                    return Err("Application.Run needs a procedure's name".to_string());
+                };
+                let called = called.rsplit(['!', '.']).next().unwrap_or(called).to_string();
+                let key = format!("RUN|{}|{:?}", called.to_ascii_uppercase(), rest);
+                let mut held = self.user_functions.borrow_mut();
+                if let Some(answer) = held.answers.remove(&key) {
+                    return Ok(Some(answer));
+                }
+                let number = held.next;
+                held.next += 1;
+                held.pending.push(PendingCall {
+                    number,
+                    name: called,
+                    key,
+                    args: PendingArgs::Vba(rest.to_vec()),
+                    once: true,
+                });
+                return Ok(Some(Value::Empty));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("rows") {
                 return self
@@ -23314,6 +23452,45 @@ fn without_own_book(formula: &str, book: &str) -> String {
         rest = &rest[ch.len_utf8()..];
     }
     out
+}
+
+/// The module's own functions as the formula engine sees them.
+#[derive(Default)]
+struct UserFunctions {
+    names: Vec<String>,
+    answers: std::collections::HashMap<String, Value>,
+    pending: Vec<PendingCall>,
+    asked: std::collections::HashMap<u64, (String, bool)>,
+    next: u64,
+}
+
+struct PendingCall {
+    number: u64,
+    name: String,
+    key: String,
+    args: PendingArgs,
+    once: bool,
+}
+
+enum PendingArgs {
+    Sheet(Vec<oxicells_calc::UserArg>),
+    Vba(Vec<Value>),
+}
+
+/// A macro's answer as the sheet holds it: an array is a block of values.
+fn sheet_arg_of(value: &Value) -> oxicells_calc::functions::Arg {
+    use oxicells_calc::functions::{Arg, RangeData};
+    match value {
+        Value::Array(array) => {
+            let (width, height) = match array.dimensions.as_slice() {
+                [columns] => (columns.length, 1),
+                [rows, columns] => (columns.length, rows.length),
+                _ => (array.values.len(), 1),
+            };
+            Arg::Range(RangeData { width, height, cells: array.values.iter().map(engine_value).collect() })
+        }
+        other => Arg::Value(engine_value(other)),
+    }
 }
 
 /// The format a Currency written to a cell puts on it.

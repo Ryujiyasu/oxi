@@ -53,7 +53,7 @@ pub mod reference;
 pub mod value;
 
 pub use ast::{BinaryOp, Expr, UnaryOp};
-pub use engine::{CalcError, RecalcReport, Workbook};
+pub use engine::{set_user_function_hook, CalcError, RecalcReport, UserArg, Workbook};
 pub use numfmt::{format_number, format_text};
 pub use lexer::{
     canonical_formula, drop_own_table_name, drop_sheet_in_formula, move_sheet_in_formula, implied_intersections, move_formula_references, normalise_formula_ranges, rename_sheet_in_formula, without_intersections,

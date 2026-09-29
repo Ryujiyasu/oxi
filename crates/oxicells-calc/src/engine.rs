@@ -102,6 +102,36 @@ fn parse_range_string(address: &str) -> Option<RangeRef> {
 
 type At = Option<(u32, u32)>;
 
+/// An argument handed to a function the workbook's macros define: the cells
+/// themselves where a reference was written, so the function can walk them.
+#[derive(Debug, Clone)]
+pub enum UserArg {
+    Value(Value),
+    Block(RangeData),
+    /// What the cells hold is carried too, so an answer worked out for
+    /// them is not reused once they change.
+    Cells { sheet: String, range: RangeRef, values: Vec<Value> },
+}
+
+type UserFunctionHook = Box<dyn FnMut(&str, Vec<UserArg>) -> Option<Arg>>;
+
+thread_local! {
+    static USER_FUNCTIONS: std::cell::RefCell<Option<UserFunctionHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Let formulas call the workbook's own functions while `hook` is set: it
+/// answers `None` for a name that is not one of them.
+pub fn set_user_function_hook(hook: Option<UserFunctionHook>) {
+    USER_FUNCTIONS.with(|held| *held.borrow_mut() = hook);
+}
+
+fn ask_user_function(name: &str, args: Vec<UserArg>) -> Option<Arg> {
+    USER_FUNCTIONS.with(|held| match held.try_borrow_mut() {
+        Ok(mut hook) => hook.as_mut().and_then(|hook| hook(name, args)),
+        Err(_) => None,
+    })
+}
+
 /// What a range read inside SUBTOTAL passes over.
 #[derive(Clone, Copy)]
 enum Skip {
@@ -1468,6 +1498,26 @@ impl Workbook {
                     })
                 {
                     return Arg::Value(Value::Error(ExcelError::Value));
+                }
+                // A function the sheet does not know may be one the workbook's
+                // macros define: `=Twice(A1)` asks the module's own Twice.
+                if !functions::is_known_function(name) {
+                    let handed: Vec<UserArg> = args
+                        .iter()
+                        .zip(&evaluated)
+                        .map(|(expr, arg)| match (expr, arg) {
+                            (Expr::Ref(reference), arg) if reference.book.is_none() => UserArg::Cells {
+                                sheet: reference.sheet.clone().unwrap_or_else(|| sheet.to_string()),
+                                range: reference.range,
+                                values: arg.flatten(),
+                            },
+                            (_, Arg::Range(block)) => UserArg::Block(block.clone()),
+                            (_, Arg::Value(value)) => UserArg::Value(value.clone()),
+                        })
+                        .collect();
+                    if let Some(answer) = ask_user_function(name, handed) {
+                        return answer;
+                    }
                 }
                 functions::call_arg(name, &evaluated)
             }

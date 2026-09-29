@@ -394,7 +394,10 @@ pub fn canonical_formula(
                     if crate::functions::is_known_function(name) {
                         name.to_ascii_uppercase()
                     } else {
-                        name.clone()
+                        // One of the workbook's own functions is spelt as it
+                        // was declared: measured, `=twice("x")` reads back
+                        // `=Twice("x")`.
+                        name_case(name).unwrap_or_else(|| name.clone())
                     }
                 } else if let Some(cell) = absolute_r1c1(name) {
                     cell
