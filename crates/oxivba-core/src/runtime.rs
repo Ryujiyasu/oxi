@@ -10346,7 +10346,25 @@ fn element_type_name(default: &Value) -> Option<&'static str> {
 }
 
 fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> Result<Value, RuntimeError> {
-    let (low, high) = match declared.to_ascii_lowercase().as_str() {
+    let lower = declared.to_ascii_lowercase();
+    // No typed variable holds a Null: measured, `x = Null` into a Byte,
+    // Integer, Long, LongLong, Single, Double, Currency, Date, Boolean or
+    // String is error 94 and the variable keeps what it had.
+    if matches!(value, Value::Null)
+        && matches!(
+            lower.as_str(),
+            "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string"
+        )
+    {
+        return Err(invalid_null(Some(line)));
+    }
+    // A Boolean goes into a Byte by its bits: measured, True is 255.
+    if lower == "byte" {
+        if let Value::Boolean(state) = value {
+            return Ok(Value::Byte(if state { 255 } else { 0 }));
+        }
+    }
+    let (low, high) = match lower.as_str() {
         "byte" => (0.0, 255.0),
         "integer" => (-32_768.0, 32_767.0),
         "long" => (-2_147_483_648.0, 2_147_483_647.0),
@@ -10387,10 +10405,14 @@ fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> R
                 Value::Int16(_)
                 | Value::Byte(_)
                 | Value::Integer(_)
+                | Value::LongLong(_)
                 | Value::Single(_)
                 | Value::Currency(_)
+                | Value::Decimal(_)
                 | Value::Date(_)
                 | Value::Double(_) => coerce_number(&value, declared, line)? != 0.0,
+                // Measured: Empty into a Boolean is False.
+                Value::Empty => false,
                 _ => return Ok(value),
             }))
         }
@@ -10412,9 +10434,11 @@ fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> R
     if !(low..=high).contains(&number) {
         return Err(overflow(declared, line));
     }
-    Ok(match declared.to_ascii_lowercase().as_str() {
+    Ok(match lower.as_str() {
         "byte" => Value::Byte(number as u8),
         "integer" => Value::Int16(number as i16),
+        // Measured: a LongLong variable answers LongLong to TypeName.
+        "longlong" | "longptr" => Value::LongLong(number as i64),
         _ => Value::Integer(number as i64),
     })
 }
@@ -14440,7 +14464,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(value, Value::String("5|5|5|0".to_string()));
+        // StrConv(Null) is Null, and a Long cannot hold it: measured, the
+        // assignment is error 94.
+        assert_eq!(value, Value::String("5|5|5|94".to_string()));
     }
 
     #[test]
