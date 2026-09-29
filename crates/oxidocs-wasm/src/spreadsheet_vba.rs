@@ -9911,6 +9911,15 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
             Value::Object(object) => {
+                // A range of several areas gives each area's cells: measured,
+                // `Application.Sum(Union(B1:B2, B5:B6))` adds all four.
+                if let Some(areas) = self.blocks(object).map(<[CellRange]>::to_vec) {
+                    for area in areas {
+                        let value = self.range_value(area)?;
+                        self.append_worksheet_function_values(&value, values)?;
+                    }
+                    return Ok(());
+                }
                 let Some(range) = self.range(object) else {
                     return Err(format!(
                         "WorksheetFunction cannot aggregate a {} object",
@@ -13692,6 +13701,8 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn remove_duplicates(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        // Duplicates are judged on what the formulas answer now.
+        self.settle_book();
         // Rows past what the sheet holds are all alike and all empty, and
         // moving empties up over empties changes nothing: `Range("A:A")` is
         // the column as far as it is used.
@@ -13754,14 +13765,14 @@ impl<'a> WorkbookHost<'a> {
                 .collect()
         };
         let mut seen: Vec<Vec<String>> = Vec::new();
-        let mut kept: Vec<Vec<Option<Cell>>> = Vec::new();
-        for held in taken {
+        let mut kept: Vec<(u32, Vec<Option<Cell>>)> = Vec::new();
+        for (from, held) in (first..=range.end_row).zip(taken) {
             let key = key_of(&held);
             if seen.contains(&key) {
                 continue;
             }
             seen.push(key);
-            kept.push(held);
+            kept.push((from, held));
         }
 
         for (offset, row) in (first..=range.end_row).enumerate() {
@@ -13771,13 +13782,30 @@ impl<'a> WorkbookHost<'a> {
                     row,
                     column,
                 };
-                let held = kept.get(offset).and_then(|line| line.get(at).cloned()).flatten();
+                // A surviving row moves up whole, its formulas with it the way
+                // a copy moves them: measured, the kept `=B4` lands in F3 as
+                // `=B3`, and `=A4*2` in B3 as `=A3*2`.
+                let held = kept
+                    .get(offset)
+                    .and_then(|(from, line)| line.get(at).cloned().flatten().map(|cell| (*from, cell)));
                 match held {
-                    Some(cell) => self.set_cell_value(address, cell.value)?,
-                    None => self.set_cell_value(address, CellValue::Empty)?,
+                    Some((from, mut cell)) => {
+                        cell.col = column;
+                        if from != row {
+                            if let Some(formula) = cell.formula.as_ref() {
+                                let by = i64::from(row) - i64::from(from);
+                                if let Ok(moved) = translate_formula_references(formula, by, 0) {
+                                    cell.formula = Some(moved);
+                                }
+                            }
+                        }
+                        self.put_cell(address, Some(cell))?;
+                    }
+                    None => self.put_cell(address, None)?,
                 }
             }
         }
+        self.wrote = true;
         Ok(Value::Boolean(true))
     }
 
