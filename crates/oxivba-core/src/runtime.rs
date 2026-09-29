@@ -313,6 +313,9 @@ pub struct Runtime<'a> {
 }
 
 struct Frame {
+    /// The last numbered line the procedure passed, which is what `Erl`
+    /// answers after an error: measured, 0 where no line is numbered.
+    last_line_number: Option<u32>,
     procedure_name: String,
     source_name: String,
     values: BTreeMap<String, ValueSlot>,
@@ -634,6 +637,7 @@ impl<'a> Runtime<'a> {
             error_statement: None,
             current_statement: 0,
             gosub_returns: Vec::new(),
+        last_line_number: None,
         };
         for (param, argument) in procedure.params.iter().zip(args) {
             let value = match argument {
@@ -850,6 +854,7 @@ impl<'a> Runtime<'a> {
                 error_statement: None,
                 current_statement: 0,
                 gosub_returns: Vec::new(),
+        last_line_number: None,
             };
             return self.eval_expr(default, &mut frame);
         }
@@ -861,15 +866,31 @@ impl<'a> Runtime<'a> {
     }
 
     fn exec_body(&mut self, body: &[Statement], frame: &mut Frame) -> Result<Flow, RuntimeError> {
-        for statement in body {
+        let mut at = 0;
+        while at < body.len() {
+            let statement = &body[at];
             self.tick(line_of(statement))?;
             let flow = match self.exec_statement(statement, frame) {
                 Ok(flow) => flow,
                 Err(failure) => self.handle_runtime_error(failure, frame)?,
             };
+            // A GoTo to a label in this same block -- inside a loop, say --
+            // goes on from there; one to anywhere else is passed out.
+            if let Flow::Jump(label) = &flow {
+                let here = body.iter().position(|held| match held {
+                    Statement::Label { name, .. } => key(name) == key(label),
+                    Statement::LineNumber { value, .. } => value.to_string() == *label,
+                    _ => false,
+                });
+                if let Some(here) = here {
+                    at = here + 1;
+                    continue;
+                }
+            }
             if !matches!(flow, Flow::Continue) {
                 return Ok(flow);
             }
+            at += 1;
         }
         Ok(Flow::Continue)
     }
@@ -901,7 +922,7 @@ impl<'a> Runtime<'a> {
                 .vba_source
                 .clone()
                 .unwrap_or_else(|| frame.source_name.clone()),
-            line: failure.line,
+            line: frame.last_line_number,
         };
         match frame.error_mode.clone() {
             ErrorMode::Disabled => Err(failure),
@@ -1093,9 +1114,11 @@ impl<'a> Runtime<'a> {
             }
             Statement::Exit { what, .. } => Ok(Flow::Exit(*what)),
             Statement::End { .. } => Ok(Flow::End),
-            Statement::Comment { .. } | Statement::Label { .. } | Statement::LineNumber { .. } => {
+            Statement::LineNumber { value, .. } => {
+                frame.last_line_number = Some(*value);
                 Ok(Flow::Continue)
             }
+            Statement::Comment { .. } | Statement::Label { .. } => Ok(Flow::Continue),
             Statement::Unknown { text, span } => Err(error(
                 RuntimeErrorKind::Unsupported,
                 format!("cannot execute unparsed VBA: {text}"),
@@ -2291,6 +2314,29 @@ impl<'a> Runtime<'a> {
     ) -> Result<(), RuntimeError> {
         let mut value = value;
         if is_place_expression(target) && self.record_rooted(frame, target) {
+            // A field takes what it is given as the type it was declared:
+            // measured, `e.Pay = 1234.5678` into a Currency field answers
+            // Currency to TypeName.
+            if let Expr::Member { object, name, .. } = target {
+                let owner = self.with_record_place(object, frame, line, |place| match place {
+                    Value::Record(record) => Some(record.type_name.clone()),
+                    _ => None,
+                })?;
+                let declared = owner
+                    .flatten()
+                    .and_then(|type_name| self.find_type(&type_name))
+                    .and_then(|definition| {
+                        definition
+                            .fields
+                            .into_iter()
+                            .find(|field| field.name.eq_ignore_ascii_case(name))
+                    })
+                    .filter(|field| field.array_bounds.is_none() && self.find_type(&field.type_name.name).is_none())
+                    .map(|field| field.type_name.name);
+                if let Some(declared) = declared.filter(|declared| !declared.eq_ignore_ascii_case("variant") && !declared.eq_ignore_ascii_case("object")) {
+                    value = coerce_declared(value, &declared, line, self.this_year())?;
+                }
+            }
             let mut carried = Some(value);
             let placed = self.with_record_place(target, frame, line, |place| {
                 *place = carried.take().expect("a record field is written once");
@@ -3944,6 +3990,7 @@ fn empty_frame() -> Frame {
         error_statement: None,
         current_statement: 0,
         gosub_returns: Vec::new(),
+        last_line_number: None,
     }
 }
 
@@ -13621,6 +13668,35 @@ mod tests {
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
         );
+    }
+
+    /// A GoTo to a label inside a loop goes there; Erl is 0 where no line is
+    /// numbered; a record field keeps its declared type. Measured in Excel.
+    #[test]
+    fn labels_in_loops_erl_and_typed_fields() {
+        let value = run(
+            "Private Type Emp
+               Pay As Currency
+             End Type
+             Public Function Ask() As String
+               Dim k As Long, s As String, e As Emp, z As Long
+               Do
+                 k = k + 1
+                 If k Mod 2 = 0 Then GoTo Skip
+                 s = s & k
+             Skip:
+               Loop Until k >= 7
+               e.Pay = 1234.5678
+               On Error Resume Next
+               z = 1 / 0
+               Ask = s & \"|\" & TypeName(e.Pay) & \"|\" & Erl
+             End Function
+",
+            "Ask",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("1357|Currency|0".to_string()));
     }
 
     /// Money left to the default goes in brackets when negative, and what
