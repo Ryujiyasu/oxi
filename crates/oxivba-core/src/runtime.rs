@@ -6363,11 +6363,16 @@ fn ansi_bytes_to_text(value: &Value) -> Result<String, String> {
     }
 }
 
+/// `StrConv(.., vbProperCase)`: only white space and NUL start a word.
+/// Measured: "hello world-foo" is "Hello World-foo", "a.b,c;d" is
+/// "A.b,c;d" and "1abc ABC" is "1abc Abc"; tab, line feed, vertical tab,
+/// form feed, carriage return and Chr(0) each start one, a no-break space
+/// does not.
 fn proper_case(value: &str) -> String {
     let mut at_word_start = true;
     let mut result = String::new();
     for character in value.chars() {
-        if character.is_alphanumeric() {
+        if !matches!(character, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\0') {
             if at_word_start {
                 result.extend(character.to_uppercase());
             } else {
@@ -8560,6 +8565,11 @@ fn call_string_builtin(
             // like the same thing and was not: it turned `InStr("", "abc", "")`
             // from error 13 into 0.
             let start = if args.len() == 2 {
+                // Nothing to search is 0 even for nothing: measured,
+                // `InStr("", "")` is 0 where `InStr("abc", "")` is 1.
+                if source.is_empty() {
+                    return Ok(Value::Integer(0));
+                }
                 0
             } else {
                 let start = integer_argument(&args[0], line)?;
@@ -13064,7 +13074,7 @@ mod tests {
         assert_eq!(
             value,
             Value::String(
-                "[ 459]|[-459.65]|OXI VBA|oxi vba|Oxi-Vba Runtime|ＡＢＣ　１２３　ガ|ABC 123 ｶﾞ|オープン|おーぷん"
+                "[ 459]|[-459.65]|OXI VBA|oxi vba|Oxi-vba Runtime|ＡＢＣ　１２３　ガ|ABC 123 ｶﾞ|オープン|おーぷん"
                     .to_string()
             )
         );
