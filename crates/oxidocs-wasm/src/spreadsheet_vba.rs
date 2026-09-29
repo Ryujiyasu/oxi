@@ -10298,8 +10298,9 @@ impl<'a> WorkbookHost<'a> {
             ShownAs::Plain => value,
             ShownAs::Moment => Value::Date(number),
             // Four places is all a Currency keeps: asked of Excel, 1.23456789
-            // under `$0.00` comes back as 1.2346.
-            ShownAs::Money => Value::Currency((number * 10_000.0).round_ties_even() as i64),
+            // under `$0.00` comes back as 1.2346, and -0.00005 as -0.0001
+            // (half away from nought).
+            ShownAs::Money => Value::Currency((number * 10_000.0).round() as i64),
         }
     }
 
@@ -10320,6 +10321,20 @@ impl<'a> WorkbookHost<'a> {
 
     fn range_value(&self, range: CellRange) -> Result<Value, String> {
         Self::range_cell_count(range)?;
+        // A cell showing money holds a Double, and one past what a Currency
+        // holds cannot be read as one: measured, 1E+15 under `$#,##0.00` is
+        // error 6 to `Value` (and 1E+15 to `Value2`).
+        for address in range.addresses() {
+            if let Some(cell) = self.cell_here(address.sheet, address.row, address.column) {
+                if let CellValue::Number(number) = cell.value {
+                    if matches!(shown_as(cell.style.number_format.as_deref()), ShownAs::Money)
+                        && (number * 10_000.0).abs() >= 9.223_372_036_854_775e18
+                    {
+                        return Err(host_error(6, "overflow"));
+                    }
+                }
+            }
+        }
         if range.is_single() {
             return Ok(self.cell_value_as_shown(range.addresses().next().unwrap()));
         }
@@ -10338,6 +10353,27 @@ impl<'a> WorkbookHost<'a> {
                 .addresses()
                 .map(|address| self.cell_value_as_shown(address))
                 .collect(),
+            element_default: Box::new(Value::Empty),
+            resizable: true,
+        }))
+    }
+
+    /// The cells as they hold their values, for `Value2`.
+    fn range_value2(&self, range: CellRange) -> Result<Value, String> {
+        Self::range_cell_count(range)?;
+        let held = |address: CellAddress| match self.cell_value_as_shown(address) {
+            Value::Currency(_) => self.cell_value(address),
+            shown => shown,
+        };
+        if range.is_single() {
+            return Ok(held(range.addresses().next().unwrap()));
+        }
+        Ok(Value::Array(ArrayValue {
+            dimensions: vec![
+                ArrayDimension { lower_bound: 1, length: (range.end_row - range.start_row + 1) as usize },
+                ArrayDimension { lower_bound: 1, length: (range.end_column - range.start_column + 1) as usize },
+            ],
+            values: range.addresses().map(held).collect(),
             element_default: Box::new(Value::Empty),
             resizable: true,
         }))
@@ -18672,7 +18708,9 @@ impl Host for WorkbookHost<'_> {
         // cell typed `$3` answers a Currency and then 3.
         if name.eq_ignore_ascii_case("value2") {
             self.settle(range);
-            return self.range_value(range).map(|value| Some(undressed(value)));
+            // Read from what the cell holds, not from the Currency it is shown
+            // as: measured, 12.34567 under `$#,##0.00` is 12.34567 to `Value2`.
+            return self.range_value2(range).map(|value| Some(undressed(value)));
         }
         // The `Local` forms read and write the same text on this Office,
         // whose function names and separators are English: measured,
