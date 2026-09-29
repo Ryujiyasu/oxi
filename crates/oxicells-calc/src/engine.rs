@@ -498,6 +498,16 @@ impl Workbook {
         Ok(formula_result(self.eval(&expr, sheet, 0, None)))
     }
 
+    /// The same, keeping a block of answers whole: `{1,2,3}*2` is three
+    /// numbers, as (width, height, cells row by row).
+    pub fn evaluate_block(&self, sheet: &str, formula: &str) -> Result<(usize, usize, Vec<Value>), CalcError> {
+        let expr = parse(formula)?;
+        Ok(match self.eval_arg(&expr, sheet, 0, None) {
+            Arg::Range(block) => (block.width, block.height, block.cells.into_iter().map(formula_result).collect()),
+            Arg::Value(value) => (1, 1, vec![formula_result(value)]),
+        })
+    }
+
     /// Evaluate a formula as though it stood in one particular cell.
     ///
     /// A conditional rule's formula is one formula written for the top-left of

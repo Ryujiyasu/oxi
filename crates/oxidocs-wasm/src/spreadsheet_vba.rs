@@ -9177,6 +9177,36 @@ impl<'a> WorkbookHost<'a> {
         // `SUM(B1:B2)` reads the cells, `LEN("abc")` is 3, and a failure comes
         // back as the value a cell would show — `1/0` is error 2007 and
         // `NOTAFN()` is 2029 — rather than stopping the macro.
+        // A block of answers comes back as an array: measured,
+        // `Evaluate("{1,2,3}*2")` has UBound 3 and 6 at the end.
+        if let Some((width, height, cells)) =
+            oxicells_core::formula::evaluate_expression_block(self.workbook, sheet, reference, self.now)
+        {
+            if cells.len() > 1 {
+                let element = |value: oxicells_calc::Value| match value {
+                    oxicells_calc::Value::Number(number) => Value::Double(number),
+                    oxicells_calc::Value::Text(text) => Value::String(text),
+                    oxicells_calc::Value::Logical(state) => Value::Boolean(state),
+                    oxicells_calc::Value::Blank => Value::Empty,
+                    oxicells_calc::Value::Error(why) => Value::Error(spreadsheet_error_number(why.as_str())),
+                };
+                let values: Vec<Value> = cells.into_iter().map(element).collect();
+                let dimensions = if height == 1 {
+                    vec![ArrayDimension { lower_bound: 1, length: width }]
+                } else {
+                    vec![
+                        ArrayDimension { lower_bound: 1, length: height },
+                        ArrayDimension { lower_bound: 1, length: width },
+                    ]
+                };
+                return Ok(Value::Array(ArrayValue {
+                    dimensions,
+                    values,
+                    element_default: Box::new(Value::Empty),
+                    resizable: true,
+                }));
+            }
+        }
         match oxicells_core::formula::evaluate_expression(
             self.workbook,
             sheet,
@@ -10363,10 +10393,12 @@ impl<'a> WorkbookHost<'a> {
     /// every one of them. So the work is done once and this is where the
     /// answer is turned into a raise.
     fn worksheet_function(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        // Measured: a VLookup that finds nothing is 1004, "Unable to get the
+        // VLookup property of the WorksheetFunction class".
         match self.worksheet_function_value(name, args)? {
-            Value::Error(number) => Err(format!(
-                "WorksheetFunction.{name} answers {}",
-                spreadsheet_error_text(number)
+            Value::Error(_) => Err(host_error_described(
+                1004,
+                format!("Unable to get the {name} property of the WorksheetFunction class"),
             )),
             answer => Ok(answer),
         }
@@ -10474,21 +10506,56 @@ impl<'a> WorkbookHost<'a> {
                 return self.worksheet_conditional_set(name, args, kind);
             }
         }
+        // A value handed over directly is read the way a formula reads one
+        // typed into it, where one out of a range or an array is read as a
+        // cell: measured, `Sum(1, "2", True)` is 4, `Sum(1, "x")` #VALUE!,
+        // `Average(Empty, 4)` 2, `Count(1, "2", True, "x")` 3 and
+        // `CountA(1, "", Empty)` 3.
         let mut values = Vec::new();
+        let mut direct: Vec<Option<f64>> = Vec::new();
+        let mut direct_given = 0usize;
         for value in args {
-            self.append_worksheet_function_values(value, &mut values)?;
+            match value {
+                Value::Object(_) | Value::Array(_) => self.append_worksheet_function_values(value, &mut values)?,
+                Value::Missing => {}
+                Value::Error(_) => values.push(value.clone()),
+                Value::Empty => {
+                    direct_given += 1;
+                    direct.push(Some(0.0));
+                }
+                Value::Boolean(state) => {
+                    direct_given += 1;
+                    direct.push(Some(if *state { 1.0 } else { 0.0 }));
+                }
+                Value::String(text) => {
+                    direct_given += 1;
+                    direct.push(text.trim().parse::<f64>().ok().filter(|_| !text.trim().is_empty()));
+                }
+                other => {
+                    direct_given += 1;
+                    direct.push(any_number(other));
+                }
+            }
         }
         if name.eq_ignore_ascii_case("counta") {
-            let count = values
-                .iter()
-                .filter(|value| {
-                    !matches!(
-                        value,
-                        Value::Empty | Value::Missing | Value::Nothing | Value::Null
-                    )
-                })
-                .count();
+            let count = direct_given
+                + values
+                    .iter()
+                    .filter(|value| !matches!(value, Value::Empty | Value::Missing | Value::Nothing | Value::Null))
+                    .count();
             return Ok(Value::Integer(count as i64));
+        }
+        if name.eq_ignore_ascii_case("count") {
+            let count = direct.iter().flatten().count()
+                + values
+                    .iter()
+                    .filter(|value| matches!(value, Value::Double(number) if number.is_finite()) || (!matches!(value, Value::Double(_) | Value::String(_) | Value::Boolean(_) | Value::Empty) && any_number(value).is_some()))
+                    .count();
+            return Ok(Value::Integer(count as i64));
+        }
+        let adds_up = ["sum", "average", "min", "max"].iter().any(|one| name.eq_ignore_ascii_case(one));
+        if adds_up && direct.iter().any(Option::is_none) {
+            return Ok(Value::Error(2015));
         }
         if name.eq_ignore_ascii_case("countblank") {
             // The other side of CountA, and it counts only what is really
@@ -10505,27 +10572,10 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Value::Integer(count as i64 + cut_blanks as i64));
         }
 
-        if name.eq_ignore_ascii_case("count") {
-            // Count is one of the functions that IGNORES an error rather than
-            // passing it on. Asked of Excel over cells holding 10, text, a
-            // blank, 20 and #N/A: `Count` answers 2 where `Sum` over the very
-            // same cells raises, and a sheet agrees -- `=COUNT` shows 2 where
-            // `=SUM` shows #N/A. It counts numbers, so the text is not counted
-            // either.
-            let count = values
-                .iter()
-                .filter(|value| {
-                    matches!(value, Value::Integer(_))
-                        || matches!(value, Value::Double(value) if value.is_finite())
-                })
-                .count();
-            return Ok(Value::Integer(count as i64));
-        }
-
         // Everything past here adds the numbers up rather than counting them,
         // and those all pass an error on: Sum, Average, Min, Max, Product,
         // Median, Large, Small and StDev were each asked, and each raised.
-        let mut numbers = Vec::new();
+        let mut numbers: Vec<f64> = if adds_up { direct.iter().flatten().copied().collect() } else { Vec::new() };
         for value in values {
             match value {
                 value if any_number(&value).is_some() => numbers.push(any_number(&value).unwrap_or_default()),
@@ -11813,6 +11863,13 @@ impl<'a> WorkbookHost<'a> {
         }
         for address in header_writes {
             self.rename_table_column_from_cell(address)?;
+        }
+        // With calculation manual a formula is still worked out as it is
+        // written, from the cells as they stand, and then left: measured,
+        // `=B1*100` written over B1 of 1 reads 100, and still 100 once B1
+        // is 7.
+        if self.calculation != -4105 && self.holds_formula(range) {
+            oxicells_core::formula::fill_missing_formula_values(self.workbook);
         }
         if refused {
             return Err(
@@ -25056,7 +25113,7 @@ mod tests {
         .unwrap();
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         let refused = execute_with_host(&module, "Ask", vec![], &mut host).unwrap_err();
-        assert!(refused.message.contains("#VALUE!"), "{refused:?}");
+        assert!(refused.message.contains("Search property of the WorksheetFunction class"), "{refused:?}");
         // The names VBA has of its own are not members at all: measured,
         // `WorksheetFunction.Sqrt(-1)` and `WorksheetFunction.Len("ab")` are
         // error 438.
@@ -25527,7 +25584,9 @@ mod tests {
             .unwrap();
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
             let stopped = execute_with_host(&module, "Ask", vec![], &mut host).unwrap_err();
-            assert!(stopped.message.contains("answers #"), "{raises}: {stopped:?}");
+            // Measured: Excel's own words, "Unable to get the VLookup
+            // property of the WorksheetFunction class".
+            assert!(stopped.message.starts_with("Unable to get the "), "{raises}: {stopped:?}");
         }
 
         // And a name Excel does not carry is no member on either.
@@ -33268,9 +33327,9 @@ End Sub
         }
     }
 
-    /// Reading a cell that holds no formula settles nothing, and a macro that
-    /// turned calculation off is taken at its word — the same word the pass at
-    /// the end of the run takes.
+    /// With calculation off a formula is worked out as it is written and then
+    /// left -- measured, `=B1*100` reads 100 on entry and still 100 once B1
+    /// changes -- and turning calculation back on works it out again.
     #[test]
     fn vba_settles_only_what_it_has_to() {
         let mut first = workbook();
@@ -33290,7 +33349,7 @@ End Sub
 
         assert_eq!(
             host.take_debug_output(),
-            vec!["[]".to_string(), "20".to_string()]
+            vec!["[20]".to_string(), "20".to_string()]
         );
 
         // A plain value read leaves the writes unincorporated, so the pass at

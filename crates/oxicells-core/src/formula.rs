@@ -139,6 +139,31 @@ pub fn evaluate_expression(
     book.evaluate(&name, formula).ok()
 }
 
+/// The same, keeping a block of answers whole, as (width, height, cells row
+/// by row): what `Evaluate("{1,2,3}*2")` hands a macro is three numbers.
+pub fn evaluate_expression_block(
+    workbook: &Workbook,
+    sheet: usize,
+    formula: &str,
+    now: Option<f64>,
+) -> Option<(usize, usize, Vec<oxicells_calc::Value>)> {
+    let name = workbook.sheets.get(sheet)?.name.clone();
+    let mut book = assemble_with_links(
+        &workbook.sheets,
+        &workbook.defined_names,
+        &workbook.external_books,
+        now,
+    );
+    for sheet in &workbook.sheets {
+        for row in &sheet.rows {
+            for cell in row.cells.iter().filter(|cell| cell.formula.is_some()) {
+                let _ = book.set_cached(&sheet.name, &a1(cell.col, row.index), to_calc(&cell.value));
+            }
+        }
+    }
+    book.evaluate_block(&name, formula).ok()
+}
+
 /// Compute only those formula cells the file left without a cached value,
 /// leaving everything Excel already calculated untouched.
 pub fn fill_missing_formula_values(workbook: &mut Workbook) {
