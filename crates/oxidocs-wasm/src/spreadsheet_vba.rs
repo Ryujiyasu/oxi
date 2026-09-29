@@ -22394,7 +22394,11 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
                 Ok(typed_from_text(kept))
             }
         }
-        Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
+        // An array where one value belongs -- an element of an array of
+        // arrays -- leaves the cell empty: measured,
+        // `Range("S1:S2").Value = Array(Array(1, 2), Array(3, 4))` leaves S1
+        // with nothing in it and raises nothing.
+        Value::Array(_) => Ok(CellValue::Empty),
         Value::Record(_) => Err("a VBA Type cannot be assigned to one cell".to_string()),
         Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
     }
