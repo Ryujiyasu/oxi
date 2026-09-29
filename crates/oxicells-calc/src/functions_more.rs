@@ -22,7 +22,8 @@ pub(crate) const NAMES: &[&str] = &[
     "ECMA.CEILING", "EFFECT", "F.TEST", "FLOOR.PRECISE", "FTEST", "FVSCHEDULE", "INTRATE", "ISO.CEILING",
     "ISPMT", "MDETERM", "NOMINAL", "PDURATION", "PERCENTRANK.EXC", "PERMUTATIONA", "PRICEDISC", "PROB",
     "RECEIVED", "RRI", "SEC", "SECH", "SERIESSUM", "SKEW.P", "STDEVPA", "TBILLEQ", "TBILLPRICE",
-    "TBILLYIELD", "VARPA", "VDB", "XIRR", "XNPV", "YIELDDISC", "Z.TEST", "ZTEST",
+    "TBILLYIELD", "VARPA", "VDB", "XIRR", "XNPV", "YIELDDISC", "Z.TEST", "ZTEST", "PERCENTOF", "ENCODEURL",
+    "AMORLINC", "AMORDEGRC", "PHONETIC",
 ];
 
 fn at(args: &[Arg], i: usize) -> Result<f64, ExcelError> {
@@ -589,6 +590,94 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Num);
             }
             finite(vdb(cost, salvage, life, start, end, factor, no_switch))
+        }
+        // PERCENTOF: the one sum over the other. Measured: 1 of 1,2,3,4 is 0.1.
+        "PERCENTOF" => {
+            count(args, 2, 2)?;
+            let (part, whole) = (numbers_of(&args[0])?, numbers_of(&args[1])?);
+            let whole: f64 = whole.iter().sum();
+            if whole == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            finite(part.iter().sum::<f64>() / whole)
+        }
+        // ENCODEURL: UTF-8, every byte but A-Z a-z 0-9 - _ . written %XX.
+        // Measured: "a b&c" is a%20b%26c and ~ becomes %7E.
+        "ENCODEURL" => {
+            count(args, 1, 1)?;
+            let text = args[0].scalar().to_text()?;
+            let mut out = String::with_capacity(text.len() * 3);
+            for byte in text.bytes() {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+                    out.push(byte as char);
+                } else {
+                    out.push_str(&format!("%{byte:02X}"));
+                }
+            }
+            Ok(Value::Text(out))
+        }
+        // PHONETIC reads the reading stored with a cell; a cell with none
+        // shows its text, and text handed over directly is #VALUE!.
+        "PHONETIC" => {
+            count(args, 1, 1)?;
+            match &args[0] {
+                Arg::Range(block) => Ok(Value::Text(block.cells.first().cloned().unwrap_or(Value::Blank).to_text()?)),
+                Arg::Value(_) => Err(ExcelError::Value),
+            }
+        }
+        // The French depreciation of the analysis add-in: AMORLINC straight
+        // line, AMORDEGRC declining with the rate raised by the life's
+        // coefficient and each year rounded. Measured: 360 and 776.
+        "AMORLINC" | "AMORDEGRC" => {
+            count(args, 6, 7)?;
+            let (cost, bought, first_end, salvage) = (at(args, 0)?, at(args, 1)?.trunc(), at(args, 2)?.trunc(), at(args, 3)?);
+            let (period, rate) = (at(args, 4)?.trunc(), at(args, 5)?);
+            let basis = basis(args, 6)?;
+            if basis == 2 || rate <= 0.0 || cost < 0.0 || salvage < 0.0 || period < 0.0 || bought > first_end {
+                return Err(ExcelError::Num);
+            }
+            let first = yearfrac(bought as i64, first_end as i64, basis)?;
+            if name == "AMORLINC" {
+                let one = cost * rate;
+                let first_part = first * rate * cost;
+                let full = ((cost - salvage - first_part) / one).trunc();
+                let answer = if period == 0.0 {
+                    first_part
+                } else if period <= full {
+                    one
+                } else if period == full + 1.0 {
+                    cost - salvage - one * full - first_part
+                } else {
+                    0.0
+                };
+                return finite(answer.max(0.0));
+            }
+            let life = 1.0 / rate;
+            let coefficient = if life < 3.0 {
+                1.0
+            } else if life < 5.0 {
+                1.5
+            } else if life <= 6.0 {
+                2.0
+            } else {
+                2.5
+            };
+            let rate = rate * coefficient;
+            let round = |x: f64| x.round();
+            let mut this = round(first * rate * cost);
+            let mut left = cost - this;
+            let mut rest = left - salvage;
+            let mut n = 0.0;
+            while n < period {
+                this = round(rate * left);
+                rest -= this;
+                if rest < 0.0 {
+                    return finite(if period - n <= 1.0 { round(left * 0.5) } else { 0.0 });
+                }
+                left -= this;
+                n += 1.0;
+            }
+            finite(this)
         }
         _ => Err(ExcelError::Name),
     }

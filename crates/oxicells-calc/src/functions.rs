@@ -571,62 +571,63 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
 /// and those the workbook works out itself. Kept in step with the match
 /// arms by `every_function_the_library_answers_is_known`.
 const KNOWN_FUNCTIONS: &[&str] = &[
-    "ABS", "ACCRINT", "ACCRINTM", "ACOS", "ACOSH", "ACOT", "ACOTH", "ADDRESS", "AGGREGATE", "AND",
-    "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC", "ASIN", "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV",
-    "AVERAGE", "AVERAGEA", "AVERAGEIF", "AVERAGEIFS", "BASE", "BESSELI", "BESSELJ", "BESSELK",
-    "BESSELY", "BETA.DIST", "BETA.INV", "BETADIST", "BETAINV", "BIN2DEC", "BIN2HEX", "BIN2OCT",
-    "BINOM.DIST", "BINOM.DIST.RANGE", "BINOM.INV", "BINOMDIST", "BITAND", "BITLSHIFT", "BITOR",
-    "BITRSHIFT", "BITXOR", "BYCOL", "BYROW", "CEILING", "CEILING.MATH", "CEILING.PRECISE", "CELL",
-    "CHAR", "CHIDIST", "CHIINV", "CHISQ.DIST", "CHISQ.DIST.RT", "CHISQ.INV", "CHISQ.INV.RT",
-    "CHISQ.TEST", "CHITEST", "CHOOSE", "CHOOSECOLS", "CHOOSEROWS", "CLEAN", "CODE", "COLUMN",
-    "COLUMNS", "COMBIN", "COMBINA", "COMPLEX", "CONCAT", "CONCATENATE", "CONFIDENCE",
-    "CONFIDENCE.NORM", "CONFIDENCE.T", "CONVERT", "CORREL", "COS", "COSH", "COT", "COTH", "COUNT",
-    "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "COUPDAYBS", "COUPDAYS", "COUPDAYSNC", "COUPNCD",
-    "COUPNUM", "COUPPCD", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH",
-    "CUMIPMT", "CUMPRINC", "D", "DATE", "DATEDIF", "DATEVALUE", "DAVERAGE", "DAY", "DAYS",
-    "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB", "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL",
-    "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX", "DMIN", "DOLLAR", "DOLLARDE", "DOLLARFR",
-    "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM", "DURATION", "DVAR", "DVARP", "ECMA.CEILING",
-    "EDATE", "EFFECT", "EOMONTH", "ERF", "ERF.PRECISE", "ERFC", "ERFC.PRECISE", "ERROR.TYPE",
-    "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST", "F.DIST", "F.DIST.RT", "F.INV",
-    "F.INV.RT", "F.TEST", "FACT", "FACTDOUBLE", "FALSE", "FDIST", "FIND", "FINDB", "FINV", "FISHER",
-    "FISHERINV", "FIXED", "FLOOR", "FLOOR.MATH", "FLOOR.PRECISE", "FORECAST", "FORECAST.LINEAR",
-    "FORMULATEXT", "FTEST", "FV", "FVSCHEDULE", "GAMMA", "GAMMA.DIST", "GAMMA.INV", "GAMMADIST",
-    "GAMMAINV", "GAMMALN", "GAMMALN.PRECISE", "GAUSS", "GCD", "GEOMEAN", "GESTEP", "GROWTH",
-    "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK",
-    "HYPGEOM.DIST", "HYPGEOMDIST", "IF", "IFERROR", "IFNA", "IFS", "IMABS", "IMAGINARY",
-    "IMARGUMENT", "IMCONJUGATE", "IMCOS", "IMCOSH", "IMCOT", "IMCSC", "IMCSCH", "IMDIV", "IMEXP",
-    "IMLN", "IMLOG10", "IMLOG2", "IMPOWER", "IMPRODUCT", "IMREAL", "IMSEC", "IMSECH", "IMSIN",
-    "IMSINH", "IMSQRT", "IMSUB", "IMSUM", "IMTAN", "INDEX", "INDIRECT", "INT", "INTERCEPT",
-    "INTRATE", "IPMT", "IRR", "ISBLANK", "ISERR", "ISERROR", "ISEVEN", "ISFORMULA", "ISLOGICAL",
-    "ISNA", "ISNONTEXT", "ISNUMBER", "ISO.CEILING", "ISODD", "ISOMITTED", "ISOWEEKNUM", "ISPMT",
-    "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB", "LEN", "LENB", "LET",
-    "LINEST", "LN", "LOG", "LOG10", "LOGEST", "LOGINV", "LOGNORM.DIST", "LOGNORM.INV",
-    "LOGNORMDIST", "LOOKUP", "LOWER", "M", "MAKEARRAY", "MAP", "MATCH", "MAX", "MAXA", "MAXIFS",
-    "MD", "MDETERM", "MDURATION", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS", "MINUTE",
-    "MINVERSE", "MIRR", "MMULT", "MOD", "MODE", "MODE.MULT", "MODE.SNGL", "MONTH", "MROUND",
-    "MULTINOMIAL", "MUNIT", "N", "NA", "NEGBINOM.DIST", "NEGBINOMDIST", "NETWORKDAYS",
-    "NETWORKDAYS.INTL", "NOMINAL", "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV", "NORMDIST",
-    "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV", "NUMBERVALUE", "OCT2BIN",
-    "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PDURATION", "PEARSON", "PERCENTILE",
-    "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERCENTRANK.EXC", "PERCENTRANK.INC",
-    "PERMUT", "PERMUTATIONA", "PHI", "PI", "PMT", "POISSON", "POISSON.DIST", "POWER", "PPMT",
-    "PRICE", "PRICEDISC", "PRICEMAT", "PROB", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC",
-    "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDARRAY", "RANDBETWEEN", "RANK", "RANK.AVG",
-    "RANK.EQ", "RATE", "RECEIVED", "REDUCE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB",
-    "ROMAN", "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RRI", "RSQ", "SCAN", "SEARCH",
-    "SEARCHB", "SEC", "SECH", "SECOND", "SEQUENCE", "SERIESSUM", "SHEET", "SHEETS", "SIGN", "SIN",
-    "SINH", "SKEW", "SKEW.P", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT", "SQRTPI",
-    "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STDEVPA", "STEYX",
-    "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2",
-    "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.DIST", "T.DIST.2T", "T.DIST.RT", "T.INV",
-    "T.INV.2T", "T.TEST", "TAKE", "TAN", "TANH", "TBILLEQ", "TBILLPRICE", "TBILLYIELD", "TDIST",
-    "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TINV",
-    "TOCOL", "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR",
-    "UNICODE", "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP",
-    "VARPA", "VDB", "VLOOKUP", "VSTACK", "WEEKDAY", "WEEKNUM", "WEIBULL", "WEIBULL.DIST", "WORKDAY",
-    "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XIRR", "XLOOKUP", "XMATCH", "XNPV", "XOR", "Y", "YD",
-    "YEAR", "YEARFRAC", "YIELD", "YIELDDISC", "YIELDMAT", "YM", "Z.TEST", "ZTEST",
+    "ABS", "ACCRINT", "ACCRINTM", "ACOS", "ACOSH", "ACOT", "ACOTH", "ADDRESS", "AGGREGATE",
+    "AMORDEGRC", "AMORLINC", "AND", "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC", "ASIN", "ASINH",
+    "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF", "AVERAGEIFS", "BASE",
+    "BESSELI", "BESSELJ", "BESSELK", "BESSELY", "BETA.DIST", "BETA.INV", "BETADIST", "BETAINV",
+    "BIN2DEC", "BIN2HEX", "BIN2OCT", "BINOM.DIST", "BINOM.DIST.RANGE", "BINOM.INV", "BINOMDIST",
+    "BITAND", "BITLSHIFT", "BITOR", "BITRSHIFT", "BITXOR", "BYCOL", "BYROW", "CEILING",
+    "CEILING.MATH", "CEILING.PRECISE", "CELL", "CHAR", "CHIDIST", "CHIINV", "CHISQ.DIST",
+    "CHISQ.DIST.RT", "CHISQ.INV", "CHISQ.INV.RT", "CHISQ.TEST", "CHITEST", "CHOOSE", "CHOOSECOLS",
+    "CHOOSEROWS", "CLEAN", "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "COMPLEX", "CONCAT",
+    "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CONFIDENCE.T", "CONVERT", "CORREL", "COS",
+    "COSH", "COT", "COTH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "COUPDAYBS",
+    "COUPDAYS", "COUPDAYSNC", "COUPNCD", "COUPNUM", "COUPPCD", "COVAR", "COVARIANCE.P",
+    "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "D", "DATE", "DATEDIF",
+    "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DBCS", "DCOUNT", "DCOUNTA", "DDB",
+    "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX",
+    "DMIN", "DOLLAR", "DOLLARDE", "DOLLARFR", "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM",
+    "DURATION", "DVAR", "DVARP", "ECMA.CEILING", "EDATE", "EFFECT", "ENCODEURL", "EOMONTH", "ERF",
+    "ERF.PRECISE", "ERFC", "ERFC.PRECISE", "ERROR.TYPE", "EVEN", "EXACT", "EXP", "EXPAND",
+    "EXPON.DIST", "EXPONDIST", "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "F.TEST", "FACT",
+    "FACTDOUBLE", "FALSE", "FDIST", "FIND", "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED",
+    "FLOOR", "FLOOR.MATH", "FLOOR.PRECISE", "FORECAST", "FORECAST.LINEAR", "FORMULATEXT", "FTEST",
+    "FV", "FVSCHEDULE", "GAMMA", "GAMMA.DIST", "GAMMA.INV", "GAMMADIST", "GAMMAINV", "GAMMALN",
+    "GAMMALN.PRECISE", "GAUSS", "GCD", "GEOMEAN", "GESTEP", "GROWTH", "HARMEAN", "HEX2BIN",
+    "HEX2DEC", "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK", "HYPGEOM.DIST", "HYPGEOMDIST",
+    "IF", "IFERROR", "IFNA", "IFS", "IMABS", "IMAGINARY", "IMARGUMENT", "IMCONJUGATE", "IMCOS",
+    "IMCOSH", "IMCOT", "IMCSC", "IMCSCH", "IMDIV", "IMEXP", "IMLN", "IMLOG10", "IMLOG2", "IMPOWER",
+    "IMPRODUCT", "IMREAL", "IMSEC", "IMSECH", "IMSIN", "IMSINH", "IMSQRT", "IMSUB", "IMSUM",
+    "IMTAN", "INDEX", "INDIRECT", "INT", "INTERCEPT", "INTRATE", "IPMT", "IRR", "ISBLANK", "ISERR",
+    "ISERROR", "ISEVEN", "ISFORMULA", "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER", "ISO.CEILING",
+    "ISODD", "ISOMITTED", "ISOWEEKNUM", "ISPMT", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE",
+    "LCM", "LEFT", "LEFTB", "LEN", "LENB", "LET", "LINEST", "LN", "LOG", "LOG10", "LOGEST",
+    "LOGINV", "LOGNORM.DIST", "LOGNORM.INV", "LOGNORMDIST", "LOOKUP", "LOWER", "M", "MAKEARRAY",
+    "MAP", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MDETERM", "MDURATION", "MEDIAN", "MID", "MIDB",
+    "MIN", "MINA", "MINIFS", "MINUTE", "MINVERSE", "MIRR", "MMULT", "MOD", "MODE", "MODE.MULT",
+    "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "MUNIT", "N", "NA", "NEGBINOM.DIST",
+    "NEGBINOMDIST", "NETWORKDAYS", "NETWORKDAYS.INTL", "NOMINAL", "NORM.DIST", "NORM.INV",
+    "NORM.S.DIST", "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW",
+    "NPER", "NPV", "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR",
+    "PDURATION", "PEARSON", "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTOF",
+    "PERCENTRANK", "PERCENTRANK.EXC", "PERCENTRANK.INC", "PERMUT", "PERMUTATIONA", "PHI",
+    "PHONETIC", "PI", "PMT", "POISSON", "POISSON.DIST", "POWER", "PPMT", "PRICE", "PRICEDISC",
+    "PRICEMAT", "PROB", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC", "QUARTILE.INC",
+    "QUOTIENT", "RADIANS", "RAND", "RANDARRAY", "RANDBETWEEN", "RANK", "RANK.AVG", "RANK.EQ",
+    "RATE", "RECEIVED", "REDUCE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN",
+    "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RRI", "RSQ", "SCAN", "SEARCH", "SEARCHB",
+    "SEC", "SECH", "SECOND", "SEQUENCE", "SERIESSUM", "SHEET", "SHEETS", "SIGN", "SIN", "SINH",
+    "SKEW", "SKEW.P", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE",
+    "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STDEVPA", "STEYX", "SUBSTITUTE", "SUBTOTAL",
+    "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH",
+    "SYD", "T", "T.DIST", "T.DIST.2T", "T.DIST.RT", "T.INV", "T.INV.2T", "T.TEST", "TAKE", "TAN",
+    "TANH", "TBILLEQ", "TBILLPRICE", "TBILLYIELD", "TDIST", "TEXT", "TEXTAFTER", "TEXTBEFORE",
+    "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TINV", "TOCOL", "TODAY", "TOROW", "TRIM",
+    "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR", "UNICODE", "UNIQUE", "UPPER", "VALUE",
+    "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VARPA", "VDB", "VLOOKUP", "VSTACK",
+    "WEEKDAY", "WEEKNUM", "WEIBULL", "WEIBULL.DIST", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS",
+    "WRAPROWS", "XIRR", "XLOOKUP", "XMATCH", "XNPV", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YIELD",
+    "YIELDDISC", "YIELDMAT", "YM", "Z.TEST", "ZTEST",
 ];
 
 /// Whether `name` is a function this build knows.
@@ -1303,6 +1304,45 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // Full-width letters, digits and katakana to their half-width forms;
         // kanji and already-half-width text are left as they are. On an en-US
         // Excel this is available where JIS, the reverse, is #NAME?.
+        // DBCS: ASC turned round. Measured: ASCII goes to its full-width
+        // form except \ (to U+FFE5), ' and " (to the closing quotes U+2019
+        // and U+201D) and the space (U+3000); half-width katakana take a
+        // following sound mark into one letter (ｶﾞ is ガ) -- but ｳﾞ stays
+        // ウ and ゛.
+        "DBCS" => {
+            let source = text(&args[0])?;
+            let wide = |half: &str| -> Option<char> {
+                ('\u{3000}'..='\u{30FF}').find(|full| *full != '\u{30F4}' && asc_halfwidth(*full) == Some(half))
+            };
+            let chars: Vec<char> = source.chars().collect();
+            let mut out = String::with_capacity(source.len() * 3);
+            let mut i = 0;
+            while i < chars.len() {
+                let ch = chars[i];
+                if let Some(mark) = chars.get(i + 1).filter(|m| matches!(m, '\u{FF9E}' | '\u{FF9F}')) {
+                    let pair: String = [ch, *mark].iter().collect();
+                    if let Some(full) = wide(&pair) {
+                        out.push(full);
+                        i += 2;
+                        continue;
+                    }
+                }
+                let code = ch as u32;
+                match ch {
+                    ' ' => out.push('\u{3000}'),
+                    '\\' => out.push('\u{FFE5}'),
+                    '\'' => out.push('\u{2019}'),
+                    '"' => out.push('\u{201D}'),
+                    _ if (0x21..=0x7E).contains(&code) => out.push(char::from_u32(code + 0xFEE0).unwrap_or(ch)),
+                    _ => match wide(&ch.to_string()) {
+                        Some(full) => out.push(full),
+                        None => out.push(ch),
+                    },
+                }
+                i += 1;
+            }
+            Ok(Value::text(out))
+        }
         "ASC" => {
             let source = text(&args[0])?;
             let mut out = String::with_capacity(source.len());
