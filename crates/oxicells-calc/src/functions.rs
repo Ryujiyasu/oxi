@@ -5589,12 +5589,25 @@ fn datedif(start: i64, end: i64, unit: &str) -> Result<f64, ExcelError> {
         "M" => Ok(months as f64),
         "Y" => Ok((months / 12) as f64),
         "YM" => Ok((months % 12) as f64),
+        // The days past the last whole month, counted Excel's way: when the
+        // end's day is the smaller, the month BEFORE the end lends its days.
+        // Measured: 31 Jan 2024 to 1 Mar 2024 is -1 (1 + 29 - 31).
         "MD" => {
-            let anchor = datetime::add_months(start, months)?;
-            Ok((end - anchor) as f64)
+            if b.day >= a.day {
+                return Ok((b.day - a.day) as f64);
+            }
+            let (year, month) = if b.month == 1 { (b.year - 1, 12) } else { (b.year, b.month - 1) };
+            Ok((b.day + datetime::days_in_month(year, month) - a.day) as f64)
         }
+        // The days since the start's month and day last came round, the
+        // start's date moved into the end's year as DATE would move it:
+        // measured, 29 Feb 2024 to 1 Mar 2025 is 0 (DATE(2025,2,29) is
+        // 1 Mar) and to 28 Feb 2025 is 365.
         "YD" => {
-            let anchor = datetime::add_months(start, (months / 12) * 12)?;
+            let mut anchor = datetime::serial_from_date(b.year, a.month, a.day)?;
+            if anchor > end {
+                anchor = datetime::serial_from_date(b.year - 1, a.month, a.day)?;
+            }
             Ok((end - anchor) as f64)
         }
         _ => Err(ExcelError::Num),
