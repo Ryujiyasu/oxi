@@ -10763,7 +10763,12 @@ impl<'a> WorkbookHost<'a> {
             if let Some(range) = self.range(object) {
                 let rows = (range.end_row - range.start_row + 1) as usize;
                 let columns = (range.end_column - range.start_column + 1) as usize;
-                let (row, column) = index_selection(rows, columns, row, column, true)?;
+                // Past the end is #REF!, an answer rather than a failure:
+                // measured, `Application.Index(Range("A1:A4"), 9)` is Error
+                // 2023 (and `WorksheetFunction.Index` raises 1004 over it).
+                let Ok((row, column)) = index_selection(rows, columns, row, column, true) else {
+                    return Ok(Value::Error(2023));
+                };
                 let selected = CellRange {
                     sheet: range.sheet,
                     start_row: range.start_row + row.saturating_sub(1) as u32,
@@ -10784,7 +10789,9 @@ impl<'a> WorkbookHost<'a> {
         }
 
         let table = self.lookup_table(array, "Index")?;
-        let (row, column) = index_selection(table.rows, table.columns, row, column, false)?;
+        let Ok((row, column)) = index_selection(table.rows, table.columns, row, column, false) else {
+            return Ok(Value::Error(2023));
+        };
         let (first_row, last_row) = if row == 0 {
             (0, table.rows)
         } else {
@@ -11052,17 +11059,6 @@ impl<'a> WorkbookHost<'a> {
             } else {
                 variance.sqrt()
             })));
-        }
-
-        if name.eq_ignore_ascii_case("power") {
-            let [base, exponent] = args else {
-                return Err("WorksheetFunction.Power expects a number and a power".to_string());
-            };
-            let result = worksheet_number(base, name)?.powf(worksheet_number(exponent, name)?);
-            if !result.is_finite() {
-                return Err("WorksheetFunction.Power has no answer for those".to_string());
-            }
-            return Ok(Some(numeric_result(result)));
         }
 
         if name.eq_ignore_ascii_case("trim") {
