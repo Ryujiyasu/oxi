@@ -850,6 +850,17 @@ impl<'a> Runtime<'a> {
                     return Ok(true);
                 }
             }
+            // A property that can only be read: measured, assigning to a
+            // Get-only property is 451, not 438.
+            if this.has_procedure_of(this.module, name, &[ProcKind::PropertyGet]) {
+                return Err(RuntimeError {
+                    kind: RuntimeErrorKind::Unsupported,
+                    message: format!("{name} has no Property Let and its Property Get does not return an object"),
+                    line: Some(line),
+                    vba_number: Some(451),
+                    vba_source: Some("VBA".to_string()),
+                });
+            }
             Err(no_such_member(format!("the class has no member {name}"), Some(line)))
         })
     }
@@ -1628,6 +1639,12 @@ impl<'a> Runtime<'a> {
                 frame.with_objects.push(held);
                 let result = self.exec_body(body, frame);
                 frame.with_objects.pop();
+                // The block held its subject; an instance only it held is
+                // done at End With: measured, `With New C ... End With` runs
+                // C's Class_Terminate there.
+                if result.is_ok() {
+                    self.collect_instances(line)?;
+                }
                 result
             }
             // `On Error GoTo -1` ends the handler that is running and clears
