@@ -4509,10 +4509,10 @@ impl<'a> Runtime<'a> {
                 let after = args
                     .get(3)
                     .filter(|value| !matches!(value, Value::Missing | Value::Empty));
+                // Measured: error 5, not 450.
                 if before.is_some() && after.is_some() {
-                    return Err(error(
-                        RuntimeErrorKind::ArgumentCount,
-                        "Collection.Add cannot specify both Before and After",
+                    return Err(invalid_procedure_call(
+                        "Collection.Add cannot specify both Before and After".to_string(),
                         Some(line),
                     ));
                 }
@@ -5221,11 +5221,11 @@ fn dictionary_array(values: Vec<Value>) -> Value {
 fn validate_dictionary_key(key: &Value, line: u32) -> Result<(), RuntimeError> {
     if matches!(
         key,
-        Value::Array(_) | Value::Null | Value::Missing | Value::Nothing | Value::Object(_)
+        Value::Array(_) | Value::Missing | Value::Nothing | Value::Object(_)
     ) {
         Err(error(
             RuntimeErrorKind::TypeMismatch,
-            "Dictionary key must be a non-Null scalar value",
+            "Dictionary key must be a scalar value",
             Some(line),
         ))
     } else {
@@ -5255,6 +5255,9 @@ fn dictionary_keys_equal(left: &Value, right: &Value, text_compare: bool) -> boo
         // Empty is the empty string: measured, a key added as Empty answers
         // `Exists("")`.
         (Value::Empty, Value::Empty) => true,
+        // Null is a key of its own: measured, a second `Add Null` is 457 and
+        // `Exists(Null)` answers True while Empty and "" stay apart.
+        (Value::Null, Value::Null) => true,
         (Value::Empty, Value::String(text)) | (Value::String(text), Value::Empty) => text.is_empty(),
         _ => false,
     }
