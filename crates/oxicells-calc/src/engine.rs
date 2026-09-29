@@ -946,6 +946,9 @@ impl Workbook {
                         .unwrap_or(Arg::Value(Value::Error(ExcelError::NA)))
                 };
                 match (name.as_str(), args.as_slice()) {
+                    ("AREAS", [Expr::Function { name: union, args: areas }]) if union == "_UNION" => {
+                        Arg::Value(Value::Number(areas.len() as f64))
+                    }
                     ("SHEETS", []) => Arg::Value(Value::Number(self.sheet_order.len().max(1) as f64)),
                     ("SHEETS", [Expr::Ref(_)]) | ("AREAS", [Expr::Ref(_)]) => Arg::Value(Value::Number(1.0)),
                     ("SHEET", []) => place(sheet),
@@ -1021,10 +1024,69 @@ impl Workbook {
                 } else {
                     Skip::Nothing
                 };
-                let evaluated: Vec<Arg> = args
-                    .iter()
-                    .map(|a| self.eval_arg_inner(a, sheet, depth + 1, skip, at))
-                    .collect();
+                // A reference of several areas, measured against Excel:
+                // a function that takes any number of arguments takes each
+                // area as one (`SUM((A1:A3,C1:C3))` is `SUM(A1:A3,C1:C3)`);
+                // one that reads a list reads every area as one list (LARGE,
+                // RANK); INDEX picks the area its fourth argument names; and
+                // anything else -- COUNTIF, SUMPRODUCT, a cell of its own --
+                // is #VALUE!.
+                if name == "_UNION" {
+                    return Arg::Value(Value::Error(ExcelError::Value));
+                }
+                let spliced = matches!(
+                    name.as_str(),
+                    "SUM" | "COUNT" | "COUNTA" | "AVERAGE" | "AVERAGEA" | "MAX" | "MAXA" | "MIN"
+                        | "MINA" | "PRODUCT" | "STDEV" | "STDEV.S" | "STDEV.P" | "STDEVP" | "STDEVA"
+                        | "VAR" | "VAR.S" | "VAR.P" | "VARP" | "MEDIAN" | "MODE" | "MODE.SNGL"
+                        | "SUMSQ" | "GEOMEAN" | "HARMEAN" | "AVEDEV" | "DEVSQ" | "SUBTOTAL"
+                );
+                let listed = matches!(
+                    name.as_str(),
+                    "LARGE" | "SMALL" | "RANK" | "RANK.EQ" | "RANK.AVG" | "PERCENTILE" | "QUARTILE"
+                        | "PERCENTILE.INC" | "PERCENTILE.EXC" | "QUARTILE.INC" | "QUARTILE.EXC"
+                        | "PERCENTRANK"
+                );
+                let mut evaluated: Vec<Arg> = Vec::with_capacity(args.len());
+                for (at_arg, a) in args.iter().enumerate() {
+                    let Expr::Function { name: union, args: areas } = a else {
+                        evaluated.push(self.eval_arg_inner(a, sheet, depth + 1, skip, at));
+                        continue;
+                    };
+                    if union != "_UNION" {
+                        evaluated.push(self.eval_arg_inner(a, sheet, depth + 1, skip, at));
+                        continue;
+                    }
+                    if spliced {
+                        for area in areas {
+                            evaluated.push(self.eval_arg_inner(area, sheet, depth + 1, skip, at));
+                        }
+                    } else if listed {
+                        let cells: Vec<Value> = areas
+                            .iter()
+                            .flat_map(|area| self.eval_arg_inner(area, sheet, depth + 1, skip, at).flatten())
+                            .collect();
+                        evaluated.push(Arg::Range(RangeData { width: 1, height: cells.len(), cells }));
+                    } else if name == "INDEX" && at_arg == 0 {
+                        let chosen = args
+                            .get(3)
+                            .map(|n| self.eval_arg_inner(n, sheet, depth + 1, skip, at).scalar().to_number())
+                            .unwrap_or(Ok(1.0));
+                        match chosen {
+                            Ok(n) if n >= 1.0 && (n as usize) <= areas.len() => evaluated
+                                .push(self.eval_arg_inner(&areas[n as usize - 1], sheet, depth + 1, skip, at)),
+                            _ => return Arg::Value(Value::Error(ExcelError::Ref)),
+                        }
+                    } else {
+                        return Arg::Value(Value::Error(ExcelError::Value));
+                    }
+                }
+                // INDEX's area number has done its work once the area is picked.
+                if name == "INDEX"
+                    && matches!(args.first(), Some(Expr::Function { name: union, .. }) if union == "_UNION")
+                {
+                    evaluated.truncate(3);
+                }
                 functions::call_arg(name, &evaluated)
             }
         }
@@ -2231,6 +2293,34 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "I1"), Value::Number(10.0));
         // Every member answers with the whole formula.
         assert_eq!(wb.formula("Sheet1", "D3"), Some("=A1:A3*2"));
+    }
+
+    #[test]
+    fn a_reference_of_several_areas_goes_where_excel_takes_it() {
+        // Every answer here is Excel's.
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        for (row, (a, c)) in [(1, (1.0, 10.0)), (2, (2.0, 20.0)), (3, (3.0, 30.0))] {
+            wb.set_value("Sheet1", &format!("A{row}"), Value::Number(a)).unwrap();
+            wb.set_value("Sheet1", &format!("C{row}"), Value::Number(c)).unwrap();
+        }
+        for (cell, formula) in [
+            ("E1", "=SUM((A1:A3,C1:C3))"),
+            ("E2", "=AREAS((A1,B2,C3))"),
+            ("E3", "=LARGE((A1:A3,C1:C3),2)"),
+            ("E4", "=INDEX((A1:A3,C1:C3),2,1,2)"),
+            ("E5", "=(A1,C1)"),
+            ("E6", "=COUNTIF((A1:A3,C1:C3),\">2\")"),
+        ] {
+            wb.set_formula("Sheet1", cell, formula).unwrap();
+        }
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(66.0));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(3.0));
+        assert_eq!(wb.value("Sheet1", "E3"), Value::Number(20.0));
+        assert_eq!(wb.value("Sheet1", "E4"), Value::Number(20.0));
+        assert_eq!(wb.value("Sheet1", "E5"), Value::Error(ExcelError::Value));
+        assert_eq!(wb.value("Sheet1", "E6"), Value::Error(ExcelError::Value));
     }
 
     #[test]

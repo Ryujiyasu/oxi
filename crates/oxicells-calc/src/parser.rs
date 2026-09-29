@@ -296,6 +296,18 @@ impl Parser {
             Token::ErrorLit(e) => Ok(Expr::Literal(Value::Error(e))),
             Token::LParen => {
                 let inner = self.parse_comparison()?;
+                // `(A1:A3,C1:C3)` is one reference of several areas, which
+                // the engine hands to a function as that many arguments.
+                if self.peek() == Some(&Token::Comma) {
+                    let mut areas = vec![inner];
+                    while self.eat(&Token::Comma) {
+                        areas.push(self.parse_comparison()?);
+                    }
+                    if !self.eat(&Token::RParen) {
+                        return Err(ParseError::UnexpectedToken("expected `)`".to_string()));
+                    }
+                    return Ok(Expr::Function { name: "_UNION".to_string(), args: areas });
+                }
                 if !self.eat(&Token::RParen) {
                     return Err(ParseError::UnexpectedToken("expected `)`".to_string()));
                 }
