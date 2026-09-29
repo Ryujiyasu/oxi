@@ -2262,7 +2262,15 @@ impl<'a> Runtime<'a> {
                 line,
             ));
         };
-        self.new_object(type_name, line.unwrap_or(0))
+        let made = self.new_object(type_name, line.unwrap_or(0));
+        // A class the language does not make itself may be one its host
+        // makes: `CreateObject("VBScript.RegExp")` in a workbook.
+        if matches!(&made, Err(failure) if failure.kind == RuntimeErrorKind::Unsupported) {
+            if let Some(object @ Value::Object(_)) = self.host_call(None, "CreateObject", args, line.unwrap_or(0))? {
+                return Ok(object);
+            }
+        }
+        made
             .map_err(|failure| {
                 if failure.kind == RuntimeErrorKind::Unsupported {
                     RuntimeError {

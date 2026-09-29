@@ -24,6 +24,8 @@ use wasm_bindgen::prelude::*;
 mod shapes;
 #[path = "spreadsheet_vba_shapes_members.rs"]
 mod shapes_members;
+#[path = "spreadsheet_vba_regexp.rs"]
+mod regexp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CellAddress {
@@ -374,6 +376,12 @@ enum HostObject {
     /// member of one with error 424 -- measured, a `Worksheet` and a `Range`
     /// kept across the sheet's deletion both raise it, read or written.
     Gone,
+    /// `CreateObject("VBScript.RegExp")`, by its place in the host's list;
+    /// what one Execute found; one match of that; its groups.
+    RegExp(usize),
+    RegExpMatches(usize),
+    RegExpMatch(usize, usize),
+    RegExpSubMatches(usize, usize),
 }
 
 
@@ -1853,6 +1861,9 @@ struct WorkbookHost<'a> {
     shape_selection: Vec<u64>,
     /// The id lists handed out as ShapeRanges.
     shape_ranges: Vec<Vec<u64>>,
+    /// The RegExp objects a macro made, and what each Execute found.
+    regexps: Vec<regexp::RegExpState>,
+    regexp_hits: Vec<Vec<regexp::RegExpHit>>,
     /// The turn of every cell written at an angle, in degrees from -90 to
     /// 90. The IR keeps only the stacked kind, which is 771 of the 774
     /// rotations in the conformance corpus; the angles are kept here for
@@ -1987,6 +1998,8 @@ impl<'a> WorkbookHost<'a> {
             shape_clipboard: None,
             shape_selection: Vec::new(),
             shape_ranges: Vec::new(),
+            regexps: Vec::new(),
+            regexp_hits: Vec::new(),
             rotations: std::collections::HashMap::new(),
             underlines: std::collections::HashMap::new(),
             hatchings: std::collections::HashMap::new(),
@@ -2106,6 +2119,10 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::SortFields(_) => "SortFields",
                 HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
+                HostObject::RegExp(_) => "RegExp",
+                HostObject::RegExpMatches(_) => "MatchCollection",
+                HostObject::RegExpMatch(..) => "Match",
+                HostObject::RegExpSubMatches(..) => "SubMatches",
             }
             .to_string(),
         })
@@ -8619,6 +8636,10 @@ impl<'a> WorkbookHost<'a> {
                 | HostObject::FormatCondition(_)
                 | HostObject::ConditionFont(_)
                 | HostObject::ConditionInterior(_)
+                | HostObject::RegExp(_)
+                | HostObject::RegExpMatches(_)
+                | HostObject::RegExpMatch(..)
+                | HostObject::RegExpSubMatches(..)
                 | HostObject::Gone => continue,
             };
             *object = followed.unwrap_or(HostObject::Gone);
@@ -16160,9 +16181,20 @@ impl Host for WorkbookHost<'_> {
         name: &str,
         args: &[Value],
     ) -> Result<Option<Value>, String> {
+        if receiver.is_none() && name.eq_ignore_ascii_case("createobject") {
+            return Ok(match args {
+                [Value::String(class)] => self.create_host_object(class),
+                _ => None,
+            });
+        }
         if let Some(receiver) = receiver {
             if self.gone(receiver) {
                 return Err(host_error(424, "the object's worksheet has been deleted"));
+            }
+            if let Some(object @ (HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..))) =
+                self.objects.get(receiver.handle as usize).copied()
+            {
+                return self.regexp_member(object, name, args);
             }
             if let Some(sheet) = self.outline_sheet(receiver) {
                 if name.eq_ignore_ascii_case("showlevels") {
@@ -17481,6 +17513,11 @@ impl Host for WorkbookHost<'_> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
+        if let Some(object @ (HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..))) =
+            self.objects.get(receiver.handle as usize).copied()
+        {
+            return self.regexp_member(object, name, &[]);
+        }
         if let Some(sheet) = self.tab_sheet(receiver) {
             return Ok(self.tab_member(sheet, name));
         }
@@ -18755,6 +18792,9 @@ impl Host for WorkbookHost<'_> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
+        if let Some(HostObject::RegExp(index)) = self.objects.get(receiver.handle as usize).copied() {
+            return self.set_regexp_member(index, name, &value);
+        }
         if let Some(sheet) = self.tab_sheet(receiver) {
             return self.set_tab_member(sheet, name, &value);
         }
@@ -19662,6 +19702,11 @@ impl Host for WorkbookHost<'_> {
     fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
+        if let Some(object) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(items) = self.regexp_items(object) {
+                return Ok(Some(items));
+            }
         }
         if self.is_worksheets(receiver) {
             let mut worksheets = Vec::with_capacity(self.workbook.sheets.len());
