@@ -17279,6 +17279,13 @@ impl Host for WorkbookHost<'_> {
                 matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SortFields(_)))
             }) {
                 Some(&["Key", "SortOn", "Order", "CustomOrder", "DataOption"][..])
+            } else if receiver.is_some_and(|receiver| {
+                matches!(
+                    self.objects.get(receiver.handle as usize),
+                    Some(HostObject::Drawing(shapes::DrawingPart::ChartObjects(_)))
+                )
+            }) {
+                Some(&["Left", "Top", "Width", "Height"][..])
             } else if receiver.is_some_and(|receiver| self.is_names(receiver) || matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SheetNames(_)))) {
                 Some(&["Name", "RefersTo"][..])
             } else if receiver.is_some_and(|receiver| self.hyperlink_scope(receiver).is_some()) {
@@ -17309,6 +17316,21 @@ impl Host for WorkbookHost<'_> {
             }
         } else if name.eq_ignore_ascii_case("autofilter") {
             Some(&["Field", "Criteria1", "Operator", "Criteria2", "VisibleDropDown"][..])
+        // What the drawing layer's methods call their arguments.
+        } else if name.eq_ignore_ascii_case("addshape") {
+            Some(&["Type", "Left", "Top", "Width", "Height"][..])
+        } else if name.eq_ignore_ascii_case("addtextbox") || name.eq_ignore_ascii_case("addlabel") {
+            Some(&["Orientation", "Left", "Top", "Width", "Height"][..])
+        } else if name.eq_ignore_ascii_case("addline") {
+            Some(&["BeginX", "BeginY", "EndX", "EndY"][..])
+        } else if name.eq_ignore_ascii_case("addchart2") {
+            Some(&["Style", "XlChartType", "Left", "Top", "Width", "Height", "NewLayout"][..])
+        } else if name.eq_ignore_ascii_case("addchart") {
+            Some(&["XlChartType", "Left", "Top", "Width", "Height"][..])
+        } else if name.eq_ignore_ascii_case("addpicture") {
+            Some(&["Filename", "LinkToFile", "SaveWithDocument", "Left", "Top", "Width", "Height"][..])
+        } else if name.eq_ignore_ascii_case("setsourcedata") {
+            Some(&["Source", "PlotBy"][..])
         } else if name.eq_ignore_ascii_case("sort") {
             Some(
                 &[
