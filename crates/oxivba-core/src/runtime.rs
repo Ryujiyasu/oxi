@@ -140,11 +140,29 @@ impl RecordValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ObjectRef {
     pub handle: u64,
     pub kind: String,
+    /// For an instance of a class module, a share in its life: the runtime
+    /// counts these to know when the last reference is gone and
+    /// Class_Terminate is due. None for everything else.
+    pub life: Option<Rc<()>>,
 }
+
+impl ObjectRef {
+    pub fn new(handle: u64, kind: impl Into<String>) -> Self {
+        ObjectRef { handle, kind: kind.into(), life: None }
+    }
+}
+
+impl PartialEq for ObjectRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle && self.kind == other.kind
+    }
+}
+
+impl Eq for ObjectRef {}
 
 pub trait Host {
     fn call(
@@ -414,6 +432,10 @@ enum InternalObject {
 struct ClassInstance {
     class: String,
     state: Option<ModuleState>,
+    /// The registry's own share; when it is the only one left, the instance
+    /// is unreachable.
+    life: Rc<()>,
+    terminated: bool,
 }
 
 /// One module's module-level variables, as they are set aside while another
@@ -856,6 +878,62 @@ impl<'a> Runtime<'a> {
     }
 
     fn call_procedure(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        let answer = self.call_procedure_body(name, args, line);
+        // Its locals are gone now; an instance only they held is done.
+        if answer.is_ok() {
+            self.collect_instances(line.unwrap_or(0))?;
+        }
+        answer
+    }
+
+    /// Run every Class_Terminate that is due: an instance whose only share
+    /// of life left is the registry's own. Terminating one may free others.
+    fn collect_instances(&mut self, line: u32) -> Result<(), RuntimeError> {
+        if !self.internal_objects.values().any(|object| matches!(object, InternalObject::Instance(_))) {
+            return Ok(());
+        }
+        loop {
+            let due: Vec<(u64, String)> = self
+                .internal_objects
+                .iter()
+                .filter_map(|(handle, object)| match object {
+                    InternalObject::Instance(instance)
+                        if !instance.terminated && Rc::strong_count(&instance.life) == 1 =>
+                    {
+                        Some((*handle, instance.class.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if due.is_empty() {
+                return Ok(());
+            }
+            for (handle, class) in due {
+                if let Some(InternalObject::Instance(instance)) = self.internal_objects.get_mut(&handle) {
+                    instance.terminated = true;
+                }
+                let has_terminate = self
+                    .classes
+                    .get(&class.to_ascii_lowercase())
+                    .is_some_and(|module| self.has_procedure_of(module, "Class_Terminate", &[ProcKind::Sub]));
+                if has_terminate {
+                    let this = ObjectRef::new(handle, class);
+                    self.as_instance(&this, |runtime| {
+                        runtime.call_kind("Class_Terminate", &[ProcKind::Sub], Vec::new(), Some(line)).map(|_| ())
+                    })?;
+                }
+                // Gone, and with it whatever it alone was holding.
+                self.internal_objects.remove(&handle);
+            }
+        }
+    }
+
+    fn call_procedure_body(
         &mut self,
         name: &str,
         args: Vec<Value>,
@@ -1331,6 +1409,8 @@ impl<'a> Runtime<'a> {
                     ));
                 }
                 self.assign(target, value, frame, span.line)?;
+                // What the variable held may have been the last reference.
+                self.collect_instances(span.line)?;
                 Ok(Flow::Continue)
             }
             Statement::Dim(decl) => {
@@ -2500,8 +2580,12 @@ impl<'a> Runtime<'a> {
                 .unwrap_or_else(|| type_name.to_string());
             let handle = self.next_internal_handle;
             self.next_internal_handle += 1;
-            self.internal_objects.insert(handle, InternalObject::Instance(ClassInstance { class: name.clone(), state: None }));
-            let made = ObjectRef { handle, kind: name };
+            let life = Rc::new(());
+            self.internal_objects.insert(
+                handle,
+                InternalObject::Instance(ClassInstance { class: name.clone(), state: None, life: life.clone(), terminated: false }),
+            );
+            let made = ObjectRef { handle, kind: name, life: Some(life) };
             // Its variables are set up, then Class_Initialize runs, as the
             // instance comes into being.
             self.as_instance(&made, |this| {
@@ -2528,10 +2612,7 @@ impl<'a> Runtime<'a> {
             )
         })?;
         self.internal_objects.insert(handle, object);
-        Ok(Value::Object(ObjectRef {
-            handle,
-            kind: kind.to_string(),
-        }))
+        Ok(Value::Object(ObjectRef::new(handle, kind)))
     }
 
     fn create_object(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -3381,6 +3462,21 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
+        let answer = self.call_user_procedure_body(name, args, force_by_value, frame, line);
+        if answer.is_ok() {
+            self.collect_instances(line.unwrap_or(0))?;
+        }
+        answer
+    }
+
+    fn call_user_procedure_body(
+        &mut self,
+        name: &str,
+        args: &[Argument],
+        force_by_value: bool,
+        frame: &mut Frame,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
         let procedure = self.find_procedure(name, line)?;
         let param_array_index = procedure
             .params
@@ -3787,10 +3883,7 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<ObjectRef, RuntimeError> {
         if expr_name(expr).is_some_and(|name| name.eq_ignore_ascii_case("err")) {
-            return Ok(ObjectRef {
-                handle: u64::MAX,
-                kind: "Err".to_string(),
-            });
+            return Ok(ObjectRef::new(u64::MAX, "Err"));
         }
         let value = match expr {
             Expr::EvaluateShortcut { text, .. } => self.evaluate_shortcut(text, line, true),
@@ -11426,10 +11519,7 @@ mod tests {
 
     impl SheetHost {
         fn cell_object(row: u32, column: u32) -> Value {
-            Value::Object(ObjectRef {
-                handle: ((row as u64) << 32) | column as u64,
-                kind: "Cell".to_string(),
-            })
+            Value::Object(ObjectRef::new(((row as u64) << 32) | column as u64, "Cell"))
         }
 
         fn coordinates(object: &ObjectRef) -> Option<(u32, u32)> {

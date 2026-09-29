@@ -2049,6 +2049,7 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         Value::Object(ObjectRef {
+            life: None,
             handle,
             kind: match object {
                 HostObject::Range(_) => "Range",
