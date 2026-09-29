@@ -17,7 +17,9 @@ use crate::datetime::{date_from_serial, weekday_sunday_one};
 /// two or more, the negative section states its own sign, which is why
 /// `#,##0;(#,##0)` shows `(1,235)` rather than `(-1,235)`.
 pub fn format_number(value: f64, format: &str) -> String {
-    if format.is_empty() || format.eq_ignore_ascii_case("general") {
+    // A number under the text format `@` shows as General: measured, 12.5 in
+    // a cell formatted `@` reads 12.5.
+    if format.is_empty() || format.eq_ignore_ascii_case("general") || format == "@" {
         return general(value);
     }
 
@@ -781,6 +783,25 @@ fn group_thousands(digits: &str) -> String {
 }
 
 
+/// How many decimals the seconds of a date format carry: the zeros after
+/// `s.` or `ss.`, three at most.
+fn second_places(format: &str) -> u32 {
+    let lower = format.to_ascii_lowercase();
+    let body: Vec<char> = lower.chars().collect();
+    let mut quoted = false;
+    for at in 0..body.len() {
+        match body[at] {
+            '"' => quoted = !quoted,
+            's' if !quoted && body.get(at + 1) == Some(&'.') => {
+                let zeros = body[at + 2..].iter().take_while(|held| **held == '0').count();
+                return zeros.min(3) as u32;
+            }
+            _ => {}
+        }
+    }
+    0
+}
+
 fn format_datetime(serial: f64, format: &str) -> String {
     let whole = serial.trunc() as i64;
     let Ok(date) = date_from_serial(whole) else {
@@ -789,7 +810,14 @@ fn format_datetime(serial: f64, format: &str) -> String {
     let (year, month, day) = (date.year, date.month, date.day);
     // The fraction of a day is the time, rounded to the nearest second the way
     // Excel shows it.
-    let seconds_of_day = ((serial - serial.trunc()) * 86_400.0).round() as i64;
+    //
+    // Unless the seconds carry decimals: `mm:ss.0` rounds to the tenth, and
+    // measured, 0.0123 of a day is 17:42.7 there, where `mm:ss` says 17:43.
+    let places = second_places(format);
+    let scale = 10_i64.pow(places);
+    let ticks = ((serial - serial.trunc()) * 86_400.0 * scale as f64).round() as i64;
+    let seconds_of_day = ticks / scale;
+    let fraction = ticks % scale;
     let hour = seconds_of_day / 3600;
     let minute = (seconds_of_day % 3600) / 60;
     let second = seconds_of_day % 60;
@@ -959,6 +987,17 @@ fn format_datetime(serial: f64, format: &str) -> String {
                     rendered.push_str(&format!("{second:02}"));
                 } else {
                     rendered.push_str(&second.to_string());
+                }
+                let zeros = body[at + run..]
+                    .iter()
+                    .skip(1)
+                    .take_while(|held| **held == '0')
+                    .count();
+                if places > 0 && body.get(at + run) == Some(&'.') && zeros > 0 {
+                    rendered.push('.');
+                    rendered.push_str(&format!("{fraction:0width$}", width = places as usize));
+                    at += run + 1 + zeros;
+                    continue;
                 }
             }
             'm' => {

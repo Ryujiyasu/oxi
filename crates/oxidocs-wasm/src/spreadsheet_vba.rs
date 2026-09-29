@@ -19399,8 +19399,10 @@ fn general_fit(value: f64, room: Option<u32>, measure: &dyn Fn(&str) -> u32) -> 
         }
     }
     // Too small to show even as an exponent: a nought, where one fits.
+    // A negative one keeps its sign: measured, -0.000001 in a five-wide
+    // column reads -0.
     if magnitude < 0.5 && fits("0") {
-        return "0".to_string();
+        return format!("{sign}0");
     }
     "#".repeat((room / measure("#").max(1)) as usize)
 }
