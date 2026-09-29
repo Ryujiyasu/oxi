@@ -379,6 +379,9 @@ enum HostObject {
     /// `CreateObject("VBScript.RegExp")`, by its place in the host's list;
     /// what one Execute found; one match of that; its groups.
     RegExp(usize),
+    /// Sheets named together, `Sheets(Array("A", "B"))`: an index into the
+    /// host's `sheet_groups`.
+    SheetGroup(usize),
     RegExpMatches(usize),
     RegExpMatch(usize, usize),
     RegExpSubMatches(usize, usize),
@@ -1863,6 +1866,10 @@ struct WorkbookHost<'a> {
     shape_ranges: Vec<Vec<u64>>,
     /// The RegExp objects a macro made, and what each Execute found.
     regexps: Vec<regexp::RegExpState>,
+    /// The sheet lists handed out as Sheets groups, and which of them is
+    /// selected (the window's SelectedSheets) while its sheets stay so.
+    sheet_groups: Vec<Vec<usize>>,
+    selected_group: Option<usize>,
     regexp_hits: Vec<Vec<regexp::RegExpHit>>,
     /// The turn of every cell written at an angle, in degrees from -90 to
     /// 90. The IR keeps only the stacked kind, which is 771 of the 774
@@ -2005,6 +2012,8 @@ impl<'a> WorkbookHost<'a> {
             cell_ids: std::collections::HashMap::new(),
             app_settings: std::collections::HashMap::new(),
             regexps: Vec::new(),
+            sheet_groups: Vec::new(),
+            selected_group: None,
             regexp_hits: Vec::new(),
             rotations: std::collections::HashMap::new(),
             underlines: std::collections::HashMap::new(),
@@ -2127,6 +2136,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
                 HostObject::RegExp(_) => "RegExp",
+                HostObject::SheetGroup(_) => "Sheets",
                 HostObject::RegExpMatches(_) => "MatchCollection",
                 HostObject::RegExpMatch(..) => "Match",
                 HostObject::RegExpSubMatches(..) => "SubMatches",
@@ -8576,6 +8586,9 @@ impl<'a> WorkbookHost<'a> {
                 self.singletons.insert((kind, sheet), handle);
             }
         }
+        for group in &mut self.sheet_groups {
+            *group = group.iter().filter_map(|sheet| moved(*sheet)).collect();
+        }
         let address = |at: CellAddress| moved(at.sheet).map(|sheet| CellAddress { sheet, ..at });
         let range = |held: CellRange| moved(held.sheet).map(|sheet| CellRange { sheet, ..held });
 
@@ -8826,6 +8839,7 @@ impl<'a> WorkbookHost<'a> {
                 | HostObject::RegExpMatches(_)
                 | HostObject::RegExpMatch(..)
                 | HostObject::RegExpSubMatches(..)
+                | HostObject::SheetGroup(_)
                 | HostObject::Gone => continue,
             };
             *object = followed.unwrap_or(HostObject::Gone);
@@ -8838,6 +8852,8 @@ impl<'a> WorkbookHost<'a> {
     /// selected still.
     fn activate_sheet(&mut self, sheet: usize) {
         self.shape_selection.clear();
+        // One sheet taken up on its own ends a group's selection.
+        self.selected_group = None;
         if sheet == self.active_sheet && self.selection.sheet == sheet {
             return;
         }
@@ -9401,14 +9417,21 @@ impl<'a> WorkbookHost<'a> {
     fn worksheets_object_or_item(&mut self, args: &[Value]) -> Result<Value, String> {
         match args {
             [] => Ok(self.object(HostObject::Worksheets)),
-            // `Sheets(Array("Sheet1", "Sheet2"))` groups the sheets named;
-            // what a macro then does with the group -- `.Select` -- lands on
-            // the first, which is what this build keeps of it. Measured:
-            // after it ActiveSheet is Sheet1.
-            [Value::Array(listed)] => match listed.values.first() {
-                Some(first) => self.worksheet_object(first),
-                None => Err(host_error(1004, "Sheets takes at least one name")),
-            },
+            // `Sheets(Array("Sheet1", "Sheet2"))` groups the sheets named: a
+            // Sheets object of its own, which `.Select` makes the window's
+            // SelectedSheets, the first of them active. Measured: after it
+            // ActiveSheet is Sheet1 and SelectedSheets.Count 2.
+            [Value::Array(listed)] => {
+                if listed.values.is_empty() {
+                    return Err(host_error(1004, "Sheets takes at least one name"));
+                }
+                let mut sheets = Vec::with_capacity(listed.values.len());
+                for value in &listed.values {
+                    sheets.push(self.worksheet_from_value(value)?);
+                }
+                self.sheet_groups.push(sheets);
+                Ok(self.object(HostObject::SheetGroup(self.sheet_groups.len() - 1)))
+            }
             [value] => self.worksheet_object(value),
             _ => Err("Worksheets expects zero or one argument".to_string()),
         }
@@ -17055,6 +17078,35 @@ impl Host for WorkbookHost<'_> {
             if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("add") {
                 return self.add_worksheet(args).map(Some);
             }
+            if let Some(HostObject::SheetGroup(group)) = self.objects.get(receiver.handle as usize).copied() {
+                let sheets = self.sheet_groups.get(group).cloned().unwrap_or_default();
+                if name.eq_ignore_ascii_case("select") {
+                    if let Some(first) = sheets.first() {
+                        self.activate_sheet(*first);
+                        self.active_cell = self.selection.first();
+                    }
+                    self.selected_group = Some(group);
+                    return Ok(Some(Value::Empty));
+                }
+                if name.eq_ignore_ascii_case("item") {
+                    let [value] = args else {
+                        return Err("Sheets.Item expects one index".to_string());
+                    };
+                    let index = any_whole_number(value).filter(|at| *at >= 1 && (*at as usize) <= sheets.len());
+                    return match index {
+                        Some(at) => Ok(Some(self.object(HostObject::Worksheet(sheets[at as usize - 1])))),
+                        None => Err(host_error(9, "subscript out of range")),
+                    };
+                }
+                if name.eq_ignore_ascii_case("delete") {
+                    let mut doomed = sheets.clone();
+                    doomed.sort_unstable();
+                    for sheet in doomed.into_iter().rev() {
+                        self.delete_worksheet(sheet)?;
+                    }
+                    return Ok(Some(Value::Boolean(true)));
+                }
+            }
             if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("item") {
                 let [value] = args else {
                     return Err("Worksheets.Item expects one sheet name or index".to_string());
@@ -18251,6 +18303,21 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(None);
         }
+        // The window's selected sheets: the group last selected while its
+        // sheets are still the selection, else the active sheet alone.
+        if self.is_window(receiver) && name.eq_ignore_ascii_case("selectedsheets") {
+            let held = self
+                .selected_group
+                .filter(|group| self.sheet_groups.get(*group).is_some_and(|sheets| sheets.contains(&self.active_sheet)));
+            let group = match held {
+                Some(group) => group,
+                None => {
+                    self.sheet_groups.push(vec![self.active_sheet]);
+                    self.sheet_groups.len() - 1
+                }
+            };
+            return Ok(Some(self.object(HostObject::SheetGroup(group))));
+        }
         if self.is_window(receiver) {
             let sheet = &self.workbook.sheets[self.active_sheet];
             // Measured: a fresh window answers False / 0 / 0; after selecting
@@ -18529,6 +18596,12 @@ impl Host for WorkbookHost<'_> {
             // so until the next cell is written.
             if name.eq_ignore_ascii_case("saved") {
                 return Ok(Some(Value::Boolean(self.saved)));
+            }
+        }
+        if let Some(HostObject::SheetGroup(group)) = self.objects.get(receiver.handle as usize).copied() {
+            if name.eq_ignore_ascii_case("count") {
+                let count = self.sheet_groups.get(group).map_or(0, Vec::len);
+                return Ok(Some(Value::Integer(count as i64)));
             }
         }
         if self.is_worksheets(receiver) {
@@ -20110,6 +20183,10 @@ impl Host for WorkbookHost<'_> {
             if let Some(items) = self.regexp_items(object) {
                 return Ok(Some(items));
             }
+        }
+        if let Some(HostObject::SheetGroup(group)) = self.objects.get(receiver.handle as usize).copied() {
+            let sheets = self.sheet_groups.get(group).cloned().unwrap_or_default();
+            return Ok(Some(sheets.into_iter().map(|sheet| self.object(HostObject::Worksheet(sheet))).collect()));
         }
         if self.is_worksheets(receiver) {
             let mut worksheets = Vec::with_capacity(self.workbook.sheets.len());
