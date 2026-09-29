@@ -56,7 +56,14 @@ pub fn format_number(value: f64, format: &str) -> String {
     // measured, `0;"neg";"zero"` shows -5 as `neg` and 0 as `zero`.
     if !has_digit_place(section) && !looks_like_a_date(section) && !section.eq_ignore_ascii_case("general") {
         let words = literal_text(section);
-        return if signed && value < 0.0 && !words.is_empty() && sections.len() == 1 { format!("-{words}") } else { words };
+        // A number that came by a condition keeps its sign too: measured,
+        // under `[>100]"big";"small"` -0.5 shows -small.
+        let conditional = conditions.iter().any(Option::is_some);
+        return if signed && value < 0.0 && !words.is_empty() && (sections.len() == 1 || conditional) {
+            format!("-{words}")
+        } else {
+            words
+        };
     }
     if section.trim().eq_ignore_ascii_case("general") {
         return general(if signed { value } else { value.abs() });
@@ -418,7 +425,7 @@ fn split_sections(format: &str) -> Vec<&str> {
 }
 
 /// A format is a date format when it names a date or time part outside quotes.
-fn looks_like_a_date(format: &str) -> bool {
+pub(crate) fn looks_like_a_date(format: &str) -> bool {
     let mut quoted = false;
     let mut marked_month = false;
     let mut characters = format.chars().peekable();
@@ -489,11 +496,44 @@ fn looks_like_a_date(format: &str) -> bool {
 
 /// What `General` shows: the shortest text that reads back as the same number.
 fn general(value: f64) -> String {
-    if value == value.trunc() && value.abs() < 1e15 {
-        return format!("{}", value as i64);
+    // General fits a number in eleven characters, the sign aside: the whole
+    // digits, a point and as many decimals as are left, trailing zeros off;
+    // what cannot be shown that way -- twelve whole digits or more, or a
+    // fraction that rounds to nothing -- goes to exponent form with five
+    // decimals at most. Measured with TEXT(x,"General"): 12345678901.5 is
+    // 12345678902, 0.123456789012 0.123456789, 1234567890.12 1234567890,
+    // 0.0000123 0.0000123, 1E-10 1E-10, 1E+15 1E+15.
+    if value == 0.0 || !value.is_finite() {
+        return "0".to_string();
     }
-    let text = format!("{value}");
-    text
+    let magnitude = value.abs();
+    let sign = if value < 0.0 { "-" } else { "" };
+    let whole_digits = if magnitude < 1.0 { 1 } else { magnitude.log10().floor() as i32 + 1 };
+    if whole_digits <= 11 {
+        let decimals = (11 - whole_digits - 1).max(0);
+        let rounded = round_half_away(magnitude, decimals);
+        let rounded_digits = if rounded < 1.0 { 1 } else { rounded.log10().floor() as i32 + 1 };
+        if rounded != 0.0 && rounded_digits <= 11 {
+            let written = format!("{rounded:.*}", decimals as usize);
+            let written = if written.contains('.') {
+                written.trim_end_matches('0').trim_end_matches('.').to_string()
+            } else {
+                written
+            };
+            return format!("{sign}{written}");
+        }
+    }
+    let exponent = magnitude.log10().floor() as i32;
+    let mut mantissa = round_half_away(magnitude / 10f64.powi(exponent), 5);
+    let mut exponent = exponent;
+    if mantissa >= 10.0 {
+        mantissa /= 10.0;
+        exponent += 1;
+    }
+    let written = format!("{mantissa:.5}");
+    let written = written.trim_end_matches('0').trim_end_matches('.');
+    let mark = if exponent < 0 { '-' } else { '+' };
+    format!("{sign}{written}E{mark}{:02}", exponent.abs())
 }
 
 /// A digit place in a format: `0` shows a digit or a zero, `#` a digit or
@@ -576,6 +616,15 @@ fn format_numeric(value: f64, format: &str) -> String {
                 scientific = Some(body[at + 1] == '+');
                 part = Part::Exponent;
                 at += 1;
+            }
+            // After the fraction's last place a comma still divides by a
+            // thousand: measured, TEXT(123456789,"0.0,,""M""") is 123.5M.
+            ',' if part == Part::Fraction => {
+                if !fraction_places.is_empty()
+                    && !body[at + 1..].iter().take_while(|held| !matches!(held, ';')).any(|held| place_of(*held).is_some())
+                {
+                    scale += 1;
+                }
             }
             ',' if part == Part::Whole => {
                 // Among the places it groups; after the last place before
@@ -680,7 +729,10 @@ fn format_numeric(value: f64, format: &str) -> String {
 
     // Now the format again, left to right, putting it all in its place.
     let mut out = String::new();
-    if negative {
+    // ...unless nothing is left of it once rounded: measured,
+    // TEXT(-0.5,"#,##0,") is 0.
+    let nothing_left = settled == 0.0 && scientific.is_none();
+    if negative && !nothing_left {
         out.push('-');
     }
     let (mut whole_at, mut fraction_at) = (0usize, 0usize);
@@ -730,7 +782,7 @@ fn format_numeric(value: f64, format: &str) -> String {
                 part = Part::Fraction;
                 out.push('.');
             }
-            ',' if part == Part::Whole => {}
+            ',' if part == Part::Whole || part == Part::Fraction => {}
             'E' | 'e' if part != Part::Exponent && scientific.is_some() && matches!(body.get(at + 1), Some('+' | '-')) => {
                 part = Part::Exponent;
                 out.push(character);

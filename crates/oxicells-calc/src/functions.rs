@@ -2204,6 +2204,14 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             expect(args, 2)?;
             let format = text(&args[1])?;
             match args[0].scalar() {
+                // A date picture has no way to write a number off the
+                // calendar: measured, TEXT(-0.5,"h:m:s") and
+                // TEXT(1E+15,"yyyy/mm/dd") are #VALUE!.
+                Value::Number(n)
+                    if crate::numfmt::looks_like_a_date(&format) && !(0.0..2_958_466.0).contains(&n) =>
+                {
+                    Err(ExcelError::Value)
+                }
                 Value::Number(n) => Ok(Value::Text(crate::numfmt::format_number(n, &format))),
                 // Text that reads as a number is formatted as that number,
                 // and other text goes through the text section. Measured:
@@ -2214,9 +2222,12 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     Ok(n) if !t.trim().is_empty() => crate::numfmt::format_number(n, &format),
                     _ => crate::numfmt::format_text(&t, &format),
                 })),
-                Value::Logical(b) => Ok(Value::Text(
-                    if b { "TRUE" } else { "FALSE" }.to_string(),
-                )),
+                // A Boolean is text to TEXT: measured, under
+                // `0;-0;"zero";"text:"@` TRUE is text:TRUE.
+                Value::Logical(b) => Ok(Value::Text(crate::numfmt::format_text(
+                    if b { "TRUE" } else { "FALSE" },
+                    &format,
+                ))),
                 Value::Blank => Ok(Value::Text(String::new())),
                 Value::Error(e) => Err(e),
             }

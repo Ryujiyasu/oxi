@@ -20308,23 +20308,40 @@ fn general_fit(value: f64, room: Option<u32>, measure: &dyn Fn(&str) -> u32) -> 
         return format!("{sign}{full}");
     }
     let room = room.unwrap_or(0);
-    if full_is_plain {
-        let decimals = full.split_once('.').map_or(0, |(_, tail)| tail.len());
+    // Cut down to the room, the plain form and the exponent each keep what
+    // digits they can, and the one keeping more is shown: measured, 0.0000123
+    // in a default column reads 1.23E-05 (three digits) and not 0.000012
+    // (two); 123456.7890123 reads 123456.8.
+    let mut shorter_plain = None;
+    if full_is_plain || plain.is_some() {
+        let base = plain.clone().unwrap_or_default();
+        let decimals = base.split_once('.').map_or(0, |(_, tail)| tail.len());
         for keep in (0..decimals).rev() {
             let shorter = general_plain(magnitude, keep);
             if shorter == "0" {
                 break;
             }
             if fits(&shorter) {
-                return format!("{sign}{shorter}");
+                shorter_plain = Some(shorter);
+                break;
             }
         }
     }
+    let mut shorter_exponent = None;
     for keep in (0..=5).rev() {
         let shorter = general_exponent(magnitude, keep);
         if fits(&shorter) {
-            return format!("{sign}{shorter}");
+            shorter_exponent = Some(shorter);
+            break;
         }
+    }
+    match (shorter_plain, shorter_exponent) {
+        (Some(plain), Some(exponent)) if general_significance(&exponent) > general_significance(&plain) => {
+            return format!("{sign}{exponent}");
+        }
+        (Some(plain), _) => return format!("{sign}{plain}"),
+        (None, Some(exponent)) => return format!("{sign}{exponent}"),
+        (None, None) => {}
     }
     // Too small to show even as an exponent: a nought, where one fits.
     // A negative one keeps its sign: measured, -0.000001 in a five-wide
