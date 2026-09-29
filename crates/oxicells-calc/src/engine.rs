@@ -212,6 +212,12 @@ pub struct Workbook {
     /// formula reading one is answered from the copy the file keeps, which is
     /// the same copy Excel reads from when the source is closed.
     linked: BTreeMap<(u32, String), BTreeMap<(u32, u32), Value>>,
+    /// The names a LET is binding while its last argument is worked out,
+    /// innermost last. Asked before the workbook's own names.
+    let_scope: std::cell::RefCell<Vec<(String, Arg)>>,
+    /// The state RAND draws from: seeded from the moment on first use, and
+    /// moved on by every draw.
+    rand_state: std::cell::Cell<u64>,
 }
 
 /// `range`, with any part reaching past what is remembered of a linked sheet
@@ -711,6 +717,19 @@ impl Workbook {
             .unwrap_or(Value::Blank)
     }
 
+    /// A draw in [0, 1), from a xorshift seeded by the moment.
+    fn next_random(&self) -> f64 {
+        let mut state = self.rand_state.get();
+        if state == 0 {
+            state = (self.now.to_bits() ^ 0x9E37_79B9_7F4A_7C15) | 1;
+        }
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        self.rand_state.set(state);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    }
+
     fn eval(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Value {
         let worked = self.eval_arg(expr, sheet, depth, at);
         match &worked {
@@ -794,10 +813,22 @@ impl Workbook {
 
             Expr::Table { name, asked } => self.a_table_column(name, asked, at),
 
-            Expr::Name(name) => match self.names.get(name) {
-                Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
-                None => Arg::Value(Value::Error(ExcelError::Name)),
-            },
+            Expr::Name(name) => {
+                let bound_by_let = self
+                    .let_scope
+                    .borrow()
+                    .iter()
+                    .rev()
+                    .find(|(held, _)| held == name)
+                    .map(|(_, value)| value.clone());
+                if let Some(value) = bound_by_let {
+                    return value;
+                }
+                match self.names.get(name) {
+                    Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
+                    None => Arg::Value(Value::Error(ExcelError::Name)),
+                }
+            }
 
             Expr::Unary { op, operand } => {
                 let operand = self.eval_arg(operand, sheet, depth + 1, at);
@@ -860,6 +891,69 @@ impl Workbook {
                 self.indirect_reference(args, sheet, depth, at)
             }
 
+            // LET names what it works out, pair by pair, and answers with its
+            // last argument: `LET(x, 2, y, x*3, x+y)` is 8. A later pair may
+            // use an earlier name.
+            // RAND and RANDBETWEEN draw afresh at every working-out, as
+            // Excel's do; a browser has no other source that is not the clock.
+            Expr::Function { name, args } if name == "RAND" || name == "RANDBETWEEN" => {
+                let draw = self.next_random();
+                if name == "RAND" {
+                    return if args.is_empty() {
+                        Arg::Value(Value::Number(draw))
+                    } else {
+                        Arg::Value(Value::Error(ExcelError::Value))
+                    };
+                }
+                let [low, high] = args.as_slice() else {
+                    return Arg::Value(Value::Error(ExcelError::Value));
+                };
+                let bound = |expr: &Expr| {
+                    self.eval_arg_inner(expr, sheet, depth + 1, skip, at).scalar().to_number()
+                };
+                match (bound(low), bound(high)) {
+                    (Ok(low), Ok(high)) => {
+                        // Both bounds go up to a whole number: measured,
+                        // RANDBETWEEN(2.5, 2.9) is 3.
+                        let (low, high) = (low.ceil(), high.ceil());
+                        if low > high {
+                            Arg::Value(Value::Error(ExcelError::Num))
+                        } else {
+                            Arg::Value(Value::Number(low + (draw * (high - low + 1.0)).floor()))
+                        }
+                    }
+                    (Err(why), _) | (_, Err(why)) => Arg::Value(Value::Error(why)),
+                }
+            }
+            Expr::Function { name, args } if name == "LET" => {
+                if args.len() < 3 || args.len() % 2 == 0 {
+                    return Arg::Value(Value::Error(ExcelError::Value));
+                }
+                let mut bound = 0;
+                let mut answer = None;
+                for pair in args[..args.len() - 1].chunks(2) {
+                    // A name given twice is refused: measured, LET(x,1,x,2,x)
+                    // is #VALUE!.
+                    let duplicate = matches!(&pair[0], Expr::Name(label)
+                        if self.let_scope.borrow()[self.let_scope.borrow().len() - bound..]
+                            .iter()
+                            .any(|(held, _)| held == label));
+                    let (Expr::Name(label), false) = (&pair[0], duplicate) else {
+                        answer = Some(Arg::Value(Value::Error(ExcelError::Value)));
+                        break;
+                    };
+                    let value = self.eval_arg_inner(&pair[1], sheet, depth + 1, skip, at);
+                    self.let_scope.borrow_mut().push((label.clone(), value));
+                    bound += 1;
+                }
+                let answer = answer.unwrap_or_else(|| {
+                    self.eval_arg_inner(&args[args.len() - 1], sheet, depth + 1, skip, at)
+                });
+                let mut scope = self.let_scope.borrow_mut();
+                let kept = scope.len() - bound;
+                scope.truncate(kept);
+                answer
+            }
             Expr::Function { name, args } => {
                 // SUBTOTAL ignores any cell in its range that is itself a
                 // SUBTOTAL, which is how a column of group subtotals can be
@@ -2089,6 +2183,27 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "I1"), Value::Number(10.0));
         // Every member answers with the whole formula.
         assert_eq!(wb.formula("Sheet1", "D3"), Some("=A1:A3*2"));
+    }
+
+    #[test]
+    fn let_binds_names_and_randbetween_rounds_both_bounds_up() {
+        // Every answer here is Excel's.
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        for (row, value) in [(1, 2.0), (2, 3.0), (3, 4.0)] {
+            wb.set_value("Sheet1", &format!("A{row}"), Value::Number(value)).unwrap();
+        }
+        wb.set_formula("Sheet1", "B1", "=LET(x,2,y,x*3,x+y)").unwrap();
+        wb.set_formula("Sheet1", "B2", "=LET(total,SUM(A1:A3),total/COUNT(A1:A3))").unwrap();
+        wb.set_formula("Sheet1", "B3", "=LET(x,1,x,2,x)").unwrap();
+        wb.set_formula("Sheet1", "B4", "=RANDBETWEEN(2.5,2.9)").unwrap();
+        wb.set_formula("Sheet1", "B5", "=RANDBETWEEN(5,3)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "B1"), Value::Number(8.0));
+        assert_eq!(wb.value("Sheet1", "B2"), Value::Number(3.0));
+        assert_eq!(wb.value("Sheet1", "B3"), Value::Error(ExcelError::Value));
+        assert_eq!(wb.value("Sheet1", "B4"), Value::Number(3.0));
+        assert_eq!(wb.value("Sheet1", "B5"), Value::Error(ExcelError::Num));
     }
 
     #[test]
