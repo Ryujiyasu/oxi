@@ -113,7 +113,11 @@ pub enum UserArg {
     Cells { sheet: String, range: RangeRef, values: Vec<Value> },
 }
 
-type UserFunctionHook = Box<dyn FnMut(&str, Vec<UserArg>) -> Option<Arg>>;
+/// Where a formula calling one of them stands: sheet, column and row, the
+/// last two counted from zero.
+pub type UserCaller = Option<(String, u32, u32)>;
+
+type UserFunctionHook = Box<dyn FnMut(&str, Vec<UserArg>, UserCaller) -> Option<Arg>>;
 
 thread_local! {
     static USER_FUNCTIONS: std::cell::RefCell<Option<UserFunctionHook>> = const { std::cell::RefCell::new(None) };
@@ -125,9 +129,9 @@ pub fn set_user_function_hook(hook: Option<UserFunctionHook>) {
     USER_FUNCTIONS.with(|held| *held.borrow_mut() = hook);
 }
 
-fn ask_user_function(name: &str, args: Vec<UserArg>) -> Option<Arg> {
+fn ask_user_function(name: &str, args: Vec<UserArg>, caller: UserCaller) -> Option<Arg> {
     USER_FUNCTIONS.with(|held| match held.try_borrow_mut() {
-        Ok(mut hook) => hook.as_mut().and_then(|hook| hook(name, args)),
+        Ok(mut hook) => hook.as_mut().and_then(|hook| hook(name, args, caller)),
         Err(_) => None,
     })
 }
@@ -1515,7 +1519,8 @@ impl Workbook {
                             (_, Arg::Value(value)) => UserArg::Value(value.clone()),
                         })
                         .collect();
-                    if let Some(answer) = ask_user_function(name, handed) {
+                    let caller = at.map(|(col, row)| (sheet.to_string(), col, row));
+                    if let Some(answer) = ask_user_function(name, handed, caller) {
                         return answer;
                     }
                 }

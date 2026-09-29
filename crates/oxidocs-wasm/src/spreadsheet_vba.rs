@@ -2248,12 +2248,12 @@ impl<'a> WorkbookHost<'a> {
     /// runtime to work out -- the cell reads #VALUE! until then.
     fn lend_user_functions(&mut self) {
         let state = self.user_functions.clone();
-        oxicells_calc::set_user_function_hook(Some(Box::new(move |name, args| {
+        oxicells_calc::set_user_function_hook(Some(Box::new(move |name, args, caller| {
             let mut held = state.borrow_mut();
             if !held.names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
                 return None;
             }
-            let key = format!("{}|{:?}", name.to_ascii_uppercase(), args);
+            let key = format!("{}|{:?}|{:?}", name.to_ascii_uppercase(), args, caller);
             if let Some(answer) = held.answers.get(&key) {
                 return Some(sheet_arg_of(answer));
             }
@@ -2266,6 +2266,7 @@ impl<'a> WorkbookHost<'a> {
                     key,
                     args: PendingArgs::Sheet(args),
                     once: false,
+                    caller,
                 });
             }
             Some(oxicells_calc::functions::Arg::Value(oxicells_calc::Value::Error(
@@ -16025,13 +16026,31 @@ impl Host for WorkbookHost<'_> {
                 PendingArgs::Sheet(args) => args.iter().map(|arg| self.vba_of_user_arg(arg)).collect(),
             };
             self.user_functions.borrow_mut().asked.insert(call.number, (call.key.clone(), call.once));
+            if let Some((sheet, column, row)) = &call.caller {
+                if let Some(at) = self.workbook.sheets.iter().position(|held| held.name.eq_ignore_ascii_case(sheet)) {
+                    self.user_functions
+                        .borrow_mut()
+                        .callers
+                        .insert(call.number, CellAddress { sheet: at, row: row + 1, column: *column });
+                }
+            }
             calls.push((call.number, call.name, args));
         }
         calls
     }
 
+    fn enter_user_function(&mut self, key: u64) {
+        let mut held = self.user_functions.borrow_mut();
+        held.running = held.callers.get(&key).copied();
+        held.running_key = Some(key);
+    }
+
     fn answer_user_function(&mut self, key: u64, value: Value) {
         let mut held = self.user_functions.borrow_mut();
+        held.running = None;
+        // A function run from a cell that tried to change the sheet fails:
+        // measured, `=Sneaky()` writing Z1 reads #VALUE! and Z1 stays empty.
+        let value = if held.refused.remove(&key) { Value::Error(2015) } else { value };
         if let Some((key, _)) = held.asked.remove(&key) {
             held.answers.insert(key, value);
         }
@@ -16490,6 +16509,12 @@ impl Host for WorkbookHost<'_> {
             // is Error 2023 -- and `Volatile` does nothing outside a function
             // a cell calls.
             if self.is_application(receiver) && name.eq_ignore_ascii_case("caller") {
+                // Inside a function a cell runs, the cell: measured,
+                // `=Where()` answering `Application.Caller.Address` is $B$2.
+                let running = self.user_functions.borrow().running;
+                if let Some(at) = running {
+                    return Ok(Some(self.object(HostObject::Range(CellRange::single(at)))));
+                }
                 return Ok(Some(Value::Error(2023)));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("volatile") {
@@ -16583,6 +16608,7 @@ impl Host for WorkbookHost<'_> {
                     key,
                     args: PendingArgs::Vba(rest.to_vec()),
                     once: true,
+                    caller: None,
                 });
                 return Ok(Some(Value::Empty));
             }
@@ -18601,6 +18627,10 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        // A function a cell runs may not change the sheet; trying fails it.
+        if self.user_functions.borrow().running.is_some() {
+            return Err(host_error(1004, "a function called from a cell cannot change the sheet"));
+        }
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
@@ -23461,6 +23491,11 @@ struct UserFunctions {
     answers: std::collections::HashMap<String, Value>,
     pending: Vec<PendingCall>,
     asked: std::collections::HashMap<u64, (String, bool)>,
+    callers: std::collections::HashMap<u64, CellAddress>,
+    refused: std::collections::HashSet<u64>,
+    running_key: Option<u64>,
+    /// The cell whose formula is running a function right now.
+    running: Option<CellAddress>,
     next: u64,
 }
 
@@ -23470,6 +23505,7 @@ struct PendingCall {
     key: String,
     args: PendingArgs,
     once: bool,
+    caller: oxicells_calc::UserCaller,
 }
 
 enum PendingArgs {

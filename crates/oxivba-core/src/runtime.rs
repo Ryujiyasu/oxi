@@ -180,6 +180,10 @@ pub trait Host {
 
     fn answer_user_function(&mut self, _key: u64, _value: Value) {}
 
+    /// Said just before one of those calls runs, so that `Application.Caller`
+    /// can name the cell asking and a write to the sheet can be refused.
+    fn enter_user_function(&mut self, _key: u64) {}
+
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
 
     fn set_indexed(
@@ -482,9 +486,9 @@ impl<'a> Runtime<'a> {
             .items
             .iter()
             .filter_map(|item| match item {
-                ModuleItem::Procedure(procedure)
-                    if procedure.kind == ProcKind::Function && procedure.visibility != crate::ast::Visibility::Private =>
-                {
+                // Private ones too: measured, `=Hidden()` for a Private
+                // Function of the module answers.
+                ModuleItem::Procedure(procedure) if procedure.kind == ProcKind::Function => {
                     Some(procedure.name.clone())
                 }
                 _ => None,
@@ -3562,6 +3566,9 @@ impl<'a> Runtime<'a> {
             return Ok(false);
         }
         for (key, name, args) in calls {
+            if let Some(host) = self.host.as_deref_mut() {
+                host.enter_user_function(key);
+            }
             let saved = (self.err_in.take(), self.err_out.take());
             let value = match self.call_procedure(&name, args, None) {
                 Ok(Value::Object(_)) | Err(_) => Value::Error(2015),
