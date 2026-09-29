@@ -9675,6 +9675,15 @@ fn numeric_text(text: &str) -> Option<f64> {
     if let Some(inside) = trimmed.strip_prefix('(').and_then(|rest| rest.strip_suffix(')')) {
         return numeric_text(inside).filter(|value| *value >= 0.0).map(|value| -value);
     }
+    // So may a sign be written after it: measured, `CDbl("5-")` is -5 and
+    // `IsNumeric("5+")` True, while `"-5-"` and `"$5-"` are not numbers.
+    if let Some(body) = trimmed.strip_suffix('-').or_else(|| trimmed.strip_suffix('+')) {
+        let body = body.trim_end();
+        if !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b',') {
+            let negative = trimmed.ends_with('-');
+            return numeric_text(body).map(|value| if negative { -value } else { value });
+        }
+    }
     // The grouping and currency marks Excel accepts, and nothing else -- a
     // trailing `%` is refused, so they cannot simply all be stripped.
     let bare: String = trimmed
@@ -9790,6 +9799,11 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
             Value::Decimal(held) => Ok(Value::Decimal(held.neg())),
             _ => unreachable!(),
         },
+        // A Byte has no negatives, so its negation is an Integer: measured,
+        // `-CByte(5)` is the Integer -5.
+        UnaryOp::Neg if matches!(value, Value::Byte(_)) => {
+            Ok(keep_rank(-number(&value)?, &Value::Int16(0))?)
+        }
         UnaryOp::Neg => Ok(keep_rank(-number(&value)?, &value)?),
         UnaryOp::Not => match value {
             Value::Boolean(value) => Ok(Value::Boolean(!value)),
@@ -10259,6 +10273,10 @@ fn like_fold(value: char, text_compare: bool) -> char {
 fn keep_rank(number: f64, was: &Value) -> Result<Value, String> {
     match was {
         Value::Date(_) => Ok(Value::Date(number)),
+        // Measured: `Int("3")` and `Abs("-2")` are Doubles, `Fix(Empty)` an
+        // Integer.
+        Value::String(_) => Ok(Value::Double(number)),
+        Value::Empty => NumRank::Int16.hold(number, None).map_err(|(_, why)| why),
         _ => match NumRank::of(was) {
             Some(rank) => rank.hold(number, None).map_err(|(_, why)| why),
             None => Ok(numeric_literal(number)),
@@ -10383,6 +10401,11 @@ fn arithmetic_result(
         {
             return Ok(Value::Double(answer));
         }
+    }
+    // Nothing and nothing is an Integer: measured, `TypeName(Empty +
+    // Empty)` is Integer.
+    if matches!((lhs, rhs), (Value::Empty, Value::Empty)) {
+        return NumRank::Int16.hold(answer, None);
     }
     match (NumRank::of(lhs), NumRank::of(rhs)) {
         // A Single cannot hold every Long, so meeting one widens PAST both to
