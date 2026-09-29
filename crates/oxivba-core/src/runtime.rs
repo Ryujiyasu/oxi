@@ -6345,7 +6345,7 @@ fn call_builtin(
             // LongLong and `VarType` is 20.
             // Null into any of these is error 94: measured for CLngLng,
             // CSng, CCur, CDec and Sgn alike.
-            "clnglng" | "clngptr" | "csng" | "ccur" | "cdec" | "sgn" if matches!(value, Value::Null) => {
+            "clnglng" | "clngptr" | "csng" | "sgn" if matches!(value, Value::Null) => {
                 Err(invalid_null(line))
             }
             "clnglng" | "clngptr" => {
@@ -6518,8 +6518,14 @@ fn call_format_builtin(
             let first_day = first_day_of_week(args.get(2), line)?;
             let first_week = first_week_of_year(args.get(3), line)?;
             format_value(&args[0], &pattern, first_day, first_week, this_year)
+                // A number past the calendar under a date picture is an
+                // overflow: measured, `Format(1E+15, "Short Date")` is 6.
+                .map_err(|message| if message.starts_with(FORMAT_OVERFLOW) {
+                    error(RuntimeErrorKind::Overflow, message, line)
+                } else {
+                    mismatch(message)
+                })
                 .map(Value::String)
-                .map_err(mismatch)
         }
         "formatdatetime" => {
             if !(1..=2).contains(&args.len()) {
@@ -7550,6 +7556,8 @@ fn without_brackets(pattern: &str) -> String {
     kept
 }
 
+const FORMAT_OVERFLOW: &str = "overflow: ";
+
 fn format_value(
     value: &Value,
     pattern: &str,
@@ -7560,7 +7568,14 @@ fn format_value(
     // Neither Null nor Empty is written by a picture: asked of Excel,
     // `Format(Empty, "000")` is the empty string, the same as
     // `Format(Empty, "abz")`, so the picture is never even looked at.
+    // ...unless the picture has a fourth section, which is theirs, written
+    // as it stands: measured, `Format(Null, "0;-0;""zero"";""text:""@")` and
+    // `Format(Empty, ...)` are both `text:@`.
     if matches!(value, Value::Null | Value::Empty) {
+        let sections = picture_sections(pattern);
+        if sections.len() > 3 {
+            return Ok(picture_literal(&sections[3]));
+        }
         return Ok(String::new());
     }
     let pattern = without_brackets(pattern);
@@ -7568,7 +7583,10 @@ fn format_value(
     if pattern.is_empty() {
         return text(value);
     }
-    if is_string_picture(pattern) {
+    // A picture of nothing but `<`, `>` and `!` is a text picture too, and a
+    // number is written out for it: measured, `Format(True, ">")` is TRUE
+    // and `Format(1E+15, "<")` 1e+15.
+    if is_string_picture(pattern) || pattern.chars().all(|ch| matches!(ch, '<' | '>' | '!')) {
         return Ok(string_picture(&text(value)?, pattern));
     }
     let lower = pattern.to_ascii_lowercase();
@@ -7600,6 +7618,7 @@ fn format_value(
         return match value_date_serial(value, this_year) {
             Ok(serial) => format_date(serial, pattern, first_day, first_week),
             Err(_) if matches!(value, Value::String(_)) => text(value),
+            Err(why) if number(value).is_ok() => Err(format!("{FORMAT_OVERFLOW}{why}")),
             Err(why) => Err(why),
         };
     }
@@ -7615,7 +7634,8 @@ fn format_value(
     }
     let value = number(value)?;
     Ok(match lower.as_str() {
-        "general number" => text(&numeric_literal(value))?,
+        // Measured: `Format(1E+15, "General Number")` is 1E+15.
+        "general number" => text(&Value::Double(value))?,
         "currency" => currency_symbol(fixed_number(value, 2, true, true, true)),
         "fixed" => fixed_number(value, 2, false, true, false),
         "standard" => fixed_number(value, 2, true, true, false),
@@ -7634,6 +7654,28 @@ fn format_value(
         "on/off" => if value == 0.0 { "Off" } else { "On" }.to_string(),
         _ => custom_number(value, pattern),
     })
+}
+
+/// A section written out as it stands: quotes and backslashes taken off,
+/// everything else kept.
+fn picture_literal(section: &str) -> String {
+    let mut out = String::new();
+    let mut characters = section.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => out.extend(characters.next()),
+            '"' => {
+                for quoted in characters.by_ref() {
+                    if quoted == '"' {
+                        break;
+                    }
+                    out.push(quoted);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Whether a picture is one for text: it has an `@` or `&` outside quotes
@@ -7705,9 +7747,12 @@ fn string_picture(value: &str, pattern: &str) -> String {
     } else {
         value.to_string()
     };
-    let mut given = text.chars().collect::<Vec<_>>().into_iter();
     let places = items.iter().filter(|item| matches!(item, Item::Place(_))).count();
     let length = text.chars().count();
+    // Filled from the left, text too long for the places keeps its RIGHT
+    // end: measured, `Format(-1234.5678, "!@@@@@")` is .5678.
+    let skipped = if leftward && places > 0 { length.saturating_sub(places) } else { 0 };
+    let mut given = text.chars().skip(skipped).collect::<Vec<_>>().into_iter();
     let mut short = if leftward { 0 } else { places.saturating_sub(length) };
     let mut out = String::new();
     for item in &items {
@@ -8147,6 +8192,12 @@ fn number_picture(value: f64, picture: &str) -> String {
     };
 
     let (magnitude, tokens) = section_magnitude(value, section);
+    // So does a positive one, when there is a zero section: measured,
+    // `Format(0.005, "0;-0;""zero""")` is zero.
+    if !negative && !zero && sections.len() > 2 && !sections[2].is_empty() && rounds_to_nothing(magnitude, &tokens) {
+        let (magnitude, tokens) = section_magnitude(0.0, sections[2].as_str());
+        return picture_form(magnitude, &tokens);
+    }
     // A negative number that rounds to nothing is written as a zero, by the
     // zero section when there is one and with no minus: measured,
     // `Format(-0.4, "0")` is `0` and `Format(-400, "0,;(0,)")` is `0`.
@@ -8435,6 +8486,57 @@ fn exponent_form(magnitude: f64, tokens: &[Token], at: usize) -> String {
 /// Walks the picture once more, dropping the digits into the places they
 /// belong and writing everything else as it stands.
 fn write_out(tokens: &[Token], digits: &str, decimals: &str, exponent: Option<&str>) -> String {
+    // Text standing between whole digit places keeps its place, the digits
+    // dealt out from the right: measured, `Format(123456789, "000-000")` is
+    // 123456-789 and `Format(0, "000-000")` 000-000.
+    let whole_end = tokens.iter().position(|t| matches!(t, Token::Point)).unwrap_or(tokens.len());
+    let whole_places: Vec<usize> = tokens[..whole_end]
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| matches!(t, Token::Zero | Token::Hash))
+        .map(|(index, _)| index)
+        .collect();
+    let interleaved = whole_places.len() > 1
+        && tokens[whole_places[0]..*whole_places.last().expect("more than one")]
+            .iter()
+            .any(|t| matches!(t, Token::Literal(_)))
+        && !digits.contains(',');
+    if interleaved {
+        let chars: Vec<char> = digits.chars().collect();
+        let count = whole_places.len();
+        let mut out = String::new();
+        let mut fraction_left = decimals.chars();
+        let mut past_point = false;
+        let mut place = 0;
+        for token in tokens {
+            match token {
+                Token::Zero | Token::Hash if !past_point => {
+                    // Place `place` of `count` takes the digit that far from
+                    // the right; the first takes every digit left over.
+                    let from_right = count - place;
+                    if place == 0 {
+                        let keep = chars.len().saturating_sub(from_right - 1);
+                        out.extend(&chars[..keep]);
+                    } else if chars.len() >= from_right {
+                        out.push(chars[chars.len() - from_right]);
+                    }
+                    place += 1;
+                }
+                Token::Zero | Token::Hash => out.extend(fraction_left.next()),
+                Token::Point => {
+                    past_point = true;
+                    out.push('.');
+                }
+                Token::Comma | Token::Exponent { .. } => {}
+                Token::Percent => out.push('%'),
+                Token::Literal(text) => out.push_str(text),
+            }
+        }
+        if let Some(exponent) = exponent {
+            out.push_str(exponent);
+        }
+        return out;
+    }
     let mut out = String::new();
     let mut written_whole = false;
     let mut fraction_left = decimals.chars();
