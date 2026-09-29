@@ -449,6 +449,22 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             // that. Measured: CUMPRINC exactly -1000, CUMIPMT -66.1854641401001
             // (adding the parts one by one misses both in the last digit).
             let payment = fin_pmt_raw(rate, periods, present, 0.0, kind)?;
+            // Paid at the start of each period, the parts are added up period
+            // by period, each period's interest on the balance before its
+            // payment: measured, CUMPRINC(0.05/12,60,10000,13,24,1) is
+            // -1890.05280395008.
+            if kind == 1.0 {
+                let balance = |before: f64| fin_fv_raw(rate, before, payment, present, 1.0);
+                let (mut principal_total, mut interest_total) = (0.0, 0.0);
+                let mut at = start;
+                while at <= end {
+                    let interest = if at == 1.0 { 0.0 } else { (balance(at - 2.0)? - payment) * rate };
+                    principal_total += payment - interest;
+                    interest_total += interest;
+                    at += 1.0;
+                }
+                return finite(if name == "CUMPRINC" { principal_total } else { interest_total });
+            }
             let principal =
                 fin_fv_raw(rate, start - 1.0, payment, present, kind)? - fin_fv_raw(rate, end, payment, present, kind)?;
             finite(if name == "CUMPRINC" { principal } else { payment * (end - start + 1.0) - principal })

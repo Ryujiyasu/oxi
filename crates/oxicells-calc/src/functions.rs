@@ -3803,7 +3803,9 @@ pub(crate) fn fin_fv_raw(rate: f64, periods: f64, payment: f64, present: f64, ki
     if rate == 0.0 {
         return Ok(-(present + payment * periods));
     }
-    let factor = annuity_factor(rate, periods)?;
+    // At -100% FV still has an answer, everything gone after the first
+    // period: measured, FV(-1,2,1) is -1 (while PMT(-1,10,1000) is #NUM!).
+    let factor = if rate == -1.0 && periods > 0.0 { 0.0 } else { annuity_factor(rate, periods)? };
     Ok(-(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate))
 }
 
@@ -3980,7 +3982,11 @@ fn fin_irr(values: &[f64], guess: f64) -> Result<Value, ExcelError> {
 }
 
 fn fin_sln(cost: f64, salvage: f64, life: f64) -> Result<Value, ExcelError> {
-    if cost < 0.0 || salvage < 0.0 || life <= 0.0 {
+    // Measured: SLN(1000,100,0) is #DIV/0!.
+    if life == 0.0 {
+        return Err(ExcelError::DivZero);
+    }
+    if cost < 0.0 || salvage < 0.0 || life < 0.0 {
         return Err(ExcelError::Num);
     }
     fin_finite((cost - salvage) / life)
