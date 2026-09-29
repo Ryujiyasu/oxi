@@ -124,8 +124,8 @@ fn kind_of(seed: &Seed) -> Kind {
     if let Some((list, _)) = in_list(&seed.text) {
         return Kind::List(list);
     }
-    match tail_digits(&seed.text) {
-        Some((before, _)) => Kind::Counted(before.to_string()),
+    match counted_parts(&seed.text) {
+        Some((before, _, after)) => Kind::Counted(format!("{before}\u{0}{after}")),
         None => Kind::Text,
     }
 }
@@ -145,6 +145,37 @@ fn tail_digits(text: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((&text[..cut], &text[cut..]))
+}
+
+/// Text that counts: digits at the end, or digits followed by an ordinal
+/// suffix. Measured: `1st` runs 2nd, 3rd, 4th (`1ST` too, the suffix
+/// written anew in lower case), `20th` 21st, 22nd, `101st` 102nd, while
+/// `Item 1st` keeps its suffix and runs Item 2st.
+fn counted_parts(text: &str) -> Option<(&str, &str, &str)> {
+    if let Some((before, digits)) = tail_digits(text) {
+        return Some((before, digits, ""));
+    }
+    let cut = text.len().checked_sub(2)?;
+    let suffix = text.get(cut..)?;
+    if !["st", "nd", "rd", "th"].iter().any(|one| suffix.eq_ignore_ascii_case(one)) {
+        return None;
+    }
+    let (before, digits) = tail_digits(&text[..cut])?;
+    Some((before, digits, suffix))
+}
+
+/// The suffix an ordinal takes: 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st.
+fn ordinal_suffix(number: i64) -> &'static str {
+    let number = number.abs();
+    if (11..=13).contains(&(number % 100)) {
+        return "th";
+    }
+    match number % 10 {
+        1 => "st",
+        2 => "nd",
+        3 => "rd",
+        _ => "th",
+    }
 }
 
 fn wrapped(index: i64, length: usize) -> usize {
@@ -301,7 +332,19 @@ enum Plan {
     Months(MonthPlan),
     Weekdays { from: f64, step: i64 },
     List { list: usize, at: usize, stride: i64 },
-    Counted { before: String, width: usize, padded: bool, slope: f64, base: f64 },
+    Counted {
+        before: String,
+        after: String,
+        width: usize,
+        padded: bool,
+        slope: f64,
+        base: f64,
+        /// A bare ordinal writes its suffix anew for each number.
+        ordinal: bool,
+        /// `Q1` to `Q4` go round: measured, Q3 runs Q4, Q1, Q2, where Q5
+        /// runs Q6 and Qtr1 Qtr2 ... Qtr6.
+        quarter: bool,
+    },
     Repeat(Vec<Filled>),
     Formula(Vec<Option<String>>),
 }
@@ -431,15 +474,23 @@ fn plan_run(run: &Run, line: &[Seed], alone: bool, how: How) -> Plan {
                 repeat()
             }
         }
-        Kind::Counted(before) => {
-            let parts: Vec<&str> = cells.iter().filter_map(|seed| tail_digits(&seed.text).map(|(_, digits)| digits)).collect();
+        Kind::Counted(_) => {
+            let (before, _, after) = counted_parts(&cells[0].text).unwrap_or(("", "", ""));
+            let (before, after) = (before.to_string(), after.to_string());
+            let parts: Vec<&str> = cells.iter().filter_map(|seed| counted_parts(&seed.text).map(|(_, digits, _)| digits)).collect();
             let numbers: Vec<f64> = parts.iter().map(|digits| digits.parse::<f64>().unwrap_or(0.0)).collect();
             let (slope, base) = fit_line(&numbers);
             // Numbered text always counts up, even on its own: "Item 1"
             // pulled down gives Item 2.
             let slope = if numbers.len() == 1 { 1.0 } else { slope };
+            let quarter = after.is_empty()
+                && (before == "Q" || before == "q")
+                && numbers.iter().all(|number| (1.0..=4.0).contains(number));
             Plan::Counted {
-                before: before.clone(),
+                ordinal: before.is_empty() && !after.is_empty(),
+                quarter,
+                before,
+                after,
                 width: parts[0].len(),
                 padded: parts[0].starts_with('0'),
                 slope,
@@ -477,15 +528,19 @@ fn run_value(plan: &Plan, index: i64, len: usize, delta: i64, along: Along) -> F
             let held = LISTS[*list];
             Filled::Text(held[wrapped(*at as i64 + index * stride, held.len())].to_string())
         }
-        Plan::Counted { before, width, padded, slope, base } => {
-            let next = (base + slope * index as f64).round() as i64;
+        Plan::Counted { before, after, width, padded, slope, base, ordinal, quarter } => {
+            let mut next = (base + slope * index as f64).round() as i64;
+            if *quarter {
+                next = wrapped(next - 1, 4) as i64 + 1;
+            }
+            let after = if *ordinal { ordinal_suffix(next) } else { after.as_str() };
             let digits = next.to_string();
             let digits = if *padded && digits.len() < *width {
                 format!("{}{}", "0".repeat(width - digits.len()), digits)
             } else {
                 digits
             };
-            Filled::Text(format!("{before}{digits}"))
+            Filled::Text(format!("{before}{digits}{after}"))
         }
         Plan::Repeat(values) => values[wrapped(index, values.len())].clone(),
         Plan::Formula(formulas) => match &formulas[wrapped(index, formulas.len())] {

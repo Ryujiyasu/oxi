@@ -7385,6 +7385,112 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// `Range.DataSeries Rowcol, Type, Date, Step, Stop, Trend`. Measured:
+    /// each lane runs from its first cell, down the columns when the block is
+    /// at least as tall as it is wide and along the rows otherwise, unless
+    /// Rowcol says; a lane whose first cell holds no number is left alone;
+    /// linear adds the step (default 1), growth multiplies by it, and a Stop
+    /// ends the lane before the first value past it. Chronological counts
+    /// days, weekdays (Saturday and Sunday skipped), or months and years from
+    /// the first date, the day held back to the month's end: Jan 31 runs
+    /// Feb 29, Mar 31, and Feb 29 2024 by years Feb 28 2025, Feb 28 2026.
+    fn data_series(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let given = |at: usize| args.get(at).filter(|value| !matches!(value, Value::Missing | Value::Empty));
+        let whole = |at: usize, default: i64| -> Result<i64, String> {
+            match given(at) {
+                Some(value) => any_whole_number(value).ok_or_else(|| host_error(1004, "DataSeries method of Range class failed")),
+                None => Ok(default),
+            }
+        };
+        let number = |at: usize| -> Result<Option<f64>, String> {
+            match given(at) {
+                Some(value) => any_number(value)
+                    .map(Some)
+                    .ok_or_else(|| host_error(1004, "DataSeries method of Range class failed")),
+                None => Ok(None),
+            }
+        };
+        let rows = range.end_row - range.start_row + 1;
+        let columns = range.end_column - range.start_column + 1;
+        let down = match whole(0, if columns > rows { 1 } else { 2 })? {
+            1 => false,
+            2 => true,
+            _ => return Err(host_error(1004, "DataSeries method of Range class failed")),
+        };
+        let kind = whole(1, -4132)?;
+        let unit = whole(2, 1)?;
+        let step = number(3)?.unwrap_or(1.0);
+        let stop = number(4)?;
+        if !matches!(kind, -4132 | 2 | 3) || !(1..=4).contains(&unit) {
+            return Err(host_error(1004, "DataSeries method of Range class failed"));
+        }
+        self.guard_locked_cells(range, "Range.DataSeries")?;
+        let lanes: Vec<Vec<CellAddress>> = if down {
+            (range.start_column..=range.end_column)
+                .map(|column| {
+                    (range.start_row..=range.end_row)
+                        .map(|row| CellAddress { sheet: range.sheet, row, column })
+                        .collect()
+                })
+                .collect()
+        } else {
+            (range.start_row..=range.end_row)
+                .map(|row| {
+                    (range.start_column..=range.end_column)
+                        .map(|column| CellAddress { sheet: range.sheet, row, column })
+                        .collect()
+                })
+                .collect()
+        };
+        for lane in lanes {
+            let seed = match self.cell_value(lane[0]) {
+                Value::Double(seed) => seed,
+                Value::Integer(seed) => seed as f64,
+                Value::Date(seed) => seed,
+                _ => continue,
+            };
+            let mut weekday = seed;
+            for (i, &at) in lane.iter().enumerate().skip(1) {
+                let k = i as f64;
+                let next = match (kind, unit) {
+                    (2, _) => seed * step.powf(k),
+                    (3, 2) => {
+                        let mut left = step.trunc() as i64;
+                        let forward = left >= 0;
+                        while left != 0 {
+                            weekday += if forward { 1.0 } else { -1.0 };
+                            let day = (weekday.floor() as i64).rem_euclid(7);
+                            if day != 0 && day != 1 {
+                                left += if forward { -1 } else { 1 };
+                            }
+                        }
+                        weekday
+                    }
+                    (3, 3) | (3, 4) => {
+                        let months = if unit == 3 { step * k } else { step * k * 12.0 };
+                        add_months_to_serial(seed, months.trunc() as i64)
+                    }
+                    _ => seed + step * k,
+                };
+                if let Some(stop) = stop {
+                    if (step >= 0.0 && next > stop) || (step < 0.0 && next < stop) {
+                        break;
+                    }
+                }
+                self.set_cell_value(at, CellValue::Number(next))?;
+                // The seed's dress goes with it: measured, a date series
+                // reads back as Dates in m/d/yyyy.
+                let dress = self
+                    .cell_here(lane[0].sheet, lane[0].row, lane[0].column)
+                    .map(|cell| cell.style)
+                    .unwrap_or_default();
+                self.set_range_style(CellRange::single(at), |_, style| *style = dress.clone())?;
+            }
+        }
+        self.wrote = true;
+        Ok(Value::Boolean(true))
+    }
+
     /// `Range.AutoFill Destination, Type`.
     ///
     /// Measured (fill.vba, 2026-09-05): the destination must hold the source
@@ -16203,6 +16309,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("autofill") {
                     return self.auto_fill(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("dataseries") {
+                    return self.data_series(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("borderaround") {
                     return self.border_around(range, args).map(Some);
                 }
@@ -16695,6 +16804,8 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowLevels", "ColumnLevels"][..])
         } else if name.eq_ignore_ascii_case("autofill") {
             Some(&["Destination", "Type"][..])
+        } else if name.eq_ignore_ascii_case("dataseries") {
+            Some(&["Rowcol", "Type", "Date", "Step", "Stop", "Trend"][..])
         } else if name.eq_ignore_ascii_case("add2")
             && receiver.is_some_and(|receiver| {
                 matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SortFields(_)))
@@ -22010,6 +22121,17 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlsheethidden" => 0,
         "xlsheetveryhidden" => 2,
         "xlfiltervalues" => 7,
+        "xlrows" => 1,
+        "xlcolumns" => 2,
+        "xllinear" => -4132,
+        "xldataserieslinear" => -4132,
+        "xlgrowth" => 2,
+        "xlchronological" => 3,
+        "xlautofill" => 4,
+        "xlday" => 1,
+        "xlweekday" => 2,
+        "xlmonth" => 3,
+        "xlyear" => 4,
         "xlabsolute" => 1,
         "xlabsrowrelcolumn" => 2,
         "xlrelrowabscolumn" => 3,
@@ -22861,6 +22983,39 @@ fn this_year_now() -> i64 {
 }
 
 /// The calendar year an Excel serial falls in.
+/// A date serial moved by whole months, the day held back to the end of a
+/// shorter month, the time of day kept.
+fn add_months_to_serial(serial: f64, months: i64) -> f64 {
+    let days = serial.floor() as i64;
+    let time = serial - serial.floor();
+    // Days from 1899-12-30 to civil, by Howard Hinnant's algorithm.
+    let z = days - 25569 + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let total = year * 12 + (month - 1) + months;
+    let (year, month) = (total.div_euclid(12), total.rem_euclid(12) + 1);
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let last = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    let day = day.min(last);
+    let (y, m) = if month <= 2 { (year - 1, month + 9) } else { (year, month - 3) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146097 + doe - 719468 + 25569) as f64 + time
+}
+
 fn year_of_serial(serial: f64) -> i64 {
     let days = serial.floor() as i64 + EXCEL_EPOCH_DAYS;
     civil_year_of_days(days)
