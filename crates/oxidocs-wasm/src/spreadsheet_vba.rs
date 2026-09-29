@@ -24959,7 +24959,7 @@ impl From<Value> for OutputValue {
 /// Application properties that answer a plain default until a macro sets
 /// them: (name, default, settable). Measured on a fresh Excel: ReferenceStyle
 /// 1, DecimalSeparator ".", ThousandsSeparator ",", UseSystemSeparators True,
-/// CutCopyMode 0, Interactive True, EnableCancelKey 1, Cursor -4143,
+/// CutCopyMode 0, Interactive True, EnableCancelKey 1 (Cursor keeps its own),
 /// MaxChange 0.001, MaxIterations 100, Iteration False, CalculationState 0,
 /// CalculateBeforeSave True, PathSeparator "\\".
 #[allow(clippy::type_complexity)]
@@ -24968,17 +24968,13 @@ const APPLICATION_SETTINGS: &[(&str, fn() -> Value, bool)] = &[
     ("decimalseparator", || Value::String(".".to_string()), true),
     ("thousandsseparator", || Value::String(",".to_string()), true),
     ("usesystemseparators", || Value::Boolean(true), true),
-    ("interactive", || Value::Boolean(true), true),
     ("enablecancelkey", || Value::Integer(1), true),
-    ("cursor", || Value::Integer(-4143), true),
     ("maxchange", || Value::Double(0.001), true),
     ("maxiterations", || Value::Integer(100), true),
     ("iteration", || Value::Boolean(false), true),
     ("calculationstate", || Value::Integer(0), false),
     ("calculatebeforesave", || Value::Boolean(true), true),
     ("pathseparator", || Value::String("\\".to_string()), false),
-    ("operatingsystem", || Value::String("Windows (64-bit) NT 10.00".to_string()), false),
-    ("windowstate", || Value::Integer(-4137), true),
     ("username", || Value::String("User".to_string()), true),
 ];
 
