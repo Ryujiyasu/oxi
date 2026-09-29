@@ -2404,9 +2404,24 @@ impl<'a> Runtime<'a> {
         match expr {
             Expr::Literal(..) | Expr::TypedIdent { .. } => true,
             Expr::Binary { op: BinaryOp::Concat, .. } => true,
-            Expr::Ident(name, _) => self
-                .declared_type(frame, name)
-                .is_some_and(|declared| !declared.eq_ignore_ascii_case("variant")),
+            Expr::Ident(name, _) => {
+                // Timer is a Single, not a Variant: measured, `Timer >= "0"`
+                // compares as numbers.
+                name.eq_ignore_ascii_case("timer")
+                    || self
+                        .declared_type(frame, name)
+                        .is_some_and(|declared| !declared.eq_ignore_ascii_case("variant"))
+            }
+            // The conversion functions hand back their own type, not a
+            // Variant: measured, `CCur(5) > "10"` is False (5 against 10)
+            // and `CDate(1) < "a"` is 13, where `Date > "zzz"` -- a Variant
+            // -- compares as text.
+            Expr::Index { target, .. } => matches!(target.as_ref(), Expr::Ident(name, _) if [
+                "cbool", "cbyte", "ccur", "cdate", "cdbl", "cint", "clng", "clnglng", "clngptr", "csng", "cstr",
+            ]
+            .iter()
+            .any(|typed| name.eq_ignore_ascii_case(typed))
+                && self.declared_type(frame, name).is_none()),
             _ => false,
         }
     }
@@ -4799,6 +4814,12 @@ pub fn is_builtin_function(name: &str) -> bool {
         "abs"
             | "array"
             | "asc"
+            | "ascb"
+            | "leftb"
+            | "rightb"
+            | "midb"
+            | "instrb"
+            | "environ$"
             | "ascw"
             | "atn"
             | "cbool"
@@ -5147,6 +5168,13 @@ fn call_builtin(
             name.as_str(),
             "asc"
                 | "ascw"
+                | "ascb"
+                | "leftb"
+                | "rightb"
+                | "midb"
+                | "instrb"
+                | "environ"
+                | "environ$"
                 | "chr"
                 | "chrw"
                 | "instr"
@@ -5281,7 +5309,17 @@ fn call_builtin(
             // The answer keeps the type it was handed: asked of Excel,
             // `VarType(Round(aDate, 2))` is 7, still a Date.
             let scale = 10_f64.powi(places as i32);
-            let rounded = (value * scale).round_ties_even() / scale;
+            // A half goes to the even neighbour; anything else is x + 0.5
+            // taken down, which is why a small negative comes out a plain 0
+            // while an exact -0.5 keeps its sign. Measured: `Round(-0.4)`,
+            // `Round(-0.001, 2)` and `Round(-1E-12, 2)` show "0", `Round(-0.5)`
+            // is -0.
+            let scaled = value * scale;
+            let rounded = if (scaled - scaled.trunc()).abs() == 0.5 {
+                scaled.round_ties_even()
+            } else {
+                (scaled + 0.5).floor()
+            } / scale;
             return Ok(keep_rank(rounded, &args[0]).unwrap_or(Value::Double(rounded)));
         }
         if matches!(name.as_str(), "hex" | "oct") {
@@ -6256,7 +6294,9 @@ fn financial_pmt(
     if denominator == 0.0 {
         return Err("payment denominator is zero".to_string());
     }
-    Ok(-(future + present * factor) * rate / denominator)
+    // present x rate x factor, in that order: measured, the last digit of
+    // PPmt(0.01, 5, 12, 1000) -82.050365682325 comes out that way.
+    Ok(-(present * rate * factor + future * rate) / denominator)
 }
 
 fn financial_nper(
@@ -6330,7 +6370,26 @@ fn financial_rate(
             break;
         }
         if (next - rate).abs() <= 1e-7 {
-            return Ok(next);
+            // Close enough to have converged, but Excel carries on to the
+            // root itself: measured, Rate(12, -100, 1000) 0.029228540769134,
+            // where stopping here gives ...158. A few more steps settle it.
+            let mut settled = next;
+            for _ in 0..8 {
+                let value = financial_equation(settled, periods, payment, present, future, kind)?;
+                let step = (settled.abs() * 1e-6).max(1e-7);
+                let slope = (financial_equation(settled + step, periods, payment, present, future, kind)?
+                    - financial_equation(settled - step, periods, payment, present, future, kind)?)
+                    / (2.0 * step);
+                if slope == 0.0 || !slope.is_finite() {
+                    break;
+                }
+                let better = settled - value / slope;
+                if !better.is_finite() || better == settled {
+                    break;
+                }
+                settled = better;
+            }
+            return Ok(settled);
         }
         rate = next;
     }
@@ -8689,6 +8748,91 @@ fn call_string_builtin(
                 _ => unreachable!(),
             }))
         }
+        // The byte forms, on the string's UTF-16 bytes, two to a
+        // character. Measured: LenB("abc") 6, LeftB("abc",2) "a",
+        // RightB("abc",2) "c", MidB("abcd",3,2) "b", InStrB("abc","c") 5,
+        // AscB("A") 65.
+        "lenb" | "leftb" | "rightb" | "midb" | "instrb" | "ascb" => {
+            let text_of = |value: &Value| nullable_text(value);
+            let bytes_to_units = |n: i64| usize::try_from(n.max(0) / 2).unwrap_or(0);
+            match name {
+                "lenb" => {
+                    if args.len() != 1 {
+                        return Err(wrong_count("1 argument"));
+                    }
+                    let Some(value) = text_of(&args[0])? else { return Ok(Value::Null) };
+                    Ok(Value::Integer(2 * value.encode_utf16().count() as i64))
+                }
+                "ascb" => {
+                    if args.len() != 1 {
+                        return Err(wrong_count("1 argument"));
+                    }
+                    let value = text_of(&args[0])?.ok_or_else(|| invalid_null(line))?;
+                    let unit = value.encode_utf16().next().ok_or_else(|| {
+                        invalid_procedure_call("AscB requires a non-empty String".to_string(), line)
+                    })?;
+                    Ok(Value::Int16((unit & 0xFF) as i16))
+                }
+                "leftb" | "rightb" => {
+                    if args.len() != 2 {
+                        return Err(wrong_count("2 arguments"));
+                    }
+                    let Some(value) = text_of(&args[0])? else { return Ok(Value::Null) };
+                    let units = value.encode_utf16().collect::<Vec<_>>();
+                    let length = bytes_to_units(integer_argument(&args[1], line)?).min(units.len());
+                    let selected = if name == "leftb" { &units[..length] } else { &units[units.len() - length..] };
+                    Ok(Value::String(String::from_utf16_lossy(selected)))
+                }
+                "midb" => {
+                    if !(2..=3).contains(&args.len()) {
+                        return Err(wrong_count("2 or 3 arguments"));
+                    }
+                    let Some(value) = text_of(&args[0])? else { return Ok(Value::Null) };
+                    let start = integer_argument(&args[1], line)?;
+                    if start < 1 {
+                        return Err(invalid_procedure_call("String position must be positive".to_string(), line));
+                    }
+                    let units = value.encode_utf16().collect::<Vec<_>>();
+                    let from = bytes_to_units(start - 1).min(units.len());
+                    let length = match args.get(2) {
+                        Some(argument) => bytes_to_units(integer_argument(argument, line)?).min(units.len() - from),
+                        None => units.len() - from,
+                    };
+                    Ok(Value::String(String::from_utf16_lossy(&units[from..from + length])))
+                }
+                _ => {
+                    // InStrB([start,] string1, string2): a byte position.
+                    if !(2..=3).contains(&args.len()) {
+                        return Err(wrong_count("2 or 3 arguments"));
+                    }
+                    let (start, source, needle) = if args.len() == 3 {
+                        (integer_argument(&args[0], line)?, &args[1], &args[2])
+                    } else {
+                        (1, &args[0], &args[1])
+                    };
+                    let (Some(source), Some(needle)) = (text_of(source)?, text_of(needle)?) else {
+                        return Ok(Value::Null);
+                    };
+                    if start < 1 {
+                        return Err(invalid_procedure_call("String position must be positive".to_string(), line));
+                    }
+                    let (hay, find) = (source.encode_utf16().collect::<Vec<_>>(), needle.encode_utf16().collect::<Vec<_>>());
+                    let from = bytes_to_units(start - 1);
+                    if find.is_empty() {
+                        return Ok(Value::Integer(if from <= hay.len() { start } else { 0 }));
+                    }
+                    let found = (from..hay.len().saturating_sub(find.len() - 1)).find(|at| hay[*at..*at + find.len()] == find[..]);
+                    Ok(Value::Integer(found.map_or(0, |at| 2 * at as i64 + 1)))
+                }
+            }
+        }
+        // Environ: nothing is set in a browser, so every name reads "".
+        "environ" | "environ$" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            Ok(Value::String(String::new()))
+        }
         "asc" | "ascw" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
@@ -10165,6 +10309,25 @@ fn binary(
                 // `Empty = "0"` is FALSE, where `Empty = 0` is True.
                 (Value::Empty, Value::String(b)) => "".partial_cmp(b.as_str()),
                 (Value::String(a), Value::Empty) => a.as_str().partial_cmp(""),
+                // Text beside a Date is read as a date, and beside a Boolean
+                // as True or False: measured, `#1/1/2024# = "1/1/2024"` and
+                // `True = "True"` are both True.
+                (Value::Date(date), Value::String(text)) | (Value::String(text), Value::Date(date)) => {
+                    let year = serial_date_parts(*date).map(|parts| parts.year).unwrap_or(1900);
+                    let read = numeric_text(text)
+                        .or_else(|| parse_date_text(text, year).ok())
+                        .ok_or_else(|| mismatch("type mismatch converting String to Date".to_string()))?;
+                    if matches!(lhs, Value::Date(_)) { date.partial_cmp(&read) } else { read.partial_cmp(date) }
+                }
+                (Value::Boolean(state), Value::String(text)) | (Value::String(text), Value::Boolean(state)) => {
+                    let read = match text.trim().to_ascii_lowercase().as_str() {
+                        "true" => -1.0,
+                        "false" => 0.0,
+                        _ => numeric_text(text).ok_or_else(|| mismatch("type mismatch converting String to Boolean".to_string()))?,
+                    };
+                    let own = if *state { -1.0 } else { 0.0 };
+                    if matches!(lhs, Value::Boolean(_)) { own.partial_cmp(&read) } else { read.partial_cmp(&own) }
+                }
                 _ => {
                     let (a, b) = numbers()?;
                     a.partial_cmp(&b)
@@ -10460,7 +10623,9 @@ fn variant_comparison(
     if !matches!(op, Eq | Ne | Lt | Le | Gt | Ge) {
         return None;
     }
-    let numeric = |value: &Value| any_number(value).is_some();
+    // A Date counts as the number here: measured, `Date > "zzz"` (a
+    // Variant Date against typed text) compares the written date as text.
+    let numeric = |value: &Value| any_number(value).is_some() || matches!(value, Value::Date(_));
     let (number_left, number_typed, string, string_typed) = match (lhs, rhs) {
         (Value::String(text), other) if numeric(other) => (false, typed.1, text, typed.0),
         (other, Value::String(text)) if numeric(other) => (true, typed.0, text, typed.1),
@@ -10485,6 +10650,12 @@ fn variant_comparison(
             Some(_) => None,
             None => settle(std::cmp::Ordering::Less),
         },
+        // A Variant Date beside typed text that is no date is the lesser,
+        // as a number beside text is: measured, `Date > "zzz"` False and
+        // `Date < "zzz"` True, whatever the date is written as.
+        (false, true) if matches!(number, Value::Date(_)) && numeric_text(string).is_none() => {
+            settle(std::cmp::Ordering::Less)
+        }
         (false, true) => {
             let written = match text(number) {
                 Ok(written) => written,
