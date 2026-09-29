@@ -1409,14 +1409,23 @@ impl<'a> Runtime<'a> {
                 ))
             }
         };
+        let mut last_was_object = None;
         for value in values {
             self.tick(Some(loop_.span.line))?;
+            last_was_object = Some(matches!(value, Value::Object(_)));
             self.assign(&loop_.item, value, frame, loop_.span.line)?;
             match self.exec_body(&loop_.body, frame)? {
                 Flow::Continue => {}
                 Flow::Exit(ExitKind::For) => return Ok(Flow::Continue),
                 flow => return Ok(flow),
             }
+        }
+        // A loop that ran to the end leaves its variable holding nothing:
+        // measured, `ws Is Nothing` after `For Each ws In Worksheets` and
+        // `IsEmpty(x)` after one over an array or a Collection.
+        if let Some(object) = last_was_object {
+            let cleared = if object { Value::Nothing } else { Value::Empty };
+            self.assign(&loop_.item, cleared, frame, loop_.span.line)?;
         }
         Ok(Flow::Continue)
     }

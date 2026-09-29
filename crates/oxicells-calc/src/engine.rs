@@ -1265,6 +1265,16 @@ impl Workbook {
                 );
                 let mut evaluated: Vec<Arg> = Vec::with_capacity(args.len());
                 for (at_arg, a) in args.iter().enumerate() {
+                    // `Jan:Mar!A1` is that cell on each sheet from Jan to Mar
+                    // as they stand in the book, taken as so many areas.
+                    let expanded;
+                    let a = match a {
+                        Expr::Function { name: sheets, args: parts } if sheets == "_SHEETS" => {
+                            expanded = self.across_sheets(parts);
+                            &expanded
+                        }
+                        _ => a,
+                    };
                     let Expr::Function { name: union, args: areas } = a else {
                         evaluated.push(self.eval_arg_inner(a, sheet, depth + 1, skip, at));
                         continue;
@@ -1535,6 +1545,27 @@ impl Workbook {
             }
             _ => None,
         }
+    }
+
+    /// `Jan:Mar!A1` as the one reference on each sheet from Jan to Mar, in
+    /// the order the book has them now.
+    fn across_sheets(&self, parts: &[Expr]) -> Expr {
+        let (Some(Expr::Literal(Value::Text(first))), Some(Expr::Ref(reference))) = (parts.first(), parts.get(1)) else {
+            return Expr::Literal(Value::Error(ExcelError::Ref));
+        };
+        let Some(last) = reference.sheet.as_deref() else {
+            return Expr::Literal(Value::Error(ExcelError::Ref));
+        };
+        let place = |wanted: &str| self.sheet_order.iter().position(|held| held.eq_ignore_ascii_case(wanted));
+        let (Some(from), Some(to)) = (place(first), place(last)) else {
+            return Expr::Literal(Value::Error(ExcelError::Ref));
+        };
+        let (from, to) = (from.min(to), from.max(to));
+        let areas = self.sheet_order[from..=to]
+            .iter()
+            .map(|sheet| Expr::Ref(crate::Reference { sheet: Some(sheet.clone()), ..reference.clone() }))
+            .collect();
+        Expr::Function { name: "_UNION".to_string(), args: areas }
     }
 
     /// `INDEX(reference, row, [col])` as the cells it names: a row or column

@@ -339,6 +339,14 @@ pub fn canonical_formula(
         let beside_colon = matches!(tokens.get(index + 1), Some((Token::Colon, _)))
             || (index > 0 && matches!(tokens.get(index - 1), Some((Token::Colon, _))));
         match token {
+            // The first sheet of `Qa:Qc!A1` is a sheet, spelt as it was named.
+            Token::Name { sheet: None, name }
+                if matches!(tokens.get(index + 1), Some((Token::Colon, _)))
+                    && matches!(tokens.get(index + 2), Some((Token::Name { sheet: Some(_), .. }, _))) =>
+            {
+                let name = sheet_case(name).unwrap_or_else(|| name.clone());
+                render_token(&mut output, Token::Name { sheet: None, name });
+            }
             Token::Name { sheet, name } => {
                 // A function this build does not know keeps its spelling:
                 // measured, `=nosuchfn()` reads back as written.
@@ -933,10 +941,130 @@ pub fn rename_sheet_in_formula(input: &str, old: &str, new: &str) -> String {
         return input.to_string();
     };
     let mut touched = false;
-    for token in &mut tokens {
-        if let Token::Name { sheet: Some(sheet), .. } = token {
-            if sheet.eq_ignore_ascii_case(old) {
+    let count = tokens.len();
+    for at in 0..count {
+        // The first sheet of `Jan:Mar!A1` is written bare before the colon.
+        let opens_a_span = matches!(tokens.get(at + 1), Some(Token::Colon))
+            && matches!(tokens.get(at + 2), Some(Token::Name { sheet: Some(_), .. }));
+        match &mut tokens[at] {
+            Token::Name { sheet: Some(sheet), .. } if sheet.eq_ignore_ascii_case(old) => {
                 *sheet = new.to_string();
+                touched = true;
+            }
+            Token::Name { sheet: None, name } if opens_a_span && name.eq_ignore_ascii_case(old) => {
+                *name = new.to_string();
+                touched = true;
+            }
+            _ => {}
+        }
+    }
+    if !touched {
+        return input.to_string();
+    }
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in tokens {
+        render_token(&mut output, token);
+    }
+    output
+}
+
+/// A formula once the sheet `gone` is deleted, `order` being the sheets as
+/// they stood. Measured through `.Formula`: `=Jan!A1+Data3!A1` becomes
+/// `=Jan!A1+#REF!A1`, and `=SUM(Jan:Data3!A1)`, whose last sheet went,
+/// `=SUM(Jan:Data2!A1)` -- the span pulls in to the sheet beside it.
+pub fn drop_sheet_in_formula(input: &str, gone: &str, order: &[String]) -> String {
+    let had_equals = input.trim_start().starts_with('=');
+    let Ok(mut tokens) = tokenize(input) else {
+        return input.to_string();
+    };
+    let place = |wanted: &str| order.iter().position(|held| held.eq_ignore_ascii_case(wanted));
+    let mut touched = false;
+    let count = tokens.len();
+    for at in 0..count {
+        let first_of_span = match (tokens.get(at + 1), tokens.get(at + 2)) {
+            (Some(Token::Colon), Some(Token::Name { sheet: Some(last), .. })) => Some(last.clone()),
+            _ => None,
+        };
+        let last_of_span = match (at.checked_sub(2).and_then(|before| tokens.get(before)), at.checked_sub(1).and_then(|before| tokens.get(before))) {
+            (Some(Token::Name { sheet: None, name: first }), Some(Token::Colon)) => Some(first.clone()),
+            _ => None,
+        };
+        match tokens[at].clone() {
+            Token::Name { sheet: None, name } if first_of_span.is_some() && name.eq_ignore_ascii_case(gone) => {
+                let last = first_of_span.unwrap_or_default();
+                if let (Some(from), Some(to)) = (place(&name), place(&last)) {
+                    let step = if to >= from { from + 1 } else { from.saturating_sub(1) };
+                    if let Some(next) = order.get(step) {
+                        tokens[at] = Token::Name { sheet: None, name: next.clone() };
+                        touched = true;
+                    }
+                }
+            }
+            Token::Name { sheet: Some(sheet), name } if sheet.eq_ignore_ascii_case(gone) => {
+                touched = true;
+                tokens[at] = match last_of_span.as_deref().and_then(|first| Some((place(first)?, place(&sheet)?))) {
+                    Some((from, to)) if from != to => {
+                        let step = if to > from { to - 1 } else { to + 1 };
+                        Token::Name { sheet: Some(order[step].clone()), name }
+                    }
+                    _ => Token::Name { sheet: None, name: format!("#REF!{name}") },
+                };
+            }
+            _ => {}
+        }
+    }
+    if !touched {
+        return input.to_string();
+    }
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in tokens {
+        render_token(&mut output, token);
+    }
+    output
+}
+
+/// A formula once the sheet `moved` has moved from where it stood in
+/// `before` to where it stands in `after`. A span `Qa:Qc!A1` follows its end
+/// sheets wherever they go -- measured, moving Qc past the last sheet widens
+/// it -- until one is taken past the other end, when that end becomes the
+/// sheet that stood beside it inside the span: measured, `Qa:Qc` with Qc
+/// moved to the front reads `Qa:Qb`.
+pub fn move_sheet_in_formula(input: &str, moved: &str, before: &[String], after: &[String]) -> String {
+    let had_equals = input.trim_start().starts_with('=');
+    let Ok(mut tokens) = tokenize(input) else {
+        return input.to_string();
+    };
+    let at_in = |order: &[String], wanted: &str| order.iter().position(|held| held.eq_ignore_ascii_case(wanted));
+    let mut touched = false;
+    let count = tokens.len();
+    for at in 0..count {
+        let (Token::Name { sheet: None, name: first }, Some(Token::Colon), Some(Token::Name { sheet: Some(last), name: cell })) =
+            (tokens[at].clone(), tokens.get(at + 1).cloned(), tokens.get(at + 2).cloned())
+        else {
+            continue;
+        };
+        let (Some(first_now), Some(last_now), Some(first_was), Some(last_was)) =
+            (at_in(after, &first), at_in(after, &last), at_in(before, &first), at_in(before, &last))
+        else {
+            continue;
+        };
+        let forward = last_was >= first_was;
+        if first.eq_ignore_ascii_case(moved) && (if forward { first_now > last_now } else { first_now < last_now }) {
+            let inner = if forward { first_was + 1 } else { first_was.saturating_sub(1) };
+            if let Some(next) = before.get(inner) {
+                tokens[at] = Token::Name { sheet: None, name: next.clone() };
+                touched = true;
+            }
+        } else if last.eq_ignore_ascii_case(moved) && (if forward { last_now < first_now } else { last_now > first_now }) {
+            let inner = if forward { last_was.saturating_sub(1) } else { last_was + 1 };
+            if let Some(next) = before.get(inner) {
+                tokens[at + 2] = Token::Name { sheet: Some(next.clone()), name: cell };
                 touched = true;
             }
         }
@@ -1865,6 +1993,31 @@ mod tests {
         );
         // Nothing to rename comes back unchanged.
         assert_eq!(rename_sheet_in_formula("=A1+B2", "Data", "Z"), "=A1+B2");
+    }
+
+    /// A sheet renamed, deleted or moved is written into formulas as Excel
+    /// writes it. Every answer measured through `.Formula`.
+    #[test]
+    fn sheets_renamed_deleted_and_moved_are_written_in() {
+        assert_eq!(rename_sheet_in_formula("=SUM(Data1:Data3!A1)", "Data1", "Jan"), "=SUM(Jan:Data3!A1)");
+        assert_eq!(rename_sheet_in_formula("=Data1!A1+Data3!A1", "Data1", "Jan"), "=Jan!A1+Data3!A1");
+        let order: Vec<String> = ["Main", "Jan", "Data2", "Data3"].iter().map(|one| one.to_string()).collect();
+        assert_eq!(drop_sheet_in_formula("=Jan!A1+Data3!A1", "Data3", &order), "=Jan!A1+#REF!A1");
+        assert_eq!(drop_sheet_in_formula("=SUM(Jan:Data3!A1)", "Data3", &order), "=SUM(Jan:Data2!A1)");
+        let names = |list: &[&str]| list.iter().map(|one| one.to_string()).collect::<Vec<_>>();
+        let before = names(&["Base", "Qa", "Qb", "Qc", "Qd"]);
+        assert_eq!(
+            move_sheet_in_formula("=SUM(Qa:Qc!A1)", "Qc", &before, &names(&["Qc", "Base", "Qa", "Qb", "Qd"])),
+            "=SUM(Qa:Qb!A1)"
+        );
+        assert_eq!(
+            move_sheet_in_formula("=SUM(Qa:Qb!A1)", "Qb", &names(&["Base", "Qa", "Qb", "Qc", "Qd"]), &names(&["Base", "Qa", "Qc", "Qd", "Qb"])),
+            "=SUM(Qa:Qb!A1)"
+        );
+        assert_eq!(
+            move_sheet_in_formula("=SUM(Qa:Qb!A1)", "Qa", &names(&["Base", "Qa", "Qd", "Qc", "Qb"]), &names(&["Base", "Qd", "Qc", "Qb", "Qa"])),
+            "=SUM(Qd:Qb!A1)"
+        );
     }
 
     /// A written formula reads back as Excel keeps it. Every pair measured

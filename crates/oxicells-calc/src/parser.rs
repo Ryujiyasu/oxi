@@ -281,6 +281,19 @@ impl Parser {
     }
 
     fn parse_range(&mut self) -> Result<Expr, ParseError> {
+        // `Jan:Mar!A1` -- the same cell on every sheet from Jan to Mar.
+        if let (Some(Token::Name { sheet: None, name: first }), Some(Token::Colon), Some(Token::Name { sheet: Some(_), .. })) = (
+            self.tokens.get(self.pos).cloned(),
+            self.tokens.get(self.pos + 1).cloned(),
+            self.tokens.get(self.pos + 2).cloned(),
+        ) {
+            self.pos += 2;
+            let last = self.parse_range()?;
+            return Ok(Expr::Function {
+                name: "_SHEETS".to_string(),
+                args: vec![Expr::Literal(Value::Text(first)), last],
+            });
+        }
         if let Some(whole) = self.whole_line() {
             return Ok(whole);
         }
@@ -310,7 +323,14 @@ impl Parser {
         match token {
             Token::Number(n) => Ok(Expr::Literal(Value::Number(n))),
             Token::Text(s) => Ok(Expr::Literal(Value::Text(s))),
-            Token::ErrorLit(e) => Ok(Expr::Literal(Value::Error(e))),
+            Token::ErrorLit(e) => {
+                // `#REF!A1` is what a reference to a deleted sheet becomes;
+                // the cell after the error goes with it.
+                if e == crate::ExcelError::Ref && matches!(self.peek(), Some(Token::Name { sheet: None, .. })) {
+                    self.pos += 1;
+                }
+                Ok(Expr::Literal(Value::Error(e)))
+            }
             Token::LParen => {
                 let inner = self.parse_comparison()?;
                 // `(A1:A3,C1:C3)` is one reference of several areas, which

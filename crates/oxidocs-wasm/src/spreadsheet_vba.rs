@@ -8510,10 +8510,16 @@ impl<'a> WorkbookHost<'a> {
         if at == sheet || at == sheet + 1 {
             return Ok(());
         }
+        let before: Vec<String> = self.workbook.sheets.iter().map(|held| held.name.clone()).collect();
         let moved = self.workbook.sheets.remove(sheet);
         // Taking it out shifts everything after it down one.
         let at = if at > sheet { at - 1 } else { at };
+        let moved_name = moved.name.clone();
         self.workbook.sheets.insert(at, moved);
+        let after: Vec<String> = self.workbook.sheets.iter().map(|held| held.name.clone()).collect();
+        self.rewrite_every_formula(&|formula| {
+            oxicells_calc::move_sheet_in_formula(formula, &moved_name, &before, &after)
+        });
         let mut order: Vec<usize> = (0..self.workbook.sheets.len()).collect();
         let lifted = order.remove(sheet);
         order.insert(at, lifted);
@@ -8665,7 +8671,9 @@ impl<'a> WorkbookHost<'a> {
         if self.workbook.sheets.len() <= 1 {
             return Err("a workbook must keep at least one worksheet".to_string());
         }
-        self.workbook.sheets.remove(sheet);
+        let order: Vec<String> = self.workbook.sheets.iter().map(|held| held.name.clone()).collect();
+        let gone = self.workbook.sheets.remove(sheet).name;
+        self.rewrite_every_formula(&|formula| oxicells_calc::drop_sheet_in_formula(formula, &gone, &order));
         self.selections.remove(&sheet);
         // Excel moves to the sheet after the deleted one, or to the last
         // when it was the last -- and where a sheet other than the active
@@ -8711,8 +8719,36 @@ impl<'a> WorkbookHost<'a> {
         {
             return Err(format!("another worksheet is already called {name}"));
         }
-        self.workbook.sheets[sheet].name = name.to_string();
+        let old = std::mem::replace(&mut self.workbook.sheets[sheet].name, name.to_string());
+        let new = name.to_string();
+        self.rewrite_every_formula(&|formula| oxicells_calc::rename_sheet_in_formula(formula, &old, &new));
         Ok(())
+    }
+
+    /// Put every formula in the book -- in its cells and in its names --
+    /// through `rewrite`. A sheet renamed or deleted is written into all of
+    /// them: measured, renaming Data1 to Jan makes `=Data1!A1+Data3!A1`
+    /// read `=Jan!A1+Data3!A1`.
+    fn rewrite_every_formula(&mut self, rewrite: &dyn Fn(&str) -> String) {
+        self.wrote = true;
+        for sheet in &mut self.workbook.sheets {
+            for row in &mut sheet.rows {
+                for cell in &mut row.cells {
+                    if let Some(formula) = cell.formula.as_mut() {
+                        let written = rewrite(formula);
+                        if written != *formula {
+                            *formula = written;
+                        }
+                    }
+                }
+            }
+        }
+        for (_, stands_for) in &mut self.workbook.defined_names {
+            let written = rewrite(stands_for);
+            if written != *stands_for {
+                *stands_for = written;
+            }
+        }
     }
 
     fn worksheet_object(&mut self, value: &Value) -> Result<Value, String> {
@@ -8743,7 +8779,8 @@ impl<'a> WorkbookHost<'a> {
                 .sheets
                 .iter()
                 .position(|sheet| sheet.name.eq_ignore_ascii_case(name))
-                .ok_or_else(|| format!("worksheet not found: {name}")),
+                // Measured: `Worksheets("zz")` and `Worksheets(99)` are 9.
+                .ok_or_else(|| host_error(9, format!("worksheet not found: {name}"))),
             value if any_number(value).is_some() => self.worksheet_from_number(any_number(value).unwrap_or_default()),
             Value::Double(index) => self.worksheet_from_number(*index),
             _ => Err("Worksheets expects a sheet name or one-based index".to_string()),
@@ -8757,7 +8794,7 @@ impl<'a> WorkbookHost<'a> {
         let index = index as usize - 1;
         (index < self.workbook.sheets.len())
             .then_some(index)
-            .ok_or_else(|| format!("worksheet index is out of range: {}", index + 1))
+            .ok_or_else(|| host_error(9, format!("worksheet index is out of range: {}", index + 1)))
     }
 
     fn range_object(
