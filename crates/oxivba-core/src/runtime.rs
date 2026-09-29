@@ -271,9 +271,15 @@ pub struct RuntimeError {
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A host refusal may carry Excel's words and then, after a mark, the
+        // engine's reason; whoever reads an unhandled failure sees both.
+        let message = match self.message.split_once(REASON_MARK) {
+            Some((words, reason)) => format!("{words} ({reason})"),
+            None => self.message.clone(),
+        };
         match self.line {
-            Some(line) => write!(f, "line {line}: {}", self.message),
-            None => f.write_str(&self.message),
+            Some(line) => write!(f, "line {line}: {message}"),
+            None => f.write_str(&message),
         }
     }
 }
@@ -637,7 +643,9 @@ impl<'a> Runtime<'a> {
 
         let mut frame = Frame {
             procedure_name: key(&procedure.name),
-            source_name: procedure.name.clone(),
+            // Measured: `Err.Raise 5000` and `Error 5` in a standard module
+            // both answer Source "VBAProject".
+            source_name: "VBAProject".to_string(),
             values: BTreeMap::new(),
             constants: BTreeSet::new(),
             auto_new: BTreeMap::new(),
@@ -939,8 +947,27 @@ impl<'a> Runtime<'a> {
         // A macro that shows `Err.Description` shows VBA's own words for the
         // errors the language raises; the engine's message says more, but it
         // is for whoever reads an unhandled failure, not for the macro.
+        // The language's own refusals -- Mid, Chr, Sqr, Log, a Collection's
+        // index or key -- carry the engine's reason in their message, but a
+        // macro sees VBA's words and the project's name: measured,
+        // `Mid("abc", 0, 1)` is 5 "Invalid procedure call or argument" from
+        // VBAProject, and a duplicate Collection key 457 from VBAProject.
+        let language = matches!(failure.vba_source.as_deref(), Some("VBA" | "Collection"));
         let description = match failure.kind {
-            RuntimeErrorKind::UserDefined | RuntimeErrorKind::Host => failure.message.clone(),
+            _ if language => vba_error_description(number).to_string(),
+            // A host refusal that gave no number of its own gives no words
+            // of Excel's either: the engine's reason is for whoever reads an
+            // unhandled failure, and Excel says 1004's plain description --
+            // measured, `Range("A1").Offset(-1, 0)`.
+            RuntimeErrorKind::Host if failure.vba_number.is_none() => {
+                vba_error_description(number).to_string()
+            }
+            RuntimeErrorKind::UserDefined | RuntimeErrorKind::Host => failure
+                .message
+                .split(REASON_MARK)
+                .next()
+                .unwrap_or_default()
+                .to_string(),
             _ => vba_error_description(number).to_string(),
         };
         frame.error_state = ErrorState {
@@ -950,6 +977,7 @@ impl<'a> Runtime<'a> {
             source: failure
                 .vba_source
                 .clone()
+                .filter(|_| !language)
                 .unwrap_or_else(|| "VBAProject".to_string()),
             line: frame.last_line_number,
         };
@@ -3247,15 +3275,12 @@ impl<'a> Runtime<'a> {
                 Some(line),
             ));
         }
-        let description = vba_error_description(number);
+        // Measured: `Error 1234` describes itself as
+        // "Application-defined or object-defined error".
         Err(raised_error(
             number,
             frame.source_name.clone(),
-            if description == "Application-defined or object-defined error" {
-                String::new()
-            } else {
-                description.to_string()
-            },
+            vba_error_description(number).to_string(),
             line,
         ))
     }
@@ -4004,11 +4029,27 @@ pub fn host_error(number: i64, message: impl Into<String>) -> String {
 
 const HOST_ERROR_MARK: &str = "vba-error:";
 
+/// Between Excel's words for an error and the engine's reason for it.
+const REASON_MARK: char = '\u{1}';
+
+/// Excel's words for a refusal, with the engine's own reason kept for an
+/// unhandled failure: `Err.Description` reads only the words.
+pub fn host_error_explained(number: i64, description: &str, reason: impl Into<String>) -> String {
+    host_error_described(number, format!("{description}{REASON_MARK}{}", reason.into()))
+}
+
 /// A host's refusal with Excel's own words for it, where Excel has some of
 /// its own rather than VBA's for the number: 1004 is `Application-defined or
 /// object-defined error` only when Excel says nothing more.
 pub fn host_error_described(number: i64, description: impl Into<String>) -> String {
     format!("{HOST_ERROR_MARK}{number}={}", description.into())
+}
+
+/// The same, raised by a part of Excel that names itself as the Source:
+/// measured, a WorksheetFunction that finds nothing answers Source
+/// "Microsoft Excel".
+pub fn host_error_from(number: i64, source: &str, description: impl Into<String>) -> String {
+    format!("{HOST_ERROR_MARK}{number}@{source}={}", description.into())
 }
 
 /// A host's refusal as a runtime error: 1004 unless the host said otherwise.
@@ -4019,13 +4060,17 @@ pub fn host_error_described(number: i64, description: impl Into<String>) -> Stri
 fn host_failure(message: String, line: u32) -> RuntimeError {
     if let Some(rest) = message.strip_prefix(HOST_ERROR_MARK) {
         if let Some((number, description)) = rest.split_once('=') {
+            let (number, source) = match number.split_once('@') {
+                Some((number, source)) => (number, Some(source.to_string())),
+                None => (number, None),
+            };
             if let Ok(number) = number.parse::<i64>() {
                 return RuntimeError {
                     kind: RuntimeErrorKind::Host,
                     message: description.to_string(),
                     line: Some(line),
                     vba_number: Some(number),
-                    vba_source: None,
+                    vba_source: source,
                 };
             }
         }

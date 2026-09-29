@@ -89,7 +89,12 @@ impl<'a> WorkbookHost<'a> {
                                 || alias.as_deref().is_some_and(|alias| shape.name.eq_ignore_ascii_case(alias))
                         })
                     })
-                    .ok_or_else(|| host_error(NO_SUCH_SHAPE, format!("there is no shape called {name}")))
+                    .ok_or_else(|| {
+                        // Measured: `Shapes("none")` says "The item with the
+                        // specified name wasn't found."
+                        let _ = name;
+                        oxivba_core::host_error_described(NO_SUCH_SHAPE, "The item with the specified name wasn't found.")
+                    })
             }
             value => match any_whole_number(value) {
                 Some(number) if number >= 1 && (number as usize) <= listed.len() => {

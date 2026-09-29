@@ -9395,8 +9395,15 @@ impl<'a> WorkbookHost<'a> {
             .name_at(name.trim())
             .and_then(|at| self.workbook.defined_names.get(at))
         else {
-            return Err(format!(
-                "{unreadable}, and the workbook has no name {name:?} either"
+            // Measured: `Range("ZZZ0")` is 1004 "Method 'Range' of object
+            // '_Global' failed"; the engine's reason stays out of it.
+            return Err(oxivba_core::host_error_explained(
+                1004,
+                match reach {
+                    NameReach::Workbook => "Method 'Range' of object '_Global' failed",
+                    NameReach::ThisSheet => "Method 'Range' of object '_Worksheet' failed",
+                },
+                format!("{unreadable}, and the workbook has no name {name:?} either"),
             ));
         };
         let refers_to = refers_to.trim();
@@ -9542,6 +9549,11 @@ impl<'a> WorkbookHost<'a> {
             Some(oxicells_calc::Value::Blank) => Ok(Value::Empty),
             Some(oxicells_calc::Value::Error(why)) => {
                 Ok(Value::Error(spreadsheet_error_number(why.as_str())))
+            }
+            // Text that is no formula at all answers #VALUE!: measured,
+            // `Evaluate("=1+")` hands back an error value, not a raise.
+            None if oxicells_calc::parse(&format!("={}", reference.trim_start_matches('='))).is_err() => {
+                Ok(Value::Error(2015))
             }
             None => Err(format!("Evaluate cannot work out {reference:?}")),
         }
@@ -10716,12 +10728,21 @@ impl<'a> WorkbookHost<'a> {
     fn worksheet_function(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         // Measured: a VLookup that finds nothing is 1004, "Unable to get the
         // VLookup property of the WorksheetFunction class".
-        match self.worksheet_function_value(name, args)? {
-            Value::Error(_) => Err(host_error_described(
+        // The Source is Excel's own: "Microsoft Excel". A refusal of the
+        // arguments themselves -- `Index(A1:A3, 5)` -- reads the same way.
+        let unable = || {
+            oxivba_core::host_error_from(
                 1004,
+                "Microsoft Excel",
                 format!("Unable to get the {name} property of the WorksheetFunction class"),
-            )),
-            answer => Ok(answer),
+            )
+        };
+        match self.worksheet_function_value(name, args) {
+            Ok(Value::Error(_)) => Err(unable()),
+            Ok(answer) => Ok(answer),
+            Err(message) if message.starts_with("vba-error:") => Err(message),
+            Err(_) if oxicells_calc::functions::is_known_function(&name.to_ascii_uppercase()) => Err(unable()),
+            Err(message) => Err(message),
         }
     }
 
