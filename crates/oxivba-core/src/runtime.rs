@@ -646,7 +646,7 @@ impl<'a> Runtime<'a> {
             if narrowed {
                 let taken = value.borrow().clone();
                 *value.borrow_mut() =
-                    coerce_declared(taken, &param.type_name.name, procedure.span.line)?;
+                    coerce_declared(taken, &param.type_name.name, procedure.span.line, self.this_year())?;
             }
             frame.values.insert(key(&param.name), value);
             if narrowed {
@@ -722,7 +722,7 @@ impl<'a> Runtime<'a> {
                 .unwrap_or(Value::Empty);
             match procedure.return_type.as_ref() {
                 Some(return_type) => {
-                    coerce_declared(value, &return_type.name, procedure.span.line)?
+                    coerce_declared(value, &return_type.name, procedure.span.line, self.this_year())?
                 }
                 None => value,
             }
@@ -2324,7 +2324,7 @@ impl<'a> Runtime<'a> {
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
                 let implicit_variant = self.lookup_slot(frame, name).is_none();
                 let mut value = match self.declared_type(frame, name) {
-                    Some(declared) => coerce_declared(value, &declared, line)?,
+                    Some(declared) => coerce_declared(value, &declared, line, self.this_year())?,
                     None => value,
                 };
                 value = match self.fixed_string_width(frame, name) {
@@ -2398,6 +2398,7 @@ impl<'a> Runtime<'a> {
                 {
                     return Err(constant_assignment_error(name, line));
                 }
+                let this_year = self.this_year();
                 let array = self.lookup_slot(frame, name).ok_or_else(|| {
                     error(
                         RuntimeErrorKind::UndefinedVariable,
@@ -2417,7 +2418,13 @@ impl<'a> Runtime<'a> {
                     Value::String(default) if !default.is_empty() => {
                         coerce_string_width(value, default.encode_utf16().count(), Some(line))?
                     }
-                    _ => value,
+                    // An element of a typed array takes the array's type:
+                    // measured, 2.6 into an Integer array is 3, and 9 into a
+                    // String array is "9".
+                    held => match element_type_name(held) {
+                        Some(declared) => coerce_declared(value, declared, line, this_year)?,
+                        None => value,
+                    },
                 };
                 let offset = array_offset(array, &indices, line)?;
                 array.values[offset] = value;
@@ -8798,7 +8805,25 @@ fn numeric_literal(value: f64) -> Value {
 ///
 /// Types this runtime holds no distinct value for — Currency, Date, Decimal,
 /// Variant and the object types — pass through untouched.
-fn coerce_declared(value: Value, declared: &str, line: u32) -> Result<Value, RuntimeError> {
+/// The declared type an array's element default stands for; None for a
+/// Variant array.
+fn element_type_name(default: &Value) -> Option<&'static str> {
+    Some(match default {
+        Value::Int16(_) => "integer",
+        Value::Integer(_) => "long",
+        Value::LongLong(_) => "longlong",
+        Value::Byte(_) => "byte",
+        Value::Single(_) => "single",
+        Value::Double(_) => "double",
+        Value::Currency(_) => "currency",
+        Value::Date(_) => "date",
+        Value::Boolean(_) => "boolean",
+        Value::String(_) => "string",
+        _ => return None,
+    })
+}
+
+fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> Result<Value, RuntimeError> {
     let (low, high) = match declared.to_ascii_lowercase().as_str() {
         "byte" => (0.0, 255.0),
         "integer" => (-32_768.0, 32_767.0),
@@ -8820,13 +8845,24 @@ fn coerce_declared(value: Value, declared: &str, line: u32) -> Result<Value, Run
             }
             return Ok(Value::Currency(scaled as i64));
         }
-        "date" => return Ok(Value::Date(coerce_number(&value, declared, line)?)),
+        // A Date variable reads text the way CDate does: measured,
+        // `dt = "2024/3/4"` is March 4th, and `dt = "abc"` is 13.
+        "date" => {
+            return match &value {
+                Value::String(_) => value_date_serial(&value, this_year)
+                    .map(Value::Date)
+                    .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line))),
+                _ => Ok(Value::Date(coerce_number(&value, declared, line)?)),
+            }
+        }
         "double" => return Ok(Value::Double(coerce_number(&value, declared, line)?)),
         "boolean" => {
             return Ok(Value::Boolean(match &value {
                 Value::Boolean(value) => *value,
-                Value::String(_)
-                | Value::Int16(_)
+                // "True" and "False" read as themselves, as CBool reads them.
+                Value::String(_) => truthy(&value)
+                    .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?,
+                Value::Int16(_)
                 | Value::Byte(_)
                 | Value::Integer(_)
                 | Value::Single(_)
@@ -15408,6 +15444,28 @@ mod tests {
         assert_eq!(
             run(source, "Ask", vec![]).unwrap(),
             Value::String("TrueFalseTrueFalseTrueodd3613".to_string())
+        );
+    }
+
+    /// Typed variables and typed arrays take what is assigned to them the
+    /// way Excel's VBA does. Every answer here is Excel's.
+    #[test]
+    fn typed_places_convert_what_they_are_given() {
+        let source = "Public Function Ask() As String
+                        Dim dt As Date, b As Boolean, arr(1 To 2) As Integer, sa(1 To 1) As String, out As String
+                        dt = \"2024/3/4\": out = Month(dt) & \"|\"
+                        b = \"True\": out = out & b & \"|\"
+                        arr(1) = 2.6: out = out & arr(1) & TypeName(arr(1)) & \"|\"
+                        sa(1) = 9: out = out & TypeName(sa(1)) & \"|\"
+                        On Error Resume Next
+                        dt = \"abc\": out = out & Err.Number & \"|\": Err.Clear
+                        b = \"yes\": out = out & Err.Number
+                        Ask = out
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("3|True|3Integer|String|13|13".to_string())
         );
     }
 }
