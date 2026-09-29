@@ -644,6 +644,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // COUNTBLANK looks only for the empty: measured, an #NAME? among
         // the cells is simply not one.
             | "COUNTBLANK"
+        // And these write an error as its word: measured,
+        // `ARRAYTOTEXT(EXPAND(A1:A2,3))` is "3, 1, #N/A".
+            | "VALUETOTEXT" | "ARRAYTOTEXT"
     );
     // And some mind only the errors handed to them DIRECTLY.
     //
@@ -1233,6 +1236,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 ExcelError::Num => 6.0,
                 ExcelError::NA => 7.0,
                 ExcelError::Spill => 9.0,
+                ExcelError::Calc => 14.0,
             })),
             _ => Err(ExcelError::NA),
         },

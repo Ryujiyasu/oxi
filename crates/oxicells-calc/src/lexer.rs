@@ -114,6 +114,7 @@ const ERROR_LITERALS: &[(&str, ExcelError)] = &[
     ("#NUM!", ExcelError::Num),
     ("#N/A", ExcelError::NA),
     ("#SPILL!", ExcelError::Spill),
+    ("#CALC!", ExcelError::Calc),
 ];
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {

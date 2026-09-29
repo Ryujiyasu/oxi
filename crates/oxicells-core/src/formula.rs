@@ -512,6 +512,7 @@ fn parse_error_text(s: &str) -> ExcelError {
         "#NUM!" => ExcelError::Num,
         "#N/A" => ExcelError::NA,
         "#SPILL!" => ExcelError::Spill,
+        "#CALC!" => ExcelError::Calc,
         _ => ExcelError::Value,
     }
 }

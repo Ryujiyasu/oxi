@@ -31,6 +31,8 @@ pub enum ExcelError {
     NA,
     /// `#SPILL!` — a dynamic array's answer has nowhere to spill.
     Spill,
+    /// `#CALC!` — a LAMBDA left uncalled, among other things.
+    Calc,
 }
 
 impl ExcelError {
@@ -44,6 +46,7 @@ impl ExcelError {
             ExcelError::Num => "#NUM!",
             ExcelError::NA => "#N/A",
             ExcelError::Spill => "#SPILL!",
+            ExcelError::Calc => "#CALC!",
         }
     }
 }

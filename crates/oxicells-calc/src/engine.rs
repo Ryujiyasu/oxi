@@ -261,6 +261,9 @@ pub struct Workbook {
     /// The names a LET is binding while its last argument is worked out,
     /// innermost last. Asked before the workbook's own names.
     let_scope: std::cell::RefCell<Vec<(String, Arg)>>,
+    /// The LAMBDAs a LET has given a name, innermost last, so that
+    /// `LET(f,LAMBDA(x,x*2),f(4))` can call one by it.
+    lambda_scope: std::cell::RefCell<Vec<(String, Expr)>>,
     /// The state RAND draws from: seeded from the moment on first use, and
     /// moved on by every draw.
     rand_state: std::cell::Cell<u64>,
@@ -1376,11 +1379,37 @@ impl Workbook {
                     _ => Arg::Value(Value::Error(ExcelError::Value)),
                 }
             }
+            // The helpers that hand values to a LAMBDA written in place:
+            // MAP, REDUCE, SCAN, BYROW, BYCOL and MAKEARRAY. Measured:
+            // `MAP(A1:A3,LAMBDA(v,v*10))` over 3,1,2 is 30,10,20,
+            // `REDUCE(0,A1:A4,LAMBDA(a,v,a+v))` 7, `SCAN` 3,4,6,7,
+            // `BYROW(A1:C2,LAMBDA(r,SUM(r)))` 4,3 (text is not summed) and
+            // `MAKEARRAY(2,2,LAMBDA(r,c,r*c))` 1,2,2,4.
+            Expr::Function { name, args }
+                if matches!(name.as_str(), "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY") =>
+            {
+                self.lambda_helper(name, args, sheet, depth, skip, at)
+            }
+            // A LAMBDA called where it is written: measured,
+            // `LAMBDA(x,x+1)(5)` is 6.
+            Expr::Function { name, args } if name == "_INVOKE" && !args.is_empty() => {
+                let values = args[1..]
+                    .iter()
+                    .map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at))
+                    .collect();
+                self.call_lambda(&args[0], values, sheet, depth, skip, at)
+            }
+            // Outside a LAMBDA nothing is left out: measured, ISOMITTED(1)
+            // is FALSE.
+            Expr::Function { name, args } if name == "ISOMITTED" && args.len() == 1 => {
+                Arg::Value(Value::Logical(false))
+            }
             Expr::Function { name, args } if name == "LET" => {
                 if args.len() < 3 || args.len() % 2 == 0 {
                     return Arg::Value(Value::Error(ExcelError::Value));
                 }
                 let mut bound = 0;
+                let mut named_lambdas = 0;
                 let mut answer = None;
                 for pair in args[..args.len() - 1].chunks(2) {
                     // A name given twice is refused: measured, LET(x,1,x,2,x)
@@ -1393,6 +1422,10 @@ impl Workbook {
                         answer = Some(Arg::Value(Value::Error(ExcelError::Value)));
                         break;
                     };
+                    if matches!(&pair[1], Expr::Function { name, .. } if name == "LAMBDA") {
+                        self.lambda_scope.borrow_mut().push((label.clone(), pair[1].clone()));
+                        named_lambdas += 1;
+                    }
                     let value = self.eval_arg_inner(&pair[1], sheet, depth + 1, skip, at);
                     self.let_scope.borrow_mut().push((label.clone(), value));
                     bound += 1;
@@ -1403,7 +1436,21 @@ impl Workbook {
                 let mut scope = self.let_scope.borrow_mut();
                 let kept = scope.len() - bound;
                 scope.truncate(kept);
+                let mut lambdas = self.lambda_scope.borrow_mut();
+                let kept = lambdas.len() - named_lambdas;
+                lambdas.truncate(kept);
                 answer
+            }
+            // A LAMBDA nobody calls is #CALC!: measured, `=LAMBDA(x,x)`.
+            Expr::Function { name, .. } if name == "LAMBDA" => Arg::Value(Value::Error(ExcelError::Calc)),
+            // A LAMBDA a LET named, called by that name.
+            Expr::Function { name, args } if self.named_lambda(name).is_some() => {
+                let lambda = self.named_lambda(name).expect("just asked");
+                let values = args
+                    .iter()
+                    .map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at))
+                    .collect();
+                self.call_lambda(&lambda, values, sheet, depth, skip, at)
             }
             Expr::Function { name, args } => {
                 // SUBTOTAL ignores any cell in its range that is itself a
@@ -1742,6 +1789,146 @@ impl Workbook {
             (range.start.col, range.end.col)
         };
         Arg::Value(Value::Number((to.saturating_sub(from) + 1) as f64))
+    }
+
+    /// Call a LAMBDA written in place with these values for its
+    /// parameters, each bound the way LET binds a name.
+    fn named_lambda(&self, name: &str) -> Option<Expr> {
+        self.lambda_scope
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(held, _)| held.eq_ignore_ascii_case(name))
+            .map(|(_, lambda)| lambda.clone())
+    }
+
+    fn call_lambda(&self, lambda: &Expr, values: Vec<Arg>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        if let Expr::Name(label) = lambda {
+            return match self.named_lambda(label) {
+                Some(named) => self.call_lambda(&named, values, sheet, depth + 1, skip, at),
+                None => Arg::Value(Value::Error(ExcelError::Value)),
+            };
+        }
+        let Expr::Function { name, args } = lambda else {
+            return Arg::Value(Value::Error(ExcelError::Value));
+        };
+        if name != "LAMBDA" || args.len() != values.len() + 1 {
+            return Arg::Value(Value::Error(ExcelError::Value));
+        }
+        let mut labels = Vec::with_capacity(values.len());
+        for parameter in &args[..values.len()] {
+            let Expr::Name(label) = parameter else {
+                return Arg::Value(Value::Error(ExcelError::Value));
+            };
+            labels.push(label.clone());
+        }
+        let bound = labels.len();
+        {
+            let mut scope = self.let_scope.borrow_mut();
+            for (label, value) in labels.into_iter().zip(values) {
+                scope.push((label, value));
+            }
+        }
+        let answer = self.eval_arg_inner(&args[args.len() - 1], sheet, depth + 1, skip, at);
+        let mut scope = self.let_scope.borrow_mut();
+        let kept = scope.len() - bound;
+        scope.truncate(kept);
+        answer
+    }
+
+    fn lambda_helper(&self, name: &str, args: &[Expr], sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        let bad = || Arg::Value(Value::Error(ExcelError::Value));
+        let Some((lambda, given)) = args.split_last() else {
+            return bad();
+        };
+        let one = |answer: Arg| match answer {
+            Arg::Value(value) => value,
+            Arg::Range(block) if block.cells.len() == 1 => block.cells[0].clone(),
+            Arg::Range(_) => Value::Error(ExcelError::Value),
+        };
+        let blocks: Vec<RangeData> = given
+            .iter()
+            .map(|expr| block_of(&self.eval_arg_inner(expr, sheet, depth + 1, skip, at)))
+            .collect();
+        match name {
+            "MAP" => {
+                let Some(first) = blocks.first() else {
+                    return bad();
+                };
+                let (width, height) = (first.width, first.height);
+                let mut cells = Vec::with_capacity(width * height);
+                for row in 0..height {
+                    for col in 0..width {
+                        let values = blocks
+                            .iter()
+                            .map(|block| Arg::Value(reach(block, col, row).unwrap_or(Value::Error(ExcelError::NA))))
+                            .collect();
+                        cells.push(one(self.call_lambda(lambda, values, sheet, depth, skip, at)));
+                    }
+                }
+                Arg::Range(RangeData { width, height, cells })
+            }
+            "REDUCE" | "SCAN" => {
+                let (mut total, data) = match blocks.as_slice() {
+                    [data] => (Value::Blank, data),
+                    [start, data] => (start.cells.first().cloned().unwrap_or(Value::Blank), data),
+                    _ => return bad(),
+                };
+                let mut steps = Vec::with_capacity(data.cells.len());
+                for value in &data.cells {
+                    let values = vec![Arg::Value(total), Arg::Value(value.clone())];
+                    total = one(self.call_lambda(lambda, values, sheet, depth, skip, at));
+                    steps.push(total.clone());
+                }
+                if name == "REDUCE" {
+                    Arg::Value(total)
+                } else {
+                    Arg::Range(RangeData { width: data.width, height: data.height, cells: steps })
+                }
+            }
+            "BYROW" | "BYCOL" => {
+                let [data] = blocks.as_slice() else {
+                    return bad();
+                };
+                let by_row = name == "BYROW";
+                let lines = if by_row { data.height } else { data.width };
+                let mut cells = Vec::with_capacity(lines);
+                for line in 0..lines {
+                    let piece = if by_row {
+                        RangeData { width: data.width, height: 1, cells: (0..data.width).map(|col| data.at(col, line)).collect() }
+                    } else {
+                        RangeData { width: 1, height: data.height, cells: (0..data.height).map(|row| data.at(line, row)).collect() }
+                    };
+                    cells.push(one(self.call_lambda(lambda, vec![Arg::Range(piece)], sheet, depth, skip, at)));
+                }
+                if by_row {
+                    Arg::Range(RangeData { width: 1, height: lines, cells })
+                } else {
+                    Arg::Range(RangeData { width: lines, height: 1, cells })
+                }
+            }
+            _ => {
+                // MAKEARRAY(rows, columns, LAMBDA(r, c, ...)), counted from one.
+                let [rows, columns] = blocks.as_slice() else {
+                    return bad();
+                };
+                let count = |block: &RangeData| match block.cells.first().map(|value| value.to_number()) {
+                    Some(Ok(n)) if n >= 1.0 => Some(n.trunc() as usize),
+                    _ => None,
+                };
+                let (Some(height), Some(width)) = (count(rows), count(columns)) else {
+                    return bad();
+                };
+                let mut cells = Vec::with_capacity(width * height);
+                for row in 1..=height {
+                    for col in 1..=width {
+                        let values = vec![Arg::Value(Value::Number(row as f64)), Arg::Value(Value::Number(col as f64))];
+                        cells.push(one(self.call_lambda(lambda, values, sheet, depth, skip, at)));
+                    }
+                }
+                Arg::Range(RangeData { width, height, cells })
+            }
+        }
     }
 
     /// The sheet and range a reference-shaped expression names, for OFFSET.

@@ -456,10 +456,18 @@ impl Parser {
         if self.peek() == Some(&Token::LParen) {
             self.pos += 1;
             let args = self.parse_args()?;
-            return Ok(Expr::Function {
+            let mut call = Expr::Function {
                 name: name.to_uppercase(),
                 args,
-            });
+            };
+            // `LAMBDA(x,x+1)(5)`: a LAMBDA called where it is written.
+            while name.eq_ignore_ascii_case("LAMBDA") && self.peek() == Some(&Token::LParen) {
+                self.pos += 1;
+                let mut handed = vec![call];
+                handed.extend(self.parse_args()?);
+                call = Expr::Function { name: "_INVOKE".to_string(), args: handed };
+            }
+            return Ok(call);
         }
 
         if sheet.is_none() {
