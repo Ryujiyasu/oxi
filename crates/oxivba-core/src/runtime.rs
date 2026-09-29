@@ -5510,7 +5510,10 @@ fn call_format_builtin(
                 ));
             }
             let leading = tristate(args.get(2), true, line)?;
-            let parens = tristate(args.get(3), false, line)?;
+            // Left to the default, a negative amount of money is written in
+            // brackets, as this locale writes money: measured,
+            // `FormatCurrency(-5)` is ($5.00) where `FormatNumber(-5)` is -5.00.
+            let parens = tristate(args.get(3), name == "formatcurrency", line)?;
             let grouping = tristate(args.get(4), true, line)?;
             let percent = name == "formatpercent";
             let mut result = fixed_number(
@@ -6716,8 +6719,10 @@ fn clock(parts: DateParts, seconds: bool) -> String {
 }
 
 fn fixed_number(value: f64, digits: usize, grouping: bool, leading: bool, parens: bool) -> String {
-    let negative = value < 0.0;
     let raw = format!("{:.*}", digits, value.abs());
+    // What rounds to nothing has no sign: measured, `FormatNumber(-0.004)`
+    // is 0.00 and `FormatCurrency(-0.004)` $0.00.
+    let negative = value < 0.0 && raw.bytes().any(|b| (b'1'..=b'9').contains(&b));
     let (whole, fraction) = raw.split_once('.').unwrap_or((&raw, ""));
     let mut whole = if grouping {
         group_number(whole)
@@ -13615,6 +13620,26 @@ mod tests {
         assert_eq!(
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
+        );
+    }
+
+    /// Money left to the default goes in brackets when negative, and what
+    /// rounds to nothing has no sign. Every answer measured in Excel's VBA.
+    #[test]
+    fn negative_money_takes_brackets_and_nothing_has_no_sign() {
+        let value = run(
+            "Public Function Money() As String
+               Money = FormatCurrency(-5) & \"|\" & FormatCurrency(-5, 0) & \"|\" & FormatCurrency(-5, , , vbFalse) & \"|\" & FormatNumber(-5) & \"|\"
+               Money = Money & FormatCurrency(-0.004) & \"|\" & FormatNumber(-0.004) & \"|\" & FormatPercent(-0.00001) & \"|\" & FormatNumber(-0.004, , , vbTrue)
+             End Function
+",
+            "Money",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String("($5.00)|($5)|-$5.00|-5.00|$0.00|0.00|0.00%|0.00".to_string())
         );
     }
 

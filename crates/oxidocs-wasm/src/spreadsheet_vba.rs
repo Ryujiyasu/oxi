@@ -9922,7 +9922,10 @@ impl<'a> WorkbookHost<'a> {
         }
         let selected_rows = last_row - first_row;
         let selected_columns = last_column - first_column;
-        let dimensions = if selected_rows > 1 && selected_columns > 1 {
+        // A column taken out stays a column: measured, `Index(A1:C12 values,
+        // 0, 2)` is 12 by 1, while a row taken out, `Index(..., 4, 0)`, is a
+        // plain list of 3.
+        let dimensions = if selected_rows > 1 {
             vec![
                 ArrayDimension {
                     lower_bound: 1,
