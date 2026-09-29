@@ -3014,6 +3014,24 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("resize") {
             return Err(host_error(1004, "Application-defined or object-defined error"));
         }
+        // What empties or removes cells does so block by block, the last
+        // block first so a block's removal cannot move one still to come:
+        // measured, `Range("A1:B2,D4").ClearContents` empties both and
+        // `Range("A1:A2,C1:C2").Delete xlUp` removes both.
+        if ["clearcontents", "clear", "clearformats", "clearcomments", "clearnotes", "delete", "insert"]
+            .iter()
+            .any(|verb| name.eq_ignore_ascii_case(verb))
+        {
+            let mut blocks = areas.clone();
+            blocks.sort_by_key(|block| std::cmp::Reverse((block.start_row, block.start_column)));
+            let mut answer = None;
+            for block in blocks {
+                let receiver = self.object(HostObject::Range(block));
+                let Value::Object(receiver) = receiver else { continue };
+                answer = self.call(Some(&receiver), name, args)?;
+            }
+            return Ok(answer.or(Some(Value::Boolean(true))));
+        }
         // Measured: `Range("A1:B2,C4").EntireRow` is `$1:$2,$4:$4`.
         if name.eq_ignore_ascii_case("entirerow") || name.eq_ignore_ascii_case("entirecolumn") {
             let rows = name.eq_ignore_ascii_case("entirerow");
