@@ -11744,10 +11744,11 @@ impl<'a> WorkbookHost<'a> {
         // Measured: `Replace` on a protected sheet changes nothing and raises
         // nothing -- not even in cells that are unlocked, and not even when
         // every cell of the range is.
+        // Measured too: it answers True whatever happens -- no match, a
+        // protected sheet, a blank range.
         if self.cell_protection(range.sheet).is_some() {
-            return Ok(Value::Boolean(false));
+            return Ok(Value::Boolean(true));
         }
-        let mut changed = false;
         for address in self.touched(range) {
             let formula = self
                 .workbook
@@ -11781,9 +11782,8 @@ impl<'a> WorkbookHost<'a> {
             } else {
                 self.set_cell_value(address, CellValue::String(replaced))?;
             }
-            changed = true;
         }
-        Ok(Value::Boolean(changed))
+        Ok(Value::Boolean(true))
     }
 
     fn current_region_object(&mut self, range: CellRange) -> Result<Value, String> {
@@ -31729,7 +31729,7 @@ End Sub
 
         assert_eq!(
             debug_output,
-            vec!["True\tTrue\tFalse\tbaz bar\tbaz\t7\t=A1&\"baz\"".to_string()]
+            vec!["True\tTrue\tTrue\tbaz bar\tbaz\t7\t=A1&\"baz\"".to_string()]
         );
     }
 
