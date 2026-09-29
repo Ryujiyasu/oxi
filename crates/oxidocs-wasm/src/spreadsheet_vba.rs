@@ -1224,6 +1224,21 @@ fn kept_validation_formula(kind: i64, formula: &str) -> String {
             return vba_date_text(fraction);
         }
     }
+    // A date is kept as the US writes it, its time after two spaces;
+    // measured: "2024-03-05" reads 3/5/2024, "45000.5" 3/15/2023  12:00:00 PM
+    // and "3/5" takes this year. A number's kinds keep a written date as its
+    // serial: "2024/3/5" reads 45356.
+    if matches!(kind, 1 | 2 | 4 | 6) && !formula.starts_with('=') {
+        if let Some(serial) = formula_number(formula) {
+            if kind == 4 {
+                let picture = if serial.fract() == 0.0 { "m/d/yyyy" } else { "m/d/yyyy  h:mm:ss AM/PM" };
+                return oxicells_core::format_number(serial, picture);
+            }
+            if plain_number(formula.trim()).is_none() {
+                return vba_number_text(serial);
+            }
+        }
+    }
     formula.to_string()
 }
 
@@ -24461,6 +24476,12 @@ fn excel_serial(year: i64, month: u32, day: u32) -> Option<f64> {
     if !(1900..=9999).contains(&year) || !(1..=12).contains(&month) || day == 0 {
         return None;
     }
+    // Excel's calendar holds a 29 February 1900 (serial 60), so its days
+    // before March of that year stand one lower than the true count: measured,
+    // "1900/1/1" writes 1 and "1900/2/28" 59.
+    if (year, month, day) == (1900, 2, 29) {
+        return Some(60.0);
+    }
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
     let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -24471,7 +24492,8 @@ fn excel_serial(year: i64, month: u32, day: u32) -> Option<f64> {
     if day > days_in_month {
         return None;
     }
-    Some((days_since_epoch(year, month, day) - EXCEL_EPOCH_DAYS) as f64)
+    let early = i64::from(year == 1900 && month <= 2);
+    Some((days_since_epoch(year, month, day) - EXCEL_EPOCH_DAYS - early) as f64)
 }
 
 /// A two-digit year the way Excel reads one: 00-29 this century, 30-99 last.
