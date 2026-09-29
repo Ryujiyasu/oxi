@@ -2251,6 +2251,15 @@ impl<'a> WorkbookHost<'a> {
     ///
     /// A macro that turned calculation off is taken at its word, the same way
     /// the pass at the end of the run takes it.
+    /// Work the whole book out if anything was written since, for the
+    /// members that read many cells' answers at once -- SpecialCells, Sort,
+    /// AutoFilter, a copy.
+    fn settle_book(&mut self) {
+        if self.wrote && self.calculation == -4105 {
+            self.recalculate();
+        }
+    }
+
     fn settle(&mut self, range: CellRange) {
         if !self.wrote || self.calculation != -4105 || !self.holds_formula(range) {
             return;
@@ -2463,6 +2472,9 @@ impl<'a> WorkbookHost<'a> {
             ),
             _ => return Err("Range.SpecialCells takes a kind and what it may hold".to_string()),
         };
+        // Which formulas answer an error or text is read off what they answer
+        // now: measured, `=1/0` written a moment before is found by xlErrors.
+        self.settle_book();
         // The last cell is the corner of everything written on the sheet, and
         // it does not depend on the block it was asked of.
         if kind == 11 {
@@ -11261,6 +11273,9 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn find_in_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        // LookIn:=xlValues reads what the formulas answer now: measured,
+        // `=A3*10` written a moment before is found as 80.
+        self.settle_book();
         if args.is_empty() || args.len() > 9 {
             return Err("Range.Find expects between one and nine arguments".to_string());
         }
@@ -13860,6 +13875,8 @@ impl<'a> WorkbookHost<'a> {
     /// range -- a column top-to-bottom, a row when it runs sideways.
     /// Shared by `Range.Sort` and the recorder's `Worksheet.Sort` object.
     fn apply_sort(&mut self, range: CellRange, keys: &[(u32, bool)], header: bool, match_case: bool, sideways: bool) -> Result<(), String> {
+        // Sorted by what the formulas answer now.
+        self.settle_book();
         // Each line is one row of the range, or one column when sorting sideways.
         let (first, last) = if sideways {
             (range.start_column, range.end_column)
@@ -13925,6 +13942,25 @@ impl<'a> WorkbookHost<'a> {
 
         for (offset, held) in taken.into_iter().enumerate() {
             let line = first + offset as u32;
+            // A formula moves with its row the way a copy would: measured,
+            // `=A3*10` sorted up to row 1 reads `=A1*10`.
+            let moved_by = i64::from(line) - i64::from(lines[offset]);
+            let held: Vec<Option<Cell>> = held
+                .into_iter()
+                .map(|cell| {
+                    cell.map(|mut cell| {
+                        if moved_by != 0 {
+                            if let Some(formula) = cell.formula.as_ref() {
+                                let (rows, columns) = if sideways { (0, moved_by) } else { (moved_by, 0) };
+                                if let Ok(moved) = translate_formula_references(formula, rows, columns) {
+                                    cell.formula = Some(moved);
+                                }
+                            }
+                        }
+                        cell
+                    })
+                })
+                .collect();
             for (lane, cell) in (across.0..=across.1).zip(held) {
                 let address = cell_at(line, lane);
                 let sheet = &mut self.workbook.sheets[address.sheet];
@@ -14761,6 +14797,8 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn apply_auto_filter(&mut self, filter: &AutoFilter) -> Result<(), String> {
+        // Filtered by what the formulas answer now.
+        self.settle_book();
         // The first row of the range holds the headings, and stays put.
         for row in (filter.range.start_row + 1)..=filter.range.end_row {
             let showing = filter.fields.iter().all(|test| {
