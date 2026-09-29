@@ -25558,9 +25558,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // S1192: `S1189+S1192` on 00501ca3 goes FAIL 0.9963 → PASS 1.0000.
             let s1194_grid_scope = std::env::var("OXI_S1194_DISABLE").is_ok()
                 || page.grid_line_pitch.is_some();
+            // S1605 (2026-09-29): S603 RETIRED to opt-in (`OXI_S603=1`). Its one
+            // derivation case (3a4f para278) passes without it, and a faithful
+            // slice (`_pb_s603_gen.py`, linesAndChars 416, HGPGothicM 12pt, exact
+            // spacer swept in 0.5pt) shows Word keeps the last line up to the same
+            // spacer (710.0) whether a body paragraph, a table, or a two-line
+            // paragraph + table follows; S603 moved the table arms to 707.5 / 708.0.
+            // blind-G policies__1f014c0f p20 «※帳票は…» (followed by a table) is
+            // the corpus instance. Full batch_gate with it off: 1075 -> 1075.
             let s603_typed_fullbox = next_block_is_table
                 && line_idx + 1 == lines.len()
-                && std::env::var("OXI_S603_DISABLE").is_err()
+                && std::env::var_os("OXI_S603").is_some()
                 && !page.doc_grid_no_type
                 && s1194_grid_scope
                 && !s548b_exact_full
@@ -49319,10 +49327,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 && (rpr_ref.font_family_east_asia.is_none() || s1376_mark || s1382
                                                     || (!self.doc_body_has_real_cjk
                                                         && std::env::var("OXI_CELL_MARK_ASCII").as_deref() == Ok("1")));
+                                            // S1597 (2026-09-29, default ON, opt-out OXI_S1597_DISABLE):
+                                            // with adjustLineHeightInTable a snapped EMPTY cell line
+                                            // still measures its paragraph mark in the ASCII face (S583),
+                                            // snapped to whole cells of that face's own natural. blind-G
+                                            // forms__0209c52f (linePitch 298 = 14.9, ascii Century,
+                                            // eastAsia MS Mincho, 12pt marks): the empty rows step 15.0 in
+                                            // Word (one cell), Oxi 29.8 (MS Mincho 15.56 -> two).
+                                            let s1597_cell = !s989_ascii
+                                                && std::env::var_os("OXI_S1597_DISABLE").is_none()
+                                                && self.doc_body_has_real_cjk
+                                                && self.adjust_line_height_in_table
+                                                && para.style.snap_to_grid
+                                                && matches!(effective_line_rule, None | Some("auto"))
+                                                && rpr_ref.font_family_east_asia.is_none()
+                                                && !self.metrics_for(&rpr_ref, &para.style).is_cjk_83_64_font();
                                             let empty_metrics = self.metrics_for_para_mark_g(
                                                 &rpr_ref,
                                                 &para.style,
-                                                s989_ascii,
+                                                s989_ascii || s1597_cell,
                                             );
                                             // S1574: in a CJK document the ascii-face empty line
                                             // is its hhea natural (Century 8pt 9.617, Word PDF
@@ -49335,6 +49358,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             {
                                                 empty_metrics.natural_line_height_hhea(empty_fs)
                                                     * effective_line_spacing.unwrap_or(1.0)
+                                            } else if s1597_cell && !empty_metrics.is_cjk_83_64_font()
+                                                && row_line_pitch.map_or(false, |p| p > 0.1)
+                                            {
+                                                let p = row_line_pitch.unwrap_or(0.0);
+                                                let h = empty_metrics.natural_line_height_hhea(empty_fs)
+                                                    * effective_line_spacing.unwrap_or(1.0);
+                                                ((h / p - 0.001).ceil().max(1.0)) * p
                                             } else {
                                             self.line_height_inner(
                                                 empty_fs,

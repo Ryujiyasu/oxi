@@ -44,7 +44,17 @@ def variants(doc):
     return {"A": doc, "B": build(carrier, one_col), "C": build(plain, sect), "D": build(plain, one_col),
             "E": build(ex20, sect), "F": build(ex700, sect),
             "G": build(carrier.replace("<w:pPr>", '<w:pPr><w:spacing w:line="300" w:lineRule="exact"/>', 1), sect),
-            "H": build(carrier.replace("<w:pPr>", '<w:pPr><w:spacing w:line="400" w:lineRule="exact"/>', 1), sect)}
+            "H": build(carrier.replace("<w:pPr>", '<w:pPr><w:spacing w:line="400" w:lineRule="exact"/>', 1), sect),
+            "I": s1606_after(doc, carrier_e, None),
+            "J": s1606_after(doc, carrier_e, '<w:p><w:r><w:t>テスト本文の段落</w:t></w:r></w:p>')}
+
+
+def s1606_after(doc, carrier_e, replacement):
+    """Replace (or drop) the exact-1pt empty paragraph that follows the carrier."""
+    ps = doc.index("<w:p", carrier_e)
+    pe = doc.index("</w:p>", ps) + len("</w:p>")
+    assert 'w:line="20"' in doc[ps:pe]
+    return doc[:ps] + (replacement or "") + doc[pe:]
 
 
 def gen():
