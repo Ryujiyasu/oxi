@@ -8626,6 +8626,11 @@ fn call_string_builtin(
                 Some(value) => nullable_text(value)?
                     .ok_or_else(|| invalid_null(line))?,
             };
+            // A Null among them is error 94: measured,
+            // `Join(Array(1, Null), "-")` stops there.
+            if array.values.iter().any(|value| matches!(value, Value::Null)) {
+                return Err(invalid_null(line));
+            }
             let values = array
                 .values
                 .iter()
@@ -9232,7 +9237,12 @@ fn value_type_name(value: &Value) -> String {
         Value::Date(_) => "Date".to_string(),
         Value::Error(_) => "Error".to_string(),
         Value::String(_) => "String".to_string(),
-        Value::Array(_) => "Variant()".to_string(),
+        // An array is named for what it holds: measured, `Split` gives
+        // String(), and a Long array handed round in a Variant is Long().
+        Value::Array(array) => match array.element_default.as_ref() {
+            Value::Empty | Value::Missing | Value::Null | Value::Array(_) => "Variant()".to_string(),
+            element => format!("{}()", value_type_name(element)),
+        },
         // Excel cannot be asked: passing a record to `TypeName` is a COMPILE
         // error there, so no measurement exists. It names itself.
         Value::Record(record) => record.type_name.clone(),
@@ -9256,7 +9266,13 @@ fn value_var_type(value: &Value) -> i64 {
         Value::String(_) => 8,
         Value::Object(_) | Value::Nothing => 9,
         Value::Boolean(_) => 11,
-        Value::Array(_) => 8_192 + 12,
+        Value::Array(array) => {
+            8_192
+                + match array.element_default.as_ref() {
+                    Value::Empty | Value::Missing | Value::Null | Value::Array(_) => 12,
+                    element => value_var_type(element),
+                }
+        }
         Value::Missing => 12,
         // vbUserDefinedType. Unmeasurable for the same reason as above.
         Value::Record(_) => 36,
@@ -13862,6 +13878,28 @@ mod tests {
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
         );
+    }
+
+    /// An array is named for what it holds, and Join stops at a Null.
+    /// Measured in Excel's VBA.
+    #[test]
+    fn arrays_are_named_for_what_they_hold() {
+        let value = run(
+            "Public Function Ask() As String
+               Dim a() As Long, s(2) As String, v As Variant
+               ReDim a(1)
+               v = Split(\"a b\")
+               Ask = TypeName(v) & VarType(a) & VarType(v) & VarType(s) & TypeName(Array(1)) & \"|\"
+               On Error Resume Next
+               Ask = Ask & Join(Array(1, Null), \"-\")
+               Ask = Ask & Err.Number
+             End Function
+",
+            "Ask",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("String()819582008200Variant()|94".to_string()));
     }
 
     /// Err is the program's: what a function leaves in it reaches its caller
