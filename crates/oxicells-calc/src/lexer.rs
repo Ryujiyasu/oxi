@@ -2034,6 +2034,12 @@ fn lex_table(src: &str, start: usize) -> Option<(Token, usize)> {
         return None;
     }
     let name = src[start..at].to_string();
+    // A name that spells a cell is read as the cell, and a bracket after a
+    // cell is no formula: measured, `=SUM(T1[n])` over a table named T1 is
+    // refused (1004) and Evaluate of it is an error.
+    if crate::reference::parse_a1(&name).is_some() {
+        return None;
+    }
     let inside = at + 1;
     let mut depth = 1usize;
     let mut end = inside;

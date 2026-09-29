@@ -4665,9 +4665,10 @@ impl<'a> WorkbookHost<'a> {
             // A column of formulas is judged by what they work out to.
             let data = CellRange { sheet, start_row: self.workbook.sheets[sheet].tables[index].start_row, end_row: row, start_column: end_col, end_column: end_col };
             self.settle(data);
+            // An empty cell is not a number: measured, a table given an empty
+            // row by `ListRows.Add` totals its last column with 103, a count.
             let last_is_numbers = (self.workbook.sheets[sheet].tables[index].start_row + 1..row)
-                .filter_map(|held| self.cell_here(sheet, held, end_col))
-                .all(|cell| matches!(cell.value, CellValue::Number(_)));
+                .all(|held| self.cell_here(sheet, held, end_col).is_some_and(|cell| matches!(cell.value, CellValue::Number(_))));
             {
                 let extra = self.table_extra.entry(id).or_default();
                 extra.totals = true;
@@ -4869,6 +4870,7 @@ impl<'a> WorkbookHost<'a> {
                     // The look stays as the cells' own: measured, the header
                     // is still bold after `Unlist`.
                     self.bake_table_dress(sheet, index);
+                    self.unlist_table_references(sheet, index);
                     self.workbook.sheets[sheet].tables.remove(index);
                     self.table_handles.retain(|(held, _, _)| *held != id);
                     Value::Empty
@@ -5170,7 +5172,12 @@ impl<'a> WorkbookHost<'a> {
                     let Value::String(new_name) = &value else {
                         return Err("a table's name is text".to_string());
                     };
-                    check_name(new_name)?;
+                    // Excel checks a table's name set from a macro only for
+                    // being there at all: measured, "T1", "A1", "R1C1",
+                    // "1abc", "a b" and "Tab.le" are all taken, "" is 1004.
+                    if new_name.is_empty() {
+                        return Err(host_error(1004, "a table's name cannot be empty"));
+                    }
                     let old = self.workbook.sheets[sheet].tables[index].name.clone();
                     if self.workbook.sheets.iter().flat_map(|held| held.tables.iter()).any(|table| {
                         table.name.eq_ignore_ascii_case(new_name) && table.name != old
@@ -5298,6 +5305,95 @@ impl<'a> WorkbookHost<'a> {
     /// Write a table's look into its cells' own dress, for a table being
     /// unlisted: the header bold and white on the accent, the odd data rows
     /// on the band.
+    /// Formulas naming a table that goes away are rewritten with plain
+    /// references to where it stood. Measured: `=SUBTOTAL(103,T1[d])` in the
+    /// totals row becomes `=SUBTOTAL(103,Sheet1!$C$2:$C$5)` after `Unlist` --
+    /// the column's data, sheet-qualified and absolute.
+    fn unlist_table_references(&mut self, sheet: usize, index: usize) {
+        let table = self.workbook.sheets[sheet].tables[index].clone();
+        let sheet_name = self.workbook.sheets[sheet].name.clone();
+        let qualifier = if sheet_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            sheet_name
+        } else {
+            format!("'{}'", sheet_name.replace('\'', "''"))
+        };
+        let first_data = table.start_row + table.header_rows;
+        let last_data = table.end_row - table.totals_rows;
+        let block = |from_col: u32, to_col: u32, from_row: u32, to_row: u32| {
+            format!(
+                "{qualifier}!${}${}:${}${}",
+                oxicells_calc::reference::col_to_letters(from_col),
+                from_row,
+                oxicells_calc::reference::col_to_letters(to_col),
+                to_row
+            )
+        };
+        let replace = |inside: &str| -> Option<String> {
+            let inside = inside.trim();
+            let (rows, column) = match inside.to_ascii_lowercase().as_str() {
+                "#all" => ((table.start_row, table.end_row), None),
+                "#data" | "" => ((first_data, last_data), None),
+                "#headers" => ((table.start_row, table.start_row + table.header_rows - 1), None),
+                "#totals" => ((table.end_row, table.end_row), None),
+                _ => ((first_data, last_data), Some(inside.trim_start_matches('[').trim_end_matches(']'))),
+            };
+            match column {
+                None => Some(block(table.start_col, table.end_col, rows.0, rows.1)),
+                Some(wanted) => {
+                    let at = table.columns.iter().position(|held| held.eq_ignore_ascii_case(wanted))?;
+                    let col = table.start_col + at as u32;
+                    Some(block(col, col, rows.0, rows.1))
+                }
+            }
+        };
+        let prefix = format!("{}[", table.name);
+        for held in &mut self.workbook.sheets {
+            for row in &mut held.rows {
+                for cell in &mut row.cells {
+                    let Some(formula) = cell.formula.as_mut() else {
+                        continue;
+                    };
+                    let mut out = String::new();
+                    let mut rest = formula.as_str();
+                    let mut changed = false;
+                    while let Some(at) = rest.to_ascii_lowercase().find(&prefix.to_ascii_lowercase()) {
+                        let open = at + prefix.len();
+                        // The reference ends at the bracket that closes the one it opened.
+                        let mut depth = 1;
+                        let mut end = None;
+                        for (offset, ch) in rest[open..].char_indices() {
+                            match ch {
+                                '[' => depth += 1,
+                                ']' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        end = Some(open + offset);
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        let Some(end) = end else { break };
+                        match replace(&rest[open..end]) {
+                            Some(plain) => {
+                                out.push_str(&rest[..at]);
+                                out.push_str(&plain);
+                                changed = true;
+                            }
+                            None => out.push_str(&rest[..=end]),
+                        }
+                        rest = &rest[end + 1..];
+                    }
+                    if changed {
+                        out.push_str(rest);
+                        *formula = out;
+                    }
+                }
+            }
+        }
+    }
+
     fn bake_table_dress(&mut self, sheet: usize, index: usize) {
         let table = self.workbook.sheets[sheet].tables[index].clone();
         let dark_header = table
@@ -12800,6 +12896,11 @@ impl<'a> WorkbookHost<'a> {
         let book = self.file_name.as_deref().unwrap_or("Book1");
         let placed = without_own_book(&placed, book);
         let placed = oxicells_calc::canonical_formula(&placed, &sheet_case, &name_case);
+        // What is no formula at all is refused: measured, `"=A1["` and
+        // `"=SUM(T1[n])"` over a table named T1 (a cell's name) are 1004.
+        if placed.starts_with('=') && oxicells_calc::parse(&placed).is_err() {
+            return Err(host_error(1004, format!("{placed:?} is not a formula")));
+        }
         Ok(oxicells_calc::normalise_formula_ranges(&placed))
     }
 
