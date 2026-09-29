@@ -15788,6 +15788,28 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("borders") {
                     return self.borders_object(range, args).map(Some);
                 }
+                // `Range("B2").Range("A1")` is B2: a reference taken as if the
+                // range's corner were A1. Measured: `.Range("B2")` of B2 is C3.
+                if name.eq_ignore_ascii_case("range") {
+                    let named = self.range_object(range.sheet, args, NameReach::ThisSheet)?;
+                    let Value::Object(named) = named else {
+                        return Err("Range.Range names no cells".to_string());
+                    };
+                    let Some(inner) = self.range(&named) else {
+                        return Err("Range.Range names more than one block".to_string());
+                    };
+                    let moved = CellRange {
+                        sheet: range.sheet,
+                        start_row: inner.start_row + range.start_row - 1,
+                        end_row: inner.end_row + range.start_row - 1,
+                        start_column: inner.start_column + range.start_column,
+                        end_column: inner.end_column + range.start_column,
+                    };
+                    if moved.end_row > MAX_WORKSHEET_ROW || moved.end_column > MAX_WORKSHEET_COLUMN {
+                        return Err(host_error(1004, "Range.Range reaches past the sheet"));
+                    }
+                    return Ok(Some(self.object(HostObject::Range(moved))));
+                }
                 if name.eq_ignore_ascii_case("copy") {
                     return self.copy_range(range, args).map(Some);
                 }
