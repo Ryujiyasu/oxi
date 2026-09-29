@@ -3466,7 +3466,25 @@ fn annuity_factor(rate: f64, periods: f64) -> Result<f64, ExcelError> {
     if rate <= -1.0 {
         return Err(ExcelError::Num);
     }
-    let factor = (1.0 + rate).powf(periods);
+    // A whole number of periods is raised by squaring and multiplying, the
+    // way Excel's own figures come out to the last digit: measured,
+    // `FV(0.004,120,-300,-5000,1)` is 54346.5852341411 that way, where
+    // `powf` gives ...408; PV, PMT and FV agreed on every case tried.
+    let factor = if periods.fract() == 0.0 && periods.abs() < 2_147_483_648.0 {
+        let mut base = 1.0 + rate;
+        let mut left = periods.abs() as u64;
+        let mut answer = 1.0;
+        while left > 0 {
+            if left & 1 == 1 {
+                answer *= base;
+            }
+            base *= base;
+            left >>= 1;
+        }
+        if periods < 0.0 { 1.0 / answer } else { answer }
+    } else {
+        (1.0 + rate).powf(periods)
+    };
     if factor.is_finite() { Ok(factor) } else { Err(ExcelError::Num) }
 }
 
