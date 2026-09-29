@@ -51,6 +51,7 @@ fn a_sheet(name: &str) -> Sheet {
             cells: vec![
                 Cell {
                     array_block: None,
+                    spill: Default::default(),
                     col: 0,
                     value: CellValue::Number(index as f64),
                     style: Default::default(),
@@ -59,6 +60,7 @@ fn a_sheet(name: &str) -> Sheet {
                 },
                 Cell {
                     array_block: None,
+                    spill: Default::default(),
                     col: 1,
                     value: CellValue::Empty,
                     style: Default::default(),

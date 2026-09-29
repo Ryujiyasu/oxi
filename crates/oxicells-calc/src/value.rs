@@ -29,6 +29,8 @@ pub enum ExcelError {
     Num,
     /// `#N/A` — value not available (lookup miss).
     NA,
+    /// `#SPILL!` — a dynamic array's answer has nowhere to spill.
+    Spill,
 }
 
 impl ExcelError {
@@ -41,6 +43,7 @@ impl ExcelError {
             ExcelError::Name => "#NAME?",
             ExcelError::Num => "#NUM!",
             ExcelError::NA => "#N/A",
+            ExcelError::Spill => "#SPILL!",
         }
     }
 }

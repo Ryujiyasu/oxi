@@ -271,6 +271,30 @@ pub struct Cell {
     /// cell alone (`<f t="array" ref="…">`) and only values on the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub array_block: Option<(u32, u32, u32, u32)>,
+    /// A dynamic-array formula's part in a spill: the cell whose formula
+    /// spills, or one of the cells its answer spilled into.
+    #[serde(default, skip_serializing_if = "Spill::is_none")]
+    pub spill: Spill,
+}
+
+/// Where a cell stands in a dynamic array's spill.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Spill {
+    /// An ordinary cell.
+    #[default]
+    None,
+    /// Its formula was written as a dynamic array (`.Formula2`) and spills
+    /// a block of answers across the cells beside it.
+    Dynamic,
+    /// Its value is a share of the spill of the formula above or left of it;
+    /// it holds no formula of its own and goes when the spill does.
+    Member,
+}
+
+impl Spill {
+    pub fn is_none(&self) -> bool {
+        *self == Spill::None
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

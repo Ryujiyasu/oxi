@@ -45,6 +45,9 @@ pub enum Token {
     Amp,
     /// `@`, implicit intersection: `=@A1:A3` in row 2 is A2.
     At,
+    /// `#` after a cell: the whole of what that cell's formula spilled,
+    /// `=SUM(D1#)`.
+    Hash,
 
     Eq,
     Ne,
@@ -107,6 +110,7 @@ const ERROR_LITERALS: &[(&str, ExcelError)] = &[
     ("#REF!", ExcelError::Ref),
     ("#NUM!", ExcelError::Num),
     ("#N/A", ExcelError::NA),
+    ("#SPILL!", ExcelError::Spill),
 ];
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
@@ -201,6 +205,12 @@ fn tokenize_spanned(input: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 Some((lit, err)) => {
                     tokens.push(Token::ErrorLit(*err));
                     i += lit.len();
+                    continue;
+                }
+                // `D1#`: the spill of the formula in D1.
+                None if matches!(tokens.last(), Some(Token::Name { .. })) => {
+                    tokens.push(Token::Hash);
+                    i += 1;
                     continue;
                 }
                 None => return Err(ParseError::UnexpectedChar('#', i)),
@@ -491,6 +501,10 @@ impl AtReader<'_> {
                         self.pos += 1;
                         self.primary()?;
                     }
+                    node = AtNode::Block { start };
+                }
+                if self.peek() == Some(&Token::Hash) {
+                    self.pos += 1;
                     node = AtNode::Block { start };
                 }
                 if self.peek() == Some(&Token::Percent) {
@@ -1545,6 +1559,7 @@ pub(crate) fn render_token(output: &mut String, token: Token) {
         Token::ErrorLit(value) => output.push_str(value.as_str()),
         Token::LBrace => output.push('{'),
         Token::At => output.push('@'),
+        Token::Hash => output.push('#'),
         Token::RBrace => output.push('}'),
         Token::Semicolon => output.push(';'),
         Token::Table { name, asked } => {

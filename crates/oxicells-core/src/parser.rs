@@ -3275,6 +3275,7 @@ fn parse_worksheet(
                             }
                             current_cells.push(Cell {
                                 array_block: None,
+                                spill: Default::default(),
                                 col: cell_col,
                                 value: cell_value,
                                 style,
@@ -3372,6 +3373,7 @@ fn parse_worksheet(
                         let style = resolve_cell_style(si.unwrap_or(0), stylesheet);
                         current_cells.push(Cell {
                             array_block: None,
+                            spill: Default::default(),
                             col,
                             value: CellValue::Empty,
                             style,
@@ -3606,6 +3608,7 @@ fn parse_worksheet(
                             formula: Some(formula.clone()),
                             runs: Vec::new(),
                             array_block: Some(block),
+                            spill: Default::default(),
                         });
                         row.cells.sort_by_key(|cell| cell.col);
                     }

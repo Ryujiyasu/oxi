@@ -260,6 +260,15 @@ fn assemble_sheets(
                     (Some(text), None) => book.set_formula(&sheet.name, &addr, text).is_ok(),
                     (None, _) => false,
                 };
+                if placed && cell.spill == crate::ir::Spill::Dynamic {
+                    let _ = book.set_dynamic(&sheet.name, &addr);
+                }
+                // A spilled value belongs to the formula that spilled it; it
+                // is remembered, not placed, so it does not stand in its way.
+                if !placed && cell.spill == crate::ir::Spill::Member {
+                    let _ = book.set_spilled_value(&sheet.name, &addr, to_calc(&cell.value));
+                    continue;
+                }
                 if !placed {
                     let _ = book.set_value(&sheet.name, &addr, to_calc(&cell.value));
                 }
@@ -359,6 +368,61 @@ fn recalculate(
                 cell.value = from_calc(&book.value(&name, &a1(cell.col, row.index)));
             }
         }
+        if mode == Overwrite::All {
+            lay_out_spills(sheet, &book.spilled_values(&name));
+        }
+    }
+}
+
+/// Put what the formulas spilled into the cells beside them, taking back
+/// whatever an earlier spill left that this one does not reach.
+fn lay_out_spills(sheet: &mut Sheet, spilled: &[((u32, u32), Value)]) {
+    for row in &mut sheet.rows {
+        for cell in row.cells.iter_mut().filter(|cell| cell.spill == crate::ir::Spill::Member) {
+            cell.value = CellValue::Empty;
+            cell.spill = crate::ir::Spill::None;
+        }
+    }
+    for ((col, row0), value) in spilled {
+        let index = row0 + 1;
+        let at = match sheet.rows.binary_search_by_key(&index, |row| row.index) {
+            Ok(at) => at,
+            Err(at) => {
+                sheet.rows.insert(
+                    at,
+                    crate::ir::Row {
+                        index,
+                        cells: Vec::new(),
+                        height: None,
+                        custom_height: false,
+                        style_font: None,
+                        thick_top: false,
+                        thick_bottom: false,
+                        hidden: false,
+                    },
+                );
+                at
+            }
+        };
+        let row = &mut sheet.rows[at];
+        let cell = match row.cells.iter().position(|cell| cell.col == *col) {
+            Some(held) => &mut row.cells[held],
+            None => {
+                row.cells.push(crate::ir::Cell {
+                    col: *col,
+                    value: CellValue::Empty,
+                    style: Default::default(),
+                    formula: None,
+                    runs: Vec::new(),
+                    array_block: None,
+                    spill: Default::default(),
+                });
+                row.cells.sort_by_key(|cell| cell.col);
+                row.cells.iter_mut().find(|cell| cell.col == *col).expect("just put there")
+            }
+        };
+        cell.value = from_calc(value);
+        cell.spill = crate::ir::Spill::Member;
     }
 }
 
@@ -402,6 +466,7 @@ fn parse_error_text(s: &str) -> ExcelError {
         "#NAME?" => ExcelError::Name,
         "#NUM!" => ExcelError::Num,
         "#N/A" => ExcelError::NA,
+        "#SPILL!" => ExcelError::Spill,
         _ => ExcelError::Value,
     }
 }
@@ -417,6 +482,7 @@ mod tests {
         for (r, c, val, formula) in data {
             rows_map.entry(r).or_default().push(Cell {
                 array_block: None,
+                spill: Default::default(),
                 col: c,
                 value: val,
                 style: CellStyle::default(),

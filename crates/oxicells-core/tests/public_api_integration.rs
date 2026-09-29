@@ -154,6 +154,7 @@ fn parse_xlsx_empty_bytes_returns_err() {
 fn make_cell(col: u32, value: CellValue, formula: Option<&str>) -> Cell {
     Cell {
         array_block: None,
+        spill: Default::default(),
         col,
         value,
         style: CellStyle::default(),

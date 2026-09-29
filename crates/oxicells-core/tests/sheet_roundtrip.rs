@@ -71,6 +71,7 @@ fn a_sheet_a_run_added_is_saved() {
             hidden: false,
             cells: vec![Cell {
                 array_block: None,
+                spill: Default::default(),
                 col: 0,
                 value: CellValue::Number(42.0),
                 style: CellStyle::default(),
@@ -164,6 +165,7 @@ fn an_array_formula_is_saved_on_its_anchor_and_read_back_whole() {
                 cells: vec![
                     Cell {
                         array_block: None,
+                        spill: Default::default(),
                         col: 0,
                         value: CellValue::Number(value),
                         style: CellStyle::default(),
@@ -172,6 +174,7 @@ fn an_array_formula_is_saved_on_its_anchor_and_read_back_whole() {
                     },
                     Cell {
                         array_block: Some((1, 2, 2, 2)),
+                        spill: Default::default(),
                         col: 2,
                         value: CellValue::Empty,
                         style: CellStyle::default(),

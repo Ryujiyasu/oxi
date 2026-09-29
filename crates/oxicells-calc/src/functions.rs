@@ -1147,6 +1147,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 ExcelError::Name => 5.0,
                 ExcelError::Num => 6.0,
                 ExcelError::NA => 7.0,
+                ExcelError::Spill => 9.0,
             })),
             _ => Err(ExcelError::NA),
         },
@@ -3952,9 +3953,11 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
             // Which column to order by, counted from one, and which way.
             let by = match sort_by {
                 Some(added) => added + 1,
+                // Left empty, as `SORT(A1:A3,,-1)` leaves it, it is the
+                // first column.
                 None => match args.get(1) {
-                    Some(one) => num(one)? as usize,
-                    None => 1,
+                    Some(one) if !one.scalar().is_blank() => num(one)? as usize,
+                    _ => 1,
                 },
             };
             // Both spell the direction third: SORT(block, by, order) and

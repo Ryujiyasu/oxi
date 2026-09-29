@@ -187,7 +187,15 @@ impl Parser {
                     args: vec![self.parse_unary()?],
                 })
             }
-            _ => self.parse_range(),
+            _ => {
+                let mut expr = self.parse_range()?;
+                // `D1#`: all of what D1's formula spilled.
+                while self.peek() == Some(&Token::Hash) {
+                    self.pos += 1;
+                    expr = Expr::Function { name: "_SPILL".to_string(), args: vec![expr] };
+                }
+                Ok(expr)
+            }
         }
     }
 

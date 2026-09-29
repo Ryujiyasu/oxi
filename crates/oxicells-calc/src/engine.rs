@@ -174,6 +174,14 @@ struct Sheet {
     /// passes over the filtered ones always and the rest from 101 up.
     hidden_rows: BTreeSet<u32>,
     filtered_rows: BTreeSet<u32>,
+    /// The formulas written as dynamic arrays, which spill.
+    dynamic: BTreeSet<(u32, u32)>,
+    /// Each spilling formula's block, as (width, height), by its cell.
+    spills: BTreeMap<(u32, u32), (u32, u32)>,
+    /// The values spilled into the cells beside them, with the formula that
+    /// spilled each -- None for one remembered from before and not yet
+    /// worked out again.
+    spilled: BTreeMap<(u32, u32), (Value, Option<(u32, u32)>)>,
 }
 
 /// What a recalculation did.
@@ -387,6 +395,48 @@ impl Workbook {
         Ok(())
     }
 
+    /// Mark a formula as a dynamic array, whose block of answers spills into
+    /// the cells beside it.
+    pub fn set_dynamic(&mut self, sheet: &str, a1: &str) -> Result<(), CalcError> {
+        let cell = self.cell_ref(a1)?;
+        self.sheet_mut(sheet)?.dynamic.insert(cell.coord());
+        Ok(())
+    }
+
+    /// A value a spill left in a cell, remembered from before so that a
+    /// formula worked out on its own can read it. A recalculation works the
+    /// spills out afresh.
+    pub fn set_spilled_value(&mut self, sheet: &str, a1: &str, value: Value) -> Result<(), CalcError> {
+        let cell = self.cell_ref(a1)?;
+        self.sheet_mut(sheet)?.spilled.insert(cell.coord(), (value, None));
+        Ok(())
+    }
+
+    /// Every spill: its sheet, its formula's cell and its (width, height).
+    pub fn spill_blocks(&self) -> Vec<(String, (u32, u32), (u32, u32))> {
+        self.sheets
+            .iter()
+            .flat_map(|(name, sheet)| sheet.spills.iter().map(move |(at, size)| (name.clone(), *at, *size)))
+            .collect()
+    }
+
+    /// The values spilled into a sheet's cells, by (col, row).
+    pub fn spilled_values(&self, sheet: &str) -> Vec<((u32, u32), Value)> {
+        self.sheets.get(sheet).map_or_else(Vec::new, |held| {
+            held.spilled
+                .iter()
+                .filter(|(_, (_, owner))| owner.is_some())
+                .map(|(at, (value, _))| (*at, value.clone()))
+                .collect()
+        })
+    }
+
+    /// The block a spilling formula's cell spilled, as a range.
+    fn spill_range(&self, sheet: &str, anchor: CellRef) -> Option<RangeRef> {
+        let (width, height) = *self.sheets.get(sheet)?.spills.get(&(anchor.col, anchor.row))?;
+        Some(RangeRef::normalised(anchor, CellRef::new(anchor.col + width - 1, anchor.row + height - 1)))
+    }
+
     /// One cell of an ARRAY formula: the formula is worked out once as a
     /// block and this cell shows the element `offset` (columns, rows) into
     /// it. Every member is given the whole formula, which is what Excel
@@ -471,7 +521,28 @@ impl Workbook {
 
     /// Recalculate every formula in dependency order.
     pub fn recalculate(&mut self) -> RecalcReport {
-        self.work_out(Extent::Everything)
+        // What was remembered of the spills goes: every one is worked out
+        // afresh.
+        for sheet in self.sheets.values_mut() {
+            sheet.spilled.retain(|_, (_, owner)| owner.is_some());
+        }
+        let mut report = self.work_out(Extent::Everything);
+        // A formula reading a cell a spill fills is waiting on the spilling
+        // formula, which the order can only know once the spill is known --
+        // so go round again while the spills are still changing.
+        let mut layout = self.spill_blocks();
+        for _ in 0..3 {
+            if layout.is_empty() {
+                break;
+            }
+            report = self.work_out(Extent::Everything);
+            let now = self.spill_blocks();
+            if now == layout {
+                break;
+            }
+            layout = now;
+        }
+        report
     }
 
     /// Recalculate only the formulas a change to these cells can reach.
@@ -570,10 +641,12 @@ impl Workbook {
             let Some(expr) = self.expr_at(sheet, coord) else {
                 continue;
             };
+            let dynamic = self.sheets.get(sheet.as_str()).is_some_and(|held| held.dynamic.contains(coord));
             let value = match self.share_at(sheet, coord) {
                 Some(offset) => {
                     formula_result(element_of(self.eval_arg(&expr, sheet, 0, Some(*coord)), offset))
                 }
+                None if dynamic => self.spill_out(sheet, *coord, &expr),
                 None => formula_result(self.eval(&expr, sheet, 0, Some(*coord))),
             };
             self.store_cached(sheet, coord, value);
@@ -594,6 +667,59 @@ impl Workbook {
         }
 
         report
+    }
+
+    /// Work out a dynamic array and spill its block into the cells beside
+    /// it, answering what its own cell shows. Measured in Excel: `=A1:A3*2`
+    /// in D1 fills D1:D3; a cell in the way holding anything makes it
+    /// #SPILL! and fills nothing; a block of one is simply that value.
+    fn spill_out(&mut self, sheet: &str, anchor: (u32, u32), expr: &Expr) -> Value {
+        if let Some(held) = self.sheets.get_mut(sheet) {
+            held.spills.remove(&anchor);
+            held.spilled.retain(|_, (_, owner)| *owner != Some(anchor));
+        }
+        let worked = self.eval_arg(expr, sheet, 0, Some(anchor));
+        let block = match worked {
+            Arg::Range(block) if block.cells.len() > 1 => block,
+            Arg::Range(block) => return formula_result(block.cells.first().cloned().unwrap_or(Value::Blank)),
+            Arg::Value(value) => return formula_result(value),
+        };
+        let (width, height) = (block.width as u32, block.height as u32);
+        let (col, row) = anchor;
+        if col + width - 1 > MAX_COL || row + height - 1 > MAX_ROW {
+            return Value::Error(ExcelError::Spill);
+        }
+        let Some(held) = self.sheets.get_mut(sheet) else {
+            return Value::Error(ExcelError::Ref);
+        };
+        for down in 0..height {
+            for across in 0..width {
+                let at = (col + across, row + down);
+                if at == anchor {
+                    continue;
+                }
+                let in_the_way = match held.cells.get(&at) {
+                    Some(Cell::Literal(Value::Blank)) | None => false,
+                    Some(_) => true,
+                };
+                let taken = held.spilled.get(&at).is_some_and(|(_, owner)| owner.is_some());
+                if in_the_way || taken {
+                    return Value::Error(ExcelError::Spill);
+                }
+            }
+        }
+        for down in 0..height {
+            for across in 0..width {
+                let at = (col + across, row + down);
+                if at == anchor {
+                    continue;
+                }
+                let value = block.cells[(down * width + across) as usize].clone();
+                held.spilled.insert(at, (value, Some(anchor)));
+            }
+        }
+        held.spills.insert(anchor, (width, height));
+        formula_result(block.cells[0].clone())
     }
 
     fn formula_keys(&self) -> Vec<(String, (u32, u32))> {
@@ -699,6 +825,23 @@ impl Workbook {
                 }
             }
         }
+        // A cell a spill fills is waiting on the formula that spills it.
+        for reference in expr.value_references() {
+            let target = reference.sheet.as_deref().unwrap_or(sheet);
+            let (Some(formulas), Some(held)) = (at.get(target), self.sheets.get(target)) else {
+                continue;
+            };
+            let (from, to) = (reference.range.start, reference.range.end);
+            for (anchor, (width, height)) in &held.spills {
+                let (last_col, last_row) = (anchor.0 + width - 1, anchor.1 + height - 1);
+                let meets = anchor.0 <= to.col && last_col >= from.col && anchor.1 <= to.row && last_row >= from.row;
+                if meets {
+                    if let Some(&j) = formulas.get(anchor) {
+                        found(j);
+                    }
+                }
+            }
+        }
     }
 
     fn expr_at(&self, sheet: &str, coord: &(u32, u32)) -> Option<Expr> {
@@ -729,11 +872,17 @@ impl Workbook {
     // -- evaluation -------------------------------------------------------
 
     fn value_at(&self, sheet: &str, col: u32, row: u32) -> Value {
-        self.sheets
-            .get(sheet)
-            .and_then(|s| s.cells.get(&(col, row)))
-            .map(|c| c.value().clone())
-            .unwrap_or(Value::Blank)
+        let Some(held) = self.sheets.get(sheet) else {
+            return Value::Blank;
+        };
+        match held.cells.get(&(col, row)) {
+            Some(Cell::Literal(Value::Blank)) | None => held
+                .spilled
+                .get(&(col, row))
+                .map(|(value, _)| value.clone())
+                .unwrap_or(Value::Blank),
+            Some(cell) => cell.value().clone(),
+        }
     }
 
     /// A draw in [0, 1), from a xorshift seeded by the moment.
@@ -912,6 +1061,12 @@ impl Workbook {
                 let (target, range) = self.index_range(args, sheet, depth + 1, at).expect("just asked");
                 Arg::Range(self.materialise(&target, &range, skip))
             }
+
+            // `D1#`: all that D1 spilled, or #REF! where it spills nothing.
+            Expr::Function { name, .. } if name == "_SPILL" => match self.reference_of(expr, sheet, depth + 1, at) {
+                Some((target, range)) => Arg::Range(self.materialise(&target, &range, skip)),
+                None => Arg::Value(Value::Error(ExcelError::Ref)),
+            },
 
             Expr::Function { name, args } if name == "ISREF" => match args.as_slice() {
                 [only] => Arg::Value(Value::Logical(self.reference_of(only, sheet, depth + 1, at).is_some())),
@@ -1367,6 +1522,17 @@ impl Workbook {
                 self.indirect_range(args, sheet, depth, at).ok()
             }
             Expr::Function { name, args } if name == "INDEX" => self.index_range(args, sheet, depth, at),
+            Expr::Function { name, args } if name == "_SPILL" && args.len() == 1 => {
+                let (target, range) = self.reference_of(&args[0], sheet, depth, at)?;
+                let range = self.spill_range(&target, range.start).or_else(|| {
+                    // A formula that is not spilling is its own cell.
+                    self.sheets
+                        .get(&target)
+                        .is_some_and(|held| held.dynamic.contains(&range.start.coord()))
+                        .then_some(RangeRef::single(range.start))
+                })?;
+                Some((target, range))
+            }
             _ => None,
         }
     }

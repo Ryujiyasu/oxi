@@ -2249,6 +2249,17 @@ impl<'a> WorkbookHost<'a> {
         let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
             return false;
         };
+        // A cell a spill fills -- or is about to fill -- is worked out with
+        // the formula that spills into it, so on a sheet with a dynamic
+        // array reading any cell waits on a pass as reading a formula does.
+        let spilled = sheet
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .any(|cell| cell.spill == oxicells_core::ir::Spill::Dynamic);
+        if spilled {
+            return true;
+        }
         sheet
             .rows
             .iter()
@@ -4079,6 +4090,62 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         Ok(())
+    }
+
+    /// A formula written through `.Formula2` is a dynamic array: its block of
+    /// answers spills into the cells beside it.
+    fn mark_dynamic(&mut self, range: CellRange) {
+        let Some(sheet) = self.workbook.sheets.get_mut(range.sheet) else {
+            return;
+        };
+        for row in sheet.rows.iter_mut().filter(|row| (range.start_row..=range.end_row).contains(&row.index)) {
+            for cell in row.cells.iter_mut().filter(|cell| (range.start_column..=range.end_column).contains(&cell.col)) {
+                if cell.formula.is_some() && cell.array_block.is_none() {
+                    cell.spill = oxicells_core::ir::Spill::Dynamic;
+                }
+            }
+        }
+    }
+
+    /// The block a dynamic array in this cell spilled, when it spilled more
+    /// than itself.
+    fn spill_block(&self, sheet: usize, row: u32, column: u32) -> Option<CellRange> {
+        let spill_at = |row: u32, column: u32| self.cell_here(sheet, row, column).map(|cell| cell.spill);
+        if spill_at(row, column) != Some(oxicells_core::ir::Spill::Dynamic) {
+            return None;
+        }
+        let member = |row: u32, column: u32| spill_at(row, column) == Some(oxicells_core::ir::Spill::Member);
+        let mut end_column = column;
+        while end_column < MAX_WORKSHEET_COLUMN && member(row, end_column + 1) {
+            end_column += 1;
+        }
+        let mut end_row = row;
+        while end_row < MAX_WORKSHEET_ROW && member(end_row + 1, column) {
+            end_row += 1;
+        }
+        (end_row > row || end_column > column).then_some(CellRange {
+            sheet,
+            start_row: row,
+            start_column: column,
+            end_row,
+            end_column,
+        })
+    }
+
+    /// The spill a cell is part of, whether it holds the formula or a share.
+    fn spill_holding(&self, address: CellAddress) -> Option<CellRange> {
+        let sheet = self.workbook.sheets.get(address.sheet)?;
+        sheet
+            .rows
+            .iter()
+            .filter(|row| row.index <= address.row)
+            .flat_map(|row| row.cells.iter().map(move |cell| (row.index, cell)))
+            .filter(|(_, cell)| cell.spill == oxicells_core::ir::Spill::Dynamic && cell.col <= address.column)
+            .filter_map(|(row, cell)| self.spill_block(address.sheet, row, cell.col))
+            .find(|block| {
+                (block.start_row..=block.end_row).contains(&address.row)
+                    && (block.start_column..=block.end_column).contains(&address.column)
+            })
     }
 
     /// A formula written the legacy way -- `.Formula`, `.Value` -- is kept as
@@ -10553,6 +10620,11 @@ impl<'a> WorkbookHost<'a> {
         else {
             return Value::String(String::new());
         };
+        // A share of a spill holds no formula: measured, D2 of
+        // `=A1:A3*2` spilled from D1 answers "" for its formula.
+        if cell.spill == oxicells_core::ir::Spill::Member {
+            return Value::String(String::new());
+        }
         if let Some(formula) = cell.formula.as_deref() {
             // Inside a table, a formula naming one of that table's columns
             // reads without the name: measured, the totals row reads
@@ -11280,11 +11352,13 @@ impl<'a> WorkbookHost<'a> {
                 cell.value = value;
                 cell.formula = None;
                 cell.array_block = None;
+                cell.spill = Default::default();
                 cell.runs.clear();
             }
             None => {
                 row.cells.push(Cell {
                     array_block: None,
+                    spill: Default::default(),
                     col: address.column,
                     value,
                     style: starting,
@@ -11429,11 +11503,13 @@ impl<'a> WorkbookHost<'a> {
                 cell.value = CellValue::Empty;
                 cell.formula = formula;
                 cell.array_block = None;
+                cell.spill = Default::default();
                 cell.runs.clear();
             }
             None => {
                 row.cells.push(Cell {
                     array_block: None,
+                    spill: Default::default(),
                     col: address.column,
                     value: CellValue::Empty,
                     style: starting,
@@ -11892,6 +11968,7 @@ impl<'a> WorkbookHost<'a> {
             if !row.cells.iter().any(|cell| cell.col == address.column) {
                 row.cells.push(Cell {
                     array_block: None,
+                    spill: Default::default(),
                     col: address.column,
                     value: CellValue::Empty,
                     style: starting,
@@ -12282,6 +12359,7 @@ impl<'a> WorkbookHost<'a> {
                 }
                 if clear_contents {
                     cell.array_block = None;
+                    cell.spill = Default::default();
                 }
                 if clear_contents {
                     cell.value = CellValue::Empty;
@@ -13716,6 +13794,7 @@ impl<'a> WorkbookHost<'a> {
         if row.cells.iter().all(|cell| cell.col != address.column) {
             row.cells.push(Cell {
                 array_block: None,
+                spill: Default::default(),
                 col: address.column,
                 value: CellValue::Empty,
                 style: CellStyle::default(),
@@ -13807,6 +13886,7 @@ impl<'a> WorkbookHost<'a> {
             cell.value = CellValue::Empty;
             cell.formula = None;
             cell.array_block = None;
+            cell.spill = Default::default();
             return Ok(());
         };
         cell.value = held.value.clone();
@@ -14540,8 +14620,11 @@ impl<'a> WorkbookHost<'a> {
             .find(|row| row.index == address.row)
             .and_then(|row| row.cells.iter_mut().find(|held| held.col == address.column))
             .expect("set_cell_value creates the cell");
+        // A spilled value put down elsewhere is only a value there.
+        let spill = if cell.spill == oxicells_core::ir::Spill::Member { Default::default() } else { cell.spill };
         *landed = Cell {
             col: address.column,
+            spill,
             ..cell
         };
         Ok(())
@@ -14610,7 +14693,7 @@ impl<'a> WorkbookHost<'a> {
                     .find(|row| row.index == address.row)
                     .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
                     .cloned()
-                    .map(|cell| Cell { formula: None, array_block: None, ..cell })
+                    .map(|cell| Cell { formula: None, array_block: None, spill: Default::default(), ..cell })
             })
             .collect();
         let notes = addresses
@@ -17064,6 +17147,29 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("formula2r1c1") {
             return self.range_formula_as(range, FormulaStyle::R1C1, true).map(Some);
         }
+        // Measured: after `D1.Formula2 = "=A1:A3*2"`, D1 and D2 both have a
+        // spill, D1's SpillingToRange is $D$1:$D$3 and D3's SpillParent D1.
+        if name.eq_ignore_ascii_case("hasspill")
+            || name.eq_ignore_ascii_case("spillingtorange")
+            || name.eq_ignore_ascii_case("spillparent")
+        {
+            self.settle(range);
+            let block = self.spill_holding(range.first());
+            if name.eq_ignore_ascii_case("hasspill") {
+                return Ok(Some(Value::Boolean(block.is_some())));
+            }
+            let Some(block) = block else {
+                return Ok(Some(Value::Nothing));
+            };
+            if name.eq_ignore_ascii_case("spillparent") {
+                return Ok(Some(self.object(HostObject::Range(CellRange {
+                    end_row: block.start_row,
+                    end_column: block.start_column,
+                    ..block
+                }))));
+            }
+            return Ok(Some(self.object(HostObject::Range(block))));
+        }
         if name.eq_ignore_ascii_case("hasformula") {
             return self.range_has_formula(range).map(Some);
         }
@@ -18075,7 +18181,9 @@ impl Host for WorkbookHost<'_> {
             || name.eq_ignore_ascii_case("formulalocal")
         {
             self.set_range_input(range, value, "range formula assignment", FormulaStyle::A1)?;
-            if !name.eq_ignore_ascii_case("formula2") {
+            if name.eq_ignore_ascii_case("formula2") {
+                self.mark_dynamic(range);
+            } else {
                 self.imply_intersections(range);
             }
             self.spread_calculated_column(range)?;
@@ -18095,7 +18203,9 @@ impl Host for WorkbookHost<'_> {
                 "range formula assignment",
                 FormulaStyle::R1C1,
             )?;
-            if !name.eq_ignore_ascii_case("formula2r1c1") {
+            if name.eq_ignore_ascii_case("formula2r1c1") {
+                self.mark_dynamic(range);
+            } else {
                 self.imply_intersections(range);
             }
             self.spread_calculated_column(range)?;
@@ -25884,6 +25994,7 @@ mod tests {
             cells: vec![
                 Cell {
                     array_block: None,
+                    spill: Default::default(),
                     col: 0,
                     value: CellValue::Number(10.0),
                     style: CellStyle {
@@ -25895,6 +26006,7 @@ mod tests {
                 },
                 Cell {
                     array_block: None,
+                    spill: Default::default(),
                     col: 1,
                     value: CellValue::String("copied".to_string()),
                     style: CellStyle {
@@ -26938,6 +27050,7 @@ mod tests {
                 cells: (0..4)
                     .map(|column| Cell {
                         array_block: None,
+                        spill: Default::default(),
                         col: column,
                         value: CellValue::String(format!(
                             "{}{row}",
@@ -31479,6 +31592,7 @@ End Sub
             index: 1,
             cells: vec![Cell {
                 array_block: None,
+                spill: Default::default(),
                 col: 0,
                 value: CellValue::Empty,
                 style: CellStyle {
@@ -34263,6 +34377,43 @@ End Sub
                 "1.23E+08~1235~1234.568~1E-04~-123457~-1~0~1.23457E+12~1.234E-07~#####~######~1234~#######~"
                     .to_string()
             )
+        );
+    }
+
+    /// A formula written through `.Formula2` spills; a cell in the way makes
+    /// it #SPILL!; `D1#` is the whole spill. Every answer here is Excel's.
+    #[test]
+    fn a_dynamic_array_spills_into_the_cells_beside_it() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               Range(\"A1:A3\").Value = Application.Transpose(Array(1, 2, 3))
+               Range(\"D1\").Formula2 = \"=A1:A3*2\"
+               out = Range(\"D2\").Value & \"|\" & Range(\"D2\").Formula & \"|\" & Range(\"D2\").HasFormula & \"|\" & Range(\"D2\").HasSpill
+               out = out & \"|\" & Range(\"D1\").SpillingToRange.Address & \"|\" & Range(\"D3\").SpillParent.Address
+               Range(\"H2\").Value = \"x\"
+               Range(\"H1\").Formula2 = \"=A1:A3\"
+               out = out & \"|\" & CLng(Range(\"H1\").Value)
+               Range(\"H2\").ClearContents
+               out = out & \"|\" & Range(\"H2\").Value
+               Range(\"A2\").Value = 5
+               out = out & \"|\" & Range(\"D2\").Value
+               Range(\"P1\").Formula2 = \"=SUM(D1#)\"
+               out = out & \"|\" & Range(\"P1\").Value
+               Range(\"D1\").ClearContents
+               Ask = out & \"|\" & IsEmpty(Range(\"D2\").Value)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("4||False|True|$D$1:$D$3|$D$1|2045|2|10|18|True".to_string())
         );
     }
 
