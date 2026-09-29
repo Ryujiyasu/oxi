@@ -6256,6 +6256,13 @@ fn call_builtin(
             "cdbl" => Ok(Value::Double(
                 number(value).map_err(|message| coercion_error(value, message, line))?,
             )),
+            // Hex text of four digits or fewer is an Integer's bits:
+            // measured, CInt("&HFFFF") -1 and CInt("&H8000") -32768, while
+            // CInt("&H10000") overflows.
+            "cint" if matches!(value, Value::String(text) if radix_text(text.trim()).is_some_and(|v| v <= 0xFFFF)) => {
+                let Value::String(text) = value else { unreachable!() };
+                Ok(Value::Int16(radix_text(text.trim()).expect("just read") as u16 as i16))
+            }
             "cint" => Ok(Value::Int16(
                 convert_integer(value, -32_768, 32_767, line)? as i16,
             )),
@@ -10519,6 +10526,19 @@ fn any_number(value: &Value) -> Option<f64> {
     }
 }
 
+/// The value `&H...` or `&O...` text spells, digits only.
+fn radix_text(trimmed: &str) -> Option<u64> {
+    let (digits, radix) = if let Some(digits) = trimmed.strip_prefix("&H").or_else(|| trimmed.strip_prefix("&h")) {
+        (digits, 16)
+    } else {
+        (trimmed.strip_prefix("&O").or_else(|| trimmed.strip_prefix("&o"))?, 8)
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    u64::from_str_radix(digits, radix).ok()
+}
+
 /// A string VBA reads as a number, and what it reads it as.
 ///
 /// Wider than Rust's own parser. Asked of Excel, `IsNumeric` is True for
@@ -10530,21 +10550,21 @@ fn numeric_text(text: &str) -> Option<f64> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(digits) = trimmed
-        .strip_prefix("&H")
-        .or_else(|| trimmed.strip_prefix("&h"))
-    {
-        return i64::from_str_radix(digits.trim_end_matches(['&', '%']), 16)
-            .ok()
-            .map(|value| value as f64);
+    // Hex and octal text: up to 0xFFFF as it stands, then up to 0xFFFFFFFF
+    // as a signed Long, beyond that as it stands. Measured: "&HFFFF" + 0 is
+    // 65535, CDbl("&HFFFFFFFF") -1, CDbl("&H100000000") 4294967296; a type
+    // suffix is not allowed in text (CLng("&HFFFF&") is error 13).
+    if let Some(value) = radix_text(trimmed) {
+        return Some(if value <= 0xFFFF {
+            value as f64
+        } else if value <= 0xFFFF_FFFF {
+            value as u32 as i32 as f64
+        } else {
+            value as f64
+        });
     }
-    if let Some(digits) = trimmed
-        .strip_prefix("&O")
-        .or_else(|| trimmed.strip_prefix("&o"))
-    {
-        return i64::from_str_radix(digits.trim_end_matches(['&', '%']), 8)
-            .ok()
-            .map(|value| value as f64);
+    if trimmed.starts_with('&') {
+        return None;
     }
     // A number in brackets is negative, as money is written: measured,
     // `CDbl("(5)")` is -5.
@@ -10592,6 +10612,8 @@ fn truthy(value: &Value) -> Result<bool, String> {
         }
         Value::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
         Value::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        // Measured: CBool("&H0") is False.
+        Value::String(value) if radix_text(value.trim()).is_some() => Ok(radix_text(value.trim()) != Some(0)),
         Value::String(value) => value
             .parse::<f64>()
             .map(|number| number != 0.0)
@@ -10622,7 +10644,11 @@ fn to_decimal(value: &Value) -> Option<Result<crate::decimal::Dec, crate::decima
         Value::Currency(held) => Ok(Dec { negative: *held < 0, magnitude: held.unsigned_abs() as u128, scale: 4 }),
         Value::Single(held) => Dec::from_f64(*held as f64),
         Value::Double(held) | Value::Date(held) => Dec::from_f64(*held),
-        Value::String(text) => return Dec::parse(text).map(Ok),
+        // Measured: CDec("&HFFFF") is 65535.
+        Value::String(text) => match Dec::parse(text) {
+            Some(held) => Ok(held),
+            None => Dec::from_f64(numeric_text(text).filter(|_| text.trim().starts_with('&'))?),
+        },
         _ => return None,
     })
 }
