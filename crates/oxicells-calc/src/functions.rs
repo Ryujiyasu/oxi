@@ -372,6 +372,17 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
             return line;
         }
     }
+    // The functions that cut, join and reshape blocks.
+    if matches!(
+        name,
+        "SEQUENCE" | "TAKE" | "DROP" | "CHOOSEROWS" | "CHOOSECOLS" | "VSTACK" | "HSTACK"
+            | "TOCOL" | "TOROW" | "WRAPROWS" | "WRAPCOLS" | "EXPAND" | "TEXTSPLIT"
+    ) {
+        return match reshaped(name, args) {
+            Ok(block) => Arg::Range(block),
+            Err(why) => Arg::Value(Value::Error(why)),
+        };
+    }
     // FREQUENCY counts into the bins and one more, down a column.
     if name == "FREQUENCY" {
         return match frequency(args) {
@@ -4091,6 +4102,306 @@ fn index_at(table: &RangeData, row: usize, col: usize) -> Result<Value, ExcelErr
     Ok(table.at(col - 1, row - 1))
 }
 
+/// A block built from rows.
+fn block_from_rows(rows: Vec<Vec<Value>>) -> Result<RangeData, ExcelError> {
+    let height = rows.len();
+    let width = rows.first().map_or(0, Vec::len);
+    if height == 0 || width == 0 {
+        return Err(ExcelError::Value);
+    }
+    Ok(RangeData { width, height, cells: rows.into_iter().flatten().collect() })
+}
+
+fn rows_of(block: &RangeData) -> Vec<Vec<Value>> {
+    (0..block.height)
+        .map(|row| (0..block.width).map(|col| block.at(col, row)).collect())
+        .collect()
+}
+
+/// An optional whole-number argument, None when omitted or blank.
+fn optional_count(args: &[Arg], at: usize) -> Result<Option<i64>, ExcelError> {
+    match args.get(at) {
+        None => Ok(None),
+        Some(arg) => match arg.scalar() {
+            Value::Blank => Ok(None),
+            other => Ok(Some(other.to_number()?.trunc() as i64)),
+        },
+    }
+}
+
+fn optional_pad(args: &[Arg], at: usize) -> Value {
+    match args.get(at).map(Arg::scalar) {
+        None | Some(Value::Blank) => Value::Error(ExcelError::NA),
+        Some(value) => value,
+    }
+}
+
+/// The first or last `n` of `len` indexes; None for all.
+fn kept(len: usize, n: Option<i64>, take: bool) -> Result<Vec<usize>, ExcelError> {
+    let Some(n) = n else {
+        return Ok((0..len).collect());
+    };
+    let count = (n.unsigned_abs() as usize).min(len);
+    let indexes: Vec<usize> = match (take, n >= 0) {
+        (true, true) => (0..count).collect(),
+        (true, false) => (len - count..len).collect(),
+        (false, true) => (count..len).collect(),
+        (false, false) => (0..len - count).collect(),
+    };
+    if n == 0 && take || indexes.is_empty() {
+        return Err(ExcelError::Value);
+    }
+    Ok(indexes)
+}
+
+/// Picks by 1-based index, negative counting from the end.
+fn picked(len: usize, wanted: &[Arg]) -> Result<Vec<usize>, ExcelError> {
+    let mut out = Vec::new();
+    for arg in wanted {
+        for value in arg.flatten() {
+            let at = value.to_number()?.trunc() as i64;
+            let index = if at > 0 { at - 1 } else { len as i64 + at };
+            if at == 0 || index < 0 || index >= len as i64 {
+                return Err(ExcelError::Value);
+            }
+            out.push(index as usize);
+        }
+    }
+    if out.is_empty() {
+        return Err(ExcelError::Value);
+    }
+    Ok(out)
+}
+
+/// SEQUENCE, TAKE, DROP, CHOOSEROWS, CHOOSECOLS, VSTACK, HSTACK, TOCOL, TOROW,
+/// WRAPROWS, WRAPCOLS, EXPAND and TEXTSPLIT. Measured against Excel: a short
+/// block in a stack or a wrap is padded with #N/A.
+fn reshaped(name: &str, args: &[Arg]) -> Result<RangeData, ExcelError> {
+    match name {
+        "SEQUENCE" => {
+            expect(args, 1)?;
+            let rows = num(&args[0])?.trunc();
+            let cols = optional_count(args, 1)?.unwrap_or(1) as f64;
+            let start = match args.get(2).map(Arg::scalar) {
+                None | Some(Value::Blank) => 1.0,
+                Some(v) => v.to_number()?,
+            };
+            let step = match args.get(3).map(Arg::scalar) {
+                None | Some(Value::Blank) => 1.0,
+                Some(v) => v.to_number()?,
+            };
+            if rows < 1.0 || cols < 1.0 || rows * cols > 1_048_576.0 {
+                return Err(ExcelError::Value);
+            }
+            let (rows, cols) = (rows as usize, cols as usize);
+            Ok(RangeData {
+                width: cols,
+                height: rows,
+                cells: (0..rows * cols).map(|at| Value::Number(start + step * at as f64)).collect(),
+            })
+        }
+        "TAKE" | "DROP" => {
+            expect(args, 2)?;
+            let block = args[0].as_range();
+            let take = name == "TAKE";
+            let rows = kept(block.height, optional_count(args, 1)?, take)?;
+            let cols = kept(block.width, optional_count(args, 2)?, take)?;
+            block_from_rows(
+                rows.iter()
+                    .map(|row| cols.iter().map(|col| block.at(*col, *row)).collect())
+                    .collect(),
+            )
+        }
+        "CHOOSEROWS" | "CHOOSECOLS" => {
+            expect(args, 2)?;
+            let block = args[0].as_range();
+            if name == "CHOOSEROWS" {
+                let rows = picked(block.height, &args[1..])?;
+                block_from_rows(
+                    rows.iter()
+                        .map(|row| (0..block.width).map(|col| block.at(col, *row)).collect())
+                        .collect(),
+                )
+            } else {
+                let cols = picked(block.width, &args[1..])?;
+                block_from_rows(
+                    (0..block.height)
+                        .map(|row| cols.iter().map(|col| block.at(*col, row)).collect())
+                        .collect(),
+                )
+            }
+        }
+        "VSTACK" | "HSTACK" => {
+            expect(args, 1)?;
+            let blocks: Vec<RangeData> = args.iter().map(Arg::as_range).collect();
+            let na = Value::Error(ExcelError::NA);
+            if name == "VSTACK" {
+                let width = blocks.iter().map(|b| b.width).max().unwrap_or(0);
+                let mut rows = Vec::new();
+                for block in &blocks {
+                    for row in rows_of(block) {
+                        let mut row = row;
+                        row.resize(width, na.clone());
+                        rows.push(row);
+                    }
+                }
+                block_from_rows(rows)
+            } else {
+                let height = blocks.iter().map(|b| b.height).max().unwrap_or(0);
+                let rows = (0..height)
+                    .map(|row| {
+                        blocks
+                            .iter()
+                            .flat_map(|block| {
+                                (0..block.width).map(move |col| {
+                                    if row < block.height { block.at(col, row) } else { Value::Error(ExcelError::NA) }
+                                })
+                            })
+                            .collect()
+                    })
+                    .collect();
+                block_from_rows(rows)
+            }
+        }
+        "TOCOL" | "TOROW" => {
+            expect(args, 1)?;
+            let block = args[0].as_range();
+            let ignore = optional_count(args, 1)?.unwrap_or(0);
+            let by_column = match args.get(2).map(Arg::scalar) {
+                None | Some(Value::Blank) => false,
+                Some(v) => v.to_logical()?,
+            };
+            let mut values = Vec::new();
+            let (outer, inner) = if by_column { (block.width, block.height) } else { (block.height, block.width) };
+            for a in 0..outer {
+                for b in 0..inner {
+                    let value = if by_column { block.at(a, b) } else { block.at(b, a) };
+                    let skip = match value {
+                        Value::Blank => ignore == 1 || ignore == 3,
+                        Value::Error(_) => ignore == 2 || ignore == 3,
+                        _ => false,
+                    };
+                    if !skip {
+                        values.push(value);
+                    }
+                }
+            }
+            if values.is_empty() {
+                return Err(ExcelError::Value);
+            }
+            let n = values.len();
+            Ok(if name == "TOCOL" {
+                RangeData { width: 1, height: n, cells: values }
+            } else {
+                RangeData { width: n, height: 1, cells: values }
+            })
+        }
+        "WRAPROWS" | "WRAPCOLS" => {
+            expect(args, 2)?;
+            let values = args[0].flatten();
+            let size = num(&args[1])?.trunc();
+            if size < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            let size = size as usize;
+            let pad = optional_pad(args, 2);
+            let lines = values.len().div_ceil(size);
+            let line = |at: usize| -> Vec<Value> {
+                (0..size).map(|k| values.get(at * size + k).cloned().unwrap_or_else(|| pad.clone())).collect()
+            };
+            if name == "WRAPROWS" {
+                block_from_rows((0..lines).map(line).collect())
+            } else {
+                let columns: Vec<Vec<Value>> = (0..lines).map(line).collect();
+                block_from_rows((0..size).map(|row| columns.iter().map(|c| c[row].clone()).collect()).collect())
+            }
+        }
+        "EXPAND" => {
+            expect(args, 2)?;
+            let block = args[0].as_range();
+            let rows = optional_count(args, 1)?.unwrap_or(block.height as i64);
+            let cols = optional_count(args, 2)?.unwrap_or(block.width as i64);
+            if rows < block.height as i64 || cols < block.width as i64 {
+                return Err(ExcelError::Value);
+            }
+            let pad = optional_pad(args, 3);
+            block_from_rows(
+                (0..rows as usize)
+                    .map(|row| {
+                        (0..cols as usize)
+                            .map(|col| {
+                                if row < block.height && col < block.width { block.at(col, row) } else { pad.clone() }
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            )
+        }
+        "TEXTSPLIT" => {
+            expect(args, 2)?;
+            let whole = text(&args[0])?;
+            let marks = |at: usize| -> Result<Vec<String>, ExcelError> {
+                match args.get(at) {
+                    None => Ok(Vec::new()),
+                    Some(arg) => arg
+                        .flatten()
+                        .into_iter()
+                        .filter(|v| !v.is_blank())
+                        .map(|v| v.to_text())
+                        .collect(),
+                }
+            };
+            let (columns, rows) = (marks(1)?, marks(2)?);
+            let ignore_empty = match args.get(3).map(Arg::scalar) {
+                None | Some(Value::Blank) => false,
+                Some(v) => v.to_logical()?,
+            };
+            let pad = optional_pad(args, 5);
+            let split = |text: &str, by: &[String]| -> Vec<String> {
+                if by.iter().all(String::is_empty) {
+                    return vec![text.to_string()];
+                }
+                let mut pieces = Vec::new();
+                let mut rest = text;
+                loop {
+                    let next = by
+                        .iter()
+                        .filter(|d| !d.is_empty())
+                        .filter_map(|d| rest.find(d.as_str()).map(|at| (at, d.len())))
+                        .min();
+                    match next {
+                        Some((at, len)) => {
+                            pieces.push(rest[..at].to_string());
+                            rest = &rest[at + len..];
+                        }
+                        None => {
+                            pieces.push(rest.to_string());
+                            break;
+                        }
+                    }
+                }
+                if ignore_empty {
+                    pieces.retain(|p| !p.is_empty());
+                }
+                pieces
+            };
+            let lines: Vec<Vec<String>> = split(&whole, &rows).iter().map(|line| split(line, &columns)).collect();
+            let width = lines.iter().map(Vec::len).max().unwrap_or(0);
+            block_from_rows(
+                lines
+                    .into_iter()
+                    .map(|line| {
+                        let mut row: Vec<Value> = line.into_iter().map(Value::Text).collect();
+                        row.resize(width, pad.clone());
+                        row
+                    })
+                    .collect(),
+            )
+        }
+        _ => Err(ExcelError::Name),
+    }
+}
+
 /// A finite answer, or #NUM! for one that ran off to infinity.
 fn fin(n: f64) -> Result<Value, ExcelError> {
     if n.is_finite() {
@@ -5211,6 +5522,35 @@ mod tests {
         close(call("SKEW", &[a.clone()]), -0.172562731898406);
         close(call("KURT", &[a.clone()]), -1.34119207860588);
         close(call("HARMEAN", &[a]), 3.03006012024048);
+        // The reshaping functions, every answer Excel's (A1:C4 = 1..12).
+        let grid = Arg::Range(RangeData {
+            width: 3,
+            height: 4,
+            cells: (1..=12).map(|n| Value::Number(n as f64)).collect(),
+        });
+        let flat = |arg: Arg| -> (usize, usize, Vec<Value>) {
+            let Arg::Range(block) = arg else { panic!("{arg:?}") };
+            (block.height, block.width, block.cells)
+        };
+        let nums = |xs: &[f64]| xs.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+        assert_eq!(flat(call_arg("SEQUENCE", &[v(2.0), v(2.0), v(10.0), v(5.0)])), (2, 2, nums(&[10.0, 15.0, 20.0, 25.0])));
+        assert_eq!(flat(call_arg("TAKE", &[grid.clone(), v(2.0), v(-2.0)])), (2, 2, nums(&[2.0, 3.0, 5.0, 6.0])));
+        assert_eq!(flat(call_arg("DROP", &[grid.clone(), v(-2.0), v(1.0)])), (2, 2, nums(&[2.0, 3.0, 5.0, 6.0])));
+        assert_eq!(flat(call_arg("CHOOSECOLS", &[grid.clone(), v(3.0), v(1.0)])).2[..2], nums(&[3.0, 1.0])[..]);
+        assert_eq!(flat(call_arg("TOCOL", &[grid.clone(), v(0.0), l(true)])).2[..3], nums(&[1.0, 4.0, 7.0])[..]);
+        let wrapped = flat(call_arg("WRAPCOLS", &[
+            Arg::Range(RangeData { width: 1, height: 6, cells: nums(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) }),
+            v(4.0),
+            Arg::Value(Value::text("-")),
+        ]));
+        assert_eq!((wrapped.0, wrapped.1), (4, 2));
+        assert_eq!(wrapped.2[5], Value::text("-"));
+        let split = flat(call_arg("TEXTSPLIT", &[
+            Arg::Value(Value::text("a,b;c")),
+            Arg::Value(Value::text(",")),
+            Arg::Value(Value::text(";")),
+        ]));
+        assert_eq!(split, (2, 2, vec![Value::text("a"), Value::text("b"), Value::text("c"), Value::Error(ExcelError::NA)]));
         // Shift_JIS byte functions and the weekend patterns, every answer Excel's.
         let tokyo = || Arg::Value(Value::text("東京abc"));
         assert_eq!(call("LENB", &[tokyo()]), Value::Number(7.0));
