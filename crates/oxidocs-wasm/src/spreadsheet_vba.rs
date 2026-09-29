@@ -1785,6 +1785,9 @@ struct WorkbookHost<'a> {
     /// Excel, `Range("A1").Locked` is True on a fresh sheet -- so it is the
     /// exceptions that are kept.
     unlocked: std::collections::HashSet<CellAddress>,
+    /// The cells whose formulas a macro has HIDDEN. None is to begin with:
+    /// measured, `Range("B2").FormulaHidden` is False on a fresh sheet.
+    hidden_formulas: std::collections::HashSet<CellAddress>,
     /// The notes on every sheet, in the order they were added.
     notes: Vec<Note>,
     /// The hyperlinks on every sheet, in the order they were added.
@@ -1939,6 +1942,7 @@ impl<'a> WorkbookHost<'a> {
             screen_updating: true,
             protected: Vec::new(),
             unlocked: std::collections::HashSet::new(),
+            hidden_formulas: std::collections::HashSet::new(),
             notes,
             links: Vec::new(),
             validations: std::collections::HashMap::new(),
@@ -8054,6 +8058,10 @@ impl<'a> WorkbookHost<'a> {
             .into_iter()
             .filter_map(address)
             .collect();
+        self.hidden_formulas = std::mem::take(&mut self.hidden_formulas)
+            .into_iter()
+            .filter_map(address)
+            .collect();
         self.notes = std::mem::take(&mut self.notes)
             .into_iter()
             .filter_map(|mut note| {
@@ -12850,6 +12858,7 @@ impl<'a> WorkbookHost<'a> {
             })
         };
         self.unlocked = self.unlocked.iter().filter_map(|held| relocate(*held)).collect();
+        self.hidden_formulas = self.hidden_formulas.iter().filter_map(|held| relocate(*held)).collect();
         self.styled = std::mem::take(&mut self.styled)
             .into_iter()
             .filter_map(|(held, style)| Some((relocate(held)?, style)))
@@ -16652,6 +16661,10 @@ impl Host for WorkbookHost<'_> {
             return self.name_member(&held, name, &[]).map(Some);
         }
         if let Some((range, selection)) = self.range_borders(receiver) {
+            // Measured: `Range("B2").Borders.Count` is 6.
+            if name.eq_ignore_ascii_case("count") && matches!(selection, BorderSelection::All) {
+                return Ok(Some(Value::Integer(6)));
+            }
             if name.eq_ignore_ascii_case("linestyle") || name.eq_ignore_ascii_case("weight") {
                 let line = name.eq_ignore_ascii_case("linestyle");
                 return self.uniform_border(range, selection).map(|value| {
@@ -17521,6 +17534,19 @@ impl Host for WorkbookHost<'_> {
                 }
             }
             return Ok(Some(seen.map(Value::Boolean).unwrap_or(Value::Boolean(true))));
+        }
+        // Read the way Locked is, cells that disagree answering Null.
+        if name.eq_ignore_ascii_case("formulahidden") {
+            let mut seen: Option<bool> = None;
+            for address in range.addresses() {
+                let hidden = self.hidden_formulas.contains(&address);
+                match seen {
+                    None => seen = Some(hidden),
+                    Some(held) if held == hidden => {}
+                    Some(_) => return Ok(Some(Value::Null)),
+                }
+            }
+            return Ok(Some(Value::Boolean(seen.unwrap_or(false))));
         }
         if name.eq_ignore_ascii_case("wraptext") {
             // A range whose cells disagree answers Null, as Bold and
@@ -18428,6 +18454,20 @@ impl Host for WorkbookHost<'_> {
                 _ => return Err(host_error(450, "Range.Style is given a style or its name")),
             };
             self.apply_style(range, index)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("formulahidden") {
+            let Some(hidden) = style_face_boolean(&value, "Range.FormulaHidden")? else {
+                return Ok(true);
+            };
+            self.guard_formats(range.sheet, "changing FormulaHidden")?;
+            for address in self.touched(range) {
+                if hidden {
+                    self.hidden_formulas.insert(address);
+                } else {
+                    self.hidden_formulas.remove(&address);
+                }
+            }
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("locked") {
