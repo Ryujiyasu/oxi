@@ -23482,6 +23482,12 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
             let serial = excel_serial(year, month, day as u32)?;
             Some((serial, "d-mmm-yy"))
         }
+        // `5 Jan` reads as `5-Jan` does: measured, the 5th of January of this
+        // year, shown d-mmm.
+        [day, month] if digits_only(day).is_some() && month_named(month).is_some() => {
+            let serial = excel_serial(this_year, month_named(month)?, digits_only(day)? as u32)?;
+            Some((serial, "d-mmm"))
+        }
         [month, number] => {
             let month = month_named(month)?;
             let number = digits_only(number)?;
@@ -23510,6 +23516,21 @@ fn written_moment(written: &str, this_year: i64) -> Option<(CellValue, Option<&'
     }
     if let Some((fraction, shown)) = written_time(trimmed) {
         return Some((CellValue::Number(fraction), Some(shown)));
+    }
+    // One part running over its sixty is still read, as that many minutes or
+    // seconds, and the cell stays General: measured, `10:61` is 11:01,
+    // `10:100` 11:40 and `10:30:61` 10:31:01 -- while `10:60:60`, `24:60`
+    // and `1:61 PM` stay text.
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if (2..=3).contains(&parts.len())
+        && parts.iter().all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        let read: Vec<u64> = parts.iter().filter_map(|part| part.parse().ok()).collect();
+        let over = read[1..].iter().filter(|part| **part >= 60).count();
+        if read.len() == parts.len() && read[0] < 24 && over == 1 {
+            let seconds = read[0] * 3600 + read[1] * 60 + read.get(2).copied().unwrap_or(0);
+            return Some((CellValue::Number(seconds as f64 / 86_400.0), None));
+        }
     }
     if let Some((serial, shown)) = written_calendar_date(trimmed, this_year) {
         return Some((CellValue::Number(serial), Some(shown)));
@@ -23621,10 +23642,12 @@ fn typed_from_written(written: &str, this_year: i64) -> (CellValue, Option<&'sta
         return read;
     }
     let trimmed = written.trim();
-    if trimmed.eq_ignore_ascii_case("true") {
+    // A logical is its word and nothing more: measured, "TRUE " with a space
+    // after it stays text.
+    if written.eq_ignore_ascii_case("true") {
         return (CellValue::Boolean(true), None);
     }
-    if trimmed.eq_ignore_ascii_case("false") {
+    if written.eq_ignore_ascii_case("false") {
         return (CellValue::Boolean(false), None);
     }
     // A number in brackets is a negative one, the way an accountant writes it.
@@ -23742,7 +23765,9 @@ fn written_exponent(written: &str) -> Option<(CellValue, Option<&'static str>)> 
     if digits.is_empty() || !digits.chars().all(|one| one.is_ascii_digit()) {
         return None;
     }
-    let number = trimmed.parse::<f64>().ok()?;
+    // A power past what a double holds is no number: measured, "1e400"
+    // stays text.
+    let number = trimmed.parse::<f64>().ok().filter(|number| number.is_finite())?;
     Some((CellValue::Number(number), Some("0.00E+00")))
 }
 
