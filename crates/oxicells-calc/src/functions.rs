@@ -1461,8 +1461,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 Some(a) => text(a)?,
                 None => ".".to_string(),
             };
+            // With no group mark given, the default one gives way to a decimal
+            // mark that is the same: measured, NUMBERVALUE("1,2",",") is 1.2.
             let group = match args.get(2) {
                 Some(a) => text(a)?,
+                None if decimal.starts_with(',') => String::new(),
                 None => ",".to_string(),
             };
             let decimal = decimal.chars().next().unwrap_or('.');
@@ -1595,8 +1598,16 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             } else {
                 (needle, haystack)
             };
+            // A start before the first character is #VALUE!: measured,
+            // FIND("a","abc",0).
             let start = match args.get(2) {
-                Some(a) => num(a)?.max(1.0) as usize - 1,
+                Some(a) => {
+                    let asked = num(a)?.trunc();
+                    if asked < 1.0 {
+                        return Err(ExcelError::Value);
+                    }
+                    asked as usize - 1
+                }
                 None => 0,
             };
             let units = utf16(&haystack);
