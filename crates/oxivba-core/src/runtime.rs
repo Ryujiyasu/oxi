@@ -3876,6 +3876,13 @@ pub fn host_error(number: i64, message: impl Into<String>) -> String {
 
 const HOST_ERROR_MARK: &str = "vba-error:";
 
+/// A host's refusal with Excel's own words for it, where Excel has some of
+/// its own rather than VBA's for the number: 1004 is `Application-defined or
+/// object-defined error` only when Excel says nothing more.
+pub fn host_error_described(number: i64, description: impl Into<String>) -> String {
+    format!("{HOST_ERROR_MARK}{number}={}", description.into())
+}
+
 /// A host's refusal as a runtime error: 1004 unless the host said otherwise.
 ///
 /// A numbered refusal carries VBA's own description for that number, which
@@ -3883,6 +3890,17 @@ const HOST_ERROR_MARK: &str = "vba-error:";
 /// argument` for 5 -- rather than the host's account of why.
 fn host_failure(message: String, line: u32) -> RuntimeError {
     if let Some(rest) = message.strip_prefix(HOST_ERROR_MARK) {
+        if let Some((number, description)) = rest.split_once('=') {
+            if let Ok(number) = number.parse::<i64>() {
+                return RuntimeError {
+                    kind: RuntimeErrorKind::Host,
+                    message: description.to_string(),
+                    line: Some(line),
+                    vba_number: Some(number),
+                    vba_source: None,
+                };
+            }
+        }
         if let Some((number, _)) = rest.split_once(':') {
             if let Ok(number) = number.parse::<i64>() {
                 return RuntimeError {

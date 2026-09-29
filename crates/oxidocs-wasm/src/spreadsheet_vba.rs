@@ -14,7 +14,7 @@ use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
 use oxivba_core::{
-    host_error, parse_module, vba_date_text, vba_number_text, ArrayDimension, ArrayValue, Host,
+    host_error, host_error_described, parse_module, vba_date_text, vba_number_text, ArrayDimension, ArrayValue, Host,
     ModuleItem, ObjectRef, Runtime, Value,
 };
 use serde::{Deserialize, Serialize};
@@ -2811,6 +2811,9 @@ impl<'a> WorkbookHost<'a> {
                 written.push(self.range_address_from_args(*block, args)?);
             }
             return Ok(Some(Value::String(written.join(","))));
+        }
+        if name.eq_ignore_ascii_case("copy") {
+            return self.copy_blocks(&areas, args).map(Some);
         }
         if name.eq_ignore_ascii_case("count") {
             let mut total = 0u64;
@@ -13291,6 +13294,9 @@ impl<'a> WorkbookHost<'a> {
 
     fn fill_clipboard(&mut self, source: CellRange) -> Result<(), String> {
         Self::range_cell_count(source)?;
+        // What is set aside is what the cells show now: a formula written a
+        // moment ago is worked out first, as a paste of values reads it.
+        self.settle(source);
         let cells = source
             .addresses()
             .map(|address| {
@@ -14355,6 +14361,114 @@ impl<'a> WorkbookHost<'a> {
             ..cell
         };
         Ok(())
+    }
+
+    /// Copies a many-block range, as the rows a filter left showing are.
+    /// Measured: the blocks must span the same columns (they stack, top
+    /// block first whatever order they were named in) or the same rows (they
+    /// sit side by side), and must not overlap -- anything else is 1004. They
+    /// land packed together, formulas as the values they held, formatting
+    /// along with them.
+    fn copy_blocks(&mut self, areas: &[CellRange], args: &[Value]) -> Result<Value, String> {
+        let refused = || host_error_described(1004, "This action won't work on multiple selections.");
+        let mut sorted = areas.to_vec();
+        let stacked = sorted
+            .iter()
+            .all(|block| block.start_column == sorted[0].start_column && block.end_column == sorted[0].end_column);
+        let beside = sorted
+            .iter()
+            .all(|block| block.start_row == sorted[0].start_row && block.end_row == sorted[0].end_row);
+        if stacked {
+            sorted.sort_by_key(|block| block.start_row);
+            if sorted.windows(2).any(|pair| pair[0].end_row >= pair[1].start_row) {
+                return Err(refused());
+            }
+        } else if beside {
+            sorted.sort_by_key(|block| block.start_column);
+            if sorted.windows(2).any(|pair| pair[0].end_column >= pair[1].start_column) {
+                return Err(refused());
+            }
+        } else {
+            return Err(refused());
+        }
+        for block in &sorted {
+            self.settle(*block);
+        }
+        let mut addresses = Vec::new();
+        let (rows, columns);
+        if stacked {
+            for block in &sorted {
+                Self::range_cell_count(*block)?;
+                addresses.extend(block.addresses());
+            }
+            rows = sorted.iter().map(|block| block.end_row - block.start_row + 1).sum::<u32>();
+            columns = sorted[0].end_column - sorted[0].start_column + 1;
+        } else {
+            for block in &sorted {
+                Self::range_cell_count(*block)?;
+            }
+            rows = sorted[0].end_row - sorted[0].start_row + 1;
+            columns = sorted.iter().map(|block| block.end_column - block.start_column + 1).sum::<u32>();
+            for row in sorted[0].start_row..=sorted[0].end_row {
+                for block in &sorted {
+                    for column in block.start_column..=block.end_column {
+                        addresses.push(CellAddress { sheet: block.sheet, row, column });
+                    }
+                }
+            }
+        }
+        let cells = addresses
+            .iter()
+            .map(|address| {
+                self.workbook.sheets[address.sheet]
+                    .rows
+                    .iter()
+                    .find(|row| row.index == address.row)
+                    .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                    .cloned()
+                    .map(|cell| Cell { formula: None, array_block: None, ..cell })
+            })
+            .collect();
+        let notes = addresses
+            .iter()
+            .map(|address| self.note_at(*address).map(|index| self.notes[index].clone()))
+            .collect();
+        let unlocked = addresses.iter().map(|address| self.unlocked.contains(address)).collect();
+        let packed = Clipboard {
+            cells,
+            notes,
+            unlocked,
+            rows,
+            columns,
+            origin: CellAddress {
+                sheet: sorted[0].sheet,
+                row: sorted[0].start_row,
+                column: sorted[0].start_column,
+            },
+        };
+        match args {
+            [] | [Value::Missing] => {
+                self.clipboard = Some(packed);
+                Ok(Value::Boolean(true))
+            }
+            [Value::Object(destination)] => {
+                let destination = self
+                    .range(destination)
+                    .ok_or_else(|| "Range.Copy destination must be a Range".to_string())?;
+                let corner = CellRange {
+                    end_row: destination.start_row,
+                    end_column: destination.start_column,
+                    ..destination
+                };
+                // A copy straight onto cells leaves whatever was set aside
+                // before where it was.
+                let held = self.clipboard.replace(packed);
+                let pasted = self.paste_special(corner, &[]);
+                self.clipboard = held;
+                pasted.map(|_| Value::Boolean(true))
+            }
+            _ => Err("Range.Copy expects one destination Range".to_string()),
+        }
     }
 
     fn copy_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
@@ -20730,6 +20844,9 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpasteallexceptborders" => 7,
         "xlpastecolumnwidths" => 8,
         "xlpastevaluesandnumberformats" => 12,
+        "xlpasteformulasandnumberformats" => 11,
+        "xlpasteallusingsourcetheme" => 13,
+        "xlpastevalidation" => 6,
         "xlpastecomments" => -4144,
         // Page setup.
         "xlportrait" => 1,
@@ -20948,6 +21065,10 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastespecialoperationsubtract" => 3,
         "xlpastespecialoperationmultiply" => 4,
         "xlpastespecialoperationdivide" => 5,
+        "xladd" => 2,
+        "xlsubtract" => 3,
+        "xlmultiply" => 4,
+        "xldivide" => 5,
         "xlsheetvisible" => -1,
         "xlsheethidden" => 0,
         "xlsheetveryhidden" => 2,
@@ -21425,7 +21546,7 @@ impl PasteWhat {
             comments: false,
         };
         Ok(match kind {
-            -4104 => Self {
+            -4104 | 13 => Self {
                 values: true,
                 formulas: true,
                 styles: true,
@@ -21459,6 +21580,17 @@ impl PasteWhat {
             },
             12 => Self {
                 values: true,
+                number_format: true,
+                ..nothing
+            },
+            -4123 => Self {
+                values: true,
+                formulas: true,
+                ..nothing
+            },
+            11 => Self {
+                values: true,
+                formulas: true,
                 number_format: true,
                 ..nothing
             },
@@ -28308,8 +28440,9 @@ mod tests {
             "Range(\"A1:A2\").Copy\n  Range(\"C1\").PasteSpecial xlPasteValues",
         );
         assert_eq!(looked_at(&workbook, 1, 2), "v=10 f= bold=false");
-        // The formula does not come; what the cell was holding does.
-        assert_eq!(looked_at(&workbook, 2, 2), "v= f= bold=false");
+        // The formula does not come; what it works out to does -- measured,
+        // pasting `=A1*2` subtracted onto 5 gives -15.
+        assert_eq!(looked_at(&workbook, 2, 2), "v=20 f= bold=false");
     }
 
     #[test]
@@ -28331,7 +28464,7 @@ mod tests {
             "Range(\"A1:A2\").Copy\n  Range(\"E1\").PasteSpecial xlPasteValues, , , True",
         );
         assert_eq!(looked_at(&workbook, 1, 4), "v=10 f= bold=false");
-        assert_eq!(looked_at(&workbook, 1, 5), "v= f= bold=false");
+        assert_eq!(looked_at(&workbook, 1, 5), "v=20 f= bold=false");
     }
 
     #[test]
@@ -33936,6 +34069,45 @@ End Sub
             Value::String(
                 "1.23E+08~1235~1234.568~1E-04~-123457~-1~0~1.23457E+12~1.234E-07~#####~######~1234~#######~"
                     .to_string()
+            )
+        );
+    }
+
+    /// A many-block range copies packed together, formulas as their values;
+    /// blocks that neither share columns nor rows are refused. Every answer
+    /// here is Excel's.
+    #[test]
+    fn many_blocks_copy_packed_together() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim r As Long, c As Long, out As String
+               For r = 1 To 6
+                 For c = 1 To 4
+                   Cells(r, c).Value = Chr(64 + c) & r
+                 Next c
+               Next r
+               Range(\"B2\").Formula = \"=A1&\"\"!\"\"\"
+               Range(\"A4:B4,A2:B2\").Copy Range(\"H10\")
+               Range(\"A1:A2,C1:C2\").Copy Range(\"F10\")
+               On Error Resume Next
+               Range(\"A1:A2,C3:C4\").Copy Range(\"F20\")
+               out = Err.Number & \":\" & Err.Description
+               Range(\"A1:B2,A2:B3\").Copy Range(\"F30\")
+               out = out & \"|\" & Err.Number
+               Ask = out & \"|\" & Range(\"H10\").Value & Range(\"I10\").Value & Range(\"I10\").HasFormula & Range(\"H11\").Value & \"|\" & Range(\"G10\").Value & Range(\"F11\").Value & \"|\" & IsEmpty(Range(\"F20\").Value)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "1004:This action won't work on multiple selections.|1004|A2A1!FalseA4|C1A2|True".to_string()
             )
         );
     }
