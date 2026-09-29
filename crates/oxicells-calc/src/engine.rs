@@ -2347,6 +2347,7 @@ impl Workbook {
             }
             Expr::Function { name, args } if name == "INDEX" => self.index_range(args, sheet, depth, at),
             Expr::Function { name, args } if name == "TRIMRANGE" => self.trimmed_range(args, sheet, depth, at),
+            Expr::Function { name, args } if matches!(name.as_str(), "TAKE" | "DROP") => self.taken_range(name, args, sheet, depth, at),
             Expr::Function { name, args } if name == "_ISECT" && args.len() == 2 => {
                 let (left_sheet, left) = self.reference_of(&args[0], sheet, depth, at)?;
                 let (right_sheet, right) = self.reference_of(&args[1], sheet, depth, at)?;
@@ -2370,6 +2371,44 @@ impl Workbook {
             }
             _ => None,
         }
+    }
+
+    /// TAKE and DROP of a reference are a reference, the rows and columns
+    /// kept of it: measured, INDEX(TAKE(B1:B6,-2),1) is B5's value alone,
+    /// where one index into an array of several rows gives a row.
+    fn taken_range(&self, name: &str, args: &[Expr], sheet: &str, depth: u32, at: At) -> Option<(String, RangeRef)> {
+        let (target, range) = self.reference_of(args.first()?, sheet, depth + 1, at)?;
+        let count = |i: usize| -> Option<Option<i64>> {
+            match args.get(i) {
+                None => Some(None),
+                Some(expr) => match self.eval_arg(expr, sheet, depth + 1, at).scalar() {
+                    Value::Blank => Some(None),
+                    value => value.to_number().ok().map(|n| Some(n.trunc() as i64)),
+                },
+            }
+        };
+        let (rows, columns) = (count(1)?, count(2)?);
+        let cut = |start: u32, end: u32, asked: Option<i64>| -> Option<(u32, u32)> {
+            let length = i64::from(end - start + 1);
+            let Some(asked) = asked else { return Some((start, end)) };
+            let (keep_from, keep_to) = if name == "TAKE" {
+                let n = asked.abs().min(length);
+                if n == 0 {
+                    return None;
+                }
+                if asked > 0 { (0, n - 1) } else { (length - n, length - 1) }
+            } else {
+                let n = asked.abs();
+                if n >= length {
+                    return None;
+                }
+                if asked > 0 { (n, length - 1) } else { (0, length - 1 - n) }
+            };
+            Some((start + keep_from as u32, start + keep_to as u32))
+        };
+        let (r0, r1) = cut(range.start.row, range.end.row, rows)?;
+        let (c0, c1) = cut(range.start.col, range.end.col, columns)?;
+        Some((target, RangeRef::normalised(CellRef::new(c0, r0), CellRef::new(c1, r1))))
     }
 
     /// TRIMRANGE(range, [rows], [columns]): the range less its empty
@@ -3864,7 +3903,9 @@ mod tests {
         assert_eq!(shown("D6"), Value::text("plum"), "rows 4 and 5 survive");
         assert_eq!(shown("D7"), Value::Number(2.0));
         assert_eq!(shown("D8"), Value::text("none"), "nothing kept, so the spare");
-        assert_eq!(shown("D9"), Value::Error(ExcelError::NA), "and nothing to say");
+        // Measured: a FILTER keeping nothing, with no stand-in, is #CALC!
+        // (Error 2050 in the cell).
+        assert_eq!(shown("D9"), Value::Error(ExcelError::Calc), "and nothing to say");
         assert_eq!(shown("D10"), Value::text("apple"), "the prefixes come off");
     }
 

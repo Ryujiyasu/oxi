@@ -5089,6 +5089,8 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
         // without one there is no answer to give.
         return match args.get(2) {
             Some(instead) if name == "FILTER" => Ok(Arg::Value(instead.scalar())),
+            // Measured: FILTER with nothing kept and no stand-in is #CALC!.
+            None if name == "FILTER" => Err(ExcelError::Calc),
             _ => Err(ExcelError::NA),
         };
     }

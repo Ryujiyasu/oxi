@@ -9876,7 +9876,20 @@ impl<'a> WorkbookHost<'a> {
         self.lend_user_functions();
         let answer = self.evaluate_object_inner(sheet, args);
         oxicells_calc::set_user_function_hook(None);
-        answer
+        // Evaluate hands back #CALC! as #VALUE!, where a cell holding it says
+        // 2050: measured, CLng(Evaluate("FILTER(B1:B3,B1:B3>100)")) and
+        // CLng(Evaluate("LAMBDA(x,x)")) are 2015.
+        fn calc_as_value(value: &mut Value) {
+            match value {
+                Value::Error(2050) => *value = Value::Error(2015),
+                Value::Array(array) => array.values.iter_mut().for_each(calc_as_value),
+                _ => {}
+            }
+        }
+        answer.map(|mut value| {
+            calc_as_value(&mut value);
+            value
+        })
     }
 
     fn evaluate_object_inner(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
