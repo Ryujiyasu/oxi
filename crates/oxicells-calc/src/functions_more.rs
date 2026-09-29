@@ -1,0 +1,825 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+//! Worksheet functions added in a second pass: the reciprocal trigonometric
+//! functions, bit shifts, the precise roundings, matrix functions, the
+//! discount-security and T-bill money functions, the cumulative annuity
+//! parts, XNPV and XIRR, VDB, and the tests CHISQ.TEST, F.TEST and Z.TEST.
+//! Each value quoted below was read from Excel.
+
+use crate::distributions as d;
+use crate::functions::{
+    block_of, fin_fv_raw, fin_pmt_raw, norm_cdf, num, numeric_operands, reach, truncate_significant, yearfrac,
+    Arg, RangeData,
+};
+use crate::value::{ExcelError, Value};
+
+/// The names this file answers for.
+pub(crate) const NAMES: &[&str] = &[
+    "ACOT", "ACOTH", "BINOM.DIST.RANGE", "BITLSHIFT", "BITRSHIFT", "CEILING.PRECISE", "CHISQ.TEST",
+    "CHITEST", "COT", "COTH", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "DISC", "DOLLARDE", "DOLLARFR",
+    "ECMA.CEILING", "EFFECT", "F.TEST", "FLOOR.PRECISE", "FTEST", "FVSCHEDULE", "INTRATE", "ISO.CEILING",
+    "ISPMT", "MDETERM", "NOMINAL", "PDURATION", "PERCENTRANK.EXC", "PERMUTATIONA", "PRICEDISC", "PROB",
+    "RECEIVED", "RRI", "SEC", "SECH", "SERIESSUM", "SKEW.P", "STDEVPA", "TBILLEQ", "TBILLPRICE",
+    "TBILLYIELD", "VARPA", "VDB", "XIRR", "XNPV", "YIELDDISC", "Z.TEST", "ZTEST",
+];
+
+fn at(args: &[Arg], i: usize) -> Result<f64, ExcelError> {
+    match args.get(i) {
+        Some(arg) => num(arg),
+        None => Err(ExcelError::Value),
+    }
+}
+
+fn optional(args: &[Arg], i: usize, default: f64) -> Result<f64, ExcelError> {
+    match args.get(i) {
+        Some(arg) if !matches!(arg.scalar(), Value::Blank) => num(arg),
+        _ => Ok(default),
+    }
+}
+
+fn count(args: &[Arg], low: usize, high: usize) -> Result<(), ExcelError> {
+    if args.len() < low || args.len() > high {
+        Err(ExcelError::Value)
+    } else {
+        Ok(())
+    }
+}
+
+fn finite(value: f64) -> Result<Value, ExcelError> {
+    if value.is_finite() {
+        Ok(Value::Number(if value == 0.0 { 0.0 } else { value }))
+    } else {
+        Err(ExcelError::Num)
+    }
+}
+
+/// Numbers of a block or list, in order, skipping text and blanks.
+fn numbers_of(arg: &Arg) -> Result<Vec<f64>, ExcelError> {
+    numeric_operands(std::slice::from_ref(arg))
+}
+
+/// Settlement and maturity as whole days, the first before the second.
+fn span(args: &[Arg]) -> Result<(i64, i64), ExcelError> {
+    let (settle, maturity) = (at(args, 0)?.trunc(), at(args, 1)?.trunc());
+    if settle < 0.0 || maturity < 0.0 || settle >= maturity {
+        return Err(ExcelError::Num);
+    }
+    Ok((settle as i64, maturity as i64))
+}
+
+fn basis(args: &[Arg], i: usize) -> Result<i64, ExcelError> {
+    let basis = optional(args, i, 0.0)?.trunc();
+    if !(0.0..=4.0).contains(&basis) {
+        return Err(ExcelError::Num);
+    }
+    Ok(basis as i64)
+}
+
+pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
+    match name {
+        // ---- the reciprocal trigonometric functions ----------------------
+        "ACOT" => {
+            count(args, 1, 1)?;
+            finite(std::f64::consts::FRAC_PI_2 - at(args, 0)?.atan())
+        }
+        "ACOTH" => {
+            count(args, 1, 1)?;
+            let x = at(args, 0)?;
+            if x.abs() <= 1.0 {
+                return Err(ExcelError::Num);
+            }
+            finite(0.5 * ((x + 1.0) / (x - 1.0)).ln())
+        }
+        "COT" | "CSC" | "SEC" | "COTH" | "CSCH" | "SECH" => {
+            count(args, 1, 1)?;
+            let x = at(args, 0)?;
+            if matches!(name, "COT" | "CSC" | "SEC") && x.abs() >= 134_217_728.0 {
+                return Err(ExcelError::Num);
+            }
+            let below = match name {
+                "COT" => x.tan(),
+                "CSC" => x.sin(),
+                "SEC" => x.cos(),
+                "COTH" => x.tanh(),
+                "CSCH" => x.sinh(),
+                _ => x.cosh(),
+            };
+            if below == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            finite(1.0 / below)
+        }
+
+        // ---- bits and roundings ------------------------------------------
+        // BITLSHIFT(5,2) 20, BITRSHIFT(20,-2) 80: a whole number below 2^48,
+        // shifted no further than 53 places.
+        "BITLSHIFT" | "BITRSHIFT" => {
+            count(args, 2, 2)?;
+            let (n, shift) = (at(args, 0)?, at(args, 1)?.trunc());
+            if n < 0.0 || n.fract() != 0.0 || n >= 281_474_976_710_656.0 || shift.abs() > 53.0 {
+                return Err(ExcelError::Num);
+            }
+            let left = if name == "BITLSHIFT" { shift } else { -shift };
+            let answer = if left >= 0.0 { n * 2f64.powf(left) } else { (n / 2f64.powf(-left)).floor() };
+            if answer >= 281_474_976_710_656.0 {
+                return Err(ExcelError::Num);
+            }
+            finite(answer)
+        }
+        // CEILING.PRECISE(-4.3,2) -4, FLOOR.PRECISE(-4.3,2) -6: the sign of
+        // the step does not matter; ISO.CEILING and ECMA.CEILING round up the
+        // same way.
+        "CEILING.PRECISE" | "ISO.CEILING" | "ECMA.CEILING" | "FLOOR.PRECISE" => {
+            count(args, 1, 2)?;
+            let x = at(args, 0)?;
+            let step = optional(args, 1, 1.0)?.abs();
+            if step == 0.0 {
+                return Ok(Value::Number(0.0));
+            }
+            let steps = x / step;
+            let whole = if name == "FLOOR.PRECISE" { steps.floor() } else { steps.ceil() };
+            finite(whole * step)
+        }
+        "PERMUTATIONA" => {
+            count(args, 2, 2)?;
+            let (n, k) = (at(args, 0)?.trunc(), at(args, 1)?.trunc());
+            if n < 0.0 || k < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            finite(n.powf(k))
+        }
+        // SERIESSUM(2,1,2,{1,2,3}) = 1*2 + 2*2^3 + 3*2^5 = 114.
+        "SERIESSUM" => {
+            count(args, 4, 4)?;
+            let (x, first, step) = (at(args, 0)?, at(args, 1)?, at(args, 2)?);
+            let mut total = 0.0;
+            for (i, coefficient) in args[3].flatten().iter().enumerate() {
+                let coefficient = match coefficient {
+                    Value::Number(n) => *n,
+                    Value::Error(e) => return Err(*e),
+                    _ => return Err(ExcelError::Value),
+                };
+                total += coefficient * x.powf(first + i as f64 * step);
+            }
+            finite(total)
+        }
+
+        // ---- statistics ------------------------------------------------------
+        "SKEW.P" => {
+            let values = numeric_operands(args)?;
+            let n = values.len() as f64;
+            if n < 1.0 {
+                return Err(ExcelError::DivZero);
+            }
+            let mean = values.iter().sum::<f64>() / n;
+            let spread = (values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n).sqrt();
+            if spread == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            // The cubes summed first, divided by the spread cubed after:
+            // measured, SKEW.P(1,2,3,4,6) 0.395870337343817.
+            finite(values.iter().map(|x| (x - mean).powi(3)).sum::<f64>() / n / spread.powi(3))
+        }
+        // The whole-population forms of STDEVA and VARA: text is 0, TRUE 1.
+        "STDEVPA" | "VARPA" => {
+            let mut values = Vec::new();
+            for arg in args {
+                match arg {
+                    Arg::Value(value) => match value {
+                        Value::Error(e) => return Err(*e),
+                        Value::Blank => {}
+                        other => values.push(other.to_number()?),
+                    },
+                    Arg::Range(block) => {
+                        for value in &block.cells {
+                            match value {
+                                Value::Error(e) => return Err(*e),
+                                Value::Number(n) => values.push(*n),
+                                Value::Logical(b) => values.push(f64::from(*b)),
+                                Value::Text(_) => values.push(0.0),
+                                Value::Blank => {}
+                            }
+                        }
+                    }
+                }
+            }
+            if values.is_empty() {
+                return Err(ExcelError::DivZero);
+            }
+            let n = values.len() as f64;
+            let mean = values.iter().sum::<f64>() / n;
+            let variance = values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+            finite(if name == "VARPA" { variance } else { variance.sqrt() })
+        }
+        // PERCENTRANK.EXC(1,2,3,4,6; 3) 0.5: the place counted from one over
+        // one more than the count, truncated to three digits by default.
+        "PERCENTRANK.EXC" => {
+            count(args, 2, 3)?;
+            let mut values = numbers_of(&args[0])?;
+            if values.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let x = at(args, 1)?;
+            let digits = optional(args, 2, 3.0)?.trunc();
+            if digits < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            let n = values.len();
+            if x < values[0] || x > values[n - 1] {
+                return Err(ExcelError::NA);
+            }
+            let mut place = (n - 1) as f64;
+            for i in 0..n {
+                if values[i] == x {
+                    place = i as f64;
+                    break;
+                }
+                if i + 1 < n && values[i] < x && x < values[i + 1] {
+                    place = i as f64 + (x - values[i]) / (values[i + 1] - values[i]);
+                    break;
+                }
+            }
+            finite(truncate_significant((place + 1.0) / (n as f64 + 1.0), digits as i32))
+        }
+        // PROB(x, chances, low, [high]): the chance of the values from low to
+        // high, the chances adding up to one.
+        "PROB" => {
+            count(args, 3, 4)?;
+            let (xs, chances) = (args[0].flatten(), args[1].flatten());
+            if xs.len() != chances.len() {
+                return Err(ExcelError::NA);
+            }
+            let low = at(args, 2)?;
+            let high = optional(args, 3, low)?;
+            let mut total = 0.0;
+            let mut sum = 0.0;
+            for (x, chance) in xs.iter().zip(&chances) {
+                let chance = match chance {
+                    Value::Number(n) => *n,
+                    Value::Error(e) => return Err(*e),
+                    _ => continue,
+                };
+                if chance <= 0.0 || chance > 1.0 {
+                    return Err(ExcelError::Num);
+                }
+                total += chance;
+                if let Value::Number(x) = x {
+                    if *x >= low && *x <= high {
+                        sum += chance;
+                    }
+                }
+            }
+            if (total - 1.0).abs() > 1e-9 {
+                return Err(ExcelError::Num);
+            }
+            finite(sum)
+        }
+        // BINOM.DIST.RANGE(10,0.3,2,4) 0.7004233215.
+        "BINOM.DIST.RANGE" => {
+            count(args, 3, 4)?;
+            let (n, p, low) = (at(args, 0)?.trunc(), at(args, 1)?, at(args, 2)?.trunc());
+            let high = optional(args, 3, low)?.trunc();
+            if n < 0.0 || !(0.0..=1.0).contains(&p) || low < 0.0 || low > n || high < low || high > n {
+                return Err(ExcelError::Num);
+            }
+            let mut total = 0.0;
+            let mut k = low;
+            while k <= high {
+                total += binomial(n, k) * p.powf(k) * (1.0 - p).powf(n - k);
+                k += 1.0;
+            }
+            finite(total)
+        }
+        // CHISQ.TEST: the chance of a chi-squared this large, with (rows-1) x
+        // (columns-1) degrees of freedom, or one less than the count for a
+        // single line.
+        "CHISQ.TEST" | "CHITEST" => {
+            count(args, 2, 2)?;
+            let (actual, expected) = (block_of(&args[0]), block_of(&args[1]));
+            if actual.width != expected.width || actual.height != expected.height {
+                return Err(ExcelError::NA);
+            }
+            let mut chi = 0.0;
+            for (a, e) in actual.cells.iter().zip(&expected.cells) {
+                if let (Value::Number(a), Value::Number(e)) = (a, e) {
+                    if *e == 0.0 {
+                        return Err(ExcelError::DivZero);
+                    }
+                    chi += (a - e).powi(2) / e;
+                }
+            }
+            let freedom = if actual.width > 1 && actual.height > 1 {
+                ((actual.width - 1) * (actual.height - 1)) as f64
+            } else {
+                (actual.cells.len() - 1) as f64
+            };
+            if freedom < 1.0 {
+                return Err(ExcelError::NA);
+            }
+            finite(d::regularized_gamma_q(freedom / 2.0, chi / 2.0))
+        }
+        // F.TEST: two tails of the F distribution at the ratio of the two
+        // sample variances.
+        "F.TEST" | "FTEST" => {
+            count(args, 2, 2)?;
+            let (first, second) = (numbers_of(&args[0])?, numbers_of(&args[1])?);
+            if first.len() < 2 || second.len() < 2 {
+                return Err(ExcelError::DivZero);
+            }
+            let variance = |values: &[f64]| {
+                let n = values.len() as f64;
+                let mean = values.iter().sum::<f64>() / n;
+                values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0)
+            };
+            let (v1, v2) = (variance(&first), variance(&second));
+            if v1 == 0.0 || v2 == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            let (d1, d2) = ((first.len() - 1) as f64, (second.len() - 1) as f64);
+            let lower = d::f_cdf(v1 / v2, d1, d2);
+            finite(2.0 * lower.min(1.0 - lower))
+        }
+        // Z.TEST(1,2,3,4,6; 2) 0.0815121921532852: one tail above the mean,
+        // the sample spread standing in for sigma when none is given.
+        "Z.TEST" | "ZTEST" => {
+            count(args, 2, 3)?;
+            let values = numbers_of(&args[0])?;
+            let n = values.len() as f64;
+            if n < 1.0 {
+                return Err(ExcelError::NA);
+            }
+            let mean = values.iter().sum::<f64>() / n;
+            let sigma = match args.get(2) {
+                Some(arg) => num(arg)?,
+                None => {
+                    if n < 2.0 {
+                        return Err(ExcelError::DivZero);
+                    }
+                    (values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt()
+                }
+            };
+            if sigma == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            // z as (mean - x) * sqrt(n) / sigma: measured, the digits of
+            // Z.TEST(1,2,3,4,6; 2) 0.0815121921532852 come out that way.
+            finite(norm_cdf(-((mean - at(args, 1)?) * n.sqrt() / sigma)))
+        }
+
+        // ---- matrices --------------------------------------------------------
+        "MDETERM" => {
+            count(args, 1, 1)?;
+            let matrix = square(&args[0])?;
+            finite(determinant(matrix))
+        }
+
+        // ---- money -----------------------------------------------------------
+        // CUMIPMT(0.01,12,1000,1,12,0) -66.1854641401001 and CUMPRINC -1000:
+        // the interest and principal parts of payments start to end.
+        "CUMIPMT" | "CUMPRINC" => {
+            count(args, 6, 6)?;
+            let (rate, periods, present) = (at(args, 0)?, at(args, 1)?, at(args, 2)?);
+            let (start, end, kind) = (at(args, 3)?.trunc(), at(args, 4)?.trunc(), at(args, 5)?);
+            if rate <= 0.0 || periods <= 0.0 || present <= 0.0 || start < 1.0 || end < start || end > periods
+                || (kind != 0.0 && kind != 1.0)
+            {
+                return Err(ExcelError::Num);
+            }
+            // The principal is what the balance fell by, from before the first
+            // payment to after the last; the interest is the payments less
+            // that. Measured: CUMPRINC exactly -1000, CUMIPMT -66.1854641401001
+            // (adding the parts one by one misses both in the last digit).
+            let payment = fin_pmt_raw(rate, periods, present, 0.0, kind)?;
+            let principal =
+                fin_fv_raw(rate, start - 1.0, payment, present, kind)? - fin_fv_raw(rate, end, payment, present, kind)?;
+            finite(if name == "CUMPRINC" { principal } else { payment * (end - start + 1.0) - principal })
+        }
+        "EFFECT" => {
+            count(args, 2, 2)?;
+            let (rate, times) = (at(args, 0)?, at(args, 1)?.trunc());
+            if rate <= 0.0 || times < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            // Raised by squaring and multiplying, as Excel does: measured,
+            // EFFECT(0.05,12) 0.0511618978817334 (powf gives ...330).
+            let mut base = 1.0 + rate / times;
+            let mut left = times as u64;
+            let mut grown = 1.0;
+            while left > 0 {
+                if left & 1 == 1 {
+                    grown *= base;
+                }
+                base *= base;
+                left >>= 1;
+            }
+            finite(grown - 1.0)
+        }
+        "NOMINAL" => {
+            count(args, 2, 2)?;
+            let (rate, times) = (at(args, 0)?, at(args, 1)?.trunc());
+            if rate <= 0.0 || times < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            finite(times * ((1.0 + rate).powf(1.0 / times) - 1.0))
+        }
+        "FVSCHEDULE" => {
+            count(args, 2, 2)?;
+            let mut value = at(args, 0)?;
+            for rate in args[1].flatten() {
+                match rate {
+                    Value::Number(r) => value *= 1.0 + r,
+                    Value::Blank => {}
+                    Value::Error(e) => return Err(e),
+                    _ => return Err(ExcelError::Value),
+                }
+            }
+            finite(value)
+        }
+        "PDURATION" => {
+            count(args, 3, 3)?;
+            let (rate, present, future) = (at(args, 0)?, at(args, 1)?, at(args, 2)?);
+            if rate <= 0.0 || present <= 0.0 || future <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            finite((future.ln() - present.ln()) / (1.0 + rate).ln())
+        }
+        "RRI" => {
+            count(args, 3, 3)?;
+            let (periods, present, future) = (at(args, 0)?, at(args, 1)?, at(args, 2)?);
+            if periods <= 0.0 || present == 0.0 {
+                return Err(ExcelError::Num);
+            }
+            finite((future / present).powf(1.0 / periods) - 1.0)
+        }
+        "ISPMT" => {
+            count(args, 4, 4)?;
+            let (rate, period, periods, present) = (at(args, 0)?, at(args, 1)?, at(args, 2)?, at(args, 3)?);
+            if periods == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            finite(present * rate * (period / periods - 1.0))
+        }
+        // DOLLARDE(1.02,16) 1.125 and DOLLARFR(1.125,16) 1.02: the fraction
+        // written as so many sixteenths, and back.
+        "DOLLARDE" | "DOLLARFR" => {
+            count(args, 2, 2)?;
+            let (value, fraction) = (at(args, 0)?, at(args, 1)?.trunc());
+            if fraction < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            if fraction == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            let scale = 10f64.powf(fraction.log10().ceil());
+            let whole = value.trunc();
+            let part = value - whole;
+            finite(if name == "DOLLARDE" {
+                whole + part * scale / fraction
+            } else {
+                whole + part * fraction / scale
+            })
+        }
+        // The discount securities, on the day-count basis given (30/360 by
+        // default): DISC(45000,45365,97,100) 0.0300835654596101.
+        "DISC" | "INTRATE" | "RECEIVED" | "PRICEDISC" | "YIELDDISC" => {
+            count(args, 4, 5)?;
+            let (settle, maturity) = span(args)?;
+            let (third, fourth) = (at(args, 2)?, at(args, 3)?);
+            if third <= 0.0 || fourth <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let years = yearfrac(settle, maturity, basis(args, 4)?)?;
+            finite(match name {
+                // Measured: 0.0300835654596101, written as 1 - price/redemption.
+                "DISC" => (1.0 - third / fourth) / years,
+                "INTRATE" => (fourth - third) / third / years,
+                "RECEIVED" => {
+                    let rest = 1.0 - fourth * years;
+                    if rest <= 0.0 {
+                        return Err(ExcelError::Num);
+                    }
+                    third / rest
+                }
+                "PRICEDISC" => fourth - third * fourth * years,
+                _ => (fourth - third) / third / years,
+            })
+        }
+        // T-bills run at most a year: TBILLPRICE(45000,45180,0.05) 97.5.
+        "TBILLPRICE" | "TBILLYIELD" | "TBILLEQ" => {
+            count(args, 3, 3)?;
+            let (settle, maturity) = span(args)?;
+            let days = (maturity - settle) as f64;
+            if days > 365.0 {
+                return Err(ExcelError::Num);
+            }
+            let given = at(args, 2)?;
+            if given <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            finite(match name {
+                "TBILLPRICE" => {
+                    let price = 100.0 * (1.0 - given * days / 360.0);
+                    if price <= 0.0 {
+                        return Err(ExcelError::Num);
+                    }
+                    price
+                }
+                "TBILLYIELD" => (100.0 - given) / given * 360.0 / days,
+                _ => {
+                    if days <= 182.0 {
+                        365.0 * given / (360.0 - given * days)
+                    } else {
+                        let price = 100.0 * (1.0 - given * days / 360.0);
+                        let term = days / 365.0;
+                        (-term + (term * term - (2.0 * term - 1.0) * (1.0 - 100.0 / price)).sqrt()) / (term - 0.5)
+                    }
+                }
+            })
+        }
+        // XNPV over dates counted from the first, at 365 a year.
+        "XNPV" => {
+            count(args, 3, 3)?;
+            let rate = at(args, 0)?;
+            let (flows, dates) = flows_and_dates(&args[1], &args[2])?;
+            finite(xnpv(rate, &flows, &dates))
+        }
+        "XIRR" => {
+            count(args, 2, 3)?;
+            let (flows, dates) = flows_and_dates(&args[0], &args[1])?;
+            if !flows.iter().any(|f| *f > 0.0) || !flows.iter().any(|f| *f < 0.0) {
+                return Err(ExcelError::Num);
+            }
+            let mut rate = optional(args, 2, 0.1)?;
+            for _ in 0..100 {
+                let value = xnpv(rate, &flows, &dates);
+                let slope: f64 = flows
+                    .iter()
+                    .zip(&dates)
+                    .map(|(flow, date)| {
+                        let years = (date - dates[0]) / 365.0;
+                        -years * flow / (1.0 + rate).powf(years + 1.0)
+                    })
+                    .sum();
+                if slope == 0.0 {
+                    return Err(ExcelError::Num);
+                }
+                let next = rate - value / slope;
+                if !next.is_finite() || next <= -1.0 {
+                    return Err(ExcelError::Num);
+                }
+                if (next - rate).abs() < 1e-12 {
+                    return finite(next);
+                }
+                rate = next;
+            }
+            Err(ExcelError::Num)
+        }
+        "VDB" => {
+            count(args, 5, 7)?;
+            let (cost, salvage, life, start, end) = (at(args, 0)?, at(args, 1)?, at(args, 2)?, at(args, 3)?, at(args, 4)?);
+            let factor = optional(args, 5, 2.0)?;
+            let no_switch = match args.get(6) {
+                Some(arg) => arg.scalar().to_logical()?,
+                None => false,
+            };
+            if cost < 0.0 || salvage < 0.0 || life <= 0.0 || start < 0.0 || end < start || end > life || factor <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            finite(vdb(cost, salvage, life, start, end, factor, no_switch))
+        }
+        _ => Err(ExcelError::Name),
+    }
+}
+
+/// The functions here that answer with a block.
+pub(crate) fn call_block(name: &str, args: &[Arg]) -> Option<Arg> {
+    let answer = match name {
+        "MINVERSE" => (|| {
+            if args.len() != 1 {
+                return Err(ExcelError::Value);
+            }
+            let matrix = square(&args[0])?;
+            inverse(matrix)
+        })(),
+        "MUNIT" => (|| {
+            if args.len() != 1 {
+                return Err(ExcelError::Value);
+            }
+            let size = at(args, 0)?.trunc();
+            if size < 1.0 {
+                return Err(ExcelError::Value);
+            }
+            let size = size as usize;
+            let cells = (0..size * size)
+                .map(|i| Value::Number(if i / size == i % size { 1.0 } else { 0.0 }))
+                .collect();
+            Ok(RangeData { width: size, height: size, cells })
+        })(),
+        _ => return None,
+    };
+    Some(match answer {
+        Ok(block) => Arg::Range(block),
+        Err(why) => Arg::Value(Value::Error(why)),
+    })
+}
+
+fn binomial(n: f64, k: f64) -> f64 {
+    let k = k.min(n - k);
+    let mut acc = 1.0f64;
+    let mut i = 0.0;
+    while i < k {
+        acc = acc * (n - i) / (i + 1.0);
+        i += 1.0;
+    }
+    acc.round()
+}
+
+/// A square block of numbers, row by row.
+fn square(arg: &Arg) -> Result<Vec<Vec<f64>>, ExcelError> {
+    let block = block_of(arg);
+    if block.width != block.height || block.cells.is_empty() {
+        return Err(ExcelError::Value);
+    }
+    let mut rows = Vec::with_capacity(block.height);
+    for row in 0..block.height {
+        let mut line = Vec::with_capacity(block.width);
+        for col in 0..block.width {
+            match reach(&block, col, row) {
+                Some(Value::Number(n)) => line.push(n),
+                _ => return Err(ExcelError::Value),
+            }
+        }
+        rows.push(line);
+    }
+    Ok(rows)
+}
+
+/// The determinant by elimination with partial pivoting.
+fn determinant(mut m: Vec<Vec<f64>>) -> f64 {
+    let n = m.len();
+    let mut det = 1.0;
+    for col in 0..n {
+        let pivot = (col..n)
+            .max_by(|&a, &b| m[a][col].abs().partial_cmp(&m[b][col].abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(col);
+        if m[pivot][col] == 0.0 {
+            return 0.0;
+        }
+        if pivot != col {
+            m.swap(pivot, col);
+            det = -det;
+        }
+        det *= m[col][col];
+        for row in col + 1..n {
+            let ratio = m[row][col] / m[col][col];
+            for k in col..n {
+                m[row][k] -= ratio * m[col][k];
+            }
+        }
+    }
+    det
+}
+
+/// The inverse by Gauss-Jordan elimination; #NUM! for a singular matrix.
+fn inverse(mut m: Vec<Vec<f64>>) -> Result<RangeData, ExcelError> {
+    let n = m.len();
+    let mut out: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect()).collect();
+    for col in 0..n {
+        let pivot = (col..n)
+            .max_by(|&a, &b| m[a][col].abs().partial_cmp(&m[b][col].abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(col);
+        if m[pivot][col] == 0.0 {
+            return Err(ExcelError::Num);
+        }
+        m.swap(pivot, col);
+        out.swap(pivot, col);
+        let lead = m[col][col];
+        for k in 0..n {
+            m[col][k] /= lead;
+            out[col][k] /= lead;
+        }
+        for row in 0..n {
+            if row != col {
+                let ratio = m[row][col];
+                if ratio != 0.0 {
+                    for k in 0..n {
+                        m[row][k] -= ratio * m[col][k];
+                        out[row][k] -= ratio * out[col][k];
+                    }
+                }
+            }
+        }
+    }
+    Ok(RangeData { width: n, height: n, cells: out.into_iter().flatten().map(Value::Number).collect() })
+}
+
+fn flows_and_dates(flows: &Arg, dates: &Arg) -> Result<(Vec<f64>, Vec<f64>), ExcelError> {
+    let (flows, dates) = (flows.flatten(), dates.flatten());
+    if flows.len() != dates.len() || flows.is_empty() {
+        return Err(ExcelError::Num);
+    }
+    let mut out_flows = Vec::with_capacity(flows.len());
+    let mut out_dates = Vec::with_capacity(dates.len());
+    for (flow, date) in flows.iter().zip(&dates) {
+        let flow = match flow {
+            Value::Number(n) => *n,
+            Value::Error(e) => return Err(*e),
+            _ => return Err(ExcelError::Value),
+        };
+        let date = match date {
+            Value::Number(n) => n.trunc(),
+            Value::Error(e) => return Err(*e),
+            _ => return Err(ExcelError::Value),
+        };
+        out_flows.push(flow);
+        out_dates.push(date);
+    }
+    if out_dates.iter().any(|date| *date < out_dates[0]) {
+        return Err(ExcelError::Num);
+    }
+    Ok((out_flows, out_dates))
+}
+
+fn xnpv(rate: f64, flows: &[f64], dates: &[f64]) -> f64 {
+    flows
+        .iter()
+        .zip(dates)
+        .map(|(flow, date)| flow / (1.0 + rate).powf((date - dates[0]) / 365.0))
+        .sum()
+}
+
+/// Declining balance for one period, never below the salvage.
+fn period_ddb(cost: f64, salvage: f64, life: f64, period: f64, factor: f64) -> f64 {
+    let mut rate = factor / life;
+    let old = if rate >= 1.0 {
+        rate = 1.0;
+        if period == 1.0 { cost } else { 0.0 }
+    } else {
+        cost * (1.0 - rate).powf(period - 1.0)
+    };
+    let new = cost * (1.0 - rate).powf(period);
+    let ddb = if new < salvage { old - salvage } else { old - new };
+    ddb.max(0.0)
+}
+
+/// Declining balance switching to straight line once that gives more,
+/// over the first `period` periods of what is left.
+fn inter_vdb(cost: f64, salvage: f64, life: f64, life_left: f64, period: f64, factor: f64) -> f64 {
+    let end = period.ceil();
+    let last = end as u64;
+    let mut total = 0.0;
+    let mut left_to_write = cost - salvage;
+    let mut straight = false;
+    let mut line = 0.0;
+    for i in 1..=last {
+        let mut term = if !straight {
+            let ddb = period_ddb(cost, salvage, life, i as f64, factor);
+            line = left_to_write / (life_left - (i - 1) as f64);
+            if line > ddb {
+                straight = true;
+                line
+            } else {
+                left_to_write -= ddb;
+                ddb
+            }
+        } else {
+            line
+        };
+        if i == last {
+            term *= period + 1.0 - end;
+        }
+        total += term;
+    }
+    total
+}
+
+/// VDB, worked the way LibreOffice works it: VDB(2400,300,10,0,1) 480.
+fn vdb(mut cost: f64, salvage: f64, mut life: f64, mut start: f64, mut end: f64, factor: f64, no_switch: bool) -> f64 {
+    if no_switch {
+        let (first, last) = (start.floor(), end.ceil());
+        let mut total = 0.0;
+        let mut i = first + 1.0;
+        while i <= last {
+            let mut term = period_ddb(cost, salvage, life, i, factor);
+            if i == first + 1.0 {
+                term *= end.min(first + 1.0) - start;
+            } else if i == last {
+                term *= end + 1.0 - last;
+            }
+            total += term;
+            i += 1.0;
+        }
+        return total;
+    }
+    if start != start.floor() && factor > 1.0 && start >= life / 2.0 {
+        let part = start - life / 2.0;
+        start = life / 2.0;
+        end -= part;
+        life += 1.0;
+    }
+    cost -= inter_vdb(cost, salvage, life, life, start, factor);
+    inter_vdb(cost, salvage, life, life - start, end - start, factor)
+}

@@ -221,7 +221,7 @@ fn bare_error(args: &[Arg]) -> Option<ExcelError> {
     })
 }
 
-fn num(arg: &Arg) -> Result<f64, ExcelError> {
+pub(crate) fn num(arg: &Arg) -> Result<f64, ExcelError> {
     arg.scalar().to_number()
 }
 
@@ -231,7 +231,7 @@ fn text(arg: &Arg) -> Result<String, ExcelError> {
 
 /// Numbers only, the way `SUM` and `AVERAGE` see a range: text and logicals
 /// inside a *range* are skipped, but a directly supplied argument is coerced.
-fn numeric_operands(args: &[Arg]) -> Result<Vec<f64>, ExcelError> {
+pub(crate) fn numeric_operands(args: &[Arg]) -> Result<Vec<f64>, ExcelError> {
     let mut out = Vec::new();
     for arg in args {
         match arg {
@@ -436,6 +436,9 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
         }
         return Arg::Range(RangeData { width: 1, height: cells.len(), cells });
     }
+    if let Some(block) = crate::functions_more::call_block(name, args) {
+        return block;
+    }
     // FREQUENCY counts into the bins and one more, down a column.
     if name == "FREQUENCY" {
         return match frequency(args) {
@@ -562,49 +565,56 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
 /// and those the workbook works out itself. Kept in step with the match
 /// arms by `every_function_the_library_answers_is_known`.
 const KNOWN_FUNCTIONS: &[&str] = &[
-    "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC",
-    "ASIN", "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF",
-    "AVERAGEIFS", "BASE", "BETA.DIST", "BETA.INV", "BETADIST", "BETAINV", "BIN2DEC", "BIN2HEX",
-    "BIN2OCT", "BINOM.DIST", "BINOM.INV", "BINOMDIST", "BITAND", "BITOR", "BITXOR", "BYCOL",
-    "BYROW", "CEILING", "CEILING.MATH", "CELL", "CHAR", "CHIDIST", "CHIINV", "CHISQ.DIST",
-    "CHISQ.DIST.RT", "CHISQ.INV", "CHISQ.INV.RT", "CHOOSE", "CHOOSECOLS", "CHOOSEROWS", "CLEAN",
-    "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT", "CONCATENATE", "CONFIDENCE",
-    "CONFIDENCE.NORM", "CONFIDENCE.T", "CORREL", "COS", "COSH", "COUNT", "COUNTA", "COUNTBLANK",
-    "COUNTIF", "COUNTIFS", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "CRITBINOM", "D", "DATE",
-    "DATEDIF", "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB",
-    "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DMAX", "DMIN",
-    "DOLLAR", "DPRODUCT", "DROP", "DSUM", "EDATE", "EOMONTH", "ERF", "ERF.PRECISE", "ERFC",
+    "ABS", "ACOS", "ACOSH", "ACOT", "ACOTH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS",
+    "ARRAYTOTEXT", "ASC", "ASIN", "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE",
+    "AVERAGEA", "AVERAGEIF", "AVERAGEIFS", "BASE", "BETA.DIST", "BETA.INV", "BETADIST", "BETAINV",
+    "BIN2DEC", "BIN2HEX", "BIN2OCT", "BINOM.DIST", "BINOM.DIST.RANGE", "BINOM.INV", "BINOMDIST",
+    "BITAND", "BITLSHIFT", "BITOR", "BITRSHIFT", "BITXOR", "BYCOL", "BYROW", "CEILING",
+    "CEILING.MATH", "CEILING.PRECISE", "CELL", "CHAR", "CHIDIST", "CHIINV", "CHISQ.DIST",
+    "CHISQ.DIST.RT", "CHISQ.INV", "CHISQ.INV.RT", "CHISQ.TEST", "CHITEST", "CHOOSE", "CHOOSECOLS",
+    "CHOOSEROWS", "CLEAN", "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT",
+    "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CONFIDENCE.T", "CORREL", "COS", "COSH", "COT",
+    "COTH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "COVAR", "COVARIANCE.P",
+    "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "D", "DATE", "DATEDIF",
+    "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB", "DEC2BIN",
+    "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX", "DMIN",
+    "DOLLAR", "DOLLARDE", "DOLLARFR", "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM", "DVAR",
+    "DVARP", "ECMA.CEILING", "EDATE", "EFFECT", "EOMONTH", "ERF", "ERF.PRECISE", "ERFC",
     "ERFC.PRECISE", "ERROR.TYPE", "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST",
-    "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "FACT", "FACTDOUBLE", "FALSE", "FDIST", "FIND",
-    "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED", "FLOOR", "FLOOR.MATH", "FORECAST",
-    "FORECAST.LINEAR", "FV", "GAMMA", "GAMMA.DIST", "GAMMA.INV", "GAMMADIST", "GAMMAINV", "GAMMALN",
-    "GAMMALN.PRECISE", "GAUSS", "GCD", "GEOMEAN", "GESTEP", "HARMEAN", "HEX2BIN", "HEX2DEC",
-    "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK", "HYPGEOM.DIST", "HYPGEOMDIST", "IF",
-    "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT", "INTERCEPT", "IPMT", "IRR", "ISBLANK",
-    "ISERR", "ISERROR", "ISEVEN", "ISFORMULA", "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER",
-    "ISODD", "ISOMITTED", "ISOWEEKNUM", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM", "LEFT",
-    "LEFTB", "LEN", "LENB", "LET", "LN", "LOG", "LOG10", "LOGINV", "LOGNORM.DIST", "LOGNORM.INV",
-    "LOGNORMDIST", "LOOKUP", "LOWER", "M", "MAKEARRAY", "MAP", "MATCH", "MAX", "MAXA", "MAXIFS",
-    "MD", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MIRR", "MMULT", "MOD",
-    "MODE", "MODE.MULT", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "N", "NA", "NEGBINOM.DIST",
-    "NEGBINOMDIST", "NETWORKDAYS", "NETWORKDAYS.INTL", "NORM.DIST", "NORM.INV", "NORM.S.DIST",
-    "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV",
-    "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PEARSON", "PERCENTILE",
-    "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERCENTRANK.INC", "PERMUT", "PHI", "PI",
-    "PMT", "POISSON", "POISSON.DIST", "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE",
+    "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "F.TEST", "FACT", "FACTDOUBLE", "FALSE", "FDIST",
+    "FIND", "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED", "FLOOR", "FLOOR.MATH", "FLOOR.PRECISE",
+    "FORECAST", "FORECAST.LINEAR", "FTEST", "FV", "FVSCHEDULE", "GAMMA", "GAMMA.DIST", "GAMMA.INV",
+    "GAMMADIST", "GAMMAINV", "GAMMALN", "GAMMALN.PRECISE", "GAUSS", "GCD", "GEOMEAN", "GESTEP",
+    "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK",
+    "HYPGEOM.DIST", "HYPGEOMDIST", "IF", "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT",
+    "INTERCEPT", "INTRATE", "IPMT", "IRR", "ISBLANK", "ISERR", "ISERROR", "ISEVEN", "ISFORMULA",
+    "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER", "ISO.CEILING", "ISODD", "ISOMITTED", "ISOWEEKNUM",
+    "ISPMT", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB", "LEN", "LENB",
+    "LET", "LN", "LOG", "LOG10", "LOGINV", "LOGNORM.DIST", "LOGNORM.INV", "LOGNORMDIST", "LOOKUP",
+    "LOWER", "M", "MAKEARRAY", "MAP", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MDETERM", "MEDIAN",
+    "MID", "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MINVERSE", "MIRR", "MMULT", "MOD", "MODE",
+    "MODE.MULT", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "MUNIT", "N", "NA", "NEGBINOM.DIST",
+    "NEGBINOMDIST", "NETWORKDAYS", "NETWORKDAYS.INTL", "NOMINAL", "NORM.DIST", "NORM.INV",
+    "NORM.S.DIST", "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW",
+    "NPER", "NPV", "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR",
+    "PDURATION", "PEARSON", "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK",
+    "PERCENTRANK.EXC", "PERCENTRANK.INC", "PERMUT", "PERMUTATIONA", "PHI", "PI", "PMT", "POISSON",
+    "POISSON.DIST", "POWER", "PPMT", "PRICEDISC", "PROB", "PRODUCT", "PROPER", "PV", "QUARTILE",
     "QUARTILE.EXC", "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDARRAY", "RANDBETWEEN",
-    "RANK", "RANK.AVG", "RANK.EQ", "RATE", "REDUCE", "REPLACE", "REPLACEB", "REPT", "RIGHT",
-    "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RSQ", "SCAN", "SEARCH",
-    "SEARCHB", "SECOND", "SEQUENCE", "SHEET", "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN",
-    "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P",
-    "STDEV.S", "STDEVA", "STDEVP", "STEYX", "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS",
-    "SUMPRODUCT", "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.DIST",
-    "T.DIST.2T", "T.DIST.RT", "T.INV", "T.INV.2T", "T.TEST", "TAKE", "TAN", "TANH", "TDIST", "TEXT",
-    "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TINV", "TOCOL",
-    "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR", "UNICODE",
-    "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VLOOKUP",
-    "VSTACK", "WEEKDAY", "WEEKNUM", "WEIBULL", "WEIBULL.DIST", "WORKDAY", "WORKDAY.INTL",
-    "WRAPCOLS", "WRAPROWS", "XLOOKUP", "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
+    "RANK", "RANK.AVG", "RANK.EQ", "RATE", "RECEIVED", "REDUCE", "REPLACE", "REPLACEB", "REPT",
+    "RIGHT", "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RRI", "RSQ",
+    "SCAN", "SEARCH", "SEARCHB", "SEC", "SECH", "SECOND", "SEQUENCE", "SERIESSUM", "SHEET",
+    "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SKEW.P", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY",
+    "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STDEVPA",
+    "STEYX", "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2",
+    "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.DIST", "T.DIST.2T", "T.DIST.RT", "T.INV",
+    "T.INV.2T", "T.TEST", "TAKE", "TAN", "TANH", "TBILLEQ", "TBILLPRICE", "TBILLYIELD", "TDIST",
+    "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TINV",
+    "TOCOL", "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR",
+    "UNICODE", "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP",
+    "VARPA", "VDB", "VLOOKUP", "VSTACK", "WEEKDAY", "WEEKNUM", "WEIBULL", "WEIBULL.DIST", "WORKDAY",
+    "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XIRR", "XLOOKUP", "XMATCH", "XNPV", "XOR", "Y", "YD",
+    "YEAR", "YEARFRAC", "YIELDDISC", "YM", "Z.TEST", "ZTEST",
 ];
 
 /// Whether `name` is a function this build knows.
@@ -3417,9 +3427,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
         }
         // ---- database ----------------------------------------------------
-        "DSUM" | "DAVERAGE" | "DCOUNT" | "DCOUNTA" | "DMAX" | "DMIN" | "DGET" | "DPRODUCT" => {
-            database_function(name, args)
-        }
+        "DSUM" | "DAVERAGE" | "DCOUNT" | "DCOUNTA" | "DMAX" | "DMIN" | "DGET" | "DPRODUCT" | "DSTDEV" | "DSTDEVP"
+        | "DVAR" | "DVARP" => database_function(name, args),
+        name if crate::functions_more::NAMES.contains(&name) => crate::functions_more::call(name, args),
         // ---- more dates --------------------------------------------------
         // The working days between two dates, both counted, less the weekend
         // and less the holidays given -- which the plain form used to ignore.
@@ -3654,7 +3664,7 @@ fn annuity_factor(rate: f64, periods: f64) -> Result<f64, ExcelError> {
     if factor.is_finite() { Ok(factor) } else { Err(ExcelError::Num) }
 }
 
-fn fin_fv_raw(rate: f64, periods: f64, payment: f64, present: f64, kind: f64) -> Result<f64, ExcelError> {
+pub(crate) fn fin_fv_raw(rate: f64, periods: f64, payment: f64, present: f64, kind: f64) -> Result<f64, ExcelError> {
     if rate == 0.0 {
         return Ok(-(present + payment * periods));
     }
@@ -3662,7 +3672,7 @@ fn fin_fv_raw(rate: f64, periods: f64, payment: f64, present: f64, kind: f64) ->
     Ok(-(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate))
 }
 
-fn fin_pmt_raw(rate: f64, periods: f64, present: f64, future: f64, kind: f64) -> Result<f64, ExcelError> {
+pub(crate) fn fin_pmt_raw(rate: f64, periods: f64, present: f64, future: f64, kind: f64) -> Result<f64, ExcelError> {
     if periods == 0.0 {
         return Err(ExcelError::Num);
     }
@@ -3942,7 +3952,7 @@ fn xmatch_nearest(hay: &[Value], key: &Value, order: &[usize], smaller: bool) ->
 }
 
 /// Truncate (not round) to a number of significant digits, as PERCENTRANK does.
-fn truncate_significant(value: f64, digits: i32) -> f64 {
+pub(crate) fn truncate_significant(value: f64, digits: i32) -> f64 {
     if value == 0.0 {
         return 0.0;
     }
@@ -4765,6 +4775,18 @@ fn database_function(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "DMAX" => Ok(Value::Number(numbers.iter().cloned().fold(f64::MIN, f64::max))),
         "DMIN" => Ok(Value::Number(numbers.iter().cloned().fold(f64::MAX, f64::min))),
         "DCOUNT" => Ok(Value::Number(numbers.len() as f64)),
+        // The spreads of the chosen numbers, sample and whole.
+        "DSTDEV" | "DSTDEVP" | "DVAR" | "DVARP" => {
+            let whole = name.ends_with('P');
+            let n = numbers.len() as f64;
+            let divisor = if whole { n } else { n - 1.0 };
+            if divisor <= 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            let mean = numbers.iter().sum::<f64>() / n;
+            let spread = numbers.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / divisor;
+            Ok(Value::Number(if name.starts_with("DSTDEV") { spread.sqrt() } else { spread }))
+        }
         "DCOUNTA" => Ok(Value::Number(chosen.iter().filter(|v| !matches!(v, Value::Blank)).count() as f64)),
         "DGET" => match numbers.len() {
             1 => Ok(chosen[0].clone()),
@@ -5733,7 +5755,7 @@ fn serial(arg: &Arg) -> Result<i64, ExcelError> {
 
 /// YEARFRAC on Excel's five day-count bases. The dates are put in order first,
 /// so it is symmetric as Excel is.
-fn yearfrac(start: i64, end: i64, basis: i64) -> Result<f64, ExcelError> {
+pub(crate) fn yearfrac(start: i64, end: i64, basis: i64) -> Result<f64, ExcelError> {
     let (start, end) = if start <= end { (start, end) } else { (end, start) };
     if start == end {
         return Ok(0.0);
