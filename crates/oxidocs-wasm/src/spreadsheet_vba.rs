@@ -13216,7 +13216,20 @@ impl<'a> WorkbookHost<'a> {
                 if shown.is_empty() {
                     continue;
                 }
-                widest = widest.max(text_px(&shown, &face, size, bold));
+                // A General number is measured with its point as wide as a
+                // digit and its exponent's sign as wide as a plus: measured,
+                // 123456.1235 fits 102 pixels of 游ゴシック where its glyphs
+                // want 98, and 1.23457E-05 takes the same 107 as 1.23457E+12.
+                let measured = if general && matches!(cell.value, CellValue::Number(_)) {
+                    let mut text = shown.replacen('.', "0", 1);
+                    if let Some(at) = text.find("E-") {
+                        text.replace_range(at + 1..at + 2, "+");
+                    }
+                    text
+                } else {
+                    shown
+                };
+                widest = widest.max(text_px(&measured, &face, size, bold));
             }
             // The column is the fitted pixels, less the five every column
             // has, in digit widths.
