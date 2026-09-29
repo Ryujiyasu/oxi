@@ -15323,10 +15323,51 @@ impl<'a> WorkbookHost<'a> {
         self.workbook.defined_names.push((held, refers_to));
     }
 
+    /// The block a filter over several cells takes: its columns cut back to
+    /// the last that holds anything, its rows running to the last holding
+    /// anything or to the end of the region round its first cell, whichever
+    /// is lower. Measured over data in A1:C4: A1:E9 filters A1:C4, A1:B3
+    /// A1:B4, A1:C2 A1:C4 and A2:C4 itself; over A1:B3 and A5:B5, A1:B9
+    /// filters A1:B5; over A1 alone, A1:B5 filters A1.
+    fn filtered_block(&self, range: CellRange) -> Result<CellRange, String> {
+        let Some(worksheet) = self.workbook.sheets.get(range.sheet) else {
+            return Ok(range);
+        };
+        let (mut last_row, mut last_column) = (range.start_row, range.start_column);
+        for row in worksheet.rows.iter().filter(|row| (range.start_row..=range.end_row).contains(&row.index)) {
+            for cell in row.cells.iter().filter(|cell| {
+                (range.start_column..=range.end_column).contains(&cell.col) && cell_has_content(cell)
+            }) {
+                last_row = last_row.max(row.index);
+                last_column = last_column.max(cell.col);
+            }
+        }
+        let corner = CellRange { end_row: range.start_row, end_column: range.start_column, ..range };
+        let region = self.current_region(corner)?;
+        Ok(CellRange { end_row: last_row.max(region.end_row), end_column: last_column, ..range })
+    }
+
     fn auto_filter(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let given = |index: usize| match args.get(index) {
             Some(Value::Missing) | None => None,
             Some(value) => Some(value),
+        };
+        // One cell stands for the block around it -- the filter it sits in,
+        // else its current region: measured, `Range("B1").AutoFilter Field:=1`
+        // over A1:C7 filters A1:C7 on column A.
+        let range = if range.start_row == range.end_row && range.start_column == range.end_column {
+            match &self.auto_filter {
+                Some(filter)
+                    if filter.range.sheet == range.sheet
+                        && (filter.range.start_row..=filter.range.end_row).contains(&range.start_row)
+                        && (filter.range.start_column..=filter.range.end_column).contains(&range.start_column) =>
+                {
+                    filter.range
+                }
+                _ => self.current_region(range)?,
+            }
+        } else {
+            self.filtered_block(range)?
         };
         if args.iter().all(|value| matches!(value, Value::Missing)) {
             // Excel treats a bare call as a switch: on becomes off.
@@ -15357,8 +15398,19 @@ impl<'a> WorkbookHost<'a> {
         }
         let first_value = match given(1) {
             Some(value) => self.criteria_value(value)?,
+            // A field with no criteria is that column let go: measured,
+            // `AutoFilter Field:=1` shows again the rows column 1 hid while
+            // the other columns' tests stay.
             None => {
-                return Err("Range.AutoFilter needs criteria to test against".to_string());
+                let mut filter = match self.auto_filter.take() {
+                    Some(filter) if ranges_equal(filter.range, range) => filter,
+                    _ => AutoFilter { range, fields: Vec::new() },
+                };
+                filter.fields.retain(|held| held.field != field);
+                self.apply_auto_filter(&filter)?;
+                self.record_auto_filter(&filter);
+                self.auto_filter = Some(filter);
+                return Ok(Value::Boolean(true));
             }
         };
         let first = parse_criteria(&first_value);
@@ -31389,7 +31441,9 @@ mod tests {
         for body in [
             // There is no third column to filter on.
             "  Range(\"A1:B5\").AutoFilter Field:=3, Criteria1:=\"apple\"",
-            "  Range(\"A1:B5\").AutoFilter Field:=1",
+            // Measured: over A1 alone the block shrinks to A1, so a second
+            // field is outside it.
+            "  Range(\"A1:B5\").AutoFilter Field:=1\n  Range(\"A1:B5\").AutoFilter Field:=2",
         ] {
             let mut workbook = workbook();
             let module = parse_module(&format!(
