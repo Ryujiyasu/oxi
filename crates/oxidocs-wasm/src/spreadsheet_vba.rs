@@ -19573,6 +19573,132 @@ fn compare_text_by_case(left: &str, right: &str) -> Ordering {
     Ordering::Equal
 }
 
+/// Unicode to Shift_JIS (CP932), as little-endian (u16 unicode, u16 code)
+/// pairs sorted by the unicode -- from the standard CP932 mapping.
+static CP932: &[u8] = include_bytes!("data/cp932.bin");
+
+/// A character's Shift_JIS code, where it has one.
+fn cp932_code(c: char) -> Option<u16> {
+    let wanted = c as u32;
+    if wanted < 0x80 {
+        return Some(wanted as u16);
+    }
+    if wanted > 0xFFFF {
+        return None;
+    }
+    let count = CP932.len() / 4;
+    let (mut low, mut high) = (0usize, count);
+    while low < high {
+        let middle = (low + high) / 2;
+        let unicode = u16::from_le_bytes([CP932[middle * 4], CP932[middle * 4 + 1]]) as u32;
+        match unicode.cmp(&wanted) {
+            Ordering::Equal => {
+                return Some(u16::from_le_bytes([CP932[middle * 4 + 2], CP932[middle * 4 + 3]]));
+            }
+            Ordering::Less => low = middle + 1,
+            Ordering::Greater => high = middle,
+        }
+    }
+    None
+}
+
+/// Half-width katakana U+FF66..U+FF9D as their full-width selves.
+const HALF_KANA: &str = "ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン";
+
+/// One character's place in Excel's text order: the base it sorts by, its
+/// voicing (か, が, ぱ), and whether it is hiragana. None for a character the
+/// order passes over (the hyphen and the apostrophe).
+fn collation_weight(c: char, voicing_mark: Option<char>) -> Option<((u8, u32), u8, u8)> {
+    let mut c = c;
+    let code = c as u32;
+    // Full-width ASCII is its ASCII self.
+    if (0xFF01..=0xFF5E).contains(&code) {
+        c = char::from_u32(code - 0xFEE0).unwrap_or(c);
+    }
+    if (0xFF66..=0xFF9D).contains(&code) {
+        c = HALF_KANA.chars().nth((code - 0xFF66) as usize).unwrap_or(c);
+    }
+    let code = c as u32;
+    if c == '-' || c == '\'' {
+        return None;
+    }
+    if c.is_ascii_digit() {
+        return Some(((1, code), 0, 0));
+    }
+    if c.is_ascii_alphabetic() {
+        return Some(((2, c.to_ascii_lowercase() as u32), 0, 0));
+    }
+    // Kana sort by their unvoiced hiragana, voicing next, and katakana
+    // before hiragana after that.
+    let (hiragana, is_hiragana) = match code {
+        0x3041..=0x3096 => (code, 1),
+        0x30A1..=0x30F6 => (code - 0x60, 0),
+        _ => (0, 0),
+    };
+    if hiragana != 0 {
+        const DAKUTEN: &str = "がぎぐげござじずぜぞだぢづでどばびぶべぼ";
+        const HANDAKUTEN: &str = "ぱぴぷぺぽ";
+        let h = char::from_u32(hiragana).unwrap_or('\0');
+        let (base, mut voicing) = if DAKUTEN.contains(h) {
+            (hiragana - 1, 1)
+        } else if HANDAKUTEN.contains(h) {
+            (hiragana - 2, 2)
+        } else if h == 'ゔ' {
+            ('う' as u32, 1)
+        } else {
+            (hiragana, 0)
+        };
+        match voicing_mark {
+            Some('\u{FF9E}') => voicing = 1,
+            Some('\u{FF9F}') => voicing = 2,
+            _ => {}
+        }
+        return Some(((3, base), voicing, is_hiragana));
+    }
+    if c == 'ー' {
+        return Some(((5, 0), 0, 0));
+    }
+    let ideograph = (0x4E00..=0x9FFF).contains(&code) || (0x3400..=0x4DBF).contains(&code) || (0xF900..=0xFAFF).contains(&code);
+    if ideograph {
+        return Some(((4, cp932_code(c).map_or(0x1_0000 + code, u32::from)), 0, 0));
+    }
+    if c.is_ascii() || (0x2000..=0x30FF).contains(&code) || (0xFF00..=0xFFEF).contains(&code) {
+        return Some(((0, code), 0, 0));
+    }
+    Some(((5, code), 0, 0))
+}
+
+/// Text in Excel's sort order, without MatchCase. Measured against Excel:
+/// symbols, then digits, then letters, then kana in their 50-sound order,
+/// then kanji in Shift_JIS order, then the long-vowel mark -- with case and
+/// width not told apart (the sort keeps such ties in their first order),
+/// voicing deciding next (か before が), then katakana before hiragana, and
+/// a hyphen or apostrophe counted only last (ab before a-b).
+fn excel_text_order(left: &str, right: &str) -> Ordering {
+    let weights = |text: &str| {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = Vec::new();
+        let mut skipped = Vec::new();
+        let mut at = 0;
+        while at < chars.len() {
+            let mark = chars.get(at + 1).copied().filter(|next| matches!(next, '\u{FF9E}' | '\u{FF9F}'));
+            match collation_weight(chars[at], mark) {
+                Some(weight) => out.push(weight),
+                None => skipped.push(at),
+            }
+            at += if mark.is_some() { 2 } else { 1 };
+        }
+        (out, skipped)
+    };
+    let ((ours, our_skipped), (theirs, their_skipped)) = (weights(left), weights(right));
+    let primary = |list: &Vec<((u8, u32), u8, u8)>| list.iter().map(|w| w.0).collect::<Vec<_>>();
+    primary(&ours)
+        .cmp(&primary(&theirs))
+        .then_with(|| ours.iter().map(|w| w.1).cmp(theirs.iter().map(|w| w.1)))
+        .then_with(|| ours.iter().map(|w| w.2).cmp(theirs.iter().map(|w| w.2)))
+        .then_with(|| our_skipped.len().cmp(&their_skipped.len()))
+}
+
 /// The plain comparison, with the case ignored — which is what every caller
 /// but a `MatchCase` sort wants, and what the tests below are written against.
 #[cfg(test)]
@@ -19599,7 +19725,7 @@ fn sort_compare_cased(
                 if match_case {
                     compare_text_by_case(left, right)
                 } else {
-                    left.to_lowercase().cmp(&right.to_lowercase())
+                    excel_text_order(left, right)
                 }
             }
             (Value::Boolean(left), Value::Boolean(right)) => left.cmp(right),
@@ -33809,6 +33935,41 @@ End Sub
             answer,
             Value::String(
                 "1.23E+08~1235~1234.568~1E-04~-123457~-1~0~1.23457E+12~1.234E-07~#####~######~1234~#######~"
+                    .to_string()
+            )
+        );
+    }
+
+    /// Text sorts in Excel's order: kana by sound, kanji by Shift_JIS, case
+    /// and width left in the order they came. Every answer here is Excel's.
+    #[test]
+    fn text_sorts_in_excels_order() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim items As Variant, i As Long, out As String
+               items = Split(\"北,東,西,南,あ,ア,ｱ,か,が,カ,ガ,a,A,ａ,1,１,10,2,_,-,!,あい,あア,亜,一,ー,a-b,ab,a b,Ab,aB,ﾊﾞﾅﾅ,パイン,きゃべつ\", \",\")
+               For i = 0 To UBound(items)
+                 Cells(i + 1, 1).NumberFormat = \"@\"
+                 Cells(i + 1, 1).Value = items(i)
+               Next i
+               Range(\"A1:A\" & UBound(items) + 1).Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlNo
+               For i = 0 To UBound(items)
+                 out = out & Cells(i + 1, 1).Value & \",\"
+               Next i
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "-,!,_,1,１,10,2,a,A,ａ,a b,ab,Ab,aB,a-b,ア,ｱ,あ,あア,あい,カ,か,ガ,が,きゃべつ,パイン,ﾊﾞﾅﾅ,亜,一,西,東,南,北,ー,"
                     .to_string()
             )
         );
