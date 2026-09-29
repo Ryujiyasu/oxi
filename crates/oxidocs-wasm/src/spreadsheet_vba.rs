@@ -12888,8 +12888,18 @@ impl<'a> WorkbookHost<'a> {
         across: i64,
     ) -> Result<String, String> {
         let placed = match style {
-            FormulaStyle::R1C1 => {
+            FormulaStyle::R1C1 if down == 0 && across == 0 => {
                 formula_from_r1c1(&formula, address.row.saturating_sub(1), address.column)
+            }
+            // Written over a block, the R1C1 formula is read at the block's
+            // first cell and that formula carried to the rest: measured,
+            // `=SUM(R[-2]C:R[-1]C)` over B2:C3 is `=SUM(B:B)` in B2 (wrapped
+            // round the sheet) and `=SUM(#REF!)` in C3.
+            FormulaStyle::R1C1 => {
+                let row = (i64::from(address.row) - down).max(1) as u32;
+                let column = (i64::from(address.column) - across).max(0) as u32;
+                let first = formula_from_r1c1(&formula, row.saturating_sub(1), column)?;
+                translate_formula_references(&first, down, across)
             }
             FormulaStyle::A1 if down == 0 && across == 0 => Ok(formula),
             FormulaStyle::A1 => translate_formula_references(&formula, down, across),

@@ -856,6 +856,24 @@ pub fn translate_formula_references(
             _ => "#REF!".to_string(),
         };
     }
+    // A range with either end carried off the sheet is #REF! as a whole:
+    // measured, `=SUM(R[-2]C:R[-1]C)` filled from B2 to C3 reads
+    // `=SUM(#REF!)` there.
+    let lost = |token: &Token| matches!(token, Token::Name { name, .. } if name == "#REF!");
+    let mut kept: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if let (Some(near), Some(Token::Colon), Some(far)) = (tokens.get(index), tokens.get(index + 1), tokens.get(index + 2)) {
+            if (lost(near) || lost(far)) && matches!(near, Token::Name { .. }) && matches!(far, Token::Name { .. }) {
+                kept.push(Token::Name { sheet: None, name: "#REF!".to_string() });
+                index += 3;
+                continue;
+            }
+        }
+        kept.push(tokens[index].clone());
+        index += 1;
+    }
+    let tokens = kept;
 
     let mut output = String::new();
     if had_equals {
@@ -987,8 +1005,27 @@ fn ordered_range(near: &Token, far: &Token) -> Option<(Token, Token)> {
     let start = start.as_str();
     let rebuilt = |sheet: &Option<String>, name: String| Token::Name { sheet: sheet.clone(), name };
     if let (Some(mut low), Some(mut high)) = (parse_a1(start), parse_a1(&end)) {
+        // A block reaching from the first row to the last is the whole
+        // column, and one from the first column to the last the whole row:
+        // measured, B1:B1048576 reads back B:B.
+        let whole = |low: &crate::reference::CellRef, high: &crate::reference::CellRef| -> Option<(Token, Token)> {
+            let dollar = |absolute: bool| if absolute { "$" } else { "" };
+            if low.row == 0 && high.row == 1_048_575 && low.row_absolute == high.row_absolute {
+                return Some((
+                    rebuilt(sheet, format!("{}{}", dollar(low.col_absolute), crate::reference::col_to_letters(low.col))),
+                    rebuilt(&far_sheet, format!("{}{}", dollar(high.col_absolute), crate::reference::col_to_letters(high.col))),
+                ));
+            }
+            if low.col == 0 && high.col == 16_383 && low.col_absolute == high.col_absolute {
+                return Some((
+                    rebuilt(sheet, format!("{}{}", dollar(low.row_absolute), low.row + 1)),
+                    rebuilt(&far_sheet, format!("{}{}", dollar(high.row_absolute), high.row + 1)),
+                ));
+            }
+            None
+        };
         if low.row <= high.row && low.col <= high.col {
-            return None;
+            return whole(&low, &high);
         }
         if low.row > high.row {
             std::mem::swap(&mut low.row, &mut high.row);
@@ -997,6 +1034,9 @@ fn ordered_range(near: &Token, far: &Token) -> Option<(Token, Token)> {
         if low.col > high.col {
             std::mem::swap(&mut low.col, &mut high.col);
             std::mem::swap(&mut low.col_absolute, &mut high.col_absolute);
+        }
+        if let Some(whole) = whole(&low, &high) {
+            return Some(whole);
         }
         return Some((rebuilt(sheet, low.to_a1()), rebuilt(&far_sheet, high.to_a1())));
     }
