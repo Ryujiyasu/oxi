@@ -18900,6 +18900,9 @@ fn general_fit(value: f64, room: Option<u32>, measure: &dyn Fn(&str) -> u32) -> 
     if value == 0.0 {
         return "0".to_string();
     }
+    if !value.is_finite() {
+        return "#NUM!".to_string();
+    }
     let sign = if value < 0.0 { "-" } else { "" };
     let magnitude = value.abs();
     let whole_digits = if magnitude < 1.0 { 1 } else { magnitude.log10().floor() as usize + 1 };

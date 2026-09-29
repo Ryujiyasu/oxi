@@ -1962,6 +1962,9 @@ fn formula_result(value: Value) -> Value {
         // A cell holds no negative zero: `=-A1` over a blank, or a SUM of
         // nothing, is 0 in Excel, and a macro reading it writes 0.
         Value::Number(number) if number == 0.0 => Value::Number(0.0),
+        // A number past what a cell holds is #NUM!: measured, `=10^400`
+        // and `=FACT(171)`.
+        Value::Number(number) if !number.is_finite() => Value::Error(ExcelError::Num),
         other => other,
     }
 }
@@ -2027,6 +2030,20 @@ fn apply_binary(op: BinaryOp, a: Value, b: Value) -> Value {
     }
 
     if op.is_comparison() {
+        // Two numbers are compared at fifteen significant digits, as Excel
+        // keeps them: measured, `=0.1+0.2=0.3` is TRUE.
+        if let (Value::Number(x), Value::Number(y)) = (&a, &b) {
+            let (x, y) = (fifteen_digits(*x), fifteen_digits(*y));
+            let ord = x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal);
+            return Value::Logical(match op {
+                BinaryOp::Eq => ord.is_eq(),
+                BinaryOp::Ne => !ord.is_eq(),
+                BinaryOp::Lt => ord.is_lt(),
+                BinaryOp::Le => ord.is_le(),
+                BinaryOp::Gt => ord.is_gt(),
+                _ => ord.is_ge(),
+            });
+        }
         return match compare(&a, &b) {
             Ok(ord) => Value::Logical(match op {
                 BinaryOp::Eq => ord.is_eq(),
@@ -2064,7 +2081,7 @@ fn apply_binary(op: BinaryOp, a: Value, b: Value) -> Value {
             }
         }
         BinaryOp::Pow => {
-            let r = x.powf(y);
+            let r = crate::functions::excel_power(x, y);
             if r.is_nan() {
                 Value::Error(ExcelError::Num)
             } else {
@@ -2073,6 +2090,14 @@ fn apply_binary(op: BinaryOp, a: Value, b: Value) -> Value {
         }
         _ => unreachable!("comparison and concat handled above"),
     }
+}
+
+/// A number as its fifteen significant digits.
+fn fifteen_digits(x: f64) -> f64 {
+    if x == 0.0 || !x.is_finite() {
+        return x;
+    }
+    format!("{x:.14e}").parse().unwrap_or(x)
 }
 
 #[cfg(test)]

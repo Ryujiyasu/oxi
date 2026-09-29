@@ -895,7 +895,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
         "POWER" => {
             expect(args, 2)?;
-            Ok(Value::Number(num(&args[0])?.powf(num(&args[1])?)))
+            let answer = excel_power(num(&args[0])?, num(&args[1])?);
+            if answer.is_nan() {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(answer))
         }
         // Excel's INT floors toward negative infinity: INT(-1.5) is -2.
         "INT" => Ok(Value::Number(one(args)?.floor())),
@@ -3908,6 +3912,19 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
 
 /// Whether the largest-not-over test of LOOKUP holds for a candidate against
 /// the needle: numbers compare as numbers, text as text without case.
+/// `x ^ y` as Excel works it: a negative number to one over an odd whole
+/// number is its real root -- measured, `=POWER(-8,1/3)` is -2.
+pub(crate) fn excel_power(x: f64, y: f64) -> f64 {
+    if x < 0.0 && y.fract() != 0.0 {
+        let inverse = 1.0 / y;
+        let whole = inverse.round();
+        if (inverse - whole).abs() < 1e-9 && whole as i64 % 2 != 0 {
+            return -(-x).powf(y);
+        }
+    }
+    x.powf(y)
+}
+
 /// ln Γ(x), Lanczos.
 fn ln_gamma(x: f64) -> f64 {
     const G: [f64; 9] = [

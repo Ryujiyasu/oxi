@@ -390,8 +390,8 @@ pub fn canonical_formula(
                 let sheet = sheet.as_ref().map(|sheet| sheet_case(sheet).unwrap_or_else(|| sheet.clone()));
                 render_token(&mut output, Token::Name { sheet, name });
             }
-            Token::Number(value) if value.is_finite() && (*value == 0.0 || (1e-4..1e15).contains(&value.abs())) => {
-                output.push_str(&value.to_string());
+            Token::Number(value) if value.is_finite() => {
+                output.push_str(&formula_number_text(text).unwrap_or_else(|| formula_number(*value)))
             }
             Token::ErrorLit(_) => render_token(&mut output, token.clone()),
             _ => output.push_str(text),
@@ -401,6 +401,67 @@ pub fn canonical_formula(
         }
     }
     output
+}
+
+/// A number as Excel writes it in a formula: its fifteen significant digits,
+/// plainly while that takes at most 21 characters and in exponent form past
+/// that. Measured: 1E+20 is 100000000000000000000, 1.5E+21 stays 1.5E+21,
+/// 123456789012345678 is 123456789012345000, 1E-10 is 0.0000000001, 1.5E-20
+/// stays 1.5E-20, and pi is 3.14159265358979.
+fn formula_number(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let written = format!("{:.14e}", value.abs());
+    let (mantissa, exponent) = written.split_once('e').unwrap_or((&written, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let plain = if exponent >= 0 {
+        let whole_len = exponent as usize + 1;
+        if digits.len() <= whole_len {
+            format!("{digits}{}", "0".repeat(whole_len - digits.len()))
+        } else {
+            format!("{}.{}", &digits[..whole_len], &digits[whole_len..])
+        }
+    } else {
+        format!("0.{}{digits}", "0".repeat((-exponent - 1) as usize))
+    };
+    let sign = if value < 0.0 { "-" } else { "" };
+    if plain.len() <= 21 {
+        return format!("{sign}{plain}");
+    }
+    let lead = &digits[..1];
+    let rest = &digits[1..];
+    let mantissa = if rest.is_empty() { lead.to_string() } else { format!("{lead}.{rest}") };
+    format!("{sign}{mantissa}E{}{:02}", if exponent < 0 { '-' } else { '+' }, exponent.abs())
+}
+
+/// A number as written in a formula, cut -- not rounded -- to fifteen
+/// significant digits, then written as `formula_number` writes it. Measured:
+/// 123456789012345678 is 123456789012345000 and 0.1234567890123456789 is
+/// 0.123456789012345, the cell's value cut the same way.
+fn formula_number_text(text: &str) -> Option<String> {
+    let (mantissa, exponent) = match text.find(['e', 'E']) {
+        Some(at) => (&text[..at], text[at + 1..].parse::<i32>().ok()?),
+        None => (text, 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if !whole.chars().chain(fraction.chars()).all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let all: String = format!("{whole}{fraction}");
+    let leading = all.chars().take_while(|ch| *ch == '0').count();
+    if leading == all.len() {
+        return Some("0".to_string());
+    }
+    let significant: String = all[leading..].chars().take(15).collect();
+    // The power of ten of the first significant digit.
+    let power = whole.len() as i32 - 1 - leading as i32 + exponent;
+    let rebuilt = format!("{}.{}e{}", &significant[..1], &significant[1..], power);
+    let value: f64 = rebuilt.replace(".e", "e").parse().ok()?;
+    Some(formula_number(value))
 }
 
 /// `R2C3` written in an A1 formula is the cell it names, absolutely:
