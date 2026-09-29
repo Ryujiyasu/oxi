@@ -383,6 +383,14 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
             Err(why) => Arg::Value(Value::Error(why)),
         };
     }
+    // TREND answers along a straight line fitted to the known points, one
+    // answer for each new x, in the new x's shape.
+    if name == "TREND" {
+        return match trend(args) {
+            Ok(block) => Arg::Range(block),
+            Err(why) => Arg::Value(Value::Error(why)),
+        };
+    }
     // FREQUENCY counts into the bins and one more, down a column.
     if name == "FREQUENCY" {
         return match frequency(args) {
@@ -4531,6 +4539,69 @@ impl Fit {
         }
         Ok(self.sxy / (self.sxx * self.syy).sqrt())
     }
+}
+
+/// TREND(known_y, [known_x], [new_x], [const]): a least-squares line with one
+/// x, through the origin when const is FALSE. Measured: y 2,4,7 over x 1,2,3
+/// gives 9.333 at 4, and 11.071 at 5 through the origin.
+fn trend(args: &[Arg]) -> Result<RangeData, ExcelError> {
+    expect(args, 1)?;
+    let numbers = |arg: &Arg| -> Result<Vec<f64>, ExcelError> {
+        arg.flatten().into_iter().map(|v| v.to_number()).collect()
+    };
+    let ys = numbers(&args[0])?;
+    let given_x = |at: usize| match args.get(at) {
+        Some(Arg::Value(Value::Blank)) | None => None,
+        Some(arg) => Some(arg),
+    };
+    let xs = match given_x(1) {
+        Some(arg) => numbers(arg)?,
+        None => (1..=ys.len()).map(|n| n as f64).collect(),
+    };
+    if xs.len() != ys.len() || ys.is_empty() {
+        return Err(ExcelError::Ref);
+    }
+    let with_constant = match args.get(3).map(Arg::scalar) {
+        None | Some(Value::Blank) => true,
+        Some(v) => v.to_logical()?,
+    };
+    let n = ys.len() as f64;
+    let (slope, intercept) = if with_constant {
+        let (mx, my) = (xs.iter().sum::<f64>() / n, ys.iter().sum::<f64>() / n);
+        let sxx: f64 = xs.iter().map(|x| (x - mx) * (x - mx)).sum();
+        let sxy: f64 = xs.iter().zip(&ys).map(|(x, y)| (x - mx) * (y - my)).sum();
+        if sxx == 0.0 {
+            return Err(ExcelError::DivZero);
+        }
+        (sxy / sxx, my - sxy / sxx * mx)
+    } else {
+        let sxx: f64 = xs.iter().map(|x| x * x).sum();
+        if sxx == 0.0 {
+            return Err(ExcelError::DivZero);
+        }
+        (xs.iter().zip(&ys).map(|(x, y)| x * y).sum::<f64>() / sxx, 0.0)
+    };
+    let (width, height, new_xs) = match given_x(2) {
+        Some(arg) => {
+            let block = arg.as_range();
+            (block.width, block.height, numbers(arg)?)
+        }
+        None => match given_x(1) {
+            Some(arg) => {
+                let block = arg.as_range();
+                (block.width, block.height, xs.clone())
+            }
+            None => {
+                let block = args[0].as_range();
+                (block.width, block.height, xs.clone())
+            }
+        },
+    };
+    Ok(RangeData {
+        width,
+        height,
+        cells: new_xs.iter().map(|x| Value::Number(intercept + slope * x)).collect(),
+    })
 }
 
 /// FREQUENCY: how many of the data fall at or under each bin and above the

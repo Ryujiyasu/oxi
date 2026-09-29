@@ -218,6 +218,8 @@ pub struct Workbook {
     /// The state RAND draws from: seeded from the moment on first use, and
     /// moved on by every draw.
     rand_state: std::cell::Cell<u64>,
+    /// The sheets in the order the workbook has them, which SHEET counts by.
+    sheet_order: Vec<String>,
 }
 
 /// `range`, with any part reaching past what is remembered of a linked sheet
@@ -261,6 +263,9 @@ impl Workbook {
 
     pub fn add_sheet(&mut self, name: &str) {
         self.sheets.entry(name.to_string()).or_default();
+        if !self.sheet_order.iter().any(|held| held == name) {
+            self.sheet_order.push(name.to_string());
+        }
     }
 
     /// Say that a row (0-based) is hidden, and whether a filter hid it.
@@ -923,6 +928,49 @@ impl Workbook {
                         }
                     }
                     (Err(why), _) | (_, Err(why)) => Arg::Value(Value::Error(why)),
+                }
+            }
+            // What a formula asks about the workbook rather than the values:
+            // measured, SHEETS() is the count of sheets, SHEET() the place of
+            // the formula's own sheet, SHEET(Two!A1) and SHEET("Two") that
+            // sheet's place (an unknown name #N/A), ISFORMULA of a cell
+            // whether it holds one, and AREAS of a plain range 1.
+            Expr::Function { name, args }
+                if matches!(name.as_str(), "SHEET" | "SHEETS" | "ISFORMULA" | "AREAS") =>
+            {
+                let place = |named: &str| {
+                    self.sheet_order
+                        .iter()
+                        .position(|held| held.eq_ignore_ascii_case(named))
+                        .map(|at| Arg::Value(Value::Number((at + 1) as f64)))
+                        .unwrap_or(Arg::Value(Value::Error(ExcelError::NA)))
+                };
+                match (name.as_str(), args.as_slice()) {
+                    ("SHEETS", []) => Arg::Value(Value::Number(self.sheet_order.len().max(1) as f64)),
+                    ("SHEETS", [Expr::Ref(_)]) | ("AREAS", [Expr::Ref(_)]) => Arg::Value(Value::Number(1.0)),
+                    ("SHEET", []) => place(sheet),
+                    ("SHEET", [Expr::Ref(reference)]) => place(reference.sheet.as_deref().unwrap_or(sheet)),
+                    ("SHEET", [other]) => {
+                        match self.eval_arg_inner(other, sheet, depth + 1, skip, at).scalar() {
+                            Value::Text(named) => place(&named),
+                            Value::Error(why) => Arg::Value(Value::Error(why)),
+                            _ => Arg::Value(Value::Error(ExcelError::NA)),
+                        }
+                    }
+                    ("ISFORMULA", [Expr::Ref(reference)]) => {
+                        let target = reference.sheet.as_deref().unwrap_or(sheet);
+                        let corner = (
+                            reference.range.start.col.min(reference.range.end.col),
+                            reference.range.start.row.min(reference.range.end.row),
+                        );
+                        let held = self
+                            .sheets
+                            .get(target)
+                            .and_then(|held| held.cells.get(&corner))
+                            .is_some_and(|cell| matches!(cell, Cell::Formula { .. }));
+                        Arg::Value(Value::Logical(held))
+                    }
+                    _ => Arg::Value(Value::Error(ExcelError::Value)),
                 }
             }
             Expr::Function { name, args } if name == "LET" => {
@@ -2183,6 +2231,52 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "I1"), Value::Number(10.0));
         // Every member answers with the whole formula.
         assert_eq!(wb.formula("Sheet1", "D3"), Some("=A1:A3*2"));
+    }
+
+    #[test]
+    fn sheet_questions_and_trend_answer_as_excel_does() {
+        // Every answer here is Excel's.
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        wb.add_sheet("Two");
+        wb.set_value("Sheet1", "A1", Value::Number(5.0)).unwrap();
+        wb.set_formula("Sheet1", "A2", "=A1*2").unwrap();
+        for (row, (x, y)) in [(1, (1.0, 2.0)), (2, (2.0, 4.0)), (3, (3.0, 7.0))] {
+            wb.set_value("Sheet1", &format!("B{row}"), Value::Number(x)).unwrap();
+            wb.set_value("Sheet1", &format!("C{row}"), Value::Number(y)).unwrap();
+        }
+        for (cell, formula) in [
+            ("D1", "=SHEETS()"),
+            ("D2", "=SHEET()"),
+            ("D3", "=SHEET(Two!A1)"),
+            ("D4", "=SHEET(\"Two\")"),
+            ("D5", "=ISFORMULA(A2)"),
+            ("D6", "=ISFORMULA(A1)"),
+            ("D7", "=AREAS(A1:B2)"),
+            ("D8", "=INDEX(TREND(C1:C3,B1:B3,{4;5},FALSE),2)"),
+            ("D9", "=SUM(TREND(C1:C3,B1:B3))"),
+            ("D10", "=SHEET(\"nope\")"),
+        ] {
+            wb.set_formula("Sheet1", cell, formula).unwrap();
+        }
+        wb.recalculate();
+        let at = |cell: &str| wb.value("Sheet1", cell);
+        assert_eq!(at("D1"), Value::Number(2.0));
+        assert_eq!(at("D2"), Value::Number(1.0));
+        assert_eq!(at("D3"), Value::Number(2.0));
+        assert_eq!(at("D4"), Value::Number(2.0));
+        assert_eq!(at("D5"), Value::Logical(true));
+        assert_eq!(at("D6"), Value::Logical(false));
+        assert_eq!(at("D7"), Value::Number(1.0));
+        match at("D8") {
+            Value::Number(n) => assert!((n - 11.0714285714286).abs() < 1e-12),
+            other => panic!("{other:?}"),
+        }
+        match at("D9") {
+            Value::Number(n) => assert!((n - 13.0).abs() < 1e-12),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(at("D10"), Value::Error(ExcelError::NA));
     }
 
     #[test]
