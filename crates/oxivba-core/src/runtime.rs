@@ -8928,7 +8928,7 @@ fn parse_written_date_text(source: &str, this_year: i64) -> Result<f64, String> 
     if time_text.is_empty() {
         Ok(date)
     } else {
-        Ok(date + parse_time_text(&time_text)?)
+        Ok(with_time_of_day(date, parse_time_text(&time_text)?))
     }
 }
 
@@ -9062,7 +9062,7 @@ fn parse_named_date_text(source: &str, this_year: i64) -> Option<Result<f64, Str
             .map_err(|_| format!("invalid Date day: {day_text}"))?;
         let mut serial = strict_date_serial(year, i64::from(month), day, source)?;
         if pieces.len() > 3 {
-            serial += parse_time_text(&pieces[3..].join(" "))?;
+            serial = with_time_of_day(serial, parse_time_text(&pieces[3..].join(" "))?);
         }
         Ok(serial)
     })())
@@ -9189,22 +9189,63 @@ fn date_add(interval: &str, amount: i64, serial: f64) -> Result<f64, String> {
             let month = total.rem_euclid(12) as u32 + 1;
             let day = parts.day.min(days_in_month(year, month));
             let date = date_serial(year, i64::from(month), i64::from(day))?;
-            date + serial.rem_euclid(1.0)
+            let time = serial.fract().abs();
+            if date < 0.0 { date - time } else { date + time }
         }
-        "y" | "d" | "w" => serial + amount as f64,
-        "ww" => serial + amount as f64 * 7.0,
-        "h" => serial + amount as f64 / 24.0,
-        "n" => serial + amount as f64 / 1_440.0,
-        "s" => serial + amount as f64 / 86_400.0,
-        _ => return Err(format!("unsupported Date interval: {interval}")),
+        // The rest move along the time line, which before 12/30/1899 is not
+        // the serial itself -- there the fraction is the time of day ADDED to
+        // a negative day: measured, `DateAdd("h", -1, #12/30/1899#)` is
+        // 12/29/1899 11:00 PM (serial -1.958...), not 1:00 AM (-0.0416...).
+        _ => {
+            let step = match interval {
+                "y" | "d" | "w" => amount as f64,
+                "ww" => amount as f64 * 7.0,
+                "h" => amount as f64 / 24.0,
+                "n" => amount as f64 / 1_440.0,
+                "s" => amount as f64 / 86_400.0,
+                _ => return Err(format!("unsupported Date interval: {interval}")),
+            };
+            let line = if serial < 0.0 { serial.trunc() + serial.fract().abs() } else { serial } + step;
+            if line >= 0.0 {
+                line
+            } else {
+                let day = line.floor();
+                let time = line - day;
+                if time == 0.0 { day } else { day - time }
+            }
+        }
     };
     serial_date_parts(result)?;
     Ok(result)
 }
 
+/// A day and a time of day as the serial VBA keeps: before 12/30/1899 the
+/// time is written as a fraction taken AWAY from the negative day, so
+/// `#12/29/1899 6:00#` is -1.25 (measured with CDbl).
+fn with_time_of_day(date: f64, time: f64) -> f64 {
+    if date < 0.0 { date - time } else { date + time }
+}
+
+/// How many of an interval `k` to a day lie before a moment, counted along
+/// the time line: before 12/30/1899 a serial's fraction is time of day
+/// added to its negative day. Measured: `DateDiff("h", CDate(-1.25),
+/// CDate(0.25))` is 24 and `DateDiff("s", CDate(-1.9), #1:00#)` 12240. On
+/// day zero's negative side Excel counts one fewer: `DateDiff("n",
+/// CDate(-0.5), 0)` is -719, `("s", ...)` -43199, `("n", CDate(-0.25), 0)`
+/// -359 -- while `("n", CDate(-1.5), CDate(-1))` is a plain -720.
+fn moment_count(serial: f64, k: f64, rounded: bool) -> i64 {
+    let line = if serial < 0.0 { serial.trunc() + serial.fract().abs() } else { serial };
+    let scaled = line * k;
+    if serial < 0.0 && serial > -1.0 {
+        return scaled.ceil() as i64 - 1;
+    }
+    if rounded { scaled.round() as i64 } else { scaled.floor() as i64 }
+}
+
 fn date_diff(interval: &str, first: f64, second: f64, first_day: i64) -> Result<i64, String> {
     let a = serial_date_parts(first)?;
     let b = serial_date_parts(second)?;
+    let days = |serial: f64| moment_count(serial, 1.0, false);
     Ok(match interval {
         "yyyy" => b.year - a.year,
         "q" => {
@@ -9212,15 +9253,12 @@ fn date_diff(interval: &str, first: f64, second: f64, first_day: i64) -> Result<
                 - (a.year * 4 + i64::from((a.month - 1) / 3))
         }
         "m" => (b.year * 12 + i64::from(b.month)) - (a.year * 12 + i64::from(a.month)),
-        "y" | "d" => second.floor() as i64 - first.floor() as i64,
-        "w" => (second.floor() as i64 - first.floor() as i64) / 7,
-        "ww" => {
-            week_boundary_index(second.floor() as i64, first_day)
-                - week_boundary_index(first.floor() as i64, first_day)
-        }
-        "h" => (second * 24.0).floor() as i64 - (first * 24.0).floor() as i64,
-        "n" => (second * 1_440.0).floor() as i64 - (first * 1_440.0).floor() as i64,
-        "s" => (second * 86_400.0).round() as i64 - (first * 86_400.0).round() as i64,
+        "y" | "d" => days(second) - days(first),
+        "w" => (days(second) - days(first)) / 7,
+        "ww" => week_boundary_index(days(second), first_day) - week_boundary_index(days(first), first_day),
+        "h" => moment_count(second, 24.0, false) - moment_count(first, 24.0, false),
+        "n" => moment_count(second, 1_440.0, false) - moment_count(first, 1_440.0, false),
+        "s" => moment_count(second, 86_400.0, true) - moment_count(first, 86_400.0, true),
         _ => return Err(format!("unsupported Date interval: {interval}")),
     })
 }
