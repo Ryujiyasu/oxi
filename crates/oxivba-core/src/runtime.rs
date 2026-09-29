@@ -1253,10 +1253,11 @@ impl<'a> Runtime<'a> {
         select: &SelectCaseStmt,
         frame: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
+        let subject_typed = self.statically_typed(&select.subject, frame);
         let subject = self.eval_expr(&select.subject, frame)?;
         for case in &select.cases {
             for label in &case.labels {
-                if self.case_matches(&subject, label, frame, select.span.line)? {
+                if self.case_matches(&subject, subject_typed, label, frame, select.span.line)? {
                     return self.exec_body(&case.body, frame);
                 }
             }
@@ -1270,13 +1271,22 @@ impl<'a> Runtime<'a> {
     fn case_matches(
         &mut self,
         subject: &Value,
+        subject_typed: bool,
         label: &CaseLabel,
         frame: &mut Frame,
         line: u32,
     ) -> Result<bool, RuntimeError> {
         let option_compare_text = self.option_compare_text();
-        let compare = |op, lhs, rhs| {
-            binary(op, lhs, rhs, option_compare_text)
+        // A label is compared the way `subject op label` would be, Variant
+        // rules and all: measured, a Variant 3 against `Case "a" To "m"` is
+        // no mismatch.
+        let label_typed = match label {
+            CaseLabel::Value(value) | CaseLabel::Compare(_, value) => self.statically_typed(value, frame),
+            CaseLabel::Range(lower, _) => self.statically_typed(lower, frame),
+        };
+        let compare = |op, lhs: Value, rhs: Value| {
+            variant_comparison(op, &lhs, &rhs, (subject_typed, label_typed), option_compare_text)
+                .unwrap_or_else(|| binary(op, lhs, rhs, option_compare_text))
                 .map_err(|(kind, message)| error(kind, message, Some(line)))
                 .and_then(|value| {
                     truthy(&value).map_err(|message| {
@@ -2230,6 +2240,21 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// Whether an expression has a type of its own rather than being a
+    /// Variant: a literal, a variable declared with a type (or a suffix), or
+    /// a joining with `&`. Cell values, function results and undeclared
+    /// variables are Variants.
+    fn statically_typed(&self, expr: &Expr, frame: &Frame) -> bool {
+        match expr {
+            Expr::Literal(..) | Expr::TypedIdent { .. } => true,
+            Expr::Binary { op: BinaryOp::Concat, .. } => true,
+            Expr::Ident(name, _) => self
+                .declared_type(frame, name)
+                .is_some_and(|declared| !declared.eq_ignore_ascii_case("variant")),
+            _ => false,
+        }
+    }
+
     fn declared_type(&self, frame: &Frame, name: &str) -> Option<String> {
         let name = key(name);
         frame
@@ -2509,6 +2534,7 @@ impl<'a> Runtime<'a> {
                 })
             }
             Expr::Binary { op, lhs, rhs, span } => {
+                let typed = (self.statically_typed(lhs, frame), self.statically_typed(rhs, frame));
                 let lhs = self.eval_expr(lhs, frame)?;
                 let rhs = self.eval_expr(rhs, frame)?;
                 // `Is` asks about identity, so it keeps the objects themselves.
@@ -2520,6 +2546,9 @@ impl<'a> Runtime<'a> {
                         self.scalar_operand(rhs, span.line)?,
                     )
                 };
+                if let Some(answer) = variant_comparison(*op, &lhs, &rhs, typed, self.option_compare_text()) {
+                    return answer.map_err(|(kind, message)| error(kind, message, Some(span.line)));
+                }
                 binary(*op, lhs, rhs, self.option_compare_text())
                     .map_err(|(kind, message)| error(kind, message, Some(span.line)))
             }
@@ -2875,6 +2904,7 @@ impl<'a> Runtime<'a> {
         let mut bound = Vec::with_capacity(procedure.params.len());
         let mut copybacks = Vec::<(ValueSlot, Vec<i64>, ValueSlot)>::new();
         let mut fixed_string_copybacks = Vec::<(ValueSlot, usize, ValueSlot)>::new();
+        let mut record_copybacks = Vec::<(Expr, ValueSlot)>::new();
         for (parameter_index, parameter) in procedure.params.iter().enumerate() {
             if parameter.mode == ParamMode::ParamArray {
                 let mut values = Vec::with_capacity(param_array_args.len());
@@ -2933,6 +2963,17 @@ impl<'a> Runtime<'a> {
                         }
                     }
                 }
+                // A field of a record goes by reference too, and comes back
+                // changed: measured, `Twice p.X` doubles p.X, where
+                // `Twice (p.X)` in brackets does not.
+                if matches!(expression, Expr::Member { .. } | Expr::Index { .. })
+                    && self.record_rooted(frame, expression)
+                {
+                    let value = Rc::new(RefCell::new(self.eval_expr(expression, frame)?));
+                    bound.push(BoundArgument::Reference(value.clone()));
+                    record_copybacks.push((expression.clone(), value));
+                    continue;
+                }
                 if let Expr::Index { target, args, .. } = expression {
                     let array = expr_name(target)
                         .and_then(|name| self.lookup_slot(frame, name))
@@ -2962,6 +3003,10 @@ impl<'a> Runtime<'a> {
         }
 
         let result = self.invoke_procedure(&procedure, bound, line)?;
+        for (place, value) in record_copybacks {
+            let value = value.borrow().clone();
+            self.assign(&place, value, frame, line.unwrap_or(0))?;
+        }
         for (target, width, value) in fixed_string_copybacks {
             *target.borrow_mut() = coerce_string_width(value.borrow().clone(), width, line)?;
         }
@@ -9522,6 +9567,70 @@ fn keep_rank(number: f64, was: &Value) -> Result<Value, String> {
 /// The asymmetry between `+` and `-` is Excel's, not a simplification: a moment
 /// plus a moment stays a Date there even though nothing sensible is being
 /// added.
+/// A number compared with a String, where a Variant is involved. Measured
+/// against Excel, with V a Variant and S a typed expression:
+///
+/// - V number against V string: the number is always the lesser
+///   (`30 < "10"` held in two Variants is True).
+/// - S number against V string: a numeric string compares as a number
+///   (`n < v` with 30 and "10" is False); any other string is the greater.
+/// - V number against S string: the number is written out and the two
+///   compared as text (`v > "9"` with 30 is False, `Cells(1, 1) < "a"` True).
+/// - S number against S string is not this: the string is made a number,
+///   and `n < "a"` is 13.
+///
+/// None when the rule does not apply and the ordinary operator decides.
+fn variant_comparison(
+    op: BinaryOp,
+    lhs: &Value,
+    rhs: &Value,
+    typed: (bool, bool),
+    option_compare_text: bool,
+) -> Option<Result<Value, (RuntimeErrorKind, String)>> {
+    use BinaryOp::*;
+    if !matches!(op, Eq | Ne | Lt | Le | Gt | Ge) {
+        return None;
+    }
+    let numeric = |value: &Value| any_number(value).is_some();
+    let (number_left, number_typed, string, string_typed) = match (lhs, rhs) {
+        (Value::String(text), other) if numeric(other) => (false, typed.1, text, typed.0),
+        (other, Value::String(text)) if numeric(other) => (true, typed.0, text, typed.1),
+        _ => return None,
+    };
+    let number = if number_left { lhs } else { rhs };
+    let settle = |ordering: std::cmp::Ordering| {
+        let ordering = if number_left { ordering } else { ordering.reverse() };
+        Some(Ok(Value::Boolean(match op {
+            Eq => ordering == std::cmp::Ordering::Equal,
+            Ne => ordering != std::cmp::Ordering::Equal,
+            Lt => ordering == std::cmp::Ordering::Less,
+            Le => ordering != std::cmp::Ordering::Greater,
+            Gt => ordering == std::cmp::Ordering::Greater,
+            _ => ordering != std::cmp::Ordering::Less,
+        })))
+    };
+    match (number_typed, string_typed) {
+        (true, true) => None,
+        (false, false) => settle(std::cmp::Ordering::Less),
+        (true, false) => match numeric_text(string) {
+            Some(_) => None,
+            None => settle(std::cmp::Ordering::Less),
+        },
+        (false, true) => {
+            let written = match text(number) {
+                Ok(written) => written,
+                Err(message) => return Some(Err((RuntimeErrorKind::TypeMismatch, message))),
+            };
+            let (a, b) = if number_left {
+                (Value::String(written), Value::String(string.clone()))
+            } else {
+                (Value::String(string.clone()), Value::String(written))
+            };
+            Some(binary(op, a, b, option_compare_text))
+        }
+    }
+}
+
 fn arithmetic_result(
     answer: f64,
     lhs: &Value,
@@ -15262,6 +15371,43 @@ mod tests {
         assert_eq!(
             run(source, "Ask", vec![]).unwrap(),
             Value::String("1234|Double|ab|12|String|0|4|Double|1000|7".to_string())
+        );
+    }
+
+    /// Numbers against strings where a Variant is involved, and a record's
+    /// field passed by reference. Every answer here is Excel's.
+    #[test]
+    fn variant_comparisons_and_record_fields_by_reference() {
+        let source = "Private Type Pt
+                        X As Long
+                      End Type
+                      Private Sub Twice(ByRef v As Long)
+                        v = v * 2
+                      End Sub
+                      Private Function Kind(v As Variant) As String
+                        Select Case v
+                          Case \"a\" To \"m\": Kind = \"early\"
+                          Case 1, 3, 5: Kind = \"odd\"
+                          Case Else: Kind = \"other\"
+                        End Select
+                      End Function
+                      Public Function Ask() As String
+                        Dim vn As Variant, vs As Variant, v10 As Variant, n As Long, p As Pt
+                        vn = 30: vs = \"a\": v10 = \"10\": n = 30
+                        Ask = (vn < \"a\") & (vn > \"9\") & (vn < v10) & (n < v10) & (n < vs) & Kind(3)
+                        p.X = 3
+                        Twice (p.X)
+                        Ask = Ask & p.X
+                        Twice p.X
+                        Ask = Ask & p.X
+                        On Error Resume Next
+                        Ask = Ask & (n < \"a\")
+                        Ask = Ask & Err.Number
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("TrueFalseTrueFalseTrueodd3613".to_string())
         );
     }
 }
