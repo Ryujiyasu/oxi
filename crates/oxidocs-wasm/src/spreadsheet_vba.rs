@@ -2527,7 +2527,8 @@ impl<'a> WorkbookHost<'a> {
         if found.is_empty() {
             return Err("Range.SpecialCells found no cells like that".to_string());
         }
-        self.blocks_object(found)
+        let areas = special_areas(&found);
+        self.written_blocks_object(areas)
     }
 
     /// Work a function out the way the sheet would.
@@ -20327,6 +20328,73 @@ fn set_r1c1_absoluteness(text: &str, mode: i64, row: u32, column: u32) -> String
         i += 1;
     }
     out
+}
+
+/// How `SpecialCells` cuts the cells it found into areas, read off Excel's
+/// answers on eleven patterns: the cells are taken from the last back to the
+/// first, each one stretching the earliest area it can lengthen into a
+/// rectangle -- a one-row area along its row, a one-column area up its
+/// column -- or starting one of its own; an area that comes to line up
+/// exactly with another joins it; and the areas are given in the reverse of
+/// the order they began. So a staircase of blanks comes out in columns,
+/// `B1,C1:C2,D1:D3,E1:E4`, where the same blanks read along rows would be
+/// four other areas.
+fn special_areas(cells: &[CellRange]) -> Vec<CellRange> {
+    let mut areas: Vec<Option<CellRange>> = Vec::new();
+    let lengthens = |area: &CellRange, cell: &CellRange| {
+        (area.start_row == area.end_row
+            && cell.start_row == area.start_row
+            && (cell.start_column + 1 == area.start_column || cell.start_column == area.end_column + 1))
+            || (area.start_column == area.end_column
+                && cell.start_column == area.start_column
+                && (cell.start_row + 1 == area.start_row || cell.start_row == area.end_row + 1))
+    };
+    let lines_up = |one: &CellRange, other: &CellRange| {
+        (one.start_column == other.start_column
+            && one.end_column == other.end_column
+            && (one.end_row + 1 == other.start_row || other.end_row + 1 == one.start_row))
+            || (one.start_row == other.start_row
+                && one.end_row == other.end_row
+                && (one.end_column + 1 == other.start_column || other.end_column + 1 == one.start_column))
+    };
+    for cell in cells.iter().rev() {
+        let found = areas
+            .iter()
+            .position(|area| area.as_ref().is_some_and(|area| lengthens(area, cell)));
+        let Some(mut at) = found else {
+            areas.push(Some(*cell));
+            continue;
+        };
+        let held = areas[at].expect("found above");
+        areas[at] = Some(CellRange {
+            start_row: held.start_row.min(cell.start_row),
+            end_row: held.end_row.max(cell.end_row),
+            start_column: held.start_column.min(cell.start_column),
+            end_column: held.end_column.max(cell.end_column),
+            ..held
+        });
+        loop {
+            let this = areas[at].expect("kept");
+            let partner = areas
+                .iter()
+                .enumerate()
+                .position(|(other, area)| other != at && area.as_ref().is_some_and(|area| lines_up(&this, area)));
+            let Some(other) = partner else { break };
+            let that = areas[other].expect("found above");
+            let joined = CellRange {
+                start_row: this.start_row.min(that.start_row),
+                end_row: this.end_row.max(that.end_row),
+                start_column: this.start_column.min(that.start_column),
+                end_column: this.end_column.max(that.end_column),
+                ..this
+            };
+            let keep = at.min(other);
+            areas[at.max(other)] = None;
+            areas[keep] = Some(joined);
+            at = keep;
+        }
+    }
+    areas.into_iter().flatten().rev().collect()
 }
 
 /// A filter criterion as `Filter.Criteria1` reads it back: a bare value
