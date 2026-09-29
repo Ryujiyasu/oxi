@@ -48,6 +48,9 @@ pub enum Token {
     /// `#` after a cell: the whole of what that cell's formula spilled,
     /// `=SUM(D1#)`.
     Hash,
+    /// A space between two references: the cells both share,
+    /// `=SUM(A1:C3 B2:C3)`.
+    Intersect,
 
     Eq,
     Ne,
@@ -138,7 +141,22 @@ fn tokenize_spanned(input: &str) -> Result<Vec<(Token, usize)>, ParseError> {
         let c = bytes[i] as char;
 
         if c.is_ascii_whitespace() {
-            i += 1;
+            // A space with a reference on either side is the intersection
+            // operator; anywhere else it is only a space.
+            let ends_a_reference = matches!(
+                tokens.last(),
+                Some(Token::Name { .. } | Token::RParen | Token::Table { .. } | Token::Hash)
+            );
+            let mut next = i;
+            while next < bytes.len() && (bytes[next] as char).is_ascii_whitespace() {
+                next += 1;
+            }
+            let starts_a_reference = next < bytes.len()
+                && matches!(bytes[next] as char, 'A'..='Z' | 'a'..='z' | '$' | '\'' | '(' | '_');
+            if ends_a_reference && starts_a_reference && !matches!(tokens.last(), Some(Token::Name { name, .. }) if src[next..].starts_with('(') && name.is_empty()) {
+                tokens.push(Token::Intersect);
+            }
+            i = next;
             continue;
         }
 
@@ -513,6 +531,15 @@ impl AtReader<'_> {
                 }
                 if self.peek() == Some(&Token::Hash) {
                     self.pos += 1;
+                    node = AtNode::Block { start };
+                }
+                while self.peek() == Some(&Token::Intersect) {
+                    self.pos += 1;
+                    self.primary()?;
+                    while self.peek() == Some(&Token::Colon) {
+                        self.pos += 1;
+                        self.primary()?;
+                    }
                     node = AtNode::Block { start };
                 }
                 if self.peek() == Some(&Token::Percent) {
@@ -1688,6 +1715,7 @@ pub(crate) fn render_token(output: &mut String, token: Token) {
         Token::LBrace => output.push('{'),
         Token::At => output.push('@'),
         Token::Hash => output.push('#'),
+        Token::Intersect => output.push(' '),
         Token::RBrace => output.push('}'),
         Token::Semicolon => output.push(';'),
         Token::Table { name, asked } => {

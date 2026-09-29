@@ -1086,6 +1086,12 @@ impl Workbook {
                 Arg::Range(self.materialise(&target, &range, skip))
             }
 
+            // Two references that share no cell: #NULL!, measured.
+            Expr::Function { name, .. } if name == "_ISECT" => match self.reference_of(expr, sheet, depth + 1, at) {
+                Some((target, range)) => Arg::Range(self.materialise(&target, &range, skip)),
+                None => Arg::Value(Value::Error(ExcelError::Null)),
+            },
+
             // `D1#`: all that D1 spilled, or #REF! where it spills nothing.
             Expr::Function { name, .. } if name == "_SPILL" => match self.reference_of(expr, sheet, depth + 1, at) {
                 Some((target, range)) => Arg::Range(self.materialise(&target, &range, skip)),
@@ -1556,6 +1562,16 @@ impl Workbook {
                 self.indirect_range(args, sheet, depth, at).ok()
             }
             Expr::Function { name, args } if name == "INDEX" => self.index_range(args, sheet, depth, at),
+            Expr::Function { name, args } if name == "_ISECT" && args.len() == 2 => {
+                let (left_sheet, left) = self.reference_of(&args[0], sheet, depth, at)?;
+                let (right_sheet, right) = self.reference_of(&args[1], sheet, depth, at)?;
+                if !left_sheet.eq_ignore_ascii_case(&right_sheet) {
+                    return None;
+                }
+                let start = CellRef::new(left.start.col.max(right.start.col), left.start.row.max(right.start.row));
+                let end = CellRef::new(left.end.col.min(right.end.col), left.end.row.min(right.end.row));
+                (start.col <= end.col && start.row <= end.row).then(|| (left_sheet, RangeRef::normalised(start, end)))
+            }
             Expr::Function { name, args } if name == "_SPILL" && args.len() == 1 => {
                 let (target, range) = self.reference_of(&args[0], sheet, depth, at)?;
                 let range = self.spill_range(&target, range.start).or_else(|| {
@@ -2750,6 +2766,30 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "B1"), Value::Number(1101.0));
         assert_eq!(wb.value("Sheet1", "B2"), Value::Number(1001.0));
         assert_eq!(wb.value("Sheet1", "B3"), Value::Number(1111.0));
+    }
+
+    /// A space between references is the cells they share, #NULL! where they
+    /// share none; MMULT is the matrix product. Measured in Excel.
+    #[test]
+    fn intersection_and_mmult() {
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        for (at, value) in ["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"].iter().zip(1..) {
+            wb.set_value("Sheet1", at, Value::Number(value as f64)).unwrap();
+        }
+        wb.set_formula("Sheet1", "E1", "=SUM(A1:C3 B2:C3)").unwrap();
+        wb.set_formula("Sheet1", "E2", "=SUM(A1:A3 C1:C3)").unwrap();
+        wb.set_formula("Sheet1", "E3", "=ROWS(A1:C3 B2:C3)").unwrap();
+        wb.set_formula("Sheet1", "E4", "=ISREF(A1 B1)").unwrap();
+        wb.set_formula("Sheet1", "E5", "=SUM(MMULT(A1:C1,A1:A3))").unwrap();
+        wb.set_formula("Sheet1", "E6", "=A1:A3,C1").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(28.0));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Error(ExcelError::Null));
+        assert_eq!(wb.value("Sheet1", "E3"), Value::Number(2.0));
+        assert_eq!(wb.value("Sheet1", "E4"), Value::Logical(false));
+        assert_eq!(wb.value("Sheet1", "E5"), Value::Number(30.0));
+        assert_eq!(wb.value("Sheet1", "E6"), Value::Error(ExcelError::Value));
     }
 
     /// A formula reading its own cell is a cycle and stays 0, as Excel

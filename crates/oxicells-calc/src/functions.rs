@@ -405,6 +405,37 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
             Err(why) => Arg::Value(Value::Error(why)),
         };
     }
+    // MMULT: the matrix product, rows of the first by columns of the second.
+    // Measured: `@MMULT(A1:A3,1)` over 1,2,3 is 1 -- a lone number is a
+    // block of one. A block that is not all numbers, or shapes that do not
+    // meet, is #VALUE!.
+    if name == "MMULT" {
+        let [left, right] = args else {
+            return Arg::Value(Value::Error(ExcelError::Value));
+        };
+        let (a, b) = (left.as_range(), right.as_range());
+        if a.width != b.height || a.cells.is_empty() || b.cells.is_empty() {
+            return Arg::Value(Value::Error(ExcelError::Value));
+        }
+        let number = |value: Value| match value {
+            Value::Number(n) => Some(n),
+            _ => None,
+        };
+        let mut cells = Vec::with_capacity(a.height * b.width);
+        for row in 0..a.height {
+            for col in 0..b.width {
+                let mut sum = 0.0;
+                for k in 0..a.width {
+                    match (number(a.at(k, row)), number(b.at(col, k))) {
+                        (Some(x), Some(y)) => sum += x * y,
+                        _ => return Arg::Value(Value::Error(ExcelError::Value)),
+                    }
+                }
+                cells.push(Value::Number(sum));
+            }
+        }
+        return Arg::Range(RangeData { width: b.width, height: a.height, cells });
+    }
     // TRANSPOSE turns its one block on its side, which is the whole of it:
     // `{=TRANSPOSE(A1:A2)}` across F1:G1 is 1 and 2.
     if name == "TRANSPOSE" {
@@ -504,23 +535,24 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "ISNUMBER", "ISODD", "ISOWEEKNUM", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM",
     "LEFT", "LEFTB", "LEN", "LENB", "LET", "LN", "LOG", "LOG10", "LOOKUP", "LOWER", "M",
     "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS",
-    "MINUTE", "MIRR", "MOD", "MODE", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "N", "NA",
-    "NETWORKDAYS", "NETWORKDAYS.INTL", "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV",
-    "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV", "NUMBERVALUE",
-    "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PEARSON", "PERCENTILE",
-    "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERMUT", "PHI", "PI", "PMT", "POWER",
-    "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC", "QUARTILE.INC", "QUOTIENT",
-    "RADIANS", "RAND", "RANDBETWEEN", "RANK", "RANK.AVG", "RANK.EQ", "RATE", "REPLACE",
-    "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW",
-    "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND", "SEQUENCE", "SHEET", "SHEETS", "SIGN", "SIN",
-    "SINH", "SKEW", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE",
-    "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STEYX", "SUBSTITUTE", "SUBTOTAL",
-    "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2",
-    "SWITCH", "SYD", "T", "TAKE", "TAN", "TANH", "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN",
-    "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL", "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE",
-    "TRUNC", "TYPE", "UNICHAR", "UNICODE", "UNIQUE", "UPPER", "VALUE", "VAR", "VAR.P", "VAR.S",
-    "VARA", "VARP", "VLOOKUP", "VSTACK", "WEEKDAY", "WEEKNUM", "WORKDAY", "WORKDAY.INTL",
-    "WRAPCOLS", "WRAPROWS", "XLOOKUP", "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
+    "MINUTE", "MIRR", "MMULT", "MOD", "MODE", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL",
+    "N", "NA", "NETWORKDAYS", "NETWORKDAYS.INTL", "NORM.DIST", "NORM.INV", "NORM.S.DIST",
+    "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV",
+    "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PEARSON",
+    "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERMUT", "PHI", "PI",
+    "PMT", "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC",
+    "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDBETWEEN", "RANK", "RANK.AVG",
+    "RANK.EQ", "RATE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN", "ROUND",
+    "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND", "SEQUENCE",
+    "SHEET", "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN", "SLOPE", "SMALL", "SORT",
+    "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA",
+    "STDEVP", "STEYX", "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT",
+    "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "TAKE", "TAN", "TANH",
+    "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL",
+    "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TYPE", "UNICHAR", "UNICODE",
+    "UNIQUE", "UPPER", "VALUE", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VLOOKUP", "VSTACK",
+    "WEEKDAY", "WEEKNUM", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XLOOKUP",
+    "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
 ];
 
 /// Whether `name` is a function this build knows.

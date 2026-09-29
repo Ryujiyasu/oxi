@@ -24,7 +24,16 @@ use crate::value::Value;
 pub fn parse(input: &str) -> Result<Expr, ParseError> {
     let tokens = tokenize(input)?;
     let mut parser = Parser { tokens, pos: 0 };
-    let expr = parser.parse_comparison()?;
+    let mut expr = parser.parse_comparison()?;
+    // `=A1:A3,C1` is a reference of two areas standing alone, which a cell
+    // cannot show: measured, it is #VALUE!.
+    if parser.peek() == Some(&Token::Comma) {
+        let mut areas = vec![expr];
+        while parser.eat(&Token::Comma) {
+            areas.push(parser.parse_comparison()?);
+        }
+        expr = Expr::Function { name: "_UNION".to_string(), args: areas };
+    }
     if parser.pos < parser.tokens.len() {
         return Err(ParseError::TrailingInput(format!("{:?}", parser.peek())));
     }
@@ -193,6 +202,12 @@ impl Parser {
                 while self.peek() == Some(&Token::Hash) {
                     self.pos += 1;
                     expr = Expr::Function { name: "_SPILL".to_string(), args: vec![expr] };
+                }
+                // `A1:C3 B2:C3`: the cells both share.
+                while self.peek() == Some(&Token::Intersect) {
+                    self.pos += 1;
+                    let other = self.parse_range()?;
+                    expr = Expr::Function { name: "_ISECT".to_string(), args: vec![expr, other] };
                 }
                 Ok(expr)
             }
