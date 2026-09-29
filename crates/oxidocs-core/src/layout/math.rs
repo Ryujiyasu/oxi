@@ -2104,6 +2104,178 @@ mod tests {
 /// `f(x)=4cos(3x)` by +0.00, `x²` by +0.00, `√x` by +1.68 (ascent side) and
 /// `2π/3` by +5.04 (+2.28 ascent, +2.76 descent) — i.e. the two sides compose
 /// independently, which is what S1095 does with this ascent/descent pair.
+/// S1611: ink (ascent, descent) as Word composes it for counting grid cells.
+/// Differs from `ink_extent` in two measured ways (Word PDF of blind-G JA
+/// educational__20d9968b p2): every shift scales with the CURRENT script size,
+/// and radicands, denominators and subscripts are CRAMPED, taking
+/// SuperscriptShiftUpCramped (615du): R=sqrt(a^2+b^2) raises its `2` 3.1pt at
+/// 10.5pt (615 -> 3.15; 750 would be 3.85) and the same radicand inside a
+/// denominator 2.2pt at 7.56pt (615 -> 2.27).
+fn ink_extent_word(expr: &MathExpr, ctx: &MathLayoutContext, cramped: bool) -> (f32, f32) {
+    let table = MathTable::cambria_math();
+    let eff = ctx.effective_font_size();
+    match expr {
+        // An upright run (`m:sty p`/`b`, or `m:nor`) draws the upright glyph:
+        // `1/x` in educational__20d9968b has x on the baseline (956/0du), where
+        // the italic 𝑥 dips 16du and tipped the line into a second cell.
+        MathExpr::Run { text, style }
+            if style.literal || matches!(style.math_style,
+                Some(crate::ir::MathStyleVariant::Plain) | Some(crate::ir::MathStyleVariant::Bold)) =>
+        {
+            let mut a = 0.0f32;
+            let mut d = 0.0f32;
+            for c in text.chars() {
+                let (ga, gd) = glyph_ink_du(c).unwrap_or((0.7, 0.2));
+                a = a.max(ga * eff);
+                d = d.max(gd * eff);
+            }
+            (a, d)
+        }
+        MathExpr::Text(_) | MathExpr::Run { .. } => ink_extent(expr, ctx),
+        MathExpr::Seq(children) => children.iter().map(|c| ink_extent_word(c, ctx, cramped))
+            .fold((0.0f32, 0.0f32), |(a, d), (ca, cd)| (a.max(ca), d.max(cd))),
+        MathExpr::Fraction { num, den, .. } => {
+            let display = ctx.style.is_display();
+            let sub_ctx = if display { *ctx } else { ctx.descend_script() };
+            let (up_du, down_du, ng, dg) = if display {
+                (table.constants.FractionNumeratorDisplayStyleShiftUp, table.constants.FractionDenominatorDisplayStyleShiftDown,
+                 table.constants.FractionNumDisplayStyleGapMin, table.constants.FractionDenomDisplayStyleGapMin)
+            } else {
+                (table.constants.FractionNumeratorShiftUp, table.constants.FractionDenominatorShiftDown,
+                 table.constants.FractionNumeratorGapMin, table.constants.FractionDenominatorGapMin)
+            };
+            let axis = table.du_to_pt(table.constants.AxisHeight, eff);
+            let half = table.du_to_pt(table.constants.FractionRuleThickness, eff) / 2.0;
+            let (na, nd) = ink_extent_word(num, &sub_ctx, cramped);
+            let (da, dd) = ink_extent_word(den, &sub_ctx, true);
+            let up = table.du_to_pt(up_du, eff).max(axis + half + table.du_to_pt(ng, eff) + nd);
+            let down = table.du_to_pt(down_du, eff).max(table.du_to_pt(dg, eff) + da - (axis - half));
+            (up + na, down + dd)
+        }
+        MathExpr::Radical { radicand, .. } => {
+            let (ra, rd) = ink_extent_word(radicand, ctx, true);
+            let gap_du = if ctx.style.is_display() { table.constants.RadicalDisplayStyleVerticalGap } else { table.constants.RadicalVerticalGap };
+            (ra + table.du_to_pt(gap_du, eff) + table.du_to_pt(table.constants.RadicalRuleThickness, eff), rd)
+        }
+        MathExpr::Superscript { base, sup } => {
+            let (ba, bd) = ink_extent_word(base, ctx, cramped);
+            let (sa, _) = ink_extent_word(sup, &ctx.descend_script(), cramped);
+            let up_du = if cramped { table.constants.SuperscriptShiftUpCramped } else { table.constants.SuperscriptShiftUp };
+            (ba.max(sa + table.du_to_pt(up_du, eff)), bd)
+        }
+        MathExpr::Subscript { base, sub } => {
+            let (ba, bd) = ink_extent_word(base, ctx, cramped);
+            let (_, sd) = ink_extent_word(sub, &ctx.descend_script(), true);
+            (ba, bd.max(sd + table.du_to_pt(table.constants.SubscriptShiftDown, eff)))
+        }
+        MathExpr::SubSuperscript { base, sub, sup } => {
+            let (ba, bd) = ink_extent_word(base, ctx, cramped);
+            let (sa, _) = ink_extent_word(sup, &ctx.descend_script(), cramped);
+            let (_, sd) = ink_extent_word(sub, &ctx.descend_script(), true);
+            let up_du = if cramped { table.constants.SuperscriptShiftUpCramped } else { table.constants.SuperscriptShiftUp };
+            (ba.max(sa + table.du_to_pt(up_du, eff)),
+             bd.max(sd + table.du_to_pt(table.constants.SubscriptShiftDown, eff)))
+        }
+        // A function name and its argument share the baseline.
+        MathExpr::Function { name, arg } => {
+            let (na, nd) = ink_extent_word(name, ctx, cramped);
+            let (aa, ad) = ink_extent_word(arg, ctx, cramped);
+            (na.max(aa), nd.max(ad))
+        }
+        // Delimiters grow to cover their content; a short content keeps the
+        // glyph's own ink.
+        MathExpr::Delimiter { beg, end, content, .. } => {
+            let (ca, cd) = ink_extent_word(content, ctx, cramped);
+            let mut a = ca;
+            let mut d = cd;
+            for c in [*beg, *end] {
+                if let Some((ga, gd)) = glyph_ink_du(c) {
+                    a = a.max(ga * eff);
+                    d = d.max(gd * eff);
+                }
+            }
+            (a, d)
+        }
+        // n-ary (∑ ∫ …): the operator glyph's own ink, limits either as
+        // scripts (subSup) or stacked with the OpenType limit constants (undOvr),
+        // and the operand on the shared baseline. reports__5823d5a8 p4: a
+        // fraction of two ∑_{i=1}^{n} terms takes 2 cells in Word; the layout-box
+        // fallback read it as 36/30pt and gave 4.
+        MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
+            let (ga, gd) = glyph_ink_du(*op).unwrap_or((0.8, 0.3));
+            let (oa, od) = (ga * eff, gd * eff);
+            let sctx = ctx.descend_script();
+            let (mut a, mut d) = (oa, od);
+            match lim_loc {
+                crate::ir::math::LimLoc::UndOvr => {
+                    if let Some(s) = sup {
+                        let (la, ld) = ink_extent_word(s, &sctx, cramped);
+                        let rise = table.du_to_pt(table.constants.UpperLimitBaselineRiseMin, eff)
+                            .max(oa + table.du_to_pt(table.constants.UpperLimitGapMin, eff) + ld);
+                        a = a.max(rise + la);
+                    }
+                    if let Some(s) = sub {
+                        let (la, ld) = ink_extent_word(s, &sctx, true);
+                        let drop = table.du_to_pt(table.constants.LowerLimitBaselineDropMin, eff)
+                            .max(od + table.du_to_pt(table.constants.LowerLimitGapMin, eff) + la);
+                        d = d.max(drop + ld);
+                    }
+                }
+                crate::ir::math::LimLoc::SubSup => {
+                    if let Some(s) = sup {
+                        let (sa, _) = ink_extent_word(s, &sctx, cramped);
+                        let up_du = if cramped { table.constants.SuperscriptShiftUpCramped } else { table.constants.SuperscriptShiftUp };
+                        a = a.max(sa + table.du_to_pt(up_du, eff));
+                    }
+                    if let Some(s) = sub {
+                        let (_, sd) = ink_extent_word(s, &sctx, true);
+                        d = d.max(sd + table.du_to_pt(table.constants.SubscriptShiftDown, eff));
+                    }
+                }
+            }
+            let (pa, pd) = ink_extent_word(operand, ctx, cramped);
+            (a.max(pa), d.max(pd))
+        }
+        // limLow / limUpp: OpenType MATH lower/upper limit placement.
+        MathExpr::Limit { base, lim, pos } => {
+            let (ba, bd) = ink_extent_word(base, ctx, cramped);
+            let lctx = ctx.descend_script();
+            match pos {
+                crate::ir::math::LimitPos::Lower => {
+                    let (la, ld) = ink_extent_word(lim, &lctx, true);
+                    let drop = table.du_to_pt(table.constants.LowerLimitBaselineDropMin, eff)
+                        .max(bd + table.du_to_pt(table.constants.LowerLimitGapMin, eff) + la);
+                    (ba, bd.max(drop + ld))
+                }
+                crate::ir::math::LimitPos::Upper => {
+                    let (la, ld) = ink_extent_word(lim, &lctx, cramped);
+                    let rise = table.du_to_pt(table.constants.UpperLimitBaselineRiseMin, eff)
+                        .max(ba + table.du_to_pt(table.constants.UpperLimitGapMin, eff) + ld);
+                    (ba.max(rise + la), bd)
+                }
+            }
+        }
+        _ => ink_extent(expr, ctx),
+    }
+}
+
+/// S1611: the per-glyph ink (top, bottom) of a whole maths block about its
+/// baseline, composed exactly as `ink_extent` composes a fraction (shifts from
+/// `fraction_shifts`, numerator/denominator ink at script size) and a radical
+/// (the radicand's depth, not the radical sign's). Used to count grid cells.
+pub fn inline_math_ink_extent(block: &MathBlock, font_size: f32) -> (f32, f32) {
+    let ctx = MathLayoutContext {
+        font_size,
+        style: MathStyle::from_block(block),
+    };
+    let exprs: &[MathExpr] = match block {
+        MathBlock::Inline(xs) => xs,
+        MathBlock::Display { content, .. } => content,
+    };
+    exprs.iter().map(|e| ink_extent_word(e, &ctx, false))
+        .fold((0.0f32, 0.0f32), |(a, d), (ea, ed)| (a.max(ea), d.max(ed)))
+}
+
 pub fn inline_math_ink(block: &MathBlock, font_size: f32) -> (f32, f32, f32) {
     let (elems, bbox) = emit_math_block(block, 0.0, 0.0, font_size);
     let baseline = bbox.ascent.max(font_size * 0.8);

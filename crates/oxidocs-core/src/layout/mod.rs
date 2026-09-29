@@ -23966,13 +23966,64 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .map(|f| (-f.style.position.unwrap_or(0.0)).max(0.0))
                             .fold(descent, f32::max);
                         let occupied = object_ascent + object_descent + extra + effect_bottom;
+                        // S1611 (2026-09-29, default ON, opt-out OXI_S1611_DISABLE): a
+                        // maths line counts grid cells from the PER-GLYPH ink of the
+                        // maths (`math::inline_math_ink_extent`: fraction shifts +
+                        // numerator/denominator ink, radical depth = radicand depth,
+                        // cramped superscripts, upright `m:sty p` glyphs), not its
+                        // layout box, which gives every letter 0.7em. Blocks share the
+                        // baseline: tallest top + deepest bottom + 1.37 <= n x pitch.
+                        // `_pb_cjkmath_gen.py` 22 fraction arms + blind-G JA
+                        // educational__20d9968b: one cell up to 16.60 (1/x, a/b,
+                        // a/sqrt(a^2+b^2)), two from 16.66 (A/b, b/.., a^2/.., a/g) ->
+                        // margin in (1.34, 1.40].
+                        let s1611 = std::env::var_os("OXI_S1611_DISABLE").is_none()
+                            && s1596_math
+                            && !line.fragments.iter().any(|f| f.style.inline_object_image.is_some()
+                                || f.style.hr_rule.is_some());
+                        if s1611 {
+                            let m: f32 = std::env::var("OXI_S1611_M").ok()
+                                .and_then(|v| v.parse().ok()).unwrap_or(1.37);
+                            // Blocks on one line share the baseline: the line
+                            // needs the tallest top plus the deepest bottom.
+                            let (ink_t, ink_b) = line.fragments.iter()
+                                .filter_map(|f| f.style.inline_math.as_ref().map(|mb| {
+                                    let mfs = f.style.font_size.unwrap_or(para_font_size);
+                                    let (t, b) = crate::layout::math::inline_math_ink_extent(mb, mfs);
+                                    if std::env::var_os("OXI_DBG_S1611").is_some() {
+                                        eprintln!("[S1611-INK] fs={:.2} top={:.2} bot={:.2}", mfs, t, b);
+                                    }
+                                    (t, b)
+                                }))
+                                .fold((0.0f32, 0.0f32), |(a, d), (t, b)| (a.max(t), d.max(b)));
+                            let ink = ink_t + ink_b;
+                            let occ = (ink + m).max(1.0);
+                            grid_pitch.filter(|p| *p > 0.1)
+                                .map_or(target, |pitch| (occ / pitch).ceil().max(1.0) * pitch)
+                        } else {
                         grid_pitch.filter(|p| *p > 0.1)
                             .map_or(target, |pitch| ((occupied / pitch).ceil() * pitch).max(target))
+                        }
                     } else { target };
                     if li == 0 && target > line_heights[0] {
                         s1116_line0_target = target;
                     }
-                    if target > line_heights[li] {
+                    // S1611: the ink count REPLACES the earlier grid snap of the
+                    // maths layout box (which had already taken two cells).
+                    let s1611_set = std::env::var_os("OXI_S1611_DISABLE").is_none()
+                        && std::env::var_os("OXI_S1596_DISABLE").is_none()
+                        && std::env::var_os("OXI_INLINE_IMAGE_GRID_DISABLE").is_none()
+                        && !page.doc_grid_no_type && para.style.snap_to_grid
+                        && grid_pitch.map_or(false, |p| p > 0.1)
+                        && line.fragments.iter().any(|f| f.style.inline_math.is_some())
+                        && !line.fragments.iter().any(|f| f.style.inline_object_image.is_some()
+                            || f.style.hr_rule.is_some());
+                    if s1611_set {
+                        if std::env::var_os("OXI_DBG_S1611").is_some() {
+                            eprintln!("[S1611] line {} {:.2} -> {:.2}", li, line_heights[li], target);
+                        }
+                        line_heights[li] = target;
+                    } else if target > line_heights[li] {
                         line_heights[li] = target;
                     }
                     if natural_target > natural_line_heights[li] {

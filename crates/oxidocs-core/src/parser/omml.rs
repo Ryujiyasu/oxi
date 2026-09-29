@@ -236,6 +236,11 @@ fn parse_single_expr(
 /// Parse `<m:r>` (math run). Concatenates all `<m:t>` text children.
 fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
     let mut text = String::new();
+    // S1611: `<m:rPr>` carries `m:sty` (p/b/i/bi) and `m:nor`; everything else
+    // in either rPr is still ignored. A styled run becomes `MathExpr::Run`, which
+    // every layout arm already treats like `Text`.
+    let mut sty: Option<crate::ir::MathStyleVariant> = None;
+    let mut nor = false;
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
@@ -256,7 +261,41 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                         }
                     }
                 } else if tag == "rPr" {
-                    skip_until_end(reader, "rPr")?;
+                    let mut depth = 0usize;
+                    loop {
+                        match reader.read_event() {
+                            Ok(ev @ Event::Empty(_)) | Ok(ev @ Event::Start(_)) => {
+                                let is_start = matches!(ev, Event::Start(_));
+                                let ee = match &ev { Event::Empty(x) | Event::Start(x) => x.clone(), _ => unreachable!() };
+                                if is_start { depth += 1; }
+                                let name = local(ee.name().as_ref());
+                                if name == "sty" {
+                                    for attr in ee.attributes().flatten() {
+                                        if local(attr.key.as_ref()) == "val" {
+                                            sty = match String::from_utf8_lossy(&attr.value).as_ref() {
+                                                "p" => Some(crate::ir::MathStyleVariant::Plain),
+                                                "b" => Some(crate::ir::MathStyleVariant::Bold),
+                                                "bi" => Some(crate::ir::MathStyleVariant::BoldItalic),
+                                                _ => Some(crate::ir::MathStyleVariant::Italic),
+                                            };
+                                        }
+                                    }
+                                } else if name == "nor" {
+                                    nor = !ee.attributes().flatten().any(|a| local(a.key.as_ref()) == "val"
+                                        && matches!(a.value.as_ref(), b"0" | b"off" | b"false"));
+                                }
+                            }
+                            Ok(Event::End(ee)) => {
+                                if local(ee.name().as_ref()) == "rPr" && depth == 0 {
+                                    break;
+                                }
+                                depth = depth.saturating_sub(1);
+                            }
+                            Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                "EOF in m:rPr".to_string())),
+                            _ => {}
+                        }
+                    }
                 } else {
                     // Unknown inner element — skip.
                     skip_until_end(reader, &tag)?;
@@ -270,6 +309,11 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
     }
     if text.is_empty() {
         Ok(MathExpr::Text(String::new()))
+    } else if (sty.is_some() || nor) && std::env::var_os("OXI_S1611_STY_DISABLE").is_none() {
+        Ok(MathExpr::Run {
+            text,
+            style: crate::ir::MathRunStyle { math_style: sty, literal: nor, ..Default::default() },
+        })
     } else {
         Ok(MathExpr::Text(text))
     }
