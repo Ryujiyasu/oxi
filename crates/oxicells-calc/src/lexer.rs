@@ -1265,10 +1265,92 @@ pub fn shift_formula_references(
         reference
     };
 
+    // A whole column or a whole row, `B:B` or `$2:3`: which it is, its
+    // one-based number and whether it is pinned.
+    let line_of = |token: &Token| -> Option<(bool, u32, bool)> {
+        let text = match token {
+            Token::Name { name, .. } => name.clone(),
+            Token::Number(value) if value.fract() == 0.0 && *value >= 1.0 => format!("{value}"),
+            _ => return None,
+        };
+        let (absolute, rest) = match text.strip_prefix('$') {
+            Some(rest) => (true, rest.to_string()),
+            None => (false, text.clone()),
+        };
+        if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+            return Some((false, rest.parse().ok()?, absolute));
+        }
+        if !rest.is_empty() && rest.len() <= 3 && rest.bytes().all(|b| b.is_ascii_alphabetic()) {
+            let column = rest
+                .bytes()
+                .fold(0u32, |held, b| held * 26 + u32::from(b.to_ascii_uppercase() - b'A' + 1));
+            return Some((true, column, absolute));
+        }
+        None
+    };
+    let write_line = |column: bool, number: u32, absolute: bool| -> String {
+        let pin = if absolute { "$" } else { "" };
+        if column {
+            let mut letters = String::new();
+            let mut left = number;
+            while left > 0 {
+                letters.insert(0, (b'A' + ((left - 1) % 26) as u8) as char);
+                left = (left - 1) / 26;
+            }
+            format!("{pin}{letters}")
+        } else {
+            format!("{pin}{number}")
+        }
+    };
+    let across_everything = match axis {
+        ShiftAxis::Rows => first_across == 0 && last_across >= MAX_COL,
+        ShiftAxis::Columns => first_across == 0 && last_across >= MAX_ROW,
+    };
+
     let mut shifted = Vec::with_capacity(tokens.len());
     let mut index = 0;
     while index < tokens.len() {
         let is_function = matches!(tokens.get(index + 1), Some(Token::LParen));
+        // A whole column moves with columns put in or taken out across every
+        // row, and a whole row with rows: measured, `SUM(B:B)` is `SUM(C:C)`
+        // after a column goes in at A and `SUM(#REF!)` once B is deleted,
+        // `SUM(1:3)` `SUM(2:4)` after a row goes in above.
+        if !is_function && matches!(tokens.get(index + 1), Some(Token::Colon)) {
+            if let (Some(first), Some(last)) = (
+                line_of(&tokens[index]),
+                tokens.get(index + 2).and_then(|token| line_of(token)),
+            ) {
+                let sheet = match &tokens[index] {
+                    Token::Name { sheet, .. } => sheet.clone(),
+                    _ => None,
+                };
+                let names_moved_sheet = match (sheet.as_deref(), moved_sheet) {
+                    (None, Some(moved)) => on_sheet.is_none_or(|own| own.eq_ignore_ascii_case(moved)),
+                    (None, None) => true,
+                    (Some(named), Some(moved)) => named.eq_ignore_ascii_case(moved),
+                    (Some(_), None) => false,
+                };
+                if first.0 == last.0 {
+                    let moves = names_moved_sheet
+                        && across_everything
+                        && (first.0 == (axis == ShiftAxis::Columns));
+                    if moves {
+                        match shifted_range(first.1 - 1, last.1 - 1, at, count, maximum)? {
+                            Some((low, high)) => {
+                                shifted.push(Token::Name { sheet, name: write_line(first.0, low + 1, first.2) });
+                                shifted.push(Token::Colon);
+                                shifted.push(Token::Name { sheet: None, name: write_line(last.0, high + 1, last.2) });
+                            }
+                            None => shifted.push(Token::ErrorLit(ExcelError::Ref)),
+                        }
+                    } else {
+                        shifted.extend(tokens[index..index + 3].iter().cloned());
+                    }
+                    index += 3;
+                    continue;
+                }
+            }
+        }
         let Token::Name { sheet, name } = &tokens[index] else {
             shifted.push(tokens[index].clone());
             index += 1;
