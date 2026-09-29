@@ -11400,6 +11400,12 @@ impl<'a> WorkbookHost<'a> {
         let needle = find_value_text(what);
         let found = addresses.into_iter().find(|address| {
             let candidate = self.find_cell_text(*address, look_in);
+            // An empty cell is found by nothing but an empty search: measured,
+            // `Cells.Find("*", SearchDirection:=xlPrevious)` finds the last
+            // cell holding something, not the empty corner of the used range.
+            if candidate.is_empty() && !needle.is_empty() {
+                return false;
+            }
             find_text_matches(&candidate, &needle, look_at == 1, match_case, match_byte)
         });
         let result = found
