@@ -22361,7 +22361,8 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         // does is give the cell a date format, which has not been
         // measured here, so the number goes in and the dressing does not.
         Value::Date(value) => Ok(CellValue::Number(value)),
-        Value::Double(value) => Ok(CellValue::Number(value)),
+        // A cell holds no negative zero.
+        Value::Double(value) => Ok(CellValue::Number(value + 0.0)),
         // Only a REAL error code may be put in a cell. Asked of Excel,
         // `Range("A1").Value = CVErr(2042)` leaves #N/A, and so do 2000, 2007,
         // 2015, 2023, 2029, 2036 and 2043 through 2049 -- while `CVErr(0)`,

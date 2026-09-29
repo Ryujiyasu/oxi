@@ -1863,10 +1863,12 @@ fn element_of(worked: Arg, (dx, dy): (u32, u32)) -> Value {
 }
 
 fn formula_result(value: Value) -> Value {
-    if value.is_blank() {
-        Value::Number(0.0)
-    } else {
-        value
+    match value {
+        Value::Blank => Value::Number(0.0),
+        // A cell holds no negative zero: `=-A1` over a blank, or a SUM of
+        // nothing, is 0 in Excel, and a macro reading it writes 0.
+        Value::Number(number) if number == 0.0 => Value::Number(0.0),
+        other => other,
     }
 }
 

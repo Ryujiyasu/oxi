@@ -250,6 +250,9 @@ pub enum RuntimeErrorKind {
     /// with no `]` after it. VBA numbers this 93, and only raises it if the
     /// match actually reaches the malformed set.
     InvalidPattern,
+    /// VBA's error 5, raised where an operator has no answer to give:
+    /// `(-8) ^ (1 / 3)`.
+    InvalidProcedureCall,
     Unsupported,
     StepLimit,
     CallDepth,
@@ -4199,6 +4202,7 @@ fn runtime_error_number(failure: &RuntimeError) -> i64 {
         RuntimeErrorKind::DivisionByZero => 11,
         RuntimeErrorKind::InvalidNull => 94,
         RuntimeErrorKind::InvalidPattern => 93,
+        RuntimeErrorKind::InvalidProcedureCall => 5,
         RuntimeErrorKind::Unsupported => 445,
         RuntimeErrorKind::StepLimit => 6,
         RuntimeErrorKind::CallDepth => 28,
@@ -5392,6 +5396,18 @@ fn call_builtin(
                 Value::Boolean(false) => Ok(Value::Byte(0)),
                 _ => Ok(Value::Byte(convert_integer(value, 0, 255, line)? as u8)),
             },
+            // Text is rounded as the decimal it spells: measured,
+            // `CCur("0.00005")` is 0 where `CCur(0.00005)` is 0.0001.
+            "ccur" if matches!(value, Value::String(_)) && matches!(value, Value::String(text) if crate::decimal::Dec::parse(text).is_some()) => {
+                let Value::String(written) = value else { unreachable!() };
+                let held = crate::decimal::Dec::parse(written).expect("just parsed").round(4);
+                let units = held.magnitude as f64 * 10f64.powi(4 - held.scale as i32);
+                if units > 9.223_372_036_854_775_807e18 {
+                    return Err(error(RuntimeErrorKind::Overflow, "overflow converting value to Currency", line));
+                }
+                let units = units as i64;
+                Ok(Value::Currency(if held.negative { -units } else { units }))
+            }
             "ccur" => {
                 let value = number(value).map_err(mismatch)?;
                 const LIMIT: f64 = 922_337_203_685_477.6;
@@ -5402,7 +5418,7 @@ fn call_builtin(
                         line,
                     ))
                 } else {
-                    Ok(Value::Currency((value * 10_000.0).round_ties_even() as i64))
+                    Ok(Value::Currency(currency_units(value)))
                 }
             }
             "cdec" => {
@@ -8180,6 +8196,23 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month as u32, day as u32)
 }
 
+/// A number in ten-thousandths, rounded half to even on the EXACT product:
+/// measured, `CCur(0.00005)` is 0.0001 and `CCur(0.00015)` 0.0001 -- the
+/// doubles sit a hair above and below the half -- while `CCur(0.00025)` is
+/// 0.0003.
+fn currency_units(value: f64) -> i64 {
+    let product = value * 10_000.0;
+    let error = value.mul_add(10_000.0, -product);
+    let floor = product.floor();
+    let fraction = product - floor;
+    let rounded = if fraction == 0.5 && error != 0.0 {
+        if error > 0.0 { floor + 1.0 } else { floor }
+    } else {
+        product.round_ties_even()
+    };
+    rounded as i64
+}
+
 fn parse_val(source: &str) -> Result<f64, String> {
     let compact = source
         .chars()
@@ -8221,7 +8254,11 @@ fn parse_val(source: &str) -> Result<f64, String> {
             .map_err(|_| "Val radix literal is outside the supported Long range".to_string())?;
         let signed = if negative {
             -(i64::from(raw))
-        } else if (radix == 16 && digits.len() <= 4) || (radix == 8 && digits.len() <= 6) {
+        } else if ((radix == 16 && digits.len() <= 4) || (radix == 8 && digits.len() <= 6))
+            // A trailing `&` makes it a Long: measured, `Val("&HFFFF")` is
+            // -1 and `Val("&HFFFF&")` 65535.
+            && bytes.get(end) != Some(&b'&')
+        {
             i64::from(raw as u16 as i16)
         } else {
             i64::from(raw as i32)
@@ -9414,6 +9451,11 @@ fn numeric_text(text: &str) -> Option<f64> {
             .ok()
             .map(|value| value as f64);
     }
+    // A number in brackets is negative, as money is written: measured,
+    // `CDbl("(5)")` is -5.
+    if let Some(inside) = trimmed.strip_prefix('(').and_then(|rest| rest.strip_suffix(')')) {
+        return numeric_text(inside).filter(|value| *value >= 0.0).map(|value| -value);
+    }
     // The grouping and currency marks Excel accepts, and nothing else -- a
     // trailing `%` is refused, so they cannot simply all be stripped.
     let bare: String = trimmed
@@ -9696,7 +9738,17 @@ fn binary(
                 // an Integer only when both sides did.
                 IntDiv => integer_result((a / b).trunc(), &lhs, &rhs)?,
                 Mod => integer_result((a as i64 % b as i64) as f64, &lhs, &rhs)?,
-                Pow => Value::Double(a.powf(b)),
+                // Measured: `10 ^ 309` is error 6 and `(-8) ^ (1 / 3)` error 5.
+                Pow => {
+                    let answer = a.powf(b);
+                    if answer.is_nan() {
+                        return Err((RuntimeErrorKind::InvalidProcedureCall, "invalid procedure call or argument".to_string()));
+                    }
+                    if answer.is_infinite() {
+                        return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
+                    }
+                    Value::Double(answer)
+                }
                 _ => unreachable!(),
             })
         }
@@ -10067,6 +10119,17 @@ fn arithmetic_result(
             Value::Double(answer)
         });
     }
+    // Currency beats Double for + and -, but a product of Currency and a
+    // floating number is a Double: measured, `TypeName(1.5 * CCur(3))` is
+    // Double where `1.5 + CCur(3)` is Currency.
+    if op == BinaryOp::Mul {
+        let ranks = [NumRank::of(lhs), NumRank::of(rhs)];
+        if ranks.contains(&Some(NumRank::Currency))
+            && (ranks.contains(&Some(NumRank::Double)) || ranks.contains(&Some(NumRank::Single)))
+        {
+            return Ok(Value::Double(answer));
+        }
+    }
     match (NumRank::of(lhs), NumRank::of(rhs)) {
         // A Single cannot hold every Long, so meeting one widens PAST both to
         // a Double. Asked of Excel, `CLng(1) + CSng(1)` is a Double where
@@ -10219,6 +10282,9 @@ fn text(value: &Value) -> Result<String, String> {
         // Excel, a Single of 0.7055475 writes back as 0.7055475, where
         // widening it to a Double first would say 0.705547511577606.
         Value::Single(value) => vba_number_text(single_text_value(*value)),
+        // A Double keeps the sign of its zero: measured, `CStr(-0#)` and
+        // `Fix(-0.5)` write -0, where an Integer 0 * -1 writes 0.
+        Value::Double(value) if *value == 0.0 && value.is_sign_negative() => "-0".to_string(),
         Value::Double(value) => vba_number_text(*value),
         Value::LongLong(value) => value.to_string(),
         Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
@@ -13977,6 +14043,30 @@ mod tests {
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
         );
+    }
+
+    /// Numbers at their edges, each as Excel's VBA answers.
+    #[test]
+    fn numbers_at_their_edges() {
+        let value = run(
+            "Public Function Ask() As String
+               Ask = CDbl(\"(5)\") & \"|\" & CCur(0.00005) & \"|\" & CCur(0.00015) & \"|\" & CCur(\"0.00005\") & \"|\"
+               Ask = Ask & TypeName(1.5 * CCur(3)) & TypeName(1.5 + CCur(3)) & TypeName(CCur(3) / CCur(2)) & \"|\"
+               Ask = Ask & Fix(-0.5) & \"|\" & Val(\"&HFFFF\") & \"|\" & Val(\"&HFFFF&\") & \"|\"
+               On Error Resume Next
+               Dim d As Double
+               d = 10 ^ 309
+               Ask = Ask & Err.Number & \"|\"
+               Err.Clear
+               d = (-8) ^ (1 / 3)
+               Ask = Ask & Err.Number
+             End Function
+",
+            "Ask",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("-5|0.0001|0.0001|0|DoubleCurrencyDouble|-0|-1|65535|6|5".to_string()));
     }
 
     /// Decimal as Excel's VBA has it: 28 places, exact sums, a Decimal from
