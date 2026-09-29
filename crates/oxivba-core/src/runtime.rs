@@ -9898,10 +9898,12 @@ fn call_string_builtin(
                             "InStrRev start must be positive or -1".to_string(),
                             line,
                         ));
+                    } else if usize::try_from(value).unwrap_or(usize::MAX) > source.len() {
+                        // A start past the end finds nothing: measured,
+                        // `InStrRev("abc", "b", 10)` is 0.
+                        return Ok(Value::Integer(0));
                     } else {
-                        usize::try_from(value)
-                            .unwrap_or(usize::MAX)
-                            .min(source.len())
+                        usize::try_from(value).unwrap_or(usize::MAX)
                     }
                 }
             };
