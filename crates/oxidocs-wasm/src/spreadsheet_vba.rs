@@ -1921,6 +1921,8 @@ struct WorkbookHost<'a> {
     now: Option<f64>,
     /// The blocks of every many-block range handed out.
     blocks: Vec<Vec<CellRange>>,
+    /// The Application settings a macro has changed.
+    app_settings: std::collections::HashMap<String, Value>,
     /// What `Range.ID` has been set to, cell by cell.
     cell_ids: std::collections::HashMap<CellAddress, String>,
     /// The text of every name a `Name` object was handed out for.
@@ -2001,6 +2003,7 @@ impl<'a> WorkbookHost<'a> {
             shape_selection: Vec::new(),
             shape_ranges: Vec::new(),
             cell_ids: std::collections::HashMap::new(),
+            app_settings: std::collections::HashMap::new(),
             regexps: Vec::new(),
             regexp_hits: Vec::new(),
             rotations: std::collections::HashMap::new(),
@@ -2390,6 +2393,13 @@ impl<'a> WorkbookHost<'a> {
     /// A2:A4 answers `A1:A4` with one area, and so does `Union` of A1:A2 and
     /// A3:A4, which only touch. What is left is a range with as many areas as
     /// there are blocks — or, where they all came to one, an ordinary range.
+    /// An Application setting: what the macro set, else Excel's default.
+    fn application_setting(&self, name: &str) -> Option<Value> {
+        let lower = name.to_ascii_lowercase();
+        let (_, default, _) = APPLICATION_SETTINGS.iter().find(|(held, _, _)| held.eq_ignore_ascii_case(name))?;
+        Some(self.app_settings.get(&lower).cloned().unwrap_or_else(|| default()))
+    }
+
     /// The references a cell's formula makes on its own sheet.
     fn formula_refs(&self, sheet: usize, row: u32, column: u32) -> Vec<CellRange> {
         let Some(cell) = self.cell_here(sheet, row, column) else {
@@ -18163,6 +18173,30 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("worksheetfunction") {
                 return Ok(Some(self.object(HostObject::WorksheetFunction)));
             }
+            if let Some(value) = self.application_setting(name) {
+                return Ok(Some(value));
+            }
+            // 0 with nothing on the clipboard, 1 (xlCopy) after a Copy, 2
+            // (xlCut) while a Cut waits: measured 0 on a fresh book.
+            if name.eq_ignore_ascii_case("cutcopymode") {
+                return Ok(Some(Value::Integer(if self.pending_cut.is_some() {
+                    2
+                } else if self.clipboard.is_some() {
+                    1
+                } else {
+                    0
+                })));
+            }
+            // ThisCell answers only inside a cell's own function call:
+            // measured, asked from a macro it is 1004 "Method 'ThisCell' of
+            // object '_Application' failed".
+            if name.eq_ignore_ascii_case("thiscell") {
+                let running = self.user_functions.borrow().running;
+                return match running {
+                    Some(address) => Ok(Some(self.object(HostObject::Range(CellRange::single(address))))),
+                    None => Err(oxivba_core::host_error_explained(1004, "Method 'ThisCell' of object '_Application' failed", "no cell is calling")),
+                };
+            }
             if name.eq_ignore_ascii_case("screenupdating") {
                 return Ok(Some(Value::Boolean(self.screen_updating)));
             }
@@ -18283,6 +18317,17 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("path") {
                 return Ok(Some(Value::String(String::new())));
             }
+            // Measured on a book a macro has written to: Saved False,
+            // ReadOnly False, FileFormat 51 (xlOpenXMLWorkbook).
+            if name.eq_ignore_ascii_case("saved") {
+                return Ok(Some(Value::Boolean(self.saved && !self.wrote)));
+            }
+            if name.eq_ignore_ascii_case("readonly") {
+                return Ok(Some(Value::Boolean(false)));
+            }
+            if name.eq_ignore_ascii_case("fileformat") {
+                return Ok(Some(Value::Integer(51)));
+            }
             // Measured: a fresh workbook is not Saved; saying it is makes it
             // so until the next cell is written.
             if name.eq_ignore_ascii_case("saved") {
@@ -18344,6 +18389,43 @@ impl Host for WorkbookHost<'_> {
             // workbook a name spelt `Sheet1!Local`.
             if name.eq_ignore_ascii_case("names") {
                 return Ok(Some(self.object(HostObject::SheetNames(sheet))));
+            }
+            // A sheet's plain facts, as a new sheet answers them. Measured:
+            // CodeName "Sheet1", Visible -1, ProtectContents False,
+            // EnableCalculation True, DisplayPageBreaks False, AutoFilterMode
+            // and FilterMode False, ScrollArea "".
+            if name.eq_ignore_ascii_case("codename") {
+                return Ok(Some(Value::String(format!("Sheet{}", sheet + 1))));
+            }
+            if name.eq_ignore_ascii_case("visible") {
+                let visibility = format!("{:?}", self.workbook.sheets[sheet].visibility).to_ascii_lowercase();
+                return Ok(Some(Value::Integer(if visibility.contains("veryhidden") {
+                    2
+                } else if visibility.contains("hidden") {
+                    0
+                } else {
+                    -1
+                })));
+            }
+            if name.eq_ignore_ascii_case("protectcontents") {
+                return Ok(Some(Value::Boolean(self.cell_protection(sheet).is_some())));
+            }
+            if name.eq_ignore_ascii_case("enablecalculation") {
+                return Ok(Some(Value::Boolean(true)));
+            }
+            if name.eq_ignore_ascii_case("displaypagebreaks") {
+                return Ok(Some(Value::Boolean(false)));
+            }
+            if name.eq_ignore_ascii_case("autofiltermode") {
+                return Ok(Some(Value::Boolean(self.auto_filter.as_ref().is_some_and(|filter| filter.range.sheet == sheet))));
+            }
+            if name.eq_ignore_ascii_case("filtermode") {
+                return Ok(Some(Value::Boolean(
+                    self.auto_filter.as_ref().is_some_and(|filter| filter.range.sheet == sheet && !filter.fields.is_empty()),
+                )));
+            }
+            if name.eq_ignore_ascii_case("scrollarea") {
+                return Ok(Some(Value::String(String::new())));
             }
             if name.eq_ignore_ascii_case("standardheight") {
                 return Ok(Some(Value::Double(f64::from(
@@ -19179,6 +19261,10 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("enableevents") {
                 self.enable_events = application_switch(&value, "Application.EnableEvents")?;
+                return Ok(true);
+            }
+            if APPLICATION_SETTINGS.iter().any(|(held, _, settable)| *settable && held.eq_ignore_ascii_case(name)) {
+                self.app_settings.insert(name.to_ascii_lowercase(), value);
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("displayalerts") {
@@ -24870,6 +24956,32 @@ impl From<Value> for OutputValue {
 /// answered rather than deflected.
 /// The worksheet functions Excel leaves off `WorksheetFunction`, because VBA
 /// has one of its own or says it another way.
+/// Application properties that answer a plain default until a macro sets
+/// them: (name, default, settable). Measured on a fresh Excel: ReferenceStyle
+/// 1, DecimalSeparator ".", ThousandsSeparator ",", UseSystemSeparators True,
+/// CutCopyMode 0, Interactive True, EnableCancelKey 1, Cursor -4143,
+/// MaxChange 0.001, MaxIterations 100, Iteration False, CalculationState 0,
+/// CalculateBeforeSave True, PathSeparator "\\".
+#[allow(clippy::type_complexity)]
+const APPLICATION_SETTINGS: &[(&str, fn() -> Value, bool)] = &[
+    ("referencestyle", || Value::Integer(1), true),
+    ("decimalseparator", || Value::String(".".to_string()), true),
+    ("thousandsseparator", || Value::String(",".to_string()), true),
+    ("usesystemseparators", || Value::Boolean(true), true),
+    ("interactive", || Value::Boolean(true), true),
+    ("enablecancelkey", || Value::Integer(1), true),
+    ("cursor", || Value::Integer(-4143), true),
+    ("maxchange", || Value::Double(0.001), true),
+    ("maxiterations", || Value::Integer(100), true),
+    ("iteration", || Value::Boolean(false), true),
+    ("calculationstate", || Value::Integer(0), false),
+    ("calculatebeforesave", || Value::Boolean(true), true),
+    ("pathseparator", || Value::String("\\".to_string()), false),
+    ("operatingsystem", || Value::String("Windows (64-bit) NT 10.00".to_string()), false),
+    ("windowstate", || Value::Integer(-4137), true),
+    ("username", || Value::String("User".to_string()), true),
+];
+
 fn vba_has_its_own(name: &str) -> bool {
     const ABSENT: &[&str] = &[
         // each of these is a VBA function of its own
