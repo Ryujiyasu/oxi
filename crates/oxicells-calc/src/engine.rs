@@ -108,6 +108,9 @@ enum Skip {
     Nothing,
     /// Other SUBTOTALs and the filtered rows; with `by_hand`, every hidden row.
     Subtotals { by_hand: bool },
+    /// AGGREGATE's options: 0 to 3 pass over nested SUBTOTALs, and 1, 3, 5
+    /// and 7 over every hidden row.
+    Aggregate { nested: bool, hidden: bool },
 }
 use crate::lexer::ParseError;
 use crate::parser::parse;
@@ -1353,6 +1356,20 @@ impl Workbook {
                         .map(|a| self.eval_arg_inner(a, sheet, depth + 1, Skip::Nothing, at).scalar());
                     let by_hand = matches!(kind, Some(Value::Number(n)) if n >= 100.0);
                     Skip::Subtotals { by_hand }
+                } else if name == "AGGREGATE" {
+                    // Measured: `AGGREGATE(9,5,B2:B6)` with row 3 hidden
+                    // leaves row 3 out.
+                    let option = args
+                        .get(1)
+                        .map(|a| self.eval_arg_inner(a, sheet, depth + 1, Skip::Nothing, at).scalar());
+                    let option = match option {
+                        Some(Value::Number(n)) => n.trunc() as i64,
+                        _ => 0,
+                    };
+                    Skip::Aggregate {
+                        nested: (0..=3).contains(&option),
+                        hidden: matches!(option, 1 | 3 | 5 | 7),
+                    }
                 } else {
                     Skip::Nothing
                 };
@@ -1875,6 +1892,10 @@ impl Workbook {
                             held.filtered_rows.contains(&row)
                                 || (by_hand && held.hidden_rows.contains(&row))
                         })
+                }
+                Skip::Aggregate { nested, hidden } => {
+                    (nested && self.is_subtotal_cell(sheet, col, row))
+                        || (hidden && held.is_some_and(|held| held.hidden_rows.contains(&row)))
                 }
             };
             if passed_over {

@@ -362,6 +362,9 @@ enum HostObject {
     Sort(usize),
     /// `Worksheet.AutoFilter`: the sheet's filter, while it has one.
     SheetFilter(usize),
+    /// `AutoFilter.Filters`, and one column's `Filter` in it.
+    SheetFilters(usize),
+    FilterColumn(usize, u32),
     SortFields(usize),
     /// A shape, a chart, or one of the objects hung off them.
     Drawing(shapes::DrawingPart),
@@ -1745,6 +1748,10 @@ struct FieldTest {
     criteria: Vec<Criteria>,
     /// True when the criteria are joined by xlOr rather than xlAnd.
     either: bool,
+    /// What `Filter.Criteria1` and `Criteria2` read back, and the operator
+    /// `Filter.Operator` does: 0 when none was given.
+    texts: Vec<String>,
+    operator: i64,
 }
 
 #[derive(Clone)]
@@ -2078,6 +2085,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Workbooks => "Workbooks",
                 HostObject::Sort(_) => "Sort",
                 HostObject::SheetFilter(_) => "AutoFilter",
+                HostObject::SheetFilters(_) => "Filters",
+                HostObject::FilterColumn(_, _) => "Filter",
                 HostObject::SortFields(_) => "SortFields",
                 HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
@@ -2664,6 +2673,66 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    /// `AutoFilter.Filters` and each column's `Filter`. Measured: there is one
+    /// Filter per column of the block; `On` says whether that column is
+    /// tested; `Criteria1` reads back with an `=` put in front of a bare
+    /// value ("a" is "=a", 3 is "=3", "<>y" stays), a top or bottom filter
+    /// reads as the bound it settled on (">=3"), and `Criteria2` where there
+    /// is none, or either on a column not tested, is error 1004; `Operator`
+    /// is 0 when none was given, 2 for xlOr.
+    fn filter_column_member(
+        &mut self,
+        object: HostObject,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let (sheet, field) = match object {
+            HostObject::SheetFilters(sheet) | HostObject::FilterColumn(sheet, _) => {
+                (sheet, if let HostObject::FilterColumn(_, field) = object { Some(field) } else { None })
+            }
+            _ => return Ok(None),
+        };
+        let Some(filter) = self.auto_filter.as_ref().filter(|filter| filter.range.sheet == sheet) else {
+            return Err(host_error(91, "the sheet's filter has been taken off"));
+        };
+        let width = filter.range.end_column - filter.range.start_column + 1;
+        let lower = name.to_ascii_lowercase();
+        let Some(field) = field else {
+            return match lower.as_str() {
+                "count" => Ok(Some(Value::Integer(i64::from(width)))),
+                "item" | "_default" => {
+                    let [index] = args else {
+                        return Err("Filters needs an index".to_string());
+                    };
+                    let index = positive_index(index, "Filters index")?;
+                    if index > width {
+                        return Err(host_error(9, "subscript out of range"));
+                    }
+                    Ok(Some(self.object(HostObject::FilterColumn(sheet, index))))
+                }
+                _ => Ok(None),
+            };
+        };
+        let test = filter.fields.iter().find(|test| test.field == field);
+        let refuse = || host_error(1004, "Application-defined or object-defined error");
+        match lower.as_str() {
+            "on" => Ok(Some(Value::Boolean(test.is_some()))),
+            "criteria1" | "criteria2" => {
+                let at = usize::from(lower == "criteria2");
+                match test.and_then(|test| test.texts.get(at)) {
+                    Some(text) => Ok(Some(Value::String(text.clone()))),
+                    None => Err(refuse()),
+                }
+            }
+            "operator" => match test {
+                Some(test) => Ok(Some(Value::Integer(test.operator))),
+                None => Err(refuse()),
+            },
+            "count" => Ok(Some(Value::Integer(i64::from(u8::from(test.is_some()))))),
+            _ => Ok(None),
+        }
+    }
+
     /// What the sheet's AutoFilter object answers: the block it covers
     /// (measured, `$A$1:$D$11` for a filter set on `A1:D11`), whether it is
     /// hiding anything, and ShowAllData, which is the sheet's own.
@@ -2683,6 +2752,14 @@ impl<'a> WorkbookHost<'a> {
         };
         match name.to_ascii_lowercase().as_str() {
             "range" => Ok(Some(self.object(HostObject::Range(range)))),
+            "filters" => match args {
+                [] | [Value::Missing] => Ok(Some(self.object(HostObject::SheetFilters(sheet)))),
+                [index] => {
+                    let filters = HostObject::SheetFilters(sheet);
+                    self.filter_column_member(filters, "Item", &[index.clone()])
+                }
+                _ => Err("AutoFilter.Filters takes one index".to_string()),
+            },
             "filtermode" => Ok(Some(Value::Boolean(
                 self.auto_filter.as_ref().is_some_and(|filter| !filter.fields.is_empty()),
             ))),
@@ -8257,6 +8334,10 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Tab(sheet) => moved(sheet).map(HostObject::Tab),
                 HostObject::Sort(sheet) => moved(sheet).map(HostObject::Sort),
                 HostObject::SheetFilter(sheet) => moved(sheet).map(HostObject::SheetFilter),
+                HostObject::SheetFilters(sheet) => moved(sheet).map(HostObject::SheetFilters),
+                HostObject::FilterColumn(sheet, field) => {
+                    moved(sheet).map(|sheet| HostObject::FilterColumn(sheet, field))
+                }
                 HostObject::SortFields(sheet) => moved(sheet).map(HostObject::SortFields),
                 HostObject::Drawing(part) => part.renumbered(moved).map(HostObject::Drawing),
                 HostObject::Blocks(_)
@@ -14131,6 +14212,9 @@ impl<'a> WorkbookHost<'a> {
             Some(axis) => axis,
             None => Self::hidden_band(range)?,
         };
+        // SUBTOTAL and AGGREGATE read what is showing: measured, a
+        // `SUBTOTAL(109,..)` answers again the moment a row is shown.
+        self.wrote = true;
         let sheet = &mut self.workbook.sheets[range.sheet];
         match axis {
             // Showing touches only the rows there are; there is nothing to
@@ -14255,16 +14339,64 @@ impl<'a> WorkbookHost<'a> {
                 "Range.AutoFilter field {field} is outside the {width}-column range"
             ));
         }
-        let first = match given(1) {
-            Some(value) => parse_criteria(&self.criteria_value(value)?),
+        let first_value = match given(1) {
+            Some(value) => self.criteria_value(value)?,
             None => {
                 return Err("Range.AutoFilter needs criteria to test against".to_string());
             }
         };
+        let first = parse_criteria(&first_value);
+        let named = given(2).is_some();
         let operator = match given(2) {
             None => 1,
             Some(value) => sort_number(value, "AutoFilter operator")?,
         };
+        // Top and bottom: so many items, or so many percent of the numbers
+        // in the column (at least one, rounded down), kept by the bound they
+        // reach. Measured over 3,1,3,7,2: top 2 items keeps >=3, bottom 2
+        // <=2, top 40% >=3, top 30% and top 10% only the 7.
+        if (3..=6).contains(&operator) {
+            let asked = oxivba_core::runtime::vba_number_text(match &first_value {
+                Value::String(text) => text.trim().parse::<f64>().map_err(|_| host_error(1004, "AutoFilter method of Range class failed"))?,
+                other => sort_number(other, "AutoFilter criteria")? as f64,
+            });
+            let asked: f64 = asked.parse().unwrap_or(0.0);
+            let column = CellRange {
+                start_row: range.start_row + 1,
+                start_column: range.start_column + field - 1,
+                end_column: range.start_column + field - 1,
+                ..range
+            };
+            let mut numbers: Vec<f64> = match self.range_value(column)? {
+                Value::Array(block) => block.values.clone(),
+                single => vec![single],
+            }
+            .into_iter()
+            .filter_map(|value| match value {
+                Value::Double(number) => Some(number),
+                Value::Integer(number) => Some(number as f64),
+                _ => None,
+            })
+            .collect();
+            if numbers.is_empty() {
+                return Err(host_error(1004, "AutoFilter method of Range class failed"));
+            }
+            let top = matches!(operator, 3 | 5);
+            numbers.sort_by(|a, b| if top { b.total_cmp(a) } else { a.total_cmp(b) });
+            let count = if operator >= 5 {
+                ((numbers.len() as f64 * asked / 100.0).floor() as usize).max(1)
+            } else {
+                (asked.max(1.0) as usize).max(1)
+            };
+            let bound = numbers[count.min(numbers.len()) - 1];
+            let text = format!(
+                "{}{}",
+                if top { ">=" } else { "<=" },
+                oxivba_core::runtime::vba_number_text(bound)
+            );
+            let criteria = parse_criteria(&Value::String(text.clone()));
+            return self.filter_on(range, field, vec![criteria], false, vec![text], operator);
+        }
         // A list of values is the same question asked of each of them:
         // `Array("10", "banana")` with xlFilterValues keeps a row holding
         // either, which is what two criteria joined by xlOr already mean.
@@ -14282,20 +14414,27 @@ impl<'a> WorkbookHost<'a> {
             if criteria.is_empty() {
                 return Err("Range.AutoFilter was given no values to keep".to_string());
             }
-            return self.filter_on(range, field, criteria, true);
+            return self.filter_on(range, field, criteria, true, Vec::new(), 7);
         }
         let either = match operator {
             1 => false,
             2 => true,
             other => return Err(format!("Range.AutoFilter cannot join criteria with {other}")),
         };
-        let second = match given(3) {
-            Some(value) => Some(parse_criteria(&self.criteria_value(value)?)),
+        let second_value = match given(3) {
+            Some(value) => Some(self.criteria_value(value)?),
             None => None,
         };
+        let second = second_value.as_ref().map(parse_criteria);
+        let texts = [Some(&first_value), second_value.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(filter_criteria_text)
+            .collect();
 
         let criteria = [Some(first), second].into_iter().flatten().collect();
-        self.filter_on(range, field, criteria, either)
+        let operator = if named { operator } else { 0 };
+        self.filter_on(range, field, criteria, either, texts, operator)
     }
 
     /// Put one column's test in place, keeping whatever the other columns ask.
@@ -14305,6 +14444,8 @@ impl<'a> WorkbookHost<'a> {
         field: u32,
         criteria: Vec<Criteria>,
         either: bool,
+        texts: Vec<String>,
+        operator: i64,
     ) -> Result<Value, String> {
         let mut filter = match self.auto_filter.take() {
             Some(filter) if ranges_equal(filter.range, range) => filter,
@@ -14318,6 +14459,8 @@ impl<'a> WorkbookHost<'a> {
             field,
             criteria,
             either,
+            texts,
+            operator,
         });
         self.apply_auto_filter(&filter)?;
         self.record_auto_filter(&filter);
@@ -14413,6 +14556,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn set_row_visible(&mut self, sheet: usize, row: u32, showing: bool) {
+        self.wrote = true;
         let Some(worksheet) = self.workbook.sheets.get_mut(sheet) else {
             return;
         };
@@ -14436,6 +14580,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn show_all_rows(&mut self, sheet: usize) -> Result<(), String> {
+        self.wrote = true;
         let Some(worksheet) = self.workbook.sheets.get_mut(sheet) else {
             return Err("worksheet is out of range".to_string());
         };
@@ -15266,6 +15411,11 @@ impl Host for WorkbookHost<'_> {
             }
             if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(receiver.handle as usize).copied() {
                 return self.sheet_filter_member(sheet, name, args);
+            }
+            if let Some(object @ (HostObject::SheetFilters(_) | HostObject::FilterColumn(_, _))) =
+                self.objects.get(receiver.handle as usize).copied()
+            {
+                return self.filter_column_member(object, name, args);
             }
             if let Some(HostObject::SortFields(sheet)) = self.objects.get(receiver.handle as usize).copied() {
                 return self.sort_fields_call(sheet, name, args).map(Some);
@@ -16503,6 +16653,11 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(receiver.handle as usize).copied() {
             return self.sheet_filter_member(sheet, name, &[]);
+        }
+        if let Some(object @ (HostObject::SheetFilters(_) | HostObject::FilterColumn(_, _))) =
+            self.objects.get(receiver.handle as usize).copied()
+        {
+            return self.filter_column_member(object, name, &[]);
         }
         if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
             let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
@@ -19836,6 +19991,24 @@ impl Criteria {
 /// Splits a criteria argument into an operator and the value it compares
 /// against. Only text carries an operator; any other value is compared for
 /// equality as it stands.
+/// A filter criterion as `Filter.Criteria1` reads it back: a bare value
+/// gains an `=`, one already led by a comparison stays as it was.
+fn filter_criteria_text(value: &Value) -> String {
+    let text = match value {
+        Value::String(text) => text.clone(),
+        Value::Double(number) => oxivba_core::runtime::vba_number_text(*number),
+        Value::Integer(number) => number.to_string(),
+        Value::Int16(number) => number.to_string(),
+        Value::Boolean(flag) => if *flag { "TRUE" } else { "FALSE" }.to_string(),
+        _ => String::new(),
+    };
+    if text.starts_with(['=', '<', '>']) {
+        text
+    } else {
+        format!("={text}")
+    }
+}
+
 fn parse_criteria(value: &Value) -> Criteria {
     let Value::String(text) = value else {
         return Criteria {
@@ -21645,6 +21818,10 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlsheethidden" => 0,
         "xlsheetveryhidden" => 2,
         "xlfiltervalues" => 7,
+        "xltop10items" => 3,
+        "xlbottom10items" => 4,
+        "xltop10percent" => 5,
+        "xlbottom10percent" => 6,
         "xlsolid" => 1,
         "xlpatternnone" => -4142,
         "xlpatternsolid" => 1,
