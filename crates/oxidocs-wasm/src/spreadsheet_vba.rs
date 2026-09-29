@@ -365,6 +365,8 @@ enum HostObject {
     /// `AutoFilter.Filters`, and one column's `Filter` in it.
     SheetFilters(usize),
     FilterColumn(usize, u32),
+    /// `Worksheet.Names`: the names that sheet keeps for itself.
+    SheetNames(usize),
     SortFields(usize),
     /// A shape, a chart, or one of the objects hung off them.
     Drawing(shapes::DrawingPart),
@@ -2086,6 +2088,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Sort(_) => "Sort",
                 HostObject::SheetFilter(_) => "AutoFilter",
                 HostObject::SheetFilters(_) => "Filters",
+                HostObject::SheetNames(_) => "Names",
                 HostObject::FilterColumn(_, _) => "Filter",
                 HostObject::SortFields(_) => "SortFields",
                 HostObject::Drawing(part) => part.kind_name(),
@@ -8335,6 +8338,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Sort(sheet) => moved(sheet).map(HostObject::Sort),
                 HostObject::SheetFilter(sheet) => moved(sheet).map(HostObject::SheetFilter),
                 HostObject::SheetFilters(sheet) => moved(sheet).map(HostObject::SheetFilters),
+                HostObject::SheetNames(sheet) => moved(sheet).map(HostObject::SheetNames),
                 HostObject::FilterColumn(sheet, field) => {
                     moved(sheet).map(|sheet| HostObject::FilterColumn(sheet, field))
                 }
@@ -9040,6 +9044,93 @@ impl<'a> WorkbookHost<'a> {
         Ok(self.name_object(&held))
     }
 
+    /// `Application.ConvertFormula(Formula, FromReferenceStyle,
+    /// [ToReferenceStyle], [ToAbsolute], [RelativeTo])`. Measured, from the
+    /// active cell A1 unless RelativeTo says otherwise:
+    /// `"=SUM(A1:B2)"` to R1C1 is `=SUM(RC:R[1]C[1])`, `"=R1C1+R[1]C"` to A1
+    /// from C3 is `=$A$1+C4`, xlAbsolute makes `=A1` `=$A$1`, xlRelative makes
+    /// `=$A$1` `=A1`, xlAbsRowRelColumn makes `=A1+$B2` from C3
+    /// `=R1C[-2]+R2C[-1]`, and text with no `=` converts too (`A1` is `RC`).
+    fn convert_formula(&mut self, args: &[Value]) -> Result<Value, String> {
+        let given = |at: usize| args.get(at).filter(|value| !matches!(value, Value::Missing));
+        let Some(Value::String(formula)) = given(0) else {
+            return Err("Application.ConvertFormula needs a formula".to_string());
+        };
+        let style = |value: Option<&Value>| -> Result<Option<i64>, String> {
+            value.map(|value| sort_number(value, "ConvertFormula style")).transpose()
+        };
+        let from = style(given(1))?.ok_or_else(|| "ConvertFormula needs FromReferenceStyle".to_string())?;
+        let to = style(given(2))?.unwrap_or(from);
+        let absolute = style(given(3))?;
+        let base = match given(4) {
+            Some(Value::Object(object)) => {
+                let range = self.range(object).ok_or_else(|| "RelativeTo must be a Range".to_string())?;
+                CellAddress { sheet: range.sheet, row: range.start_row, column: range.start_column }
+            }
+            _ => self.active_cell,
+        };
+        let (row, column) = (base.row.saturating_sub(1), base.column);
+        let bare = !formula.trim_start().starts_with('=');
+        let written = if bare { format!("={formula}") } else { formula.clone() };
+        let r1c1 = |text: &str| formula_to_r1c1(text, row, column);
+        let a1 = |text: &str| oxicells_calc::formula_from_r1c1(text, row, column);
+        let mut text = if from == -4150 { a1(&written)? } else { written };
+        if let Some(mode) = absolute {
+            let rewritten = set_r1c1_absoluteness(&r1c1(&text)?, mode, row, column);
+            text = a1(&rewritten)?;
+        }
+        if to == -4150 {
+            text = r1c1(&text)?;
+        }
+        if bare {
+            text = text.trim_start_matches('=').to_string();
+        }
+        Ok(Value::String(text))
+    }
+
+    /// `Worksheet.Names`: Add, Item and Count over the names spelt with this
+    /// sheet in front, which is how the workbook keeps a sheet's own names.
+    fn sheet_names_member(&mut self, sheet: usize, name: &str, args: &[Value]) -> Result<Option<Value>, String> {
+        let prefix = format!("{}!", self.workbook.sheets[sheet].name);
+        let mut held = self
+            .workbook
+            .defined_names
+            .iter()
+            .map(|(name, _)| name.clone())
+            .filter(|name| name.len() > prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(&prefix))
+            .collect::<Vec<_>>();
+        held.sort_by(|one, other| compare_text_by_case(one, other));
+        match name.to_ascii_lowercase().as_str() {
+            "count" => Ok(Some(Value::Integer(held.len() as i64))),
+            "add" => {
+                let mut given = args.to_vec();
+                if let Some(Value::String(leaf)) = given.first() {
+                    if !leaf.contains('!') {
+                        given[0] = Value::String(format!("{prefix}{leaf}"));
+                    }
+                }
+                self.add_name(&given).map(Some)
+            }
+            "item" | "_default" => {
+                let [wanted] = args else {
+                    return Err("Names.Item takes one name or one number".to_string());
+                };
+                let full = match wanted {
+                    Value::String(leaf) if leaf.contains('!') => leaf.clone(),
+                    Value::String(leaf) => format!("{prefix}{leaf}"),
+                    value => {
+                        let index = positive_index(value, "index")? as usize;
+                        held.get(index - 1)
+                            .cloned()
+                            .ok_or_else(|| host_error(9, "subscript out of range"))?
+                    }
+                };
+                self.name_item(&Value::String(full)).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Give a name to something, or write over a name already given.
     ///
     /// Asked of Excel: `RefersTo` is read as a formula, so a string WITHOUT a
@@ -9130,6 +9221,13 @@ impl<'a> WorkbookHost<'a> {
                 self.workbook.defined_names[at].1
             )));
         }
+        // Measured: `=Sheet1!$A$1:$A$4` reads `=Sheet1!R1C1:R4C1`, relative
+        // parts counted from the active cell.
+        if name.eq_ignore_ascii_case("referstor1c1") {
+            let written = format!("={}", self.workbook.defined_names[at].1);
+            let from = self.active_cell;
+            return formula_to_r1c1(&written, from.row.saturating_sub(1), from.column).map(Value::String);
+        }
         // The names Excel writes for itself are hidden; the ones a macro adds
         // are not. Measured: `Sheet1!_FilterDatabase` answers False.
         if name.eq_ignore_ascii_case("visible") {
@@ -9154,6 +9252,8 @@ impl<'a> WorkbookHost<'a> {
                 return Err("Name.Delete does not accept arguments".to_string());
             }
             self.workbook.defined_names.remove(at);
+            // Measured: a formula that read the name answers #NAME? at once.
+            self.wrote = true;
             return Ok(Value::Empty);
         }
         Err(format!("Name.{name} is not available in the browser"))
@@ -15417,6 +15517,9 @@ impl Host for WorkbookHost<'_> {
             {
                 return self.filter_column_member(object, name, args);
             }
+            if let Some(HostObject::SheetNames(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+                return self.sheet_names_member(sheet, name, args);
+            }
             if let Some(HostObject::SortFields(sheet)) = self.objects.get(receiver.handle as usize).copied() {
                 return self.sort_fields_call(sheet, name, args).map(Some);
             }
@@ -15904,6 +16007,9 @@ impl Host for WorkbookHost<'_> {
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("intersect") {
                 return self.intersect_ranges(args).map(Some);
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("convertformula") {
+                return self.convert_formula(args).map(Some);
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("rows") {
                 return self
@@ -16483,7 +16589,7 @@ impl Host for WorkbookHost<'_> {
                 matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SortFields(_)))
             }) {
                 Some(&["Key", "SortOn", "Order", "CustomOrder", "DataOption"][..])
-            } else if receiver.is_some_and(|receiver| self.is_names(receiver)) {
+            } else if receiver.is_some_and(|receiver| self.is_names(receiver) || matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SheetNames(_)))) {
                 Some(&["Name", "RefersTo"][..])
             } else if receiver.is_some_and(|receiver| self.hyperlink_scope(receiver).is_some()) {
                 Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
@@ -16658,6 +16764,9 @@ impl Host for WorkbookHost<'_> {
             self.objects.get(receiver.handle as usize).copied()
         {
             return self.filter_column_member(object, name, &[]);
+        }
+        if let Some(HostObject::SheetNames(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            return self.sheet_names_member(sheet, name, &[]);
         }
         if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
             let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
@@ -17387,6 +17496,11 @@ impl Host for WorkbookHost<'_> {
             // raises. (`StandardWidth` is left out: Excel answers it in
             // characters of the standard font, which is a measurement this
             // build cannot make.)
+            // Measured: `ActiveSheet.Names.Add Name:="Local", ...` gives the
+            // workbook a name spelt `Sheet1!Local`.
+            if name.eq_ignore_ascii_case("names") {
+                return Ok(Some(self.object(HostObject::SheetNames(sheet))));
+            }
             if name.eq_ignore_ascii_case("standardheight") {
                 return Ok(Some(Value::Double(f64::from(
                     self.workbook.sheets[sheet].default_row_height,
@@ -19991,6 +20105,84 @@ impl Criteria {
 /// Splits a criteria argument into an operator and the value it compares
 /// against. Only text carries an operator; any other value is compared for
 /// equality as it stands.
+/// Rewrite every `R..C..` reference in R1C1 text to the absoluteness
+/// `ConvertFormula` asks for: 1 all absolute, 2 absolute row, 3 absolute
+/// column, 4 all relative. `row` and `column` are zero-based.
+fn set_r1c1_absoluteness(text: &str, mode: i64, row: u32, column: u32) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut quoted = false;
+    // One half of a reference: its line, one-based and absolute.
+    let part = |at: &mut usize, base: u32| -> i64 {
+        if chars.get(*at) == Some(&'[') {
+            let start = *at + 1;
+            let mut end = start;
+            while end < chars.len() && chars[end] != ']' {
+                end += 1;
+            }
+            let offset: i64 = chars[start..end].iter().collect::<String>().parse().unwrap_or(0);
+            *at = end + 1;
+            i64::from(base) + 1 + offset
+        } else {
+            let start = *at;
+            while *at < chars.len() && chars[*at].is_ascii_digit() {
+                *at += 1;
+            }
+            if *at == start {
+                i64::from(base) + 1
+            } else {
+                chars[start..*at].iter().collect::<String>().parse().unwrap_or(1)
+            }
+        }
+    };
+    let write = |line: i64, base: u32, absolute: bool| -> String {
+        if absolute {
+            line.to_string()
+        } else {
+            let offset = line - i64::from(base) - 1;
+            if offset == 0 { String::new() } else { format!("[{offset}]") }
+        }
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' {
+            quoted = !quoted;
+        }
+        let starts = !quoted
+            && c == 'R'
+            && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_' || chars[i - 1] == '.'));
+        if starts {
+            let mut at = i + 1;
+            let line = part(&mut at, row);
+            if chars.get(at) == Some(&'C') {
+                at += 1;
+                let across = part(&mut at, column);
+                let ends = chars
+                    .get(at)
+                    .is_none_or(|next| !(next.is_alphanumeric() || *next == '_' || *next == '('));
+                if ends {
+                    let (row_absolute, column_absolute) = match mode {
+                        1 => (true, true),
+                        2 => (true, false),
+                        3 => (false, true),
+                        _ => (false, false),
+                    };
+                    out.push('R');
+                    out.push_str(&write(line, row, row_absolute));
+                    out.push('C');
+                    out.push_str(&write(across, column, column_absolute));
+                    i = at;
+                    continue;
+                }
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
 /// A filter criterion as `Filter.Criteria1` reads it back: a bare value
 /// gains an `=`, one already led by a comparison stays as it was.
 fn filter_criteria_text(value: &Value) -> String {
@@ -21818,6 +22010,10 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlsheethidden" => 0,
         "xlsheetveryhidden" => 2,
         "xlfiltervalues" => 7,
+        "xlabsolute" => 1,
+        "xlabsrowrelcolumn" => 2,
+        "xlrelrowabscolumn" => 3,
+        "xlrelative" => 4,
         "xltop10items" => 3,
         "xlbottom10items" => 4,
         "xltop10percent" => 5,
