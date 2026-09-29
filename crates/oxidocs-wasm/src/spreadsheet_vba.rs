@@ -7349,10 +7349,14 @@ impl<'a> WorkbookHost<'a> {
     /// and then `Range("A11:B12").Group` leave column A at level 3 and B at
     /// 2, with rows 9 to 12 still at 1. Grouping past the eighth level, and
     /// ungrouping what is at the first, are both refused with 1004.
-    fn group_range(&mut self, range: CellRange, deeper: bool) -> Result<Value, String> {
-        let (axis, first, last) = match Self::outline_band(range) {
-            Some(band) => band,
-            None => (ShiftAxis::Columns, range.start_column, range.end_column),
+    fn group_range(&mut self, range: CellRange, sense: Option<RangeAxis>, deeper: bool) -> Result<Value, String> {
+        // `Range("B2:C4").Rows.Group` groups rows 2 to 4, and `.Columns`
+        // columns B and C: measured.
+        let (axis, first, last) = match (sense, Self::outline_band(range)) {
+            (Some(RangeAxis::Rows), _) => (ShiftAxis::Rows, range.start_row, range.end_row),
+            (Some(RangeAxis::Columns), _) => (ShiftAxis::Columns, range.start_column, range.end_column),
+            (None, Some(band)) => band,
+            (None, None) => (ShiftAxis::Columns, range.start_column, range.end_column),
         };
         let levels: Vec<u8> = (first..=last)
             .map(|index| self.outline_level(range.sheet, axis, index))
@@ -7360,11 +7364,18 @@ impl<'a> WorkbookHost<'a> {
         if deeper && levels.iter().any(|level| *level >= 8) {
             return Err(host_error(1004, "an outline goes no deeper than eight levels"));
         }
-        if !deeper && levels.iter().any(|level| *level <= 1) {
-            return Err(host_error(1004, "the rows or columns are not grouped"));
+        // Ungrouping fails only where none of the lines is grouped: measured,
+        // rows 1:2 ungroup quietly when row 2 alone is grouped, and a line
+        // not grouped stays as it is.
+        if !deeper && levels.iter().all(|level| *level <= 1) {
+            return Err(oxivba_core::host_error_explained(
+                1004,
+                "Ungroup method of Range class failed",
+                "the rows or columns are not grouped",
+            ));
         }
         for (index, level) in (first..=last).zip(levels) {
-            let level = if deeper { level + 1 } else { level - 1 };
+            let level = if deeper { level + 1 } else { level.saturating_sub(1).max(1) };
             self.set_outline_level(range.sheet, axis, index, level);
         }
         Ok(Value::Boolean(true))
@@ -16877,10 +16888,12 @@ impl Host for WorkbookHost<'_> {
                     return self.auto_fit(range, sense).map(Some);
                 }
                 if name.eq_ignore_ascii_case("group") {
-                    return self.group_range(range, true).map(Some);
+                    let sense = self.range_sense(receiver);
+                    return self.group_range(range, sense, true).map(Some);
                 }
                 if name.eq_ignore_ascii_case("ungroup") {
-                    return self.group_range(range, false).map(Some);
+                    let sense = self.range_sense(receiver);
+                    return self.group_range(range, sense, false).map(Some);
                 }
                 if name.eq_ignore_ascii_case("clearoutline") {
                     self.clear_outline(range);
@@ -18582,7 +18595,8 @@ impl Host for WorkbookHost<'_> {
                 }
                 level = Some(held);
             }
-            return Ok(Some(Value::Integer(i64::from(level.unwrap_or(1)))));
+            // A Double: measured, `TypeName(Rows(1).OutlineLevel)`.
+            return Ok(Some(Value::Double(f64::from(level.unwrap_or(1)))));
         }
         if name.eq_ignore_ascii_case("readingorder") {
             // Excel leaves a cell reading by context, which is -5002.
