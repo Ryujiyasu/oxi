@@ -9724,10 +9724,25 @@ impl<'a> WorkbookHost<'a> {
         // `NOTAFN()` is 2029 — rather than stopping the macro.
         // A block of answers comes back as an array: measured,
         // `Evaluate("{1,2,3}*2")` has UBound 3 and 6 at the end.
-        if let Some((width, height, cells)) =
+        // A formula working out to cells answers with them as a Range:
+        // measured, `TypeName(Evaluate("INDEX(A1:A6,2)"))` is Range.
+        if let Some((at, range)) =
+            oxicells_core::formula::evaluate_expression_reference(self.workbook, sheet, reference, self.now)
+        {
+            return Ok(self.object(HostObject::Range(CellRange {
+                sheet: at,
+                start_row: range.start.row + 1,
+                start_column: range.start.col,
+                end_row: range.end.row + 1,
+                end_column: range.end.col,
+            })));
+        }
+        // And an array stays one however small: measured, `Evaluate("{5}")`,
+        // `"{5}*2"` and `"INDEX({1;2;3},1)"` are each a Variant() of one.
+        if let Some((width, height, cells, block)) =
             oxicells_core::formula::evaluate_expression_block(self.workbook, sheet, reference, self.now)
         {
-            if cells.len() > 1 {
+            if cells.len() > 1 || (block && cells.len() == 1) {
                 let element = |value: oxicells_calc::Value| match value {
                     oxicells_calc::Value::Number(number) => Value::Double(number),
                     oxicells_calc::Value::Text(text) => Value::String(text),

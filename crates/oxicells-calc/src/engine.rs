@@ -549,12 +549,31 @@ impl Workbook {
 
     /// The same, keeping a block of answers whole: `{1,2,3}*2` is three
     /// numbers, as (width, height, cells row by row).
-    pub fn evaluate_block(&self, sheet: &str, formula: &str) -> Result<(usize, usize, Vec<Value>), CalcError> {
+    /// The last of the four says whether the answer came as a block -- an
+    /// array, however small -- rather than as one value.
+    pub fn evaluate_block(&self, sheet: &str, formula: &str) -> Result<(usize, usize, Vec<Value>, bool), CalcError> {
         let expr = parse(formula)?;
+        // TRANSPOSE of one cell is that cell's value, where TRANSPOSE({1})
+        // is still an array: measured, TypeName Double against Variant().
+        let one_cell = matches!(&expr, Expr::Function { name, args }
+            if name == "TRANSPOSE" && matches!(args.as_slice(), [Expr::Ref(reference)] if reference.range.start == reference.range.end));
         Ok(match self.eval_arg(&expr, sheet, 0, None) {
-            Arg::Range(block) => (block.width, block.height, block.cells.into_iter().map(formula_result).collect()),
-            Arg::Value(value) => (1, 1, vec![formula_result(value)]),
+            Arg::Range(block) => (block.width, block.height, block.cells.into_iter().map(formula_result).collect(), !one_cell),
+            Arg::Value(value) => (1, 1, vec![formula_result(value)], false),
         })
+    }
+
+    /// The cells a formula names when what it works out to is a reference
+    /// -- `INDEX(A1:A6,2)`, `OFFSET(A1,1,0)`, `INDIRECT("B2")` -- as the
+    /// sheet and range; None for anything else.
+    pub fn evaluate_reference(&self, sheet: &str, formula: &str) -> Option<(String, RangeRef)> {
+        let expr = parse(formula).ok()?;
+        match &expr {
+            Expr::Function { name, .. } if matches!(name.as_str(), "INDEX" | "OFFSET" | "INDIRECT") => {
+                self.reference_of(&expr, sheet, 0, None)
+            }
+            _ => None,
+        }
     }
 
     /// Evaluate a formula as though it stood in one particular cell.
@@ -1491,6 +1510,16 @@ impl Workbook {
                     && matches!(args.first(), Some(Expr::Function { name: union, .. }) if union == "_UNION")
                 {
                     evaluated.truncate(3);
+                }
+                // INDEX with one index into CELLS two ways wide and tall has
+                // no one cell to give: measured, `=INDEX(A1:B2,2)` is #REF!,
+                // where the same into an array is its whole row.
+                if name == "INDEX"
+                    && args.len() == 2
+                    && matches!(evaluated.first(), Some(Arg::Range(block)) if block.width > 1 && block.height > 1)
+                    && self.reference_of(&args[0], sheet, depth + 1, at).is_some()
+                {
+                    return Arg::Value(Value::Error(ExcelError::Ref));
                 }
                 // EDATE and EOMONTH take an array a value at a time but refuse
                 // a block of CELLS: measured, `EOMONTH(A1:A3,0)` is #VALUE!

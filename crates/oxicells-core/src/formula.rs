@@ -146,7 +146,7 @@ pub fn evaluate_expression_block(
     sheet: usize,
     formula: &str,
     now: Option<f64>,
-) -> Option<(usize, usize, Vec<oxicells_calc::Value>)> {
+) -> Option<(usize, usize, Vec<oxicells_calc::Value>, bool)> {
     let name = workbook.sheets.get(sheet)?.name.clone();
     let mut book = assemble_with_links(
         &workbook.sheets,
@@ -162,6 +162,26 @@ pub fn evaluate_expression_block(
         }
     }
     book.evaluate_block(&name, formula).ok()
+}
+
+/// The sheet (by place) and cells a formula names when it works out to a
+/// reference, such as `INDEX(A1:A6,2)`; rows and columns counted from zero.
+pub fn evaluate_expression_reference(
+    workbook: &Workbook,
+    sheet: usize,
+    formula: &str,
+    now: Option<f64>,
+) -> Option<(usize, oxicells_calc::RangeRef)> {
+    let name = workbook.sheets.get(sheet)?.name.clone();
+    let book = assemble_with_links(
+        &workbook.sheets,
+        &workbook.defined_names,
+        &workbook.external_books,
+        now,
+    );
+    let (target, range) = book.evaluate_reference(&name, formula)?;
+    let at = workbook.sheets.iter().position(|held| held.name.eq_ignore_ascii_case(&target))?;
+    Some((at, range))
 }
 
 /// Compute only those formula cells the file left without a cached value,

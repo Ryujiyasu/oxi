@@ -373,6 +373,28 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
         if let Some(line) = a_whole_line(args) {
             return line;
         }
+        // One index into an array of several rows is that whole row, a
+        // column's one cell included: measured, `SUM(INDEX({1,2;3,4},2))`
+        // is 7 and `Evaluate("INDEX({1;2;3},1)")` an array of one. (A
+        // reference of two dimensions is #REF! instead, which the engine
+        // settles before it gets here.)
+        if let [table, row] = args {
+            let table = table.as_range();
+            if table.height > 1 {
+                return match row.scalar().to_number() {
+                    Ok(row) if row >= 1.0 && (row as usize) <= table.height => {
+                        let at = row as usize - 1;
+                        Arg::Range(RangeData {
+                            width: table.width,
+                            height: 1,
+                            cells: (0..table.width).map(|col| table.at(col, at)).collect(),
+                        })
+                    }
+                    Ok(_) => Arg::Value(Value::Error(ExcelError::Ref)),
+                    Err(why) => Arg::Value(Value::Error(why)),
+                };
+            }
+        }
     }
     // The functions that cut, join and reshape blocks.
     if matches!(
