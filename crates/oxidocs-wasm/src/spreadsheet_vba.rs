@@ -10672,11 +10672,20 @@ impl<'a> WorkbookHost<'a> {
             }
             return fitted;
         }
-        if measure(&shown) <= room {
-            shown
-        } else {
-            "#".repeat(hashes)
+        if measure(&shown) > room {
+            return "#".repeat(hashes);
         }
+        // `*x` repeats x across whatever room the rest leaves: measured,
+        // the accounting format fills a wide column with spaces between
+        // the $ and the amount.
+        if let Some((fill, marked)) = format.and_then(fill_marked) {
+            let with_mark = oxicells_core::format_number(number, &marked);
+            let rest: String = with_mark.chars().filter(|held| *held != FILL_MARK).collect();
+            let each = measure(&fill.to_string()).max(1);
+            let count = (room.saturating_sub(measure(&rest)) / each) as usize;
+            return with_mark.replacen(FILL_MARK, &fill.to_string().repeat(count), 1);
+        }
+        shown
     }
 
     /// What a cell would show in the formula bar.
@@ -20044,6 +20053,39 @@ fn shown_as(format: Option<&str>) -> ShownAs {
     }
 }
 
+/// Stands where a format's `*x` is while the rest is laid out.
+const FILL_MARK: char = '\u{E000}';
+
+/// A format with each section's `*x` (outside quotes) replaced by a quoted
+/// mark, and the character the first fills with.
+fn fill_marked(format: &str) -> Option<(char, String)> {
+    let mut out = String::with_capacity(format.len() + 4);
+    let mut quoted = false;
+    let mut characters = format.chars();
+    let mut fill = None;
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => {
+                quoted = !quoted;
+                out.push(character);
+            }
+            '\\' if !quoted => {
+                out.push(character);
+                out.extend(characters.next());
+            }
+            '*' if !quoted => {
+                let with = characters.next()?;
+                fill.get_or_insert(with);
+                out.push('"');
+                out.push(FILL_MARK);
+                out.push('"');
+            }
+            other => out.push(other),
+        }
+    }
+    fill.map(|with| (with, out))
+}
+
 fn shown_text(value: &Value, format: Option<&str>) -> String {
     match value {
         // Every numeric kind takes the format -- a Date among them:
@@ -20053,6 +20095,12 @@ fn shown_text(value: &Value, format: Option<&str>) -> String {
             oxicells_core::format_number(any_number(value).unwrap_or_default(), format.unwrap_or("General"))
         }
         Value::Empty | Value::Missing => String::new(),
+        // Text wears the format's text section: measured, "abc" under
+        // `0;0;0;"txt:"@` shows `txt:abc`.
+        Value::String(text) => match format {
+            Some(format) => oxicells_calc::format_text(text, format),
+            None => text.clone(),
+        },
         value => find_value_text(value),
     }
 }

@@ -22,7 +22,26 @@ pub fn format_number(value: f64, format: &str) -> String {
     }
 
     let sections: Vec<&str> = split_sections(format);
-    let (section, signed) = if value < 0.0 && sections.len() > 1 {
+    // A section may say which numbers it is for: measured, under
+    // `[<1000]0;#,##0,"K"` 1500 is `2K`. With conditions the first section
+    // whose condition holds is used, and one without a condition takes the
+    // rest; a number shown that way keeps its sign.
+    let conditions: Vec<Option<(String, f64)>> = sections.iter().map(|one| section_condition(one)).collect();
+    let (section, signed) = if conditions.iter().any(Option::is_some) {
+        let numeric = &sections[..sections.len().min(3)];
+        let chosen = numeric
+            .iter()
+            .zip(&conditions)
+            .find(|(_, condition)| match condition {
+                Some((op, bound)) => condition_holds(op, value, *bound),
+                None => true,
+            })
+            .map(|(one, _)| *one);
+        match chosen {
+            Some(one) => (one, true),
+            None => return "#".repeat(1),
+        }
+    } else if value < 0.0 && sections.len() > 1 {
         // The negative section carries its own sign, so the value loses it.
         (sections[1], false)
     } else if value == 0.0 && sections.len() > 2 {
@@ -30,6 +49,16 @@ pub fn format_number(value: f64, format: &str) -> String {
     } else {
         (sections[0], true)
     };
+
+    // A section with no place for a digit shows only its own words:
+    // measured, `0;"neg";"zero"` shows -5 as `neg` and 0 as `zero`.
+    if !has_digit_place(section) && !looks_like_a_date(section) && !section.eq_ignore_ascii_case("general") {
+        let words = literal_text(section);
+        return if signed && value < 0.0 && !words.is_empty() && sections.len() == 1 { format!("-{words}") } else { words };
+    }
+    if section.trim().eq_ignore_ascii_case("general") {
+        return general(if signed { value } else { value.abs() });
+    }
 
     let magnitude = if signed { value } else { value.abs() };
     if looks_like_a_date(section) {
@@ -39,6 +68,98 @@ pub fn format_number(value: f64, format: &str) -> String {
         return format_fraction(magnitude, &shape);
     }
     format_numeric(magnitude, section)
+}
+
+/// Text under a format: its fourth section, or a lone section holding `@`,
+/// with the text where the `@` is. Measured: under `0;0;0;"txt:"@` "abc" is
+/// `txt:abc`; a format with no text section shows text as it is.
+pub fn format_text(text: &str, format: &str) -> String {
+    let sections = split_sections(format);
+    let section = match sections.len() {
+        4.. => sections[3],
+        1 if sections[0].contains('@') => sections[0],
+        _ => return text.to_string(),
+    };
+    let mut out = String::new();
+    let mut quoted = false;
+    let mut characters = section.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => quoted = !quoted,
+            _ if quoted => out.push(character),
+            '\\' => out.extend(characters.next()),
+            '_' => {
+                characters.next();
+                out.push(' ');
+            }
+            '*' => {
+                characters.next();
+            }
+            '[' => {
+                for held in characters.by_ref() {
+                    if held == ']' {
+                        break;
+                    }
+                }
+            }
+            '@' => out.push_str(text),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Whether a section has anywhere for a digit to go.
+fn has_digit_place(section: &str) -> bool {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut bracket = false;
+    for character in section.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '\\' | '_' | '*' => escaped = true,
+            '[' => bracket = true,
+            ']' => bracket = false,
+            _ if bracket => {}
+            '0' | '#' | '?' => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// A section's condition, `[<1000]` or `[>=5]`, as the operator and bound.
+fn section_condition(section: &str) -> Option<(String, f64)> {
+    let mut rest = section;
+    while let Some(open) = rest.find('[') {
+        let close = rest[open..].find(']')? + open;
+        let inside = &rest[open + 1..close];
+        for op in ["<=", ">=", "<>", "<", ">", "="] {
+            if let Some(bound) = inside.strip_prefix(op) {
+                if let Ok(bound) = bound.trim().parse::<f64>() {
+                    return Some((op.to_string(), bound));
+                }
+            }
+        }
+        rest = &rest[close + 1..];
+    }
+    None
+}
+
+fn condition_holds(op: &str, value: f64, bound: f64) -> bool {
+    match op {
+        "<" => value < bound,
+        "<=" => value <= bound,
+        ">" => value > bound,
+        ">=" => value >= bound,
+        "=" => value == bound,
+        _ => value != bound,
+    }
 }
 
 /// The parts of a fraction format: `# ?/?` is a whole part, the text between,
@@ -373,124 +494,279 @@ fn general(value: f64) -> String {
     text
 }
 
-fn format_numeric(value: f64, format: &str) -> String {
-    let mut decimals = 0usize;
-    let mut grouped = false;
-    let mut percent = false;
-    let mut scientific = false;
-    let mut scale = 0u32;
-    let mut integer_places = 0usize;
+/// A digit place in a format: `0` shows a digit or a zero, `#` a digit or
+/// nothing, `?` a digit or a space.
+#[derive(Clone, Copy, PartialEq)]
+enum Place {
+    Zero,
+    Hash,
+    Query,
+}
 
-    // Read the shape of the format before rendering anything with it.
+fn place_of(character: char) -> Option<Place> {
+    match character {
+        '0' => Some(Place::Zero),
+        '#' => Some(Place::Hash),
+        '?' => Some(Place::Query),
+        _ => None,
+    }
+}
+
+/// What stands in a place that has no digit of its own.
+fn empty_place(place: Place) -> &'static str {
+    match place {
+        Place::Zero => "0",
+        Place::Hash => "",
+        Place::Query => " ",
+    }
+}
+
+/// Where a character of the format sits: before the point, after it, or in
+/// the exponent.
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    Whole,
+    Fraction,
+    Exponent,
+}
+
+/// A number under a numeric format section, as Excel shows it. Measured in
+/// `Range.Text`: `0.##` shows 12 as `12.`, `??.??` 3.14159 as ` 3.14`,
+/// `0.0E+0` 0.000123 as `1.2E-4`, `#,##0,,` 1234567 as `1`; the places are
+/// filled from the right, what the number has beyond them going to the first
+/// one; `#` leaves nothing and `?` a space where there is no digit, and the
+/// fraction's trailing zeros go the same way.
+fn format_numeric(value: f64, format: &str) -> String {
     let body: Vec<char> = format.chars().collect();
-    let mut seen_point = false;
+
+    // The shape: which places there are in each part, and what else the
+    // format asks of the number.
+    let mut whole_places: Vec<Place> = Vec::new();
+    let mut fraction_places: Vec<Place> = Vec::new();
+    let mut exponent_places: Vec<Place> = Vec::new();
+    let mut percent = 0i32;
+    let mut grouped = false;
+    let mut scale = 0i32;
+    let mut scientific: Option<bool> = None;
+    let mut part = Part::Whole;
     let mut quoted = false;
     let mut at = 0;
     while at < body.len() {
         let character = body[at];
+        if quoted {
+            if character == '"' {
+                quoted = false;
+            }
+            at += 1;
+            continue;
+        }
         match character {
-            '"' => quoted = !quoted,
-            _ if quoted => {}
-            // `_x` keeps the width of x, `\x` shows x, `*x` fills with x:
-            // in each the character after belongs to the directive, not to
-            // the number.
-            '_' | '\\' | '*' => at += 1,
-            // A bracketed part names a colour, a condition or a locale.
+            '"' => quoted = true,
+            '\\' | '_' | '*' => at += 1,
             '[' => {
                 while at < body.len() && body[at] != ']' {
                     at += 1;
                 }
             }
-            '.' => seen_point = true,
-            '0' | '#' | '?' => {
-                if seen_point {
-                    decimals += 1;
-                } else if character == '0' {
-                    integer_places += 1;
-                }
+            '.' if part == Part::Whole => part = Part::Fraction,
+            '%' => percent += 1,
+            'E' | 'e' if scientific.is_none() && matches!(body.get(at + 1), Some('+' | '-')) => {
+                scientific = Some(body[at + 1] == '+');
+                part = Part::Exponent;
+                at += 1;
             }
-            '%' => percent = true,
-            'E' | 'e' if at + 1 < body.len() && matches!(body[at + 1], '+' | '-') => {
-                scientific = true;
-            }
-            ',' => {
-                // A comma among the digits groups them; one after the last
-                // digit divides by a thousand for each comma.
-                let trailing = body[at + 1..]
+            ',' if part == Part::Whole => {
+                // Among the places it groups; after the last place before
+                // the point it divides by a thousand.
+                let more_places = body[at + 1..]
                     .iter()
-                    .all(|held| !matches!(held, '0' | '#' | '?' | '.'));
-                if trailing {
-                    scale += 1;
-                } else {
+                    .take_while(|held| !matches!(held, '.' | 'E' | 'e' | ';'))
+                    .any(|held| place_of(*held).is_some());
+                if more_places && !whole_places.is_empty() {
                     grouped = true;
+                } else if !whole_places.is_empty() {
+                    scale += 1;
                 }
             }
-            _ => {}
+            other => {
+                if let Some(place) = place_of(other) {
+                    match part {
+                        Part::Whole => whole_places.push(place),
+                        Part::Fraction => fraction_places.push(place),
+                        Part::Exponent => exponent_places.push(place),
+                    }
+                }
+            }
         }
         at += 1;
     }
 
-    let mut number = value;
-    if percent {
-        number *= 100.0;
-    }
-    for _ in 0..scale {
-        number /= 1000.0;
-    }
+    let negative = value < 0.0;
+    let mut number = value.abs() * 100f64.powi(percent) / 1000f64.powi(scale);
 
-    if scientific {
-        // In 0.00E+00 the places after the point belong to the mantissa; the
-        // ones after E are the exponent's width, counted separately.
-        let mantissa_places = format
-            .split(['E', 'e'])
-            .next()
-            .map(|head| head.rsplit('.').next().unwrap_or("").chars()
-                .filter(|held| matches!(held, '0' | '#' | '?')).count())
-            .filter(|_| format.contains('.'))
-            .unwrap_or(0);
-        let rendered = format!("{:.*E}", mantissa_places, number);
-        // Rust writes E3; Excel writes E+03.
-        return match rendered.split_once('E') {
-            Some((mantissa, exponent)) => {
-                let power: i32 = exponent.parse().unwrap_or(0);
-                format!("{mantissa}E{}{:02}", if power < 0 { '-' } else { '+' }, power.abs())
-            }
-            None => rendered,
+    // Scientific: the mantissa has as many whole digits as the format has
+    // places for, and the exponent comes out of that.
+    let mut exponent = 0i32;
+    if scientific.is_some() && number != 0.0 {
+        let places = whole_places.len().max(1) as i32;
+        let magnitude = number.log10().floor() as i32;
+        exponent = if places > 1 && whole_places.first() == Some(&Place::Hash) {
+            magnitude.div_euclid(places) * places
+        } else {
+            magnitude - (places - 1)
         };
+        number /= 10f64.powi(exponent);
+        // Rounding may carry the mantissa over into another digit.
+        let decimals = fraction_places.len() as i32;
+        let settled = round_half_away(number, decimals);
+        if settled >= 10f64.powi(places) {
+            number = settled / 10.0;
+            exponent += 1;
+        }
     }
 
-    let negative = number < 0.0;
-    // Excel sends a half away from zero; Rust's formatting sends it to the
-    // even neighbour, so the rounding is done before the text is made.
-    let scale = 10f64.powi(decimals as i32);
-    let settled = (number.abs() * scale).round() / scale;
-    let rounded = format!("{:.*}", decimals, settled);
-    let (whole, fraction) = match rounded.split_once('.') {
-        Some((whole, fraction)) => (whole.to_string(), Some(fraction.to_string())),
-        None => (rounded.clone(), None),
+    let settled = round_half_away(number, fraction_places.len() as i32);
+    let rendered = format!("{:.*}", fraction_places.len(), settled);
+    let (whole_digits, fraction_digits) = match rendered.split_once('.') {
+        Some((whole, fraction)) => (whole.to_string(), fraction.to_string()),
+        None => (rendered.clone(), String::new()),
+    };
+    let whole_digits = if whole_digits == "0" { String::new() } else { whole_digits };
+
+    // The whole part, place by place from the right; what does not fit goes
+    // to the first place.
+    let count = whole_places.len();
+    let digits: Vec<char> = whole_digits.chars().collect();
+    let mut whole_slots: Vec<String> = Vec::with_capacity(count);
+    for (index, place) in whole_places.iter().enumerate() {
+        let from_right = count - 1 - index;
+        let mut slot = String::new();
+        if index == 0 && digits.len() > count {
+            slot.extend(&digits[..digits.len() - count]);
+        }
+        if from_right < digits.len() {
+            slot.push(digits[digits.len() - 1 - from_right]);
+        } else {
+            slot.push_str(empty_place(*place));
+        }
+        whole_slots.push(slot);
+    }
+    if grouped && count > 0 {
+        // Grouping runs over the digits the whole part shows, however they
+        // are spread; they are gathered into the first place.
+        let shown: String = whole_slots.concat();
+        let lead: String = shown.chars().take_while(|held| !held.is_ascii_digit()).collect();
+        let figures: String = shown.chars().filter(char::is_ascii_digit).collect();
+        whole_slots = vec![String::new(); count];
+        whole_slots[0] = format!("{lead}{}", group_thousands(&figures));
+    }
+
+    // The fraction's trailing zeros: gone under `#`, a space under `?`.
+    let mut fraction_slots: Vec<String> = fraction_digits.chars().map(String::from).collect();
+    for index in (0..fraction_slots.len()).rev() {
+        if fraction_slots[index] != "0" || fraction_places[index] == Place::Zero {
+            break;
+        }
+        fraction_slots[index] = empty_place(fraction_places[index]).to_string();
+    }
+
+    // The exponent, at least as many digits as it has `0`s.
+    let exponent_digits = {
+        let zeros = exponent_places.iter().filter(|place| **place == Place::Zero).count();
+        format!("{:0>width$}", exponent.abs(), width = zeros.max(1))
     };
 
-    let mut whole = whole;
-    while whole.len() < integer_places {
-        whole.insert(0, '0');
-    }
-    if grouped {
-        whole = group_thousands(&whole);
-    }
-
-    let mut rendered = String::new();
+    // Now the format again, left to right, putting it all in its place.
+    let mut out = String::new();
     if negative {
-        rendered.push('-');
+        out.push('-');
     }
-    rendered.push_str(&whole);
-    if let Some(fraction) = fraction {
-        rendered.push('.');
-        rendered.push_str(&fraction);
+    let (mut whole_at, mut fraction_at) = (0usize, 0usize);
+    let mut part = Part::Whole;
+    let mut quoted = false;
+    let mut at = 0;
+    while at < body.len() {
+        let character = body[at];
+        if quoted {
+            if character == '"' {
+                quoted = false;
+            } else {
+                out.push(character);
+            }
+            at += 1;
+            continue;
+        }
+        match character {
+            '"' => quoted = true,
+            '\\' => {
+                if let Some(next) = body.get(at + 1) {
+                    out.push(*next);
+                }
+                at += 1;
+            }
+            // `_x` keeps the width of x: Excel's own `Range.Text` gives a
+            // space. `*x` fills what the cell has left, which depends on its
+            // width, so nothing is put here.
+            '_' => {
+                out.push(' ');
+                at += 1;
+            }
+            '*' => at += 1,
+            '[' => {
+                // `[$€-407]` shows its currency; a colour, a condition or a
+                // bare locale shows nothing.
+                let start = at;
+                while at < body.len() && body[at] != ']' {
+                    at += 1;
+                }
+                let inside: String = body[start + 1..at.min(body.len())].iter().collect();
+                if let Some(currency) = inside.strip_prefix('$') {
+                    out.push_str(currency.split('-').next().unwrap_or(""));
+                }
+            }
+            '.' if part == Part::Whole => {
+                part = Part::Fraction;
+                out.push('.');
+            }
+            ',' if part == Part::Whole => {}
+            'E' | 'e' if part != Part::Exponent && scientific.is_some() && matches!(body.get(at + 1), Some('+' | '-')) => {
+                part = Part::Exponent;
+                out.push(character);
+                if exponent < 0 {
+                    out.push('-');
+                } else if scientific == Some(true) {
+                    out.push('+');
+                }
+                out.push_str(&exponent_digits);
+                at += 1;
+            }
+            other => match (place_of(other), part) {
+                (Some(_), Part::Whole) => {
+                    if let Some(slot) = whole_slots.get(whole_at) {
+                        out.push_str(slot);
+                    }
+                    whole_at += 1;
+                }
+                (Some(_), Part::Fraction) => {
+                    if let Some(slot) = fraction_slots.get(fraction_at) {
+                        out.push_str(slot);
+                    }
+                    fraction_at += 1;
+                }
+                (Some(_), Part::Exponent) => {}
+                (None, _) => out.push(other),
+            },
+        }
+        at += 1;
     }
+    out
+}
 
-    // Whatever the format says around the number comes along: currency signs,
-    // quoted words, percent signs.
-    decorate(&rendered, format)
+/// Half away from zero, as Excel rounds for display; Rust's own formatting
+/// sends a half to the even neighbour.
+fn round_half_away(number: f64, decimals: i32) -> f64 {
+    let scale = 10f64.powi(decimals);
+    (number * scale).round() / scale
 }
 
 fn group_thousands(digits: &str) -> String {
@@ -504,75 +780,6 @@ fn group_thousands(digits: &str) -> String {
     grouped
 }
 
-/// Puts the number into the literal text the format wraps it in.
-fn decorate(number: &str, format: &str) -> String {
-    let mut before = String::new();
-    let mut after = String::new();
-    let mut seen_digit = false;
-    let mut quoted = false;
-    let mut characters = format.chars().peekable();
-    while let Some(character) = characters.next() {
-        match character {
-            '"' => quoted = !quoted,
-            _ if quoted => {
-                if seen_digit {
-                    after.push(character);
-                } else {
-                    before.push(character);
-                }
-            }
-            '0' | '#' | '?' | '.' | ',' => seen_digit = true,
-            '%' => {
-                if seen_digit {
-                    after.push('%');
-                } else {
-                    before.push('%');
-                }
-            }
-            '\\' => {
-                if let Some(escaped) = characters.next() {
-                    if seen_digit {
-                        after.push(escaped);
-                    } else {
-                        before.push(escaped);
-                    }
-                }
-            }
-            // `_x` asks for the width of x and shows nothing there. Excel's
-            // own `Range.Text` gives a space, which is what a sheet shows.
-            '_' => {
-                characters.next();
-                if seen_digit {
-                    after.push(' ');
-                } else {
-                    before.push(' ');
-                }
-            }
-            // `*x` fills the rest of the cell with x. What that comes to
-            // depends on the width of the cell, so nothing is put here.
-            '*' => {
-                characters.next();
-            }
-            // `[Red]`, `[$-411]`, `[>100]`: a colour, a locale, a condition.
-            // None of them is text.
-            '[' => {
-                for held in characters.by_ref() {
-                    if held == ']' {
-                        break;
-                    }
-                }
-            }
-            _ => {
-                if seen_digit {
-                    after.push(character);
-                } else {
-                    before.push(character);
-                }
-            }
-        }
-    }
-    format!("{before}{number}{after}")
-}
 
 fn format_datetime(serial: f64, format: &str) -> String {
     let whole = serial.trunc() as i64;
@@ -883,7 +1090,23 @@ fn next_is_second(body: &[char], at: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::format_number;
+    use super::{format_number, format_text};
+
+    /// Places, sections and text, each as Excel 16 shows it in `Range.Text`.
+    #[test]
+    fn places_sections_and_text_as_excel_shows_them() {
+        assert_eq!(format_number(12.0, "0.##"), "12.");
+        assert_eq!(format_number(3.14159, "??.??"), " 3.14");
+        assert_eq!(format_number(0.000123, "0.0E+0"), "1.2E-4");
+        assert_eq!(format_number(12345.678, "0.00E+00"), "1.23E+04");
+        assert_eq!(format_number(1234567.0, "#,##0,,"), "1");
+        assert_eq!(format_number(1500.0, "[<1000]0;#,##0,\"K\""), "2K");
+        assert_eq!(format_number(-5.0, "0;\"neg\";\"zero\""), "neg");
+        assert_eq!(format_number(0.0, "0;\"neg\";\"zero\""), "zero");
+        assert_eq!(format_number(1.23456789, "0.####"), "1.2346");
+        assert_eq!(format_text("abc", "0;0;0;\"txt:\"@"), "txt:abc");
+        assert_eq!(format_text("abc", "0.00"), "abc");
+    }
 
     /// Every expectation is what Excel 16 put in `Range.Text` for that value
     /// under that format.
