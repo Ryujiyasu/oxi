@@ -519,37 +519,38 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
 const KNOWN_FUNCTIONS: &[&str] = &[
     "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ASC", "ASIN",
     "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF",
-    "AVERAGEIFS", "BASE", "BIN2DEC", "BIN2HEX", "BIN2OCT", "BITAND", "BITOR", "BITXOR",
-    "CEILING", "CEILING.MATH", "CELL", "CHAR", "CHOOSE", "CHOOSECOLS", "CHOOSEROWS", "CLEAN",
-    "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT", "CONCATENATE", "CONFIDENCE",
-    "CONFIDENCE.NORM", "CORREL", "COS", "COSH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF",
-    "COUNTIFS", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "D", "DATE", "DATEDIF", "DATEVALUE",
-    "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB", "DEC2BIN",
-    "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DMAX", "DMIN",
-    "DOLLAR", "DPRODUCT", "DROP", "DSUM", "EDATE", "EOMONTH", "ERROR.TYPE", "EVEN", "EXACT",
-    "EXP", "EXPAND", "FACT", "FACTDOUBLE", "FALSE", "FIND", "FINDB", "FIXED", "FLOOR",
-    "FLOOR.MATH", "FORECAST", "FORECAST.LINEAR", "FV", "GAUSS", "GCD", "GEOMEAN", "GESTEP",
-    "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK", "IF",
-    "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT", "INTERCEPT", "IPMT", "IRR",
-    "ISBLANK", "ISERR", "ISERROR", "ISEVEN", "ISFORMULA", "ISLOGICAL", "ISNA", "ISNONTEXT",
-    "ISNUMBER", "ISODD", "ISOWEEKNUM", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM",
-    "LEFT", "LEFTB", "LEN", "LENB", "LET", "LN", "LOG", "LOG10", "LOOKUP", "LOWER", "M",
-    "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS",
-    "MINUTE", "MIRR", "MMULT", "MOD", "MODE", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL",
-    "N", "NA", "NETWORKDAYS", "NETWORKDAYS.INTL", "NORM.DIST", "NORM.INV", "NORM.S.DIST",
-    "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV",
-    "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PEARSON",
-    "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERCENTRANK.INC",
-    "PERMUT", "PHI", "PI", "PMT", "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE",
-    "QUARTILE.EXC", "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDBETWEEN", "RANK",
-    "RANK.AVG", "RANK.EQ", "RATE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN",
-    "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND",
-    "SEQUENCE", "SHEET", "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN", "SLOPE", "SMALL",
-    "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA",
-    "STDEVP", "STEYX", "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT",
-    "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "TAKE", "TAN", "TANH",
-    "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL",
-    "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TYPE", "UNICHAR", "UNICODE",
+    "AVERAGEIFS", "BASE", "BIN2DEC", "BIN2HEX", "BIN2OCT", "BINOM.DIST", "BINOMDIST", "BITAND",
+    "BITOR", "BITXOR", "CEILING", "CEILING.MATH", "CELL", "CHAR", "CHOOSE", "CHOOSECOLS",
+    "CHOOSEROWS", "CLEAN", "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT",
+    "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CORREL", "COS", "COSH", "COUNT", "COUNTA",
+    "COUNTBLANK", "COUNTIF", "COUNTIFS", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "D", "DATE",
+    "DATEDIF", "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA",
+    "DDB", "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET",
+    "DMAX", "DMIN", "DOLLAR", "DPRODUCT", "DROP", "DSUM", "EDATE", "EOMONTH", "ERROR.TYPE",
+    "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST", "FACT", "FACTDOUBLE", "FALSE",
+    "FIND", "FINDB", "FIXED", "FLOOR", "FLOOR.MATH", "FORECAST", "FORECAST.LINEAR", "FV",
+    "GAUSS", "GCD", "GEOMEAN", "GESTEP", "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP",
+    "HOUR", "HSTACK", "HYPERLINK", "IF", "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT",
+    "INTERCEPT", "IPMT", "IRR", "ISBLANK", "ISERR", "ISERROR", "ISEVEN", "ISFORMULA",
+    "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER", "ISODD", "ISOWEEKNUM", "ISREF", "ISTEXT",
+    "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB", "LEN", "LENB", "LET", "LN", "LOG",
+    "LOG10", "LOOKUP", "LOWER", "M", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MEDIAN", "MID",
+    "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MIRR", "MMULT", "MOD", "MODE", "MODE.SNGL",
+    "MONTH", "MROUND", "MULTINOMIAL", "N", "NA", "NETWORKDAYS", "NETWORKDAYS.INTL",
+    "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST",
+    "NORMSINV", "NOT", "NOW", "NPER", "NPV", "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX",
+    "ODD", "OFFSET", "OR", "PEARSON", "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC",
+    "PERCENTRANK", "PERCENTRANK.INC", "PERMUT", "PHI", "PI", "PMT", "POISSON", "POISSON.DIST",
+    "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC", "QUARTILE.INC",
+    "QUOTIENT", "RADIANS", "RAND", "RANDARRAY", "RANDBETWEEN", "RANK", "RANK.AVG", "RANK.EQ",
+    "RATE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN", "ROUND", "ROUNDDOWN",
+    "ROUNDUP", "ROW", "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND", "SEQUENCE", "SHEET",
+    "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN", "SLOPE", "SMALL", "SORT", "SORTBY", "SQRT",
+    "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA", "STDEVP", "STEYX",
+    "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT", "SUMSQ", "SUMX2MY2",
+    "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.TEST", "TAKE", "TAN", "TANH", "TEXT",
+    "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL", "TODAY",
+    "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR", "UNICODE",
     "UNIQUE", "UPPER", "VALUE", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VLOOKUP", "VSTACK",
     "WEEKDAY", "WEEKNUM", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XLOOKUP",
     "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
@@ -1381,6 +1382,24 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if start > units.len() {
                 return Err(ExcelError::Value);
             }
+            // SEARCH reads `*`, `?` and `~` as FIND does not: measured,
+            // `SEARCH("*na","banana")` is 1 -- the first place the pattern
+            // matches the text from.
+            if name == "SEARCH" && has_wildcards(&needle) {
+                let chars: Vec<char> = haystack.chars().collect();
+                let pattern = format!("{needle}*");
+                let mut unit_at = 0usize;
+                for (index, _) in chars.iter().enumerate() {
+                    if unit_at >= start {
+                        let rest: String = chars[index..].iter().collect();
+                        if wildcard_match(&rest, &pattern) {
+                            return Ok(Value::Number((unit_at + 1) as f64));
+                        }
+                    }
+                    unit_at += chars[index].len_utf16();
+                }
+                return Err(ExcelError::Value);
+            }
             let found = units[start..]
                 .windows(needle_units.len().max(1))
                 .position(|w| w == needle_units.as_slice());
@@ -1393,6 +1412,123 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "VALUE" => Ok(Value::Number(
             Value::Text(text(one_arg(args)?)?).to_number()?,
         )),
+        // Measured: BINOM.DIST(3,10,0.5,FALSE) is 0.117188 as shown,
+        // POISSON.DIST(2,3,TRUE) 0.42319, EXPON.DIST(1,2,TRUE) 0.864665.
+        "BINOM.DIST" | "BINOMDIST" => {
+            expect(args, 4)?;
+            let (k, n, p) = (num(&args[0])?.trunc(), num(&args[1])?.trunc(), num(&args[2])?);
+            let cumulative = args[3].scalar().to_logical()?;
+            if k < 0.0 || k > n || !(0.0..=1.0).contains(&p) {
+                return Err(ExcelError::Num);
+            }
+            // Exact products while they fit, so a tidy answer stays tidy:
+            // 120/1024 is 0.1171875 and shows as 0.117188.
+            let mass = |j: f64| {
+                if n <= 1000.0 {
+                    let mut choose = 1.0;
+                    for i in 0..j as i64 {
+                        choose = choose * (n - i as f64) / (i as f64 + 1.0);
+                    }
+                    choose * p.powi(j as i32) * (1.0 - p).powi((n - j) as i32)
+                } else {
+                    (ln_choose(n, j) + j * p.ln() + (n - j) * (1.0 - p).ln()).exp()
+                }
+            };
+            let answer = if cumulative { (0..=k as i64).map(|j| mass(j as f64)).sum() } else { mass(k) };
+            Ok(Value::Number(answer))
+        }
+        "POISSON.DIST" | "POISSON" => {
+            expect(args, 3)?;
+            let (x, mean) = (num(&args[0])?.trunc(), num(&args[1])?);
+            let cumulative = args[2].scalar().to_logical()?;
+            if x < 0.0 || mean < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let mass = |j: f64| {
+                if j <= 170.0 {
+                    let mut term = (-mean).exp();
+                    for i in 1..=j as i64 {
+                        term = term * mean / i as f64;
+                    }
+                    term
+                } else {
+                    (j * mean.ln() - mean - ln_gamma(j + 1.0)).exp()
+                }
+            };
+            let answer = if cumulative { (0..=x as i64).map(|j| mass(j as f64)).sum() } else { mass(x) };
+            Ok(Value::Number(answer))
+        }
+        "EXPON.DIST" | "EXPONDIST" => {
+            expect(args, 3)?;
+            let (x, lambda) = (num(&args[0])?, num(&args[1])?);
+            let cumulative = args[2].scalar().to_logical()?;
+            if x < 0.0 || lambda <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(if cumulative { 1.0 - (-lambda * x).exp() } else { lambda * (-lambda * x).exp() }))
+        }
+        // T.TEST(a, b, tails, type): paired (1), equal variance (2) or
+        // unequal (3). Measured: a sample paired with itself is #DIV/0!.
+        "T.TEST" | "TTEST" => {
+            expect(args, 4)?;
+            let numbers = |arg: &Arg| arg.flatten().into_iter().filter_map(|v| match v {
+                Value::Number(n) => Some(n),
+                _ => None,
+            }).collect::<Vec<f64>>();
+            let (a, b) = (numbers(&args[0]), numbers(&args[1]));
+            let tails = num(&args[2])?.trunc();
+            let kind = num(&args[3])?.trunc();
+            if !(tails == 1.0 || tails == 2.0) || !(1.0..=3.0).contains(&kind) {
+                return Err(ExcelError::Num);
+            }
+            let mean = |xs: &[f64]| xs.iter().sum::<f64>() / xs.len() as f64;
+            let variance = |xs: &[f64]| {
+                let m = mean(xs);
+                xs.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (xs.len() as f64 - 1.0)
+            };
+            let (t, df) = if kind == 1.0 {
+                if a.len() != b.len() {
+                    return Err(ExcelError::NA);
+                }
+                let d: Vec<f64> = a.iter().zip(&b).map(|(x, y)| x - y).collect();
+                if d.len() < 2 {
+                    return Err(ExcelError::DivZero);
+                }
+                let spread = variance(&d);
+                if spread == 0.0 {
+                    return Err(ExcelError::DivZero);
+                }
+                (mean(&d) / (spread / d.len() as f64).sqrt(), d.len() as f64 - 1.0)
+            } else {
+                if a.len() < 2 || b.len() < 2 {
+                    return Err(ExcelError::DivZero);
+                }
+                let (na, nb) = (a.len() as f64, b.len() as f64);
+                let (va, vb) = (variance(&a), variance(&b));
+                if kind == 2.0 {
+                    let squares = |xs: &[f64]| {
+                        let m = mean(xs);
+                        xs.iter().map(|x| (x - m) * (x - m)).sum::<f64>()
+                    };
+                    let pooled = (squares(&a) + squares(&b)) / (na + nb - 2.0);
+                    let se = (pooled * (1.0 / na + 1.0 / nb)).sqrt();
+                    if se == 0.0 {
+                        return Err(ExcelError::DivZero);
+                    }
+                    ((mean(&a) - mean(&b)) / se, na + nb - 2.0)
+                } else {
+                    let (sa, sb) = (va / na, vb / nb);
+                    let se = (sa + sb).sqrt();
+                    if se == 0.0 {
+                        return Err(ExcelError::DivZero);
+                    }
+                    let df = (sa + sb).powi(2) / (sa * sa / (na - 1.0) + sb * sb / (nb - 1.0));
+                    ((mean(&a) - mean(&b)) / se, df)
+                }
+            };
+            let upper = 0.5 * regularized_beta(df / (df + t * t), df / 2.0, 0.5);
+            Ok(Value::Number(tails * upper))
+        }
 
         // ---- conditional aggregates ---------------------------------------
         "COUNTIF" => {
@@ -2552,15 +2688,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             };
 
             if approximate {
-                let mut best = None;
-                for i in 0..lanes {
-                    match compare(&probe(i), &key) {
-                        Ok(Ordering::Greater) => break,
-                        Ok(_) => best = Some(i),
-                        Err(_) => continue,
-                    }
-                }
-                best.map(fetch).ok_or(ExcelError::NA)
+                sorted_position(lanes, false, probe, &key).map(fetch).ok_or(ExcelError::NA)
             } else {
                 // An empty cell in the lookup column never matches, not even an
                 // empty lookup value: Excel reports #N/A rather than pairing two
@@ -2588,28 +2716,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             };
             let found = match mode {
                 0 => haystack.iter().position(|v| answers_to(v, &key)),
-                m if m > 0 => {
-                    let mut best = None;
-                    for (i, v) in haystack.iter().enumerate() {
-                        match compare(v, &key) {
-                            Ok(Ordering::Greater) => break,
-                            Ok(_) => best = Some(i),
-                            Err(_) => continue,
-                        }
-                    }
-                    best
-                }
-                _ => {
-                    let mut best = None;
-                    for (i, v) in haystack.iter().enumerate() {
-                        match compare(v, &key) {
-                            Ok(Ordering::Less) => break,
-                            Ok(_) => best = Some(i),
-                            Err(_) => continue,
-                        }
-                    }
-                    best
-                }
+                m => sorted_position(haystack.len(), m < 0, |i| haystack[i].clone(), &key),
             };
             found
                 .map(|i| Value::Number((i + 1) as f64))
@@ -3118,14 +3225,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 Some(a) => a.flatten(),
                 None => vector.clone(),
             };
-            let mut found = None;
-            for (at, cell) in vector.iter().enumerate() {
-                if lookup_le(cell, &needle) {
-                    found = Some(at);
-                } else {
-                    break;
-                }
-            }
+            let found = sorted_position(vector.len(), false, |i| vector[i].clone(), &needle);
             match found {
                 Some(at) => Ok(result.get(at).cloned().unwrap_or(Value::Error(ExcelError::NA))),
                 None => Err(ExcelError::NA),
@@ -3804,6 +3904,131 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
 
 /// Whether the largest-not-over test of LOOKUP holds for a candidate against
 /// the needle: numbers compare as numbers, text as text without case.
+/// ln Γ(x), Lanczos.
+fn ln_gamma(x: f64) -> f64 {
+    const G: [f64; 9] = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    if x < 0.5 {
+        return (std::f64::consts::PI / (std::f64::consts::PI * x).sin()).ln() - ln_gamma(1.0 - x);
+    }
+    let x = x - 1.0;
+    let mut sum = G[0];
+    for (i, g) in G.iter().enumerate().skip(1) {
+        sum += g / (x + i as f64);
+    }
+    let t = x + 7.5;
+    0.5 * (2.0 * std::f64::consts::PI).ln() + (x + 0.5) * t.ln() - t + sum.ln()
+}
+
+fn ln_choose(n: f64, k: f64) -> f64 {
+    ln_gamma(n + 1.0) - ln_gamma(k + 1.0) - ln_gamma(n - k + 1.0)
+}
+
+/// The regularised incomplete beta function I_x(a, b), by continued fraction.
+fn regularized_beta(x: f64, a: f64, b: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let front = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
+    let fraction = |x: f64, a: f64, b: f64| {
+        let tiny = 1e-300;
+        let (mut c, mut d) = (1.0, 1.0 - (a + b) * x / (a + 1.0));
+        if d.abs() < tiny {
+            d = tiny;
+        }
+        d = 1.0 / d;
+        let mut h = d;
+        for m in 1..300 {
+            let m = m as f64;
+            let even = m * (b - m) * x / ((a + 2.0 * m - 1.0) * (a + 2.0 * m));
+            d = 1.0 + even * d;
+            if d.abs() < tiny { d = tiny; }
+            c = 1.0 + even / c;
+            if c.abs() < tiny { c = tiny; }
+            d = 1.0 / d;
+            h *= d * c;
+            let odd = -(a + m) * (a + b + m) * x / ((a + 2.0 * m) * (a + 2.0 * m + 1.0));
+            d = 1.0 + odd * d;
+            if d.abs() < tiny { d = tiny; }
+            c = 1.0 + odd / c;
+            if c.abs() < tiny { c = tiny; }
+            d = 1.0 / d;
+            let step = d * c;
+            h *= step;
+            if (step - 1.0).abs() < 1e-15 {
+                break;
+            }
+        }
+        h
+    };
+    if x < (a + 1.0) / (a + b + 2.0) {
+        front * fraction(x, a, b) / a
+    } else {
+        1.0 - front * fraction(1.0 - x, b, a) / b
+    }
+}
+
+/// Excel's search over a table it assumes is sorted, zero-based: a plain
+/// binary search that stops on the first equal probe and then walks to the
+/// far end of that run of equals -- forward ascending, backward descending --
+/// and a descending search refuses a needle above the leading value. The same
+/// search `WorksheetFunction.Match` was measured to make (5,040 differential
+/// cases); on unsorted data it is why `LOOKUP(4.5, {1,3,4,6,2,5})` is 2's
+/// neighbour 2 and not 4.
+fn sorted_position(count: usize, descending: bool, value_at: impl Fn(usize) -> Value, needle: &Value) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    let order = |i: usize| compare(&value_at(i), needle).ok();
+    if descending {
+        match order(0) {
+            Some(Ordering::Less) => return None,
+            Some(Ordering::Equal) => return Some(0),
+            _ => {}
+        }
+    }
+    let (mut low, mut high) = (1usize, count);
+    let mut found = None;
+    while low <= high {
+        let middle = (low + high) / 2;
+        match order(middle - 1) {
+            Some(Ordering::Equal) => {
+                found = Some(middle);
+                break;
+            }
+            Some(side) if (side == Ordering::Less) != descending => {
+                found = Some(middle);
+                low = middle + 1;
+            }
+            _ => high = middle - 1,
+        }
+    }
+    let mut position = found?;
+    if descending {
+        while position > 1 && order(position - 2) == Some(Ordering::Equal) {
+            position -= 1;
+        }
+    } else {
+        while position < count && order(position) == Some(Ordering::Equal) {
+            position += 1;
+        }
+    }
+    Some(position - 1)
+}
+
+#[allow(dead_code)]
 fn lookup_le(cell: &Value, needle: &Value) -> bool {
     match (cell, needle) {
         (Value::Number(a), Value::Number(b)) => a <= b,

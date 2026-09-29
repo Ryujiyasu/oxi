@@ -1196,6 +1196,43 @@ impl Workbook {
             // use an earlier name.
             // RAND and RANDBETWEEN draw afresh at every working-out, as
             // Excel's do; a browser has no other source that is not the clock.
+            // RANDARRAY([rows], [columns], [min], [max], [whole]): measured,
+            // RANDARRAY(2,2,1,1,TRUE) is a block of ones.
+            Expr::Function { name, args } if name == "RANDARRAY" => {
+                let given = |index: usize, default: f64| match args.get(index) {
+                    Some(expr) => match self.eval_arg_inner(expr, sheet, depth + 1, skip, at).scalar() {
+                        Value::Blank => Ok(default),
+                        value => value.to_number(),
+                    },
+                    None => Ok(default),
+                };
+                let whole = match args.get(4) {
+                    Some(expr) => self.eval_arg_inner(expr, sheet, depth + 1, skip, at).scalar().to_logical().unwrap_or(false),
+                    None => false,
+                };
+                let (rows, cols, low, high) = match (given(0, 1.0), given(1, 1.0), given(2, 0.0), given(3, 1.0)) {
+                    (Ok(r), Ok(c), Ok(l), Ok(h)) => (r, c, l, h),
+                    (Err(why), ..) | (_, Err(why), ..) | (_, _, Err(why), _) | (_, _, _, Err(why)) => {
+                        return Arg::Value(Value::Error(why))
+                    }
+                };
+                if rows < 1.0 || cols < 1.0 || low > high {
+                    return Arg::Value(Value::Error(ExcelError::Value));
+                }
+                let (height, width) = (rows as usize, cols as usize);
+                let cells = (0..height * width)
+                    .map(|_| {
+                        let draw = self.next_random();
+                        Value::Number(if whole {
+                            low.ceil() + (draw * (high.floor() - low.ceil() + 1.0)).floor()
+                        } else {
+                            low + draw * (high - low)
+                        })
+                    })
+                    .collect();
+                Arg::Range(RangeData { width, height, cells })
+            }
+
             Expr::Function { name, args } if name == "RAND" || name == "RANDBETWEEN" => {
                 let draw = self.next_random();
                 if name == "RAND" {
