@@ -2130,6 +2130,14 @@ impl<'a> Parser<'a> {
                 return Statement::OnError(OnError::ResumeNext { span });
             }
             self.eat_kw("goto");
+            // `On Error GoTo -1`
+            if matches!(self.kind(), TokenKind::Punct(Punct::Minus))
+                && matches!(self.kind_at(1), TokenKind::Number(n) if *n == 1.0)
+            {
+                self.pos += 2;
+                self.end_statement();
+                return Statement::OnError(OnError::Goto { label: "-1".to_string(), span });
+            }
             let target = self.parse_label_ref().unwrap_or_default();
             self.end_statement();
             return if target == "0" {

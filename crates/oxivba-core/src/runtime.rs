@@ -289,6 +289,14 @@ pub fn execute_with_host(
 }
 
 pub struct Runtime<'a> {
+    /// The Err object is the program's, not a procedure's: what a caller
+    /// has in it is what the procedure it calls starts with, and what that
+    /// leaves in it -- unless it leaves from inside its error handler, which
+    /// clears it -- is what the caller finds when it comes back. Measured:
+    /// an error swallowed by `On Error Resume Next` in a function is still
+    /// Err 11 in its caller; one handled and left by `Exit Function` is 0.
+    err_in: Option<ErrorState>,
+    err_out: Option<ErrorState>,
     module: &'a Module,
     host: Option<&'a mut dyn Host>,
     steps: usize,
@@ -392,6 +400,8 @@ enum Flow {
 impl<'a> Runtime<'a> {
     pub fn new(module: &'a Module) -> Self {
         Self {
+            err_in: None,
+            err_out: None,
             module,
             host: None,
             steps: 0,
@@ -632,7 +642,7 @@ impl<'a> Runtime<'a> {
             static_procedure: procedure.is_static,
             with_objects: Vec::new(),
             error_mode: ErrorMode::Disabled,
-            error_state: ErrorState::default(),
+            error_state: self.err_in.take().unwrap_or_default(),
             error_handler_active: false,
             error_statement: None,
             current_statement: 0,
@@ -683,6 +693,16 @@ impl<'a> Runtime<'a> {
         self.depth += 1;
         let flow = self.exec_procedure_body(&procedure.body, &mut frame);
         self.depth -= 1;
+        // A procedure that fails hands its error up as a failure, which the
+        // caller's own handling sets Err from; only one that returns hands
+        // back what it left in Err.
+        if flow.is_ok() {
+            self.err_out = Some(if frame.error_handler_active {
+                ErrorState::default()
+            } else {
+                frame.error_state.clone()
+            });
+        }
         let ended = match flow? {
             Flow::Continue
             | Flow::Exit(ExitKind::Sub | ExitKind::Function | ExitKind::Property) => false,
@@ -870,6 +890,9 @@ impl<'a> Runtime<'a> {
         while at < body.len() {
             let statement = &body[at];
             self.tick(line_of(statement))?;
+            if let Some(carried) = self.err_out.take() {
+                frame.error_state = carried;
+            }
             let flow = match self.exec_statement(statement, frame) {
                 Ok(flow) => flow,
                 Err(failure) => self.handle_runtime_error(failure, frame)?,
@@ -918,10 +941,11 @@ impl<'a> Runtime<'a> {
         frame.error_state = ErrorState {
             number,
             description,
+            // Measured: a run-time error's Source is the project's name.
             source: failure
                 .vba_source
                 .clone()
-                .unwrap_or_else(|| frame.source_name.clone()),
+                .unwrap_or_else(|| "VBAProject".to_string()),
             line: frame.last_line_number,
         };
         match frame.error_mode.clone() {
@@ -1072,6 +1096,15 @@ impl<'a> Runtime<'a> {
                 let result = self.exec_body(body, frame);
                 frame.with_objects.pop();
                 result
+            }
+            // `On Error GoTo -1` ends the handler that is running and clears
+            // Err, leaving the mode as it was: measured, Err.Number is 0 after
+            // it.
+            Statement::OnError(OnError::Goto { label, .. }) if label.is_empty() || label == "-1" => {
+                frame.error_state = ErrorState::default();
+                frame.error_handler_active = false;
+                frame.error_statement = None;
+                Ok(Flow::Continue)
             }
             Statement::OnError(mode) => {
                 frame.error_mode = match mode {
@@ -3064,7 +3097,11 @@ impl<'a> Runtime<'a> {
             bound.push(BoundArgument::Value(self.eval_expr(expression, frame)?));
         }
 
+        self.err_in = Some(frame.error_state.clone());
         let result = self.invoke_procedure(&procedure, bound, line)?;
+        if let Some(carried) = self.err_out.take() {
+            frame.error_state = carried;
+        }
         for (place, value) in record_copybacks {
             let value = value.borrow().clone();
             self.assign(&place, value, frame, line.unwrap_or(0))?;
@@ -3104,6 +3141,7 @@ impl<'a> Runtime<'a> {
         if self.module.items.iter().any(
             |item| matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name)),
         ) {
+            self.err_in = Some(frame.error_state.clone());
             return self.call_procedure(name, args, line);
         }
         if name.eq_ignore_ascii_case("createobject") {
@@ -13824,6 +13862,49 @@ mod tests {
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
         );
+    }
+
+    /// Err is the program's: what a function leaves in it reaches its caller
+    /// unless the function left from its handler; On Error clears it; GoTo
+    /// -1 clears it; a run-time error's Source is VBAProject. Measured.
+    #[test]
+    fn err_outlives_the_procedure_that_set_it() {
+        let value = run(
+            "Private Function Swallow() As Long
+               On Error Resume Next
+               Dim x As Long
+               x = 1 / 0
+             End Function
+             Private Function Handled() As Long
+               On Error GoTo H
+               Dim x As Long
+               x = 1 / 0
+               Exit Function
+             H:
+             End Function
+             Private Function Sees() As Long
+               Sees = Err.Number
+             End Function
+             Public Function Ask() As String
+               Dim o As String, x As Long
+               On Error Resume Next
+               x = Swallow()
+               o = Err.Number & \"|\"
+               x = Handled()
+               o = o & Err.Number & \"|\"
+               Err.Raise 7
+               o = o & Sees() & \"|\"
+               On Error GoTo -1
+               o = o & Err.Number & \"|\"
+               x = 1 / 0
+               Ask = o & Err.Source
+             End Function
+",
+            "Ask",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("11|0|7|0|VBAProject".to_string()));
     }
 
     /// Named arguments to a Collection go to their places, and a Dictionary
