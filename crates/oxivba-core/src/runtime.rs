@@ -6680,7 +6680,15 @@ fn format_value(
         "fixed" => fixed_number(value, 2, false, true, false),
         "standard" => fixed_number(value, 2, true, true, false),
         "percent" => format!("{}%", fixed_number(value * 100.0, 2, false, true, false)),
-        "scientific" => format!("{value:.2E}"),
+        // Measured: `Format(1234.5678, "Scientific")` is 1.23E+03 -- the
+        // exponent signed and in two digits at least.
+        "scientific" => {
+            let written = format!("{value:.2E}");
+            let (mantissa, exponent) = written.split_once('E').unwrap_or((&written, "0"));
+            let exponent: i32 = exponent.parse().unwrap_or(0);
+            let sign = if exponent < 0 { '-' } else { '+' };
+            format!("{mantissa}E{sign}{:02}", exponent.abs())
+        }
         "yes/no" => if value == 0.0 { "No" } else { "Yes" }.to_string(),
         "true/false" => if value == 0.0 { "False" } else { "True" }.to_string(),
         "on/off" => if value == 0.0 { "Off" } else { "On" }.to_string(),
@@ -6688,7 +6696,10 @@ fn format_value(
     })
 }
 
-/// Whether a picture is one for text: it has an `@` or `&` outside quotes.
+/// Whether a picture is one for text: it has an `@` or `&` outside quotes
+/// in its FIRST section. An `@` further on is the text section of a number
+/// picture: measured, `Format(5, "0;-0;;@")` is 5 and
+/// `Format(-5, "0;(0);z;@")` (5).
 fn is_string_picture(pattern: &str) -> bool {
     let mut quoted = false;
     let mut escaped = false;
@@ -6700,6 +6711,7 @@ fn is_string_picture(pattern: &str) -> bool {
         match ch {
             '\\' => escaped = true,
             '"' => quoted = !quoted,
+            ';' if !quoted => return false,
             '@' | '&' if !quoted => return true,
             _ => {}
         }
@@ -10368,7 +10380,7 @@ fn text(value: &Value) -> Result<String, String> {
         // A Single says only as many digits as a Single holds: asked of
         // Excel, a Single of 0.7055475 writes back as 0.7055475, where
         // widening it to a Double first would say 0.705547511577606.
-        Value::Single(value) => vba_number_text(single_text_value(*value)),
+        Value::Single(value) => number_text_in(single_text_value(*value), 7),
         // A Double keeps the sign of its zero: measured, `CStr(-0#)` and
         // `Fix(-0.5)` write -0, where an Integer 0 * -1 writes 0.
         Value::Double(value) if *value == 0.0 && value.is_sign_negative() => "-0".to_string(),
@@ -10445,6 +10457,14 @@ pub fn vba_date_text(serial: f64) -> String {
 }
 
 pub fn vba_number_text(value: f64) -> String {
+    number_text_in(value, 15)
+}
+
+/// A number written VBA's way in so many significant digits: fifteen for a
+/// Double and seven for a Single, whose bounds move with it -- measured,
+/// `CStr(CSng(12345678))` is 1.234568E+07 and `CStr(CSng(0.00000012))`
+/// 1.2E-07, where `CStr(CSng(0.0000001))` is 0.0000001.
+fn number_text_in(value: f64, places: usize) -> String {
     if value == 0.0 {
         return "0".to_string();
     }
@@ -10454,7 +10474,7 @@ pub fn vba_number_text(value: f64) -> String {
         return value.to_string();
     }
     let sign = if value < 0.0 { "-" } else { "" };
-    let written = format!("{:.14e}", value.abs());
+    let written = format!("{:.*e}", places - 1, value.abs());
     let (mantissa, exponent) = written
         .split_once('e')
         .expect("Rust writes an exponent in this form");
@@ -10467,7 +10487,7 @@ pub fn vba_number_text(value: f64) -> String {
     // not where the first one sits, which is why two numbers of the same size
     // can be written differently.
     let last = exponent - (digits.len() as i32 - 1);
-    if exponent <= 14 && last >= -15 {
+    if exponent < places as i32 && last >= -(places as i32) {
         return format!("{sign}{}", plain_digits(digits, exponent));
     }
     let mantissa = if digits.len() == 1 {
