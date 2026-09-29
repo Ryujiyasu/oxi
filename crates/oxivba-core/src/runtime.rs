@@ -1674,6 +1674,12 @@ impl<'a> Runtime<'a> {
                             line,
                         )?);
                         coerce_string_width(value, width, Some(line))
+                    } else if !variable.type_name.name.is_empty()
+                        && !variable.type_name.name.eq_ignore_ascii_case("variant")
+                    {
+                        // A typed Const holds its own type: measured,
+                        // `Const K As Long = 2 ^ 3 + 1` is a Long.
+                        coerce_declared(value, &variable.type_name.name, line, self.this_year())
                     } else {
                         Ok(value)
                     }
