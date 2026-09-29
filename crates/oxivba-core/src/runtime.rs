@@ -1970,6 +1970,12 @@ impl<'a> Runtime<'a> {
                 Flow::Exit(ExitKind::For) => return Ok(Flow::Continue),
                 flow => return Ok(flow),
             }
+            // Next steps on from whatever the body left in the counter:
+            // measured, setting i = 4 while i is 2 runs 1, 4, 5.
+            let current = self.eval_expr(&loop_.counter, frame)?;
+            let current_number = number(&current).map_err(|message| {
+                error(RuntimeErrorKind::TypeMismatch, message, Some(loop_.span.line))
+            })?;
             let next = numeric_result(current_number + increment, &current, &step);
             self.assign(&loop_.counter, next, frame, loop_.span.line)?;
         }
@@ -5977,7 +5983,15 @@ fn call_builtin(
             if matches!(args[0], Value::Null) {
                 return Ok(Value::Null);
             }
-            let index = integer_argument(&args[0], line)?;
+            // The index is cut to its whole part, not rounded: measured,
+            // Choose(1.5, "a", "b") is "a" and Choose(2.5, ...) "b".
+            let index = number(&args[0])
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+                .trunc();
+            if !index.is_finite() || index.abs() > 2_147_483_647.0 {
+                return Err(error(RuntimeErrorKind::Overflow, "Choose index is out of range", line));
+            }
+            let index = index as i64;
             return Ok(if index < 1 || index as usize >= args.len() {
                 Value::Null
             } else {
