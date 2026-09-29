@@ -8739,8 +8739,68 @@ impl<'a> WorkbookHost<'a> {
         self.sheets_renumbered(&|was| Some(if was >= at { was + 1 } else { was }));
         let from = if sheet >= at { sheet + 1 } else { sheet };
         self.duplicate_side_tables(from, at);
+        self.duplicate_sheet_names(from, at);
         self.activate_sheet(at);
         Ok(())
+    }
+
+    /// The order Excel lists names in: by the name itself, and a name held
+    /// by several sheets in the order of those sheets with the workbook's own
+    /// last. Measured after copying Sheet1: konst, 'Sheet1 (2)'!loc, loc,
+    /// Sheet1!mine, 'Sheet1 (2)'!mine.
+    fn sort_names(&self, held: &mut [String]) {
+        let place = |name: &str| -> (String, usize) {
+            match name.rsplit_once('!') {
+                Some((scope, leaf)) => {
+                    let scope = scope.trim_matches('\'');
+                    let index = self
+                        .workbook
+                        .sheets
+                        .iter()
+                        .position(|sheet| sheet.name.eq_ignore_ascii_case(scope))
+                        .unwrap_or(usize::MAX - 1);
+                    (leaf.to_string(), index)
+                }
+                None => (name.to_string(), usize::MAX),
+            }
+        };
+        held.sort_by(|one, other| {
+            let (one_leaf, one_at) = place(one);
+            let (other_leaf, other_at) = place(other);
+            compare_text_by_case(&one_leaf, &other_leaf).then(one_at.cmp(&other_at))
+        });
+    }
+
+    /// The names a copied sheet takes with it. Measured: each of the source
+    /// sheet's own names is given to the copy as well, and so is every
+    /// workbook name that points into the source -- `loc` for
+    /// `=Sheet1!$A$1` becomes `'Sheet1 (2)'!loc` for `='Sheet1 (2)'!$A$1` --
+    /// while names pointing elsewhere or at nothing stay single.
+    fn duplicate_sheet_names(&mut self, from: usize, to: usize) {
+        let source = self.workbook.sheets[from].name.clone();
+        let copy = self.workbook.sheets[to].name.clone();
+        let prefix = format!("{source}!");
+        let mut added = Vec::new();
+        for (name, refers_to) in &self.workbook.defined_names {
+            let leaf = match name.split_once('!') {
+                Some((scope, leaf)) if scope.trim_matches('\'').eq_ignore_ascii_case(&source) => leaf,
+                Some(_) => continue,
+                None => {
+                    let written = format!("={refers_to}");
+                    let renamed = oxicells_calc::rename_sheet_in_formula(&written, &source, "\u{1}");
+                    if renamed == written {
+                        continue;
+                    }
+                    name.as_str()
+                }
+            };
+            let _ = &prefix;
+            let moved = oxicells_calc::rename_sheet_in_formula(&format!("={refers_to}"), &source, &copy);
+            let moved = moved.trim_start_matches('=').to_string();
+            added.push((format!("{copy}!{leaf}"), moved));
+        }
+        self.workbook.defined_names.extend(added);
+        self.wrote = true;
     }
 
     fn move_worksheet(&mut self, sheet: usize, args: &[Value]) -> Result<(), String> {
@@ -9156,7 +9216,7 @@ impl<'a> WorkbookHost<'a> {
                     .iter()
                     .map(|(name, _)| name.clone())
                     .collect::<Vec<_>>();
-                held.sort_by(|one, other| compare_text_by_case(one, other));
+                self.sort_names(&mut held);
                 held.get(index - 1)
                     .cloned()
                     .ok_or_else(|| format!("the workbook has no name number {index}"))?
@@ -9225,7 +9285,7 @@ impl<'a> WorkbookHost<'a> {
             .map(|(name, _)| name.clone())
             .filter(|name| name.len() > prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(&prefix))
             .collect::<Vec<_>>();
-        held.sort_by(|one, other| compare_text_by_case(one, other));
+        self.sort_names(&mut held);
         match name.to_ascii_lowercase().as_str() {
             "count" => Ok(Some(Value::Integer(held.len() as i64))),
             "add" => {
@@ -9339,8 +9399,16 @@ impl<'a> WorkbookHost<'a> {
         let Some(at) = self.name_at(held) else {
             return Err(format!("the name {held:?} is no longer in the workbook"));
         };
+        // A sheet's own name is spelt with the sheet quoted where it needs it:
+        // measured, `'Sheet1 (2)'!loc`.
         if name.eq_ignore_ascii_case("name") {
-            return Ok(Value::String(self.workbook.defined_names[at].0.clone()));
+            let held = self.workbook.defined_names[at].0.clone();
+            return Ok(Value::String(match held.rsplit_once('!') {
+                Some((scope, leaf)) if !scope.starts_with('\'') => {
+                    format!("{}!{leaf}", quoted_sheet(scope))
+                }
+                _ => held,
+            }));
         }
         if name.eq_ignore_ascii_case("refersto") || name.eq_ignore_ascii_case("value") {
             return Ok(Value::String(format!(
@@ -9405,8 +9473,16 @@ impl<'a> WorkbookHost<'a> {
         // without its sheet: `Range("loc")` has to reach `Sheet1!loc`. Reading
         // the list directly here found only the exact spelling, so a scoped
         // name could be added and then not be found by the name a macro writes.
-        let Some((held, refers_to)) = self
-            .name_at(name.trim())
+        // The sheet's own name of that spelling comes first: measured, on a
+        // copy of Sheet1 `Range("loc")` is the copy's own `loc`.
+        let own = (!name.contains('!'))
+            .then(|| {
+                let scoped = format!("{}!{}", self.workbook.sheets[sheet].name, name.trim());
+                self.workbook.defined_names.iter().position(|(held, _)| held.eq_ignore_ascii_case(&scoped))
+            })
+            .flatten();
+        let Some((held, refers_to)) = own
+            .or_else(|| self.name_at(name.trim()))
             .and_then(|at| self.workbook.defined_names.get(at))
         else {
             // Measured: `Range("ZZZ0")` is 1004 "Method 'Range' of object
@@ -19267,7 +19343,7 @@ impl Host for WorkbookHost<'_> {
                 .iter()
                 .map(|(name, _)| name.clone())
                 .collect::<Vec<_>>();
-            held.sort_by(|one, other| compare_text_by_case(one, other));
+            self.sort_names(&mut held);
             let mut items = Vec::with_capacity(held.len());
             for name in held {
                 items.push(self.name_object(&name));

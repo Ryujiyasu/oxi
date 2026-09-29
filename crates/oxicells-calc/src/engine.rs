@@ -358,6 +358,18 @@ impl Workbook {
     }
 
     /// Define a workbook-scoped name, e.g. `TAX_RATE` → `0.1`.
+    /// What a name stands for, read from the sheet asking: that sheet's own
+    /// name of that spelling first, then the workbook's. Measured on a copied
+    /// sheet: `=loc+mine` reads the copy's own `loc` and `mine`.
+    fn name_bound(&self, name: &str, sheet: &str) -> Option<&Expr> {
+        let upper = name.to_uppercase();
+        let scope = sheet.to_uppercase();
+        self.names
+            .get(&format!("{scope}!{upper}"))
+            .or_else(|| self.names.get(&format!("'{}'!{upper}", scope.replace('\'', "''"))))
+            .or_else(|| self.names.get(&upper))
+    }
+
     pub fn define_name(&mut self, name: &str, formula: &str) -> Result<(), CalcError> {
         let expr = parse(formula)?;
         self.names.insert(name.to_uppercase(), expr);
@@ -1019,7 +1031,7 @@ impl Workbook {
                 if let Some(value) = bound_by_let {
                     return value;
                 }
-                match self.names.get(name) {
+                match self.name_bound(name, sheet) {
                     Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
                     // A table's bare name is its data: `COLUMNS(tbl)`.
                     None if self.tables.contains_key(&name.to_uppercase()) => {
@@ -1656,7 +1668,7 @@ impl Workbook {
                 reference.range,
             )),
             Expr::Table { name, asked } => self.table_range(name, asked, sheet, at).ok(),
-            Expr::Name(name) => match self.names.get(name) {
+            Expr::Name(name) => match self.name_bound(name, sheet) {
                 Some(bound) => {
                     let bound = bound.clone();
                     self.reference_of(&bound, sheet, depth, at)

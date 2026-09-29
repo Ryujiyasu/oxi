@@ -341,8 +341,20 @@ impl Parser {
             Token::ErrorLit(e) => {
                 // `#REF!A1` is what a reference to a deleted sheet becomes;
                 // the cell after the error goes with it.
-                if e == crate::ExcelError::Ref && matches!(self.peek(), Some(Token::Name { sheet: None, .. })) {
+                if e == crate::ExcelError::Ref
+                    && matches!(self.peek(), Some(Token::Name { sheet: None, .. } | Token::Number(_)))
+                {
                     self.pos += 1;
+                    // And the far end of a range with it: measured,
+                    // `=SUM(#REF!A:A)` is #REF!, not a sum of column A.
+                    if matches!(self.peek(), Some(Token::Colon))
+                        && matches!(
+                            self.tokens.get(self.pos + 1),
+                            Some(Token::Name { sheet: None, .. } | Token::Number(_))
+                        )
+                    {
+                        self.pos += 2;
+                    }
                 }
                 Ok(Expr::Literal(Value::Error(e)))
             }
