@@ -1977,9 +1977,15 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let format = text(&args[1])?;
             match args[0].scalar() {
                 Value::Number(n) => Ok(Value::Text(crate::numfmt::format_number(n, &format))),
-                // Text handed to TEXT comes back as it was: there is nothing
-                // for a number format to do to it.
-                Value::Text(t) => Ok(Value::Text(t)),
+                // Text that reads as a number is formatted as that number,
+                // and other text goes through the text section. Measured:
+                // `TEXT("12","0.0")` is 12.0, `TEXT("1/2/2020","yyyy")` 2020,
+                // `TEXT("abc","@@")` abcabc, `TEXT("abc","0;0;0;<@>")` <abc>
+                // and `TEXT("abc","0.0")` abc.
+                Value::Text(t) => Ok(Value::Text(match Value::Text(t.clone()).to_number() {
+                    Ok(n) if !t.trim().is_empty() => crate::numfmt::format_number(n, &format),
+                    _ => crate::numfmt::format_text(&t, &format),
+                })),
                 Value::Logical(b) => Ok(Value::Text(
                     if b { "TRUE" } else { "FALSE" }.to_string(),
                 )),
