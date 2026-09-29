@@ -6479,6 +6479,9 @@ fn format_value(
     if pattern.is_empty() {
         return text(value);
     }
+    if is_string_picture(pattern) {
+        return Ok(string_picture(&text(value)?, pattern));
+    }
     let lower = pattern.to_ascii_lowercase();
     let named_date = matches!(
         lower.as_str(),
@@ -6503,15 +6506,23 @@ fn format_value(
             | "on/off"
     );
     if named_date || (!named_number && reads_as_date(pattern)) {
-        return format_date(value_date_serial(value, this_year)?, pattern, first_day, first_week);
+        // Text that is no date is left as it is: measured,
+        // `Format("abc", "yyyy")` is abc and `Format("", "(empty)")` is "".
+        return match value_date_serial(value, this_year) {
+            Ok(serial) => format_date(serial, pattern, first_day, first_week),
+            Err(_) if matches!(value, Value::String(_)) => text(value),
+            Err(why) => Err(why),
+        };
     }
-    if let Value::String(value) = value {
-        return Ok(match pattern {
-            "<" => value.to_lowercase(),
-            ">" => value.to_uppercase(),
-            _ if pattern.contains('@') => pattern.replace('@', value),
-            _ => value.clone(),
-        });
+    if let Value::String(held) = value {
+        match pattern {
+            "<" => return Ok(held.to_lowercase()),
+            ">" => return Ok(held.to_uppercase()),
+            // Text that is no number is left as it is: measured,
+            // `Format("abc", "0.00")` is abc.
+            _ if number(value).is_err() => return Ok(held.clone()),
+            _ => {}
+        }
     }
     let value = number(value)?;
     Ok(match lower.as_str() {
@@ -6526,6 +6537,99 @@ fn format_value(
         "on/off" => if value == 0.0 { "Off" } else { "On" }.to_string(),
         _ => custom_number(value, pattern),
     })
+}
+
+/// Whether a picture is one for text: it has an `@` or `&` outside quotes.
+fn is_string_picture(pattern: &str) -> bool {
+    let mut quoted = false;
+    let mut escaped = false;
+    for ch in pattern.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => quoted = !quoted,
+            '@' | '&' if !quoted => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Text put through a picture of `@` and `&`. Measured in Excel's VBA: the
+/// places are filled left to right, the text standing to the right -- what
+/// it is short of is spaces at the front for `@` and nothing for `&` --
+/// unless a `!` puts it to the left; what does not fit follows at the end;
+/// `>` and `<` change its case. `Format("12", "@@@@")` is "  12",
+/// `Format("ab", "(@@@)")` "( ab)", `Format("abc", "@-@")` "a-bc",
+/// `Format("ab", "!@@@@")` "ab  ".
+fn string_picture(value: &str, pattern: &str) -> String {
+    enum Item {
+        Place(char),
+        Literal(char),
+    }
+    let mut items = Vec::new();
+    let (mut upper, mut lower, mut leftward) = (false, false, false);
+    let mut chars = pattern.chars();
+    let mut quoted = false;
+    while let Some(ch) = chars.next() {
+        if quoted {
+            if ch == '"' {
+                quoted = false;
+            } else {
+                items.push(Item::Literal(ch));
+            }
+            continue;
+        }
+        match ch {
+            '"' => quoted = true,
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    items.push(Item::Literal(next));
+                }
+            }
+            '@' | '&' => items.push(Item::Place(ch)),
+            '>' => upper = true,
+            '<' => lower = true,
+            '!' => leftward = true,
+            other => items.push(Item::Literal(other)),
+        }
+    }
+    let text = if upper {
+        value.to_uppercase()
+    } else if lower {
+        value.to_lowercase()
+    } else {
+        value.to_string()
+    };
+    let mut given = text.chars().collect::<Vec<_>>().into_iter();
+    let places = items.iter().filter(|item| matches!(item, Item::Place(_))).count();
+    let length = text.chars().count();
+    let mut short = if leftward { 0 } else { places.saturating_sub(length) };
+    let mut out = String::new();
+    for item in &items {
+        match item {
+            Item::Literal(ch) => out.push(*ch),
+            Item::Place(kind) => {
+                if short > 0 {
+                    short -= 1;
+                    if *kind == '@' {
+                        out.push(' ');
+                    }
+                    continue;
+                }
+                match given.next() {
+                    Some(ch) => out.push(ch),
+                    None if *kind == '@' => out.push(' '),
+                    None => {}
+                }
+            }
+        }
+    }
+    out.extend(given);
+    out
 }
 
 fn format_date(
@@ -13667,6 +13771,27 @@ mod tests {
         assert_eq!(
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
+        );
+    }
+
+    /// Text through a picture of `@` and `&`, and text that is no number or
+    /// date through a picture for one. Every answer measured in Excel's VBA.
+    #[test]
+    fn text_pictures_fill_from_the_left_and_stand_right() {
+        let value = run(
+            "Public Function Ask() As String
+               Ask = Format(\"12\", \"@@@@\") & \"|\" & Format(\"12345\", \"@@@\") & \"|\" & Format(\"ab\", \"!@@@@\") & \"|\" & Format(\"ab\", \"(@@@)\") & \"|\"
+               Ask = Ask & Format(\"abc\", \"@-@\") & \"|\" & Format(\"ab\", \"&&&&\") & \"|\" & Format(12, \"@@@@\") & \"|\" & Format(1.5, \"@@@@@\") & \"|\" & Format(\"abc\", \">@@@@\") & \"|\"
+               Ask = Ask & Format(\"abc\", \"0.00\") & \"|\" & Format(\"abc\", \"yyyy\") & \"|\" & Format(\"\", \"(empty)\") & \"|\"
+             End Function
+",
+            "Ask",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String("  12|12345|ab  |( ab)|a-bc|ab|  12|  1.5| ABC|abc|abc||".to_string())
         );
     }
 
