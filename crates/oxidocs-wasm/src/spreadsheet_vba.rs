@@ -12265,6 +12265,10 @@ impl<'a> WorkbookHost<'a> {
         let mut refused = false;
         let mut broadcast_dress: Option<Worn> = None;
         let mut header_writes: Vec<CellAddress> = Vec::new();
+        // A cell a merge covers, other than its first, takes nothing: measured,
+        // `Range("B2").Value = "x"` inside a merged A1:B2 changes nothing and
+        // raises nothing.
+        let merges = self.merges_on(range.sheet);
         for row_step in 0..=(range.end_row - range.start_row) {
             for column_step in 0..=(range.end_column - range.start_column) {
                 let address = CellAddress {
@@ -12272,6 +12276,11 @@ impl<'a> WorkbookHost<'a> {
                     row: range.start_row + row_step,
                     column: range.start_column + column_step,
                 };
+                if merges.iter().any(|merge| {
+                    range_contains(*merge, CellRange::single(address)) && merge.first() != address
+                }) {
+                    continue;
+                }
                 if self.write_is_protected(address) {
                     refused = true;
                     continue;
@@ -15063,6 +15072,28 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// The merged blocks of a sheet.
+    fn merges_on(&self, sheet: usize) -> Vec<CellRange> {
+        self.workbook
+            .sheets
+            .get(sheet)
+            .map(|held| held.merge_cells.iter().map(|merge| merge_range(sheet, merge)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Refuse a change that would split a merged block: measured, clearing
+    /// B1 or A1:A2 of a merged A1:B2 is 1004, clearing all of it is not.
+    fn refuse_part_of_merge(&self, range: CellRange) -> Result<(), String> {
+        let split = self
+            .merges_on(range.sheet)
+            .into_iter()
+            .any(|merge| ranges_overlap(range, merge) && !range_contains(range, merge));
+        if split {
+            return Err(host_error_described(1004, "Cannot change part of a merged cell."));
+        }
+        Ok(())
+    }
+
     fn unmerge_range(&mut self, range: CellRange) -> Result<(), String> {
         let sheet = self
             .workbook
@@ -16663,6 +16694,7 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Range.ClearContents does not accept arguments".to_string());
                     }
+                    self.refuse_part_of_merge(range)?;
                     // Emptying cells that hold nothing does nothing, so a
                     // whole column is cleared as far as the sheet holds --
                     // unless the sheet is protected, where an empty locked
