@@ -1446,6 +1446,17 @@ impl Workbook {
                 {
                     evaluated.truncate(3);
                 }
+                // EDATE and EOMONTH take an array a value at a time but refuse
+                // a block of CELLS: measured, `EOMONTH(A1:A3,0)` is #VALUE!
+                // wherever it stands, while `EDATE(A1,{1,2})` reads 32.
+                if matches!(name.as_str(), "EDATE" | "EOMONTH")
+                    && args.iter().zip(&evaluated).any(|(expr, arg)| {
+                        matches!(expr, Expr::Ref(_) | Expr::Name(_))
+                            && matches!(arg, Arg::Range(block) if block.cells.len() > 1)
+                    })
+                {
+                    return Arg::Value(Value::Error(ExcelError::Value));
+                }
                 functions::call_arg(name, &evaluated)
             }
         }

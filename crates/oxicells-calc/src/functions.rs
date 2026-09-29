@@ -315,6 +315,8 @@ fn one_at_a_time(name: &str) -> bool {
             | "FIND" | "SEARCH" | "SUBSTITUTE" | "REPLACE" | "REPT" | "EXACT"
             | "CHAR" | "CODE" | "UNICODE" | "TEXT" | "VALUE" | "PROPER" | "T"
         // one date
+            // (EDATE and EOMONTH take arrays so, but a block of cells is
+            // #VALUE! -- the engine refuses that before it gets here)
             | "DATE" | "DATEDIF" | "DAY" | "DAYS" | "EDATE" | "EOMONTH"
             | "HOUR" | "MINUTE" | "MONTH" | "SECOND" | "TIME" | "WEEKDAY"
             | "YEAR"
