@@ -11937,7 +11937,8 @@ impl<'a> WorkbookHost<'a> {
         let Some(cell) = row.cells.iter_mut().find(|cell| cell.col == address.column) else {
             return;
         };
-        if cell.style.number_format.is_none() {
+        let percent = cell.style.number_format.as_deref().is_some_and(|held| held.contains('%'));
+        if cell.style.number_format.is_none() || (shown == MONEY_FORMAT && percent) {
             cell.style.number_format = Some(shown.to_string());
         }
     }
@@ -23067,6 +23068,9 @@ fn from_cell_value(value: &CellValue) -> Value {
     }
 }
 
+/// The format a Currency written to a cell puts on it.
+const MONEY_FORMAT: &str = "$#,##0.00_);($#,##0.00)";
+
 fn to_cell_value(value: Value) -> Result<CellValue, String> {
     match value {
         Value::Empty | Value::Null => Ok(CellValue::Empty),
@@ -23981,6 +23985,14 @@ fn cell_input(value: Value, this_year: i64) -> Result<CellInput, String> {
             "m/d/yyyy h:mm"
         };
         return to_cell_value(value).map(|cell| CellInput::Constant(cell, Some(shown)));
+    }
+    // A Currency lands as money: measured, `Range("A1").Value =
+    // CCur(12.3456)` holds 12.35, reads back a Currency and wears
+    // `$#,##0.00_);($#,##0.00)` -- over General and over a percent, while a
+    // cell already showing `0.000` keeps that and holds 1.23 for 1.23456.
+    if let Value::Currency(units) = value {
+        let cents = (units as f64 / 100.0).round_ties_even();
+        return Ok(CellInput::Constant(CellValue::Number(cents / 100.0), Some(MONEY_FORMAT)));
     }
     to_cell_value(value).map(|cell| CellInput::Constant(cell, None))
 }
