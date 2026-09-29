@@ -3484,6 +3484,12 @@ impl<'a> Runtime<'a> {
                         if let Some(target) = emptied {
                             self.write_null_back(target, frame, span.line);
                         }
+                        // A `$` function answers a String, which cannot be
+                        // Null: measured, `Left$(Null, 1)` and `UCase$(Null)`
+                        // are error 94 where `Left(Null, 1)` is Null.
+                        if matches!(target.as_ref(), Expr::TypedIdent { suffix: '$', .. }) && matches!(answer, Ok(Value::Null)) {
+                            return Err(invalid_null(Some(span.line)));
+                        }
                         answer
                     }
                     Expr::Member { object, name, .. } => {
@@ -9412,6 +9418,11 @@ fn call_string_builtin(
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
             }
+            // StrReverse answers a String and nothing else: measured,
+            // `StrReverse(Null)` is error 94 where `LTrim(Null)` is Null.
+            if name == "strreverse" && matches!(args[0], Value::Null) {
+                return Err(invalid_null(line));
+            }
             let Some(value) = nullable_text(&args[0])? else {
                 return Ok(Value::Null);
             };
@@ -9883,11 +9894,18 @@ fn call_string_builtin(
                 ));
             }
             let character = match &args[1] {
+                // Measured: `String(2, Null)` is Null.
+                Value::Null => return Ok(Value::Null),
                 Value::String(value) => value.chars().next().ok_or_else(|| {
                     invalid_procedure_call("String requires a character".to_string(), line)
                 })?,
                 value => {
                     let code = integer_argument(value, line)?;
+                    // The code is an Integer: measured, a Date (36532) is
+                    // error 6.
+                    if !(-32_768..=32_767).contains(&code) {
+                        return Err(error(RuntimeErrorKind::Overflow, "overflow", line));
+                    }
                     char::from_u32((code & 0xff) as u32).unwrap_or('\u{fffd}')
                 }
             };
@@ -10765,6 +10783,8 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
         // Integer just as `1` is. It can overflow: the one Integer that
         // has no positive twin is -32768.
         UnaryOp::Plus => Ok(keep_rank(number(&value)?, &value)?),
+        // Measured: `-Null` is Null.
+        UnaryOp::Neg if matches!(value, Value::Null) => Ok(Value::Null),
         UnaryOp::Neg if matches!(value, Value::Decimal(_)) => match value {
             Value::Decimal(held) => Ok(Value::Decimal(held.neg())),
             _ => unreachable!(),
@@ -10901,19 +10921,32 @@ fn binary(
         if matches!(lhs, Value::Null) && matches!(rhs, Value::Null) {
             return Ok(Value::Null);
         }
-    } else if matches!(op, And | Or) && (matches!(lhs, Value::Null) || matches!(rhs, Value::Null)) {
-        // Three-valued logic on bits: a Null only stays Null while the other
-        // side cannot settle every bit on its own. Asked of Excel,
-        // `Null And False` is False and `Null Or True` is True, while
-        // `Null And True` and `Null Or False` are both Null -- and
-        // `Null And 0` is the Integer 0.
-        let other = if matches!(lhs, Value::Null) { &rhs } else { &lhs };
+    } else if matches!(op, And | Or | Xor | Eqv | Imp)
+        && matches!(rhs, Value::Null)
+        && matches!(lhs, Value::String(_))
+    {
+        // Text before a Null is error 94 to every logical operator:
+        // measured, `"12" Or Null` (while `Null Or "12"` is 12).
+        return Err((RuntimeErrorKind::InvalidNull, "invalid use of Null".to_string()));
+    } else if matches!(op, And | Or | Imp) && (matches!(lhs, Value::Null) || matches!(rhs, Value::Null)) {
+        // Three-valued logic, as Excel settles it. `And` is 0 beside a 0 and
+        // Null otherwise; `Or` is the other side beside anything but 0 and
+        // Null beside 0; `x Imp y` is `(Not x) Or y`. Measured: `Null And 0`
+        // Integer 0, `Null And True` Null, `CByte(6) Or Null` Byte 6,
+        // `CDbl(3.5) Or Null` Long 4, `Null Or False` Null, `CByte(6) Imp
+        // Null` Byte 249, `Null Imp True` True, `False Imp Null` True.
+        let (other, negated) = match op {
+            Imp if matches!(rhs, Value::Null) => (&lhs, true),
+            _ if matches!(lhs, Value::Null) => (&rhs, false),
+            _ => (&lhs, false),
+        };
         if !matches!(other, Value::Null) {
             let bits = number(other).map_err(|message| (RuntimeErrorKind::TypeMismatch, message))?;
             let bits = bits.round_ties_even() as i64;
+            let bits = if negated { !bits } else { bits };
             let settled = match op {
                 And => bits == 0,
-                _ => bits == -1 || matches!(other, Value::Byte(255)),
+                _ => bits != 0 && !(negated && matches!(other, Value::Byte(255))),
             };
             if settled {
                 return logical_answer(bits, logical_rank(other), logical_rank(other));
