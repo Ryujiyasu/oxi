@@ -382,7 +382,12 @@ pub struct Runtime<'a> {
     current_time: f64,
 }
 
-struct Frame {
+struct Frame<'b> {
+    /// The procedure's own statements, where its error handler lives: the
+    /// handler runs from where the error stopped the procedure, so that
+    /// `Resume` and `Resume Next` go back into the very loop or If it came
+    /// out of.
+    body: &'b [Statement],
     /// The last numbered line the procedure passed, which is what `Erl`
     /// answers after an error: measured, 0 where no line is numbered.
     last_line_number: Option<u32>,
@@ -401,8 +406,6 @@ struct Frame {
     error_mode: ErrorMode,
     error_state: ErrorState,
     error_handler_active: bool,
-    error_statement: Option<usize>,
-    current_statement: usize,
     gosub_returns: Vec<usize>,
 }
 
@@ -482,6 +485,8 @@ enum Flow {
     GoSub(String),
     Return,
     Resume(ResumeTarget),
+    /// An error the procedure's handler is to take, at this label.
+    Handle(String),
 }
 
 impl<'a> Runtime<'a> {
@@ -1138,10 +1143,9 @@ impl<'a> Runtime<'a> {
             error_mode: ErrorMode::Disabled,
             error_state: self.err_in.take().unwrap_or_default(),
             error_handler_active: false,
-            error_statement: None,
-            current_statement: 0,
             gosub_returns: Vec::new(),
         last_line_number: None,
+            body: &procedure.body,
         };
         for (param, argument) in procedure.params.iter().zip(args) {
             let value = match argument {
@@ -1208,7 +1212,7 @@ impl<'a> Runtime<'a> {
                     Some(procedure.span.line),
                 ))
             }
-            Flow::Jump(label) | Flow::GoSub(label) => {
+            Flow::Jump(label) | Flow::GoSub(label) | Flow::Handle(label) => {
                 return Err(error(
                     RuntimeErrorKind::UndefinedVariable,
                     format!("VBA label not found: {label}"),
@@ -1253,22 +1257,31 @@ impl<'a> Runtime<'a> {
         body: &[Statement],
         frame: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
-        let mut labels = BTreeMap::new();
-        for (index, statement) in body.iter().enumerate() {
-            match statement {
-                Statement::Label { name, .. } => {
-                    labels.entry(key(name)).or_insert(index);
-                }
-                Statement::LineNumber { value, .. } => {
-                    labels.entry(value.to_string()).or_insert(index);
-                }
-                _ => {}
-            }
+        match self.run_procedure_from(body, 0, frame)? {
+            Some(flow) => Ok(flow),
+            None => Ok(Flow::Continue),
         }
+    }
 
-        let mut pc = 0;
+    /// The procedure's error handler, run from its label where the error
+    /// stopped the procedure. What it ends with goes back to that place: a
+    /// `Resume`, or `Exit`, `End` -- or, running off the end, the
+    /// procedure's end. Measured: `Resume Next` after an error inside a For
+    /// loop goes on with the loop's next statement, and `Resume` after
+    /// `If c Then Err.Raise 5` raises again without testing `c` again.
+    fn run_handler(&mut self, label: &str, frame: &mut Frame) -> Result<Flow, RuntimeError> {
+        let body = frame.body;
+        let labels = statement_labels(body);
+        let start = label_destination(&labels, label, None)?;
+        Ok(self.run_procedure_from(body, start, frame)?.unwrap_or(Flow::Exit(ExitKind::Sub)))
+    }
+
+    /// The procedure's statements from `start`, following its GoTos and
+    /// GoSubs; None where it runs off the end.
+    fn run_procedure_from(&mut self, body: &[Statement], start: usize, frame: &mut Frame) -> Result<Option<Flow>, RuntimeError> {
+        let labels = statement_labels(body);
+        let mut pc = start;
         while pc < body.len() {
-            frame.current_statement = pc;
             match self.exec_body(&body[pc..=pc], frame)? {
                 Flow::Continue => pc += 1,
                 Flow::Jump(label) => {
@@ -1295,28 +1308,12 @@ impl<'a> Runtime<'a> {
                             line_of(&body[pc]),
                         ));
                     }
-                    let failed = frame.error_statement.ok_or_else(|| {
-                        error(
-                            RuntimeErrorKind::Unsupported,
-                            "Resume has no failed statement",
-                            line_of(&body[pc]),
-                        )
-                    })?;
-                    frame.error_handler_active = false;
-                    frame.error_statement = None;
-                    frame.error_state = ErrorState::default();
-                    pc = match target {
-                        ResumeTarget::Same => failed,
-                        ResumeTarget::Next => failed.saturating_add(1),
-                        ResumeTarget::Label(label) => {
-                            label_destination(&labels, &label, line_of(&body[pc]))?
-                        }
-                    };
+                    return Ok(Some(Flow::Resume(target)));
                 }
-                flow => return Ok(flow),
+                flow => return Ok(Some(flow)),
             }
         }
-        Ok(Flow::Continue)
+        Ok(None)
     }
 
     fn find_procedure(&mut self, name: &str, line: Option<u32>) -> Result<Procedure, RuntimeError> {
@@ -1369,10 +1366,9 @@ impl<'a> Runtime<'a> {
                 error_mode: ErrorMode::Disabled,
                 error_state: ErrorState::default(),
                 error_handler_active: false,
-                error_statement: None,
-                current_statement: 0,
                 gosub_returns: Vec::new(),
         last_line_number: None,
+                body: &[],
             };
             return self.eval_expr(default, &mut frame);
         }
@@ -1391,10 +1387,28 @@ impl<'a> Runtime<'a> {
             if let Some(carried) = self.err_out.take() {
                 frame.error_state = carried;
             }
-            let flow = match self.exec_statement(statement, frame) {
+            let mut flow = match self.exec_statement(statement, frame) {
                 Ok(flow) => flow,
                 Err(failure) => self.handle_runtime_error(failure, frame)?,
             };
+            if let Flow::Handle(label) = &flow {
+                let label = label.clone();
+                flow = match self.run_handler(&label, frame)? {
+                    Flow::Resume(target) => {
+                        frame.error_handler_active = false;
+                        frame.error_state = ErrorState::default();
+                        match target {
+                            ResumeTarget::Same => continue,
+                            ResumeTarget::Next => {
+                                at += 1;
+                                continue;
+                            }
+                            ResumeTarget::Label(label) => Flow::Jump(label),
+                        }
+                    }
+                    other => other,
+                };
+            }
             // A GoTo to a label in this same block -- inside a loop, say --
             // goes on from there; one to anywhere else is passed out.
             if let Flow::Jump(label) = &flow {
@@ -1464,15 +1478,14 @@ impl<'a> Runtime<'a> {
                 .clone()
                 .filter(|_| !language)
                 .unwrap_or_else(|| "VBAProject".to_string()),
-            line: frame.last_line_number,
+            line: excel_erl(frame.body, frame.last_line_number),
         };
         match frame.error_mode.clone() {
             ErrorMode::Disabled => Err(failure),
             ErrorMode::ResumeNext => Ok(Flow::Continue),
             ErrorMode::Goto(label) => {
                 frame.error_handler_active = true;
-                frame.error_statement = Some(frame.current_statement);
-                Ok(Flow::Jump(label))
+                Ok(Flow::Handle(label))
             }
         }
     }
@@ -1623,7 +1636,6 @@ impl<'a> Runtime<'a> {
             Statement::OnError(OnError::Goto { label, .. }) if label.is_empty() || label == "-1" => {
                 frame.error_state = ErrorState::default();
                 frame.error_handler_active = false;
-                frame.error_statement = None;
                 Ok(Flow::Continue)
             }
             Statement::OnError(mode) => {
@@ -1635,7 +1647,6 @@ impl<'a> Runtime<'a> {
                 frame.error_state = ErrorState::default();
                 if matches!(mode, OnError::Disable { .. }) {
                     frame.error_handler_active = false;
-                    frame.error_statement = None;
                 }
                 Ok(Flow::Continue)
             }
@@ -2978,7 +2989,7 @@ impl<'a> Runtime<'a> {
                     Value::Record(record) => Some(record.type_name.clone()),
                     _ => None,
                 })?;
-                let declared = owner
+                let field = owner
                     .flatten()
                     .and_then(|type_name| self.find_type(&type_name))
                     .and_then(|definition| {
@@ -2987,10 +2998,19 @@ impl<'a> Runtime<'a> {
                             .into_iter()
                             .find(|field| field.name.eq_ignore_ascii_case(name))
                     })
-                    .filter(|field| field.array_bounds.is_none() && self.find_type(&field.type_name.name).is_none())
-                    .map(|field| field.type_name.name);
+                    .filter(|field| field.array_bounds.is_none() && self.find_type(&field.type_name.name).is_none());
+                // A `String * n` field keeps its width: measured, "abcdef"
+                // into a `Name As String * 4` field reads "abcd".
+                let width = match field.as_ref().and_then(|field| field.type_name.fixed_length.clone()) {
+                    Some(length) => usize::try_from(self.array_index(&length, frame, line)?).ok(),
+                    None => None,
+                };
+                let declared = field.map(|field| field.type_name.name);
                 if let Some(declared) = declared.filter(|declared| !declared.eq_ignore_ascii_case("variant") && !declared.eq_ignore_ascii_case("object")) {
                     value = coerce_declared(value, &declared, line, self.this_year())?;
+                }
+                if let Some(width) = width {
+                    value = coerce_string_width(value, width, Some(line))?;
                 }
             }
             let mut carried = Some(value);
@@ -4846,7 +4866,49 @@ fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) 
     }
 }
 
-fn empty_frame() -> Frame {
+/// What `Erl` answers for an error on numbered line `current`. Numbered
+/// `Dim` lines make no code, and Excel's answer shows it: an error on the
+/// first numbered line that does run, when every numbered line before it is
+/// a Dim and another numbered line follows, reads as the first numbered
+/// line. Measured: `10 Dim v / 20 v = 1 / 0 / 30 x = 1` gives 10, without
+/// the 30 it gives 20, and `5 x = 1 / 10 Dim v / 20 v = 1 / 0 / 30 ...` 20.
+fn excel_erl(body: &[Statement], current: Option<u32>) -> Option<u32> {
+    let current = current?;
+    let mut numbered: Vec<(u32, bool)> = Vec::new();
+    for (index, statement) in body.iter().enumerate() {
+        if let Statement::LineNumber { value, .. } = statement {
+            let declaration = matches!(body.get(index + 1), Some(Statement::Dim(_)));
+            numbered.push((*value, declaration));
+        }
+    }
+    let Some(at) = numbered.iter().position(|(value, _)| *value == current) else {
+        return Some(current);
+    };
+    let before = &numbered[..at];
+    if !before.is_empty() && before.iter().all(|(_, declaration)| *declaration) && !numbered[at].1 && at + 1 < numbered.len() {
+        return Some(before[0].0);
+    }
+    Some(current)
+}
+
+/// Where each label and line number of a procedure stands.
+fn statement_labels(body: &[Statement]) -> BTreeMap<String, usize> {
+    let mut labels = BTreeMap::new();
+    for (index, statement) in body.iter().enumerate() {
+        match statement {
+            Statement::Label { name, .. } => {
+                labels.entry(key(name)).or_insert(index);
+            }
+            Statement::LineNumber { value, .. } => {
+                labels.entry(value.to_string()).or_insert(index);
+            }
+            _ => {}
+        }
+    }
+    labels
+}
+
+fn empty_frame() -> Frame<'static> {
     Frame {
         procedure_name: String::new(),
         source_name: String::new(),
@@ -4861,10 +4923,9 @@ fn empty_frame() -> Frame {
         error_mode: ErrorMode::Disabled,
         error_state: ErrorState::default(),
         error_handler_active: false,
-        error_statement: None,
-        current_statement: 0,
         gosub_returns: Vec::new(),
         last_line_number: None,
+        body: &[],
     }
 }
 
@@ -13571,13 +13632,16 @@ mod tests {
         assert_eq!(value, Value::Integer(5));
     }
 
+    /// `Resume` goes back to the statement that failed, which for
+    /// `If c Then Err.Raise 77` is the Raise itself, not the test: measured,
+    /// Excel never leaves that loop. So the retry here fails in the test.
     #[test]
     fn resume_retries_and_resume_label_redirects_execution() {
         let retry = run(
             "Public Function RetryProbe() As Long\n\
-               Dim attempts As Long\n\
+               Dim attempts As Long, x As Long\n\
                On Error GoTo Failed\n\
-               If attempts = 0 Then Err.Raise 77\n\
+               If 10 \\ attempts > 0 Then x = 1\n\
                RetryProbe = attempts\n\
                Exit Function\n\
              Failed:\n\
@@ -13607,6 +13671,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(redirected, Value::Integer(42));
+    }
+
+    /// The handler takes the error where it happened, so `Resume Next`
+    /// carries on inside the loop that failed: measured, Excel answers
+    /// "1:-12,err2,2:-12,3:12,4:6,end i=5".
+    #[test]
+    fn resume_next_carries_on_inside_the_loop_that_failed() {
+        let value = run(
+            "Public Function InFor() As String\n\
+               Dim i As Long, o As String, x As Long\n\
+               On Error GoTo H\n\
+               For i = 1 To 4\n\
+                 x = 12 \\ (i - 2)\n\
+                 o = o & i & \":\" & x & \",\"\n\
+               Next i\n\
+               InFor = o & \"end i=\" & i\n\
+               Exit Function\n\
+             H:\n\
+               o = o & \"err\" & i & \",\"\n\
+               Resume Next\n\
+             End Function\n",
+            "InFor",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("1:-12,err2,2:-12,3:12,4:6,end i=5".to_string()));
     }
 
     #[test]
