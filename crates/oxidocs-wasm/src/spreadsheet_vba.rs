@@ -11501,8 +11501,12 @@ impl<'a> WorkbookHost<'a> {
         let value = from_cell_value(&cell.value);
         let format = cell.style.number_format.as_deref();
         let shown = shown_text(&value, format);
-        let CellValue::Number(number) = cell.value else {
-            return shown;
+        let number = match cell.value {
+            CellValue::Number(number) => Some(number),
+            // A Boolean keeps to its cell as a number does, where text spills
+            // over: measured, TRUE under `0;-0;"zero";"text:"@` reads #######.
+            CellValue::Boolean(_) => None,
+            _ => return shown,
         };
         let (normal_face, normal_size) = self.normal_font();
         let face = cell.style.font_name.clone().unwrap_or(normal_face);
@@ -11513,11 +11517,21 @@ impl<'a> WorkbookHost<'a> {
         // ¥281,292 (67 px) in 69 and not in 68.
         let measure = |text: &str| text_px(text, &face, size, bold) + if bold { 2 } else { 0 };
         let room = (self.column_px(address.sheet, address.column) - 5.0).max(0.0) as u32;
-        let general = format.is_none_or(|format| format.eq_ignore_ascii_case("general"));
+        // A number in a cell formatted for text alone is shown as General:
+        // measured, -1234.5678 under `@` or `"x"@"y"` reads -1234.57.
+        let general = format.is_none_or(|format| format.eq_ignore_ascii_case("general") || text_only_format(format));
         // The #s fill the room less the bold margin, at their own width:
         // measured, bold in 36 pixels is ### and in 58 ######.
         let hash = text_px("#", &face, size, bold).max(1);
         let hashes = (room.saturating_sub(if bold { 2 } else { 0 }) / hash) as usize;
+        let Some(number) = number else {
+            return if measure(&shown) > room { "#".repeat(hashes) } else { shown };
+        };
+        // A date or time picture has nothing to show for a number off the
+        // calendar: measured, -0.5 and 1E+15 under `[h]:mm` read #######.
+        if format.is_some_and(oxicells_calc::looks_like_a_date) && !(0.0..2_958_466.0).contains(&number) {
+            return "#".repeat(hashes);
+        }
         if general {
             let fitted = general_fit(number, Some(room), &measure);
             if fitted.starts_with('#') {
@@ -21733,8 +21747,34 @@ fn shown_text(value: &Value, format: Option<&str>) -> String {
             Some(format) => oxicells_calc::format_text(text, format),
             None => text.clone(),
         },
+        // So does a Boolean: measured, TRUE under `"x"@"y"` shows xTRUEy
+        // and under `0.00;;;` nothing.
+        Value::Boolean(state) => match format {
+            Some(format) => oxicells_calc::format_text(if *state { "TRUE" } else { "FALSE" }, format),
+            None => find_value_text(value),
+        },
         value => find_value_text(value),
     }
+}
+
+/// Whether a format is for text alone: one section with an `@` in it
+/// outside quotes. A number under one is shown as General.
+fn text_only_format(format: &str) -> bool {
+    let mut quoted = false;
+    let mut at = false;
+    let mut characters = format.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => quoted = !quoted,
+            '\\' if !quoted => {
+                characters.next();
+            }
+            ';' if !quoted => return false,
+            '@' if !quoted => at = true,
+            _ => {}
+        }
+    }
+    at
 }
 
 fn worksheet_number(value: &Value, name: &str) -> Result<f64, String> {

@@ -425,7 +425,7 @@ fn split_sections(format: &str) -> Vec<&str> {
 }
 
 /// A format is a date format when it names a date or time part outside quotes.
-pub(crate) fn looks_like_a_date(format: &str) -> bool {
+pub fn looks_like_a_date(format: &str) -> bool {
     let mut quoted = false;
     let mut marked_month = false;
     let mut characters = format.chars().peekable();
