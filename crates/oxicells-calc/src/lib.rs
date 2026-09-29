@@ -56,6 +56,7 @@ pub mod parser;
 pub mod numfmt;
 pub mod r1c1;
 pub mod reference;
+pub mod regex;
 pub mod value;
 
 pub use ast::{BinaryOp, Expr, UnaryOp};

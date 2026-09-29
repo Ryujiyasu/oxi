@@ -23,8 +23,23 @@ pub(crate) const NAMES: &[&str] = &[
     "ISPMT", "MDETERM", "NOMINAL", "PDURATION", "PERCENTRANK.EXC", "PERMUTATIONA", "PRICEDISC", "PROB",
     "RECEIVED", "RRI", "SEC", "SECH", "SERIESSUM", "SKEW.P", "STDEVPA", "TBILLEQ", "TBILLPRICE",
     "TBILLYIELD", "VARPA", "VDB", "XIRR", "XNPV", "YIELDDISC", "Z.TEST", "ZTEST", "PERCENTOF", "ENCODEURL",
-    "AMORLINC", "AMORDEGRC", "PHONETIC",
+    "AMORLINC", "AMORDEGRC", "PHONETIC", "REGEXTEST", "REGEXREPLACE",
 ];
+
+/// A pattern of REGEXTEST, REGEXEXTRACT or REGEXREPLACE, case-blind when
+/// the flag at `flag` is 1; one that will not compile is #VALUE!.
+fn pattern(args: &[Arg], flag: usize) -> Result<crate::regex::Regex, ExcelError> {
+    let text = args[1].scalar().to_text()?;
+    let blind = match args.get(flag).map(Arg::scalar) {
+        None | Some(Value::Blank) => false,
+        Some(value) => match value.to_number()? {
+            0.0 => false,
+            1.0 => true,
+            _ => return Err(ExcelError::Value),
+        },
+    };
+    crate::regex::Regex::new(&text, blind, false).map_err(|_| ExcelError::Value)
+}
 
 fn at(args: &[Arg], i: usize) -> Result<f64, ExcelError> {
     match args.get(i) {
@@ -591,6 +606,45 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
             finite(vdb(cost, salvage, life, start, end, factor, no_switch))
         }
+        // Measured: REGEXTEST("ABC","abc") FALSE and with 1 TRUE; "(" #VALUE!.
+        "REGEXTEST" => {
+            count(args, 2, 3)?;
+            let text: Vec<char> = args[0].scalar().to_text()?.chars().collect();
+            Ok(Value::Logical(pattern(args, 2)?.find_at(&text, 0).is_some()))
+        }
+        // REGEXREPLACE(text, pattern, replacement, [occurrence], [case]):
+        // every match, or the nth (from the end when negative); $n, ${n},
+        // $0 and $$ in the replacement. Measured: "a1b2c3" with occurrence
+        // 2 is a1b#c3, with -1 a1b2c#; "aaa" by a* is "--".
+        "REGEXREPLACE" => {
+            count(args, 3, 5)?;
+            let text: Vec<char> = args[0].scalar().to_text()?.chars().collect();
+            let regex = pattern(args, 4)?;
+            let replacement = args[2].scalar().to_text()?;
+            let occurrence = optional(args, 3, 0.0)?.trunc() as i64;
+            let found = regex.find_all(&text);
+            let chosen: Option<usize> = match occurrence {
+                0 => None,
+                n if n > 0 => Some(n as usize - 1),
+                n => found.len().checked_sub(n.unsigned_abs() as usize),
+            };
+            if occurrence != 0 && chosen.is_none_or(|i| i >= found.len()) {
+                return Ok(Value::Text(text.iter().collect()));
+            }
+            let mut out = String::new();
+            let mut last = 0;
+            for (i, caps) in found.iter().enumerate() {
+                if chosen.is_some_and(|c| c != i) {
+                    continue;
+                }
+                let (s, e) = caps[0].unwrap_or((last, last));
+                out.extend(&text[last..s]);
+                out.push_str(&crate::regex::expand(&replacement, &text, caps));
+                last = e;
+            }
+            out.extend(&text[last..]);
+            Ok(Value::Text(out))
+        }
         // PERCENTOF: the one sum over the other. Measured: 1 of 1,2,3,4 is 0.1.
         "PERCENTOF" => {
             count(args, 2, 2)?;
@@ -708,6 +762,40 @@ pub(crate) fn call_block(name: &str, args: &[Arg]) -> Option<Arg> {
             Ok(RangeData { width: size, height: size, cells })
         })(),
         "LINEST" | "LOGEST" => regression_block(name == "LOGEST", args),
+        // REGEXEXTRACT(text, pattern, [mode], [case]): 0 the first match,
+        // 1 every match, 2 the groups of the first -- the last two as a row.
+        // Measured: no match is #N/A; a group that took no part is empty.
+        "REGEXEXTRACT" => {
+            return Some((|| -> Result<Arg, ExcelError> {
+                count(args, 2, 4)?;
+                let text: Vec<char> = args[0].scalar().to_text()?.chars().collect();
+                let regex = pattern(args, 3)?;
+                let piece = |span: Option<(usize, usize)>| {
+                    Value::Text(span.map(|(s, e)| text[s..e].iter().collect()).unwrap_or_default())
+                };
+                match optional(args, 2, 0.0)?.trunc() as i64 {
+                    0 => {
+                        let caps = regex.find_at(&text, 0).ok_or(ExcelError::NA)?;
+                        Ok(Arg::Value(piece(caps[0])))
+                    }
+                    1 => {
+                        let all = regex.find_all(&text);
+                        if all.is_empty() {
+                            return Err(ExcelError::NA);
+                        }
+                        let cells: Vec<Value> = all.iter().map(|caps| piece(caps[0])).collect();
+                        Ok(Arg::Range(RangeData { width: cells.len(), height: 1, cells }))
+                    }
+                    2 => {
+                        let caps = regex.find_at(&text, 0).ok_or(ExcelError::NA)?;
+                        let cells: Vec<Value> = if caps.len() > 1 { caps[1..].iter().map(|c| piece(*c)).collect() } else { vec![piece(caps[0])] };
+                        Ok(Arg::Range(RangeData { width: cells.len(), height: 1, cells }))
+                    }
+                    _ => Err(ExcelError::Value),
+                }
+            })()
+            .unwrap_or_else(|why| Arg::Value(Value::Error(why))));
+        }
         "GROWTH" => growth(args),
         _ => return None,
     };
