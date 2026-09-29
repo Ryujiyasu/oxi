@@ -5496,10 +5496,18 @@ impl Criteria {
             (BinaryPredicate::Eq, text.as_str())
         };
 
-        let operand = match rest.parse::<f64>() {
-            Ok(n) => Value::Number(n),
+        // A criterion reads a date the way a typed cell does: measured,
+        // `">1/1/2024"` over a cell holding 45292 counts nothing and
+        // `">=1/1/2024"` counts it.
+        let as_typed = || {
+            (!rest.trim().is_empty())
+                .then(|| Value::Text(rest.to_string()).to_number().ok())
+                .flatten()
+        };
+        let operand = match rest.parse::<f64>().ok().or_else(as_typed) {
+            Some(n) => Value::Number(n),
             // `"<>#N/A"` names the error, not the four characters of it.
-            Err(_) => match an_error_named(rest) {
+            None => match an_error_named(rest) {
                 Some(why) => Value::Error(why),
                 None => Value::Text(rest.to_string()),
             },
@@ -5561,6 +5569,20 @@ impl Criteria {
                 }
                 return matches!(self.op, BinaryPredicate::Ne);
             }
+        }
+        // A comparison for greater or less reads only its own kind: measured,
+        // `COUNTIF(.., ">1/1/2024")` counts no text cell, where the sheet's
+        // own `>` would put every text above every number.
+        let kind = |value: &Value| match value {
+            Value::Number(_) => 0,
+            Value::Text(_) => 1,
+            Value::Logical(_) => 2,
+            _ => 3,
+        };
+        if !matches!(self.op, BinaryPredicate::Eq | BinaryPredicate::Ne)
+            && kind(v) != kind(&self.operand)
+        {
+            return false;
         }
         match compare(v, &self.operand) {
             Ok(ord) => match self.op {

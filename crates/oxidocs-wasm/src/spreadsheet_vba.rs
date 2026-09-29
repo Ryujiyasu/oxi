@@ -20459,6 +20459,14 @@ fn criteria_operand(text: &str) -> Value {
     if text.eq_ignore_ascii_case("false") {
         return Value::Boolean(false);
     }
+    // A date is read the way a typed cell reads it: measured,
+    // `CountIf(.., ">1/1/2024")` over a cell holding 45292 counts nothing and
+    // `">=1/1/2024"` counts it.
+    if let Ok(number) = oxicells_calc::Value::Text(text.to_string()).to_number() {
+        if number.is_finite() {
+            return Value::Double(number);
+        }
+    }
     Value::String(text.to_string())
 }
 
