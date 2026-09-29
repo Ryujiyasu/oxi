@@ -639,6 +639,14 @@ impl<'a> Runtime<'a> {
             if this.has_procedure_of(this.module, name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet]) {
                 return this.call_kind(name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet], args.to_vec(), Some(line));
             }
+            // Through an interface: `animal.Speak` on a class that
+            // `Implements IAnimal` runs its `IAnimal_Speak`.
+            for interface in this.interfaces_of(&receiver.kind) {
+                let through = format!("{interface}_{name}");
+                if this.has_procedure_of(this.module, &through, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet]) {
+                    return this.call_kind(&through, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet], args.to_vec(), Some(line));
+                }
+            }
             if let Some(slot) = this.module_values.get(&key(name)).cloned() {
                 let value = slot.borrow().clone();
                 if args.is_empty() {
@@ -703,6 +711,81 @@ impl<'a> Runtime<'a> {
         self.instance_member(receiver, name, &placed, line)
     }
 
+    /// The interfaces a class names with `Implements`.
+    fn interfaces_of(&self, class: &str) -> Vec<String> {
+        self.classes
+            .get(&class.to_ascii_lowercase())
+            .map(|module| {
+                module
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ModuleItem::Implements { interface, .. } => Some(interface.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `RaiseEvent Name(args)` from the instance running now: every
+    /// instance holding it in a `WithEvents` variable hears it, through its
+    /// `variable_Name` procedure, in the order the instances were made.
+    fn raise_event(&mut self, name: &str, args: Vec<Value>, line: u32) -> Result<(), RuntimeError> {
+        let Some(source) = self.me.clone() else {
+            return Ok(());
+        };
+        let mut listeners: Vec<(ObjectRef, String)> = Vec::new();
+        let handles: Vec<(u64, String)> = self
+            .internal_objects
+            .iter()
+            .filter_map(|(handle, object)| match object {
+                InternalObject::Instance(instance) => Some((*handle, instance.class.clone())),
+                _ => None,
+            })
+            .collect();
+        for (handle, class) in handles {
+            let Some(module) = self.classes.get(&class.to_ascii_lowercase()).copied() else {
+                continue;
+            };
+            for item in &module.items {
+                let ModuleItem::Variables(decl) = item else {
+                    continue;
+                };
+                for variable in decl.items.iter().filter(|variable| variable.with_events) {
+                    let procedure = format!("{}_{}", variable.name, name);
+                    if !self.has_procedure_of(module, &procedure, &[ProcKind::Sub]) {
+                        continue;
+                    }
+                    // The live instance keeps its variables out on the
+                    // runtime; the rest keep them with themselves.
+                    let held = if self.owner == Some(handle) {
+                        self.module_values.get(&key(&variable.name)).map(|slot| slot.borrow().clone())
+                    } else {
+                        match self.internal_objects.get(&handle) {
+                            Some(InternalObject::Instance(instance)) => instance
+                                .state
+                                .as_ref()
+                                .and_then(|state| state.values.get(&key(&variable.name)))
+                                .map(|slot| slot.borrow().clone()),
+                            _ => None,
+                        }
+                    };
+                    if matches!(held, Some(Value::Object(ref object)) if object.handle == source.handle) {
+                        listeners.push((ObjectRef::new(handle, class.clone()), procedure));
+                    }
+                }
+            }
+        }
+        for (listener, procedure) in listeners {
+            let values = args.clone();
+            self.as_instance(&listener, |this| {
+                this.call_kind(&procedure, &[ProcKind::Sub], values, Some(line)).map(|_| ())
+            })?;
+        }
+        Ok(())
+    }
+
     /// `obj.Name(args) = value` on an instance: a Property Let (Set for an
     /// object when there is one), else a variable of the class.
     fn instance_assign(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], value: Value, line: u32) -> Result<bool, RuntimeError> {
@@ -718,6 +801,15 @@ impl<'a> Runtime<'a> {
                 all.push(value);
                 this.call_kind(name, kinds, all, Some(line))?;
                 return Ok(true);
+            }
+            for interface in this.interfaces_of(&receiver.kind) {
+                let through = format!("{interface}_{name}");
+                if this.has_procedure_of(this.module, &through, kinds) {
+                    let mut all = args.to_vec();
+                    all.push(value);
+                    this.call_kind(&through, kinds, all, Some(line))?;
+                    return Ok(true);
+                }
             }
             if args.is_empty() {
                 if let Some(slot) = this.module_values.get(&key(name)).cloned() {
@@ -1552,6 +1644,17 @@ impl<'a> Runtime<'a> {
                 Ok(Flow::Continue)
             }
             Statement::Comment { .. } | Statement::Label { .. } => Ok(Flow::Continue),
+            Statement::RaiseEvent(raised) => {
+                let mut values = Vec::with_capacity(raised.args.len());
+                for argument in &raised.args {
+                    values.push(match &argument.value {
+                        Some(expr) => self.eval_expr(expr, frame)?,
+                        None => Value::Missing,
+                    });
+                }
+                self.raise_event(&raised.name, values, raised.span.line)?;
+                Ok(Flow::Continue)
+            }
             Statement::Unknown { text, span } => Err(error(
                 RuntimeErrorKind::Unsupported,
                 format!("cannot execute unparsed VBA: {text}"),
@@ -3169,7 +3272,8 @@ impl<'a> Runtime<'a> {
                             .rsplit('.')
                             .next()
                             .is_some_and(|name| object.kind.eq_ignore_ascii_case(name))
-                        || type_name.eq_ignore_ascii_case("object"),
+                        || type_name.eq_ignore_ascii_case("object")
+                        || self.interfaces_of(&object.kind).iter().any(|interface| interface.eq_ignore_ascii_case(type_name)),
                 )),
                 Value::Nothing => Ok(Value::Boolean(false)),
                 _ => Err(error(
@@ -3690,6 +3794,18 @@ impl<'a> Runtime<'a> {
         }
         if name.eq_ignore_ascii_case("createobject") {
             return self.create_object(&args, line);
+        }
+        // ObjPtr: an address for an object, the same for the same object and
+        // 0 for Nothing. A browser has no addresses; the object's handle,
+        // kept nonzero, serves -- measured, only `<> 0` and equality are
+        // ever asked of it.
+        if name.eq_ignore_ascii_case("objptr") {
+            return match args.as_slice() {
+                [Value::Object(object)] => Ok(Value::LongLong(((object.handle & 0x0000_FFFF_FFFF_FFFF) as i64) + 0x1_0000)),
+                [Value::Nothing] => Ok(Value::LongLong(0)),
+                [_] => Err(error(RuntimeErrorKind::TypeMismatch, "ObjPtr takes an object", line)),
+                _ => Err(error(RuntimeErrorKind::ArgumentCount, "ObjPtr takes one argument", line)),
+            };
         }
         if name.eq_ignore_ascii_case("rnd") {
             return self.call_rnd(&args, line);
