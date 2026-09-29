@@ -1048,6 +1048,55 @@ impl Workbook {
                 across(*op, &a, &b)
             }
 
+            // CELL(info, [reference]): what Excel says of the first cell.
+            // Measured: `CELL("address",B2)` is $B$2 and `CELL("col",C5)` 3.
+            Expr::Function { name, args } if name == "CELL" && (1..=2).contains(&args.len()) => {
+                let info = match self.eval_arg(&args[0], sheet, depth + 1, at).scalar() {
+                    Value::Text(text) => text.to_ascii_lowercase(),
+                    Value::Error(why) => return Arg::Value(Value::Error(why)),
+                    _ => return Arg::Value(Value::Error(ExcelError::Value)),
+                };
+                let (target, cell) = match args.get(1) {
+                    Some(reference) => match self.reference_of(reference, sheet, depth + 1, at) {
+                        Some((target, range)) => (target, range.start),
+                        None => return Arg::Value(Value::Error(ExcelError::Value)),
+                    },
+                    None => match at {
+                        Some((col, row)) => (sheet.to_string(), CellRef::new(col, row)),
+                        None => return Arg::Value(Value::Error(ExcelError::Value)),
+                    },
+                };
+                let held = self.value_at(&target, cell.col, cell.row);
+                Arg::Value(match info.as_str() {
+                    "address" => {
+                        let mut letters = String::new();
+                        let mut left = cell.col + 1;
+                        while left > 0 {
+                            letters.insert(0, (b'A' + ((left - 1) % 26) as u8) as char);
+                            left = (left - 1) / 26;
+                        }
+                        let local = format!("${letters}${}", cell.row + 1);
+                        if target == sheet {
+                            Value::Text(local)
+                        } else {
+                            Value::Text(format!("'{}'!{local}", target.replace('\'', "''")))
+                        }
+                    }
+                    "col" => Value::Number(f64::from(cell.col) + 1.0),
+                    "row" => Value::Number(f64::from(cell.row) + 1.0),
+                    "contents" => held,
+                    "type" => Value::Text(
+                        match held {
+                            Value::Blank => "b",
+                            Value::Text(_) => "l",
+                            _ => "v",
+                        }
+                        .to_string(),
+                    ),
+                    _ => Value::Error(ExcelError::Value),
+                })
+            }
+
             // Whether the argument names cells, rather than what they hold.
             // A table part that is not there -- `[#Totals]` with no totals
             // row -- is not a reference.
@@ -1727,9 +1776,6 @@ impl Workbook {
                 .to_logical()
                 .unwrap_or(true),
         };
-        if !a1 {
-            return Err(ExcelError::Ref);
-        }
         let (target, address) = match text.rfind('!') {
             Some(pos) => {
                 let raw = text[..pos].trim();
@@ -1745,6 +1791,17 @@ impl Workbook {
         if !self.sheets.contains_key(&target) {
             return Err(ExcelError::Ref);
         }
+        // R1C1 text is read from where the formula stands: measured,
+        // `INDIRECT("R2C1",FALSE)` is A2.
+        let address = if a1 {
+            address
+        } else {
+            let (col, row) = at.unwrap_or((0, 0));
+            crate::formula_from_r1c1(&format!("={address}"), row, col)
+                .map_err(|_| ExcelError::Ref)?
+                .trim_start_matches('=')
+                .to_string()
+        };
         let range = parse_range_string(&address).ok_or(ExcelError::Ref)?;
         Ok((target, range))
     }

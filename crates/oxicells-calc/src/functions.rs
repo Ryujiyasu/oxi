@@ -520,8 +520,8 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ASC", "ASIN",
     "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF",
     "AVERAGEIFS", "BASE", "BIN2DEC", "BIN2HEX", "BIN2OCT", "BITAND", "BITOR", "BITXOR",
-    "CEILING", "CEILING.MATH", "CHAR", "CHOOSE", "CHOOSECOLS", "CHOOSEROWS", "CLEAN", "CODE",
-    "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT", "CONCATENATE", "CONFIDENCE",
+    "CEILING", "CEILING.MATH", "CELL", "CHAR", "CHOOSE", "CHOOSECOLS", "CHOOSEROWS", "CLEAN",
+    "CODE", "COLUMN", "COLUMNS", "COMBIN", "COMBINA", "CONCAT", "CONCATENATE", "CONFIDENCE",
     "CONFIDENCE.NORM", "CORREL", "COS", "COSH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF",
     "COUNTIFS", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "D", "DATE", "DATEDIF", "DATEVALUE",
     "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DCOUNT", "DCOUNTA", "DDB", "DEC2BIN",
@@ -539,13 +539,13 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "N", "NA", "NETWORKDAYS", "NETWORKDAYS.INTL", "NORM.DIST", "NORM.INV", "NORM.S.DIST",
     "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW", "NPER", "NPV",
     "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR", "PEARSON",
-    "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERMUT", "PHI", "PI",
-    "PMT", "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE", "QUARTILE.EXC",
-    "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDBETWEEN", "RANK", "RANK.AVG",
-    "RANK.EQ", "RATE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN", "ROUND",
-    "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND", "SEQUENCE",
-    "SHEET", "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN", "SLOPE", "SMALL", "SORT",
-    "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA",
+    "PERCENTILE", "PERCENTILE.EXC", "PERCENTILE.INC", "PERCENTRANK", "PERCENTRANK.INC",
+    "PERMUT", "PHI", "PI", "PMT", "POWER", "PPMT", "PRODUCT", "PROPER", "PV", "QUARTILE",
+    "QUARTILE.EXC", "QUARTILE.INC", "QUOTIENT", "RADIANS", "RAND", "RANDBETWEEN", "RANK",
+    "RANK.AVG", "RANK.EQ", "RATE", "REPLACE", "REPLACEB", "REPT", "RIGHT", "RIGHTB", "ROMAN",
+    "ROUND", "ROUNDDOWN", "ROUNDUP", "ROW", "ROWS", "RSQ", "SEARCH", "SEARCHB", "SECOND",
+    "SEQUENCE", "SHEET", "SHEETS", "SIGN", "SIN", "SINH", "SKEW", "SLN", "SLOPE", "SMALL",
+    "SORT", "SORTBY", "SQRT", "SQRTPI", "STANDARDIZE", "STDEV", "STDEV.P", "STDEV.S", "STDEVA",
     "STDEVP", "STEYX", "SUBSTITUTE", "SUBTOTAL", "SUM", "SUMIF", "SUMIFS", "SUMPRODUCT",
     "SUMSQ", "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "TAKE", "TAN", "TANH",
     "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL",
@@ -1758,6 +1758,25 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Num);
             }
             let up = name.starts_with("CEILING");
+            // The .MATH forms' third argument sends a negative number the
+            // other way: measured, `FLOOR.MATH(-4.5,2,1)` is -4, toward
+            // zero, where `FLOOR.MATH(-4.5,2)` is -6.
+            if name.ends_with(".MATH") {
+                let step = step.abs();
+                let mode = match args.get(2) {
+                    Some(one) => num(one)?,
+                    None => 0.0,
+                };
+                let steps = value / step;
+                let toward_zero = value < 0.0 && mode != 0.0;
+                let rounded = match (up, toward_zero) {
+                    (true, false) => steps.ceil(),
+                    (true, true) => steps.floor(),
+                    (false, false) => steps.floor(),
+                    (false, true) => steps.ceil(),
+                };
+                return Ok(Value::Number(step * rounded));
+            }
             let steps = value / step;
             Ok(Value::Number(
                 step * if up { steps.ceil() } else { steps.floor() },
@@ -2416,7 +2435,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
         // Where a value falls in a set, 0..1, truncated to some significant
         // digits (3 by default).
-        "PERCENTRANK" => {
+        "PERCENTRANK" | "PERCENTRANK.INC" => {
             if args.len() < 2 {
                 return Err(ExcelError::Value);
             }
