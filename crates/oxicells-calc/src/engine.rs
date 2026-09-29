@@ -37,6 +37,7 @@ struct TableRef {
     first_col: u32,
     last_col: u32,
     header_rows: u32,
+    totals_rows: u32,
     headings: Vec<String>,
 }
 
@@ -327,6 +328,7 @@ impl Workbook {
         rows: (u32, u32),
         cols: (u32, u32),
         header_rows: u32,
+        totals_rows: u32,
         headings: Vec<String>,
     ) {
         self.tables.insert(
@@ -338,6 +340,7 @@ impl Workbook {
                 first_col: cols.0,
                 last_col: cols.1,
                 header_rows,
+                totals_rows,
                 headings: headings.into_iter().map(|one| one.to_uppercase()).collect(),
             },
         );
@@ -816,7 +819,7 @@ impl Workbook {
                 Arg::Range(self.materialise(target, &reference.range, skip))
             }
 
-            Expr::Table { name, asked } => self.a_table_column(name, asked, at),
+            Expr::Table { name, asked } => self.a_table_column(name, asked, sheet, at),
 
             Expr::Name(name) => {
                 let bound_by_let = self
@@ -831,6 +834,10 @@ impl Workbook {
                 }
                 match self.names.get(name) {
                     Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
+                    // A table's bare name is its data: `COLUMNS(tbl)`.
+                    None if self.tables.contains_key(&name.to_uppercase()) => {
+                        self.a_table_column(name, "", sheet, at)
+                    }
                     None => Arg::Value(Value::Error(ExcelError::Name)),
                 }
             }
@@ -857,8 +864,16 @@ impl Workbook {
                 across(*op, &a, &b)
             }
 
+            // Whether the argument names cells, rather than what they hold.
+            // A table part that is not there -- `[#Totals]` with no totals
+            // row -- is not a reference.
+            Expr::Function { name, args } if name == "ISREF" => match args.as_slice() {
+                [only] => Arg::Value(Value::Logical(self.reference_of(only, sheet, depth + 1, at).is_some())),
+                _ => Arg::Value(Value::Error(ExcelError::Value)),
+            },
+
             Expr::Function { name, args } if name == "ROW" || name == "COLUMN" => {
-                self.which_line(name, args, at)
+                self.which_line(name, args, sheet, at)
             }
 
             // The clock belongs to the workbook, not to the function library,
@@ -884,7 +899,7 @@ impl Workbook {
                 if matches!(name.as_str(), "ROWS" | "COLUMNS")
                     && Expr::asks_only_the_shape(name, args) =>
             {
-                self.how_many_lines(name, args, at)
+                self.how_many_lines(name, args, sheet, at)
             }
 
             // OFFSET and INDIRECT hand back a *reference*, computed here where
@@ -1099,8 +1114,8 @@ impl Workbook {
     /// `Suppliers1[]` is every data cell. Which rows are meant depends on the
     /// part named — the body, the heading, this row — and which columns on the
     /// heading named, so the two are worked out separately and put together.
-    fn a_table_column(&self, name: &str, asked: &str, at: At) -> Arg {
-        match self.table_range(name, asked, at) {
+    fn a_table_column(&self, name: &str, asked: &str, sheet: &str, at: At) -> Arg {
+        match self.table_range(name, asked, sheet, at) {
             Ok((sheet, range)) => Arg::Range(self.materialise(&sheet, &range, Skip::Nothing)),
             Err(why) => Arg::Value(Value::Error(why)),
         }
@@ -1110,10 +1125,22 @@ impl Workbook {
     ///
     /// `ROW(tbl[[#Headers],[ID]])` asks where the heading IS, not what it
     /// says, so the two callers need different halves of the same answer.
-    fn table_range(&self, name: &str, asked: &str, at: At)
+    fn table_range(&self, name: &str, asked: &str, sheet: &str, at: At)
         -> Result<(String, RangeRef), ExcelError>
     {
-        let Some(table) = self.tables.get(&name.to_uppercase()) else {
+        // `[@Qty]` names no table: it is the one the asking cell sits in.
+        let found = if name.is_empty() {
+            at.and_then(|(col, row)| {
+                self.tables.values().find(|table| {
+                    table.sheet == sheet
+                        && (table.first_row..=table.last_row).contains(&row)
+                        && (table.first_col..=table.last_col).contains(&col)
+                })
+            })
+        } else {
+            self.tables.get(&name.to_uppercase())
+        };
+        let Some(table) = found else {
             return Err(ExcelError::Name);
         };
         // `[[#This Row],[DATE]]` arrives as `[#This Row],[DATE]`; a lone
@@ -1123,7 +1150,12 @@ impl Workbook {
         let mut part = TablePart::Body;
         let mut wanted: Vec<&str> = Vec::new();
         for piece in &parts {
-            let bare = piece.trim().trim_start_matches('[').trim_end_matches(']');
+            let mut bare = piece.trim().trim_start_matches('[').trim_end_matches(']');
+            // `[@Qty]` and `[@[Unit Price]]` are this row's cell of a column.
+            if let Some(column) = bare.strip_prefix('@').filter(|rest| !rest.trim().is_empty()) {
+                part = TablePart::ThisRow;
+                bare = column.trim().trim_start_matches('[').trim_end_matches(']');
+            }
             match bare.trim().to_ascii_uppercase().as_str() {
                 "#THIS ROW" | "@" => part = TablePart::ThisRow,
                 "#HEADERS" => part = TablePart::Headers,
@@ -1162,8 +1194,10 @@ impl Workbook {
         let (first_row, last_row) = match part {
             TablePart::Headers => (table.first_row, table.first_row + table.header_rows - 1),
             TablePart::All => (table.first_row, table.last_row),
+            // A table with no totals row has no `[#Totals]`: Excel says #REF!.
+            TablePart::Totals if table.totals_rows == 0 => return Err(ExcelError::Ref),
             TablePart::Totals => (table.last_row, table.last_row),
-            TablePart::Body => (body_first, table.last_row),
+            TablePart::Body => (body_first, table.last_row - table.totals_rows),
             TablePart::ThisRow => match at {
                 // Outside the table is `#VALUE!` in Excel, which is what a
                 // stray `[#This Row]` deserves.
@@ -1190,7 +1224,7 @@ impl Workbook {
     /// what makes `SMALL(IF(range = x, ROW(range)), n)` pick out the nth row
     /// where something is true. Answering only the first would give one number
     /// where five hundred were wanted.
-    fn which_line(&self, name: &str, args: &[Expr], at: At) -> Arg {
+    fn which_line(&self, name: &str, args: &[Expr], sheet: &str, at: At) -> Arg {
         let down = name == "ROW";
         let Some(first) = args.first() else {
             // No argument: wherever we are. Outside a cell there is no answer.
@@ -1208,7 +1242,7 @@ impl Workbook {
         // reference like any other once the table has been looked up.
         let range = &match first {
             Expr::Ref(reference) => reference.range,
-            Expr::Table { name, asked } => match self.table_range(name, asked, at) {
+            Expr::Table { name, asked } => match self.table_range(name, asked, sheet, at) {
                 Ok((_, range)) => range,
                 Err(why) => return Arg::Value(Value::Error(why)),
             },
@@ -1237,13 +1271,17 @@ impl Workbook {
     /// says — `materialise` cuts a range back to what the sheet holds, and
     /// counting the cut-down block would answer with the sheet's height
     /// instead of the reference's.
-    fn how_many_lines(&self, name: &str, args: &[Expr], at: At) -> Arg {
+    fn how_many_lines(&self, name: &str, args: &[Expr], sheet: &str, at: At) -> Arg {
         let down = name == "ROWS";
         let range = match args.first() {
             Some(Expr::Ref(reference)) => reference.range,
-            Some(Expr::Table { name, asked }) => match self.table_range(name, asked, at) {
+            Some(Expr::Table { name, asked }) => match self.table_range(name, asked, sheet, at) {
                 Ok((_, range)) => range,
                 Err(why) => return Arg::Value(Value::Error(why)),
+            },
+            Some(other) => match self.reference_of(other, sheet, 0, at) {
+                Some((_, range)) => range,
+                None => return Arg::Value(Value::Error(ExcelError::Value)),
             },
             _ => return Arg::Value(Value::Error(ExcelError::Value)),
         };
@@ -1262,11 +1300,17 @@ impl Workbook {
                 reference.sheet.clone().unwrap_or_else(|| sheet.to_string()),
                 reference.range,
             )),
-            Expr::Table { name, asked } => self.table_range(name, asked, at).ok(),
-            Expr::Name(name) => {
-                let bound = self.names.get(name)?.clone();
-                self.reference_of(&bound, sheet, depth, at)
-            }
+            Expr::Table { name, asked } => self.table_range(name, asked, sheet, at).ok(),
+            Expr::Name(name) => match self.names.get(name) {
+                Some(bound) => {
+                    let bound = bound.clone();
+                    self.reference_of(&bound, sheet, depth, at)
+                }
+                None if self.tables.contains_key(&name.to_uppercase()) => {
+                    self.table_range(name, "", sheet, at).ok()
+                }
+                None => None,
+            },
             // A reference can be built by another OFFSET or INDIRECT --
             // `OFFSET(INDIRECT("A1"), 4, 0)` -- so those are followed to their
             // own reference rather than to their materialised values.
@@ -1668,6 +1712,7 @@ mod tests {
             (0, 3),
             (0, 2),
             1,
+            0,
             vec!["ID".into(), "NAME".into(), "PAY".into()],
         );
         wb

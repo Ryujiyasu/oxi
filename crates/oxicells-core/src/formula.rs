@@ -208,6 +208,7 @@ fn assemble_sheets(
                 ),
                 (table.start_col, table.end_col),
                 table.header_rows,
+                table.totals_rows,
                 table.columns.clone(),
             );
         }

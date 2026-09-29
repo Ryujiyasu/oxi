@@ -220,6 +220,17 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
             continue;
         }
 
+        // A bracket group on its own, `[@Qty]`, names a column of the table
+        // the formula sits in.
+        if c == '[' {
+            if let Some(Token::Table { asked, .. }) = lex_table(&format!("_{}", &src[i..]), 0).map(|(tok, _)| tok) {
+                let next = i + asked.len() + 2;
+                tokens.push(Token::Table { name: String::new(), asked });
+                i = next;
+                continue;
+            }
+        }
+
         return Err(ParseError::UnexpectedChar(c, i));
     }
 
@@ -289,7 +300,8 @@ pub fn translate_formula_references(
 /// `C:A` as `A:C` and `6:5` as `5:6`. Rows and columns are put in order each
 /// on its own, and a `$` goes with the coordinate it was written on:
 /// `B$6:$A5` becomes `$A5:B$6`. A formula with nothing out of order, or one
-/// that will not tokenize, comes back exactly as it was given.
+/// that will not tokenize, comes back exactly as it was given. A table asked
+/// for nothing, `tblP[]`, is written as the table's bare name.
 pub fn normalise_formula_ranges(input: &str) -> String {
     let Ok(tokens) = tokenize(input) else {
         return input.to_string();
@@ -298,6 +310,16 @@ pub fn normalise_formula_ranges(input: &str) -> String {
     let mut written: Vec<Token> = Vec::with_capacity(tokens.len());
     let mut index = 0;
     while index < tokens.len() {
+        // `tblP[]` is stored as `tblP`: measured, `=SUM(tblP[])` reads back
+        // `=SUM(tblP)`.
+        if let Token::Table { name, asked } = &tokens[index] {
+            if asked.trim().is_empty() && !name.is_empty() {
+                changed = true;
+                written.push(Token::Name { sheet: None, name: name.clone() });
+                index += 1;
+                continue;
+            }
+        }
         if let (Some(near), Some(Token::Colon), Some(far)) =
             (tokens.get(index), tokens.get(index + 1), tokens.get(index + 2))
         {
@@ -313,6 +335,65 @@ pub fn normalise_formula_ranges(input: &str) -> String {
         written.push(tokens[index].clone());
         index += 1;
     }
+    if !changed {
+        return input.to_string();
+    }
+    let mut output = String::new();
+    if input.trim_start().starts_with('=') {
+        output.push('=');
+    }
+    for token in written {
+        render_token(&mut output, token);
+    }
+    output
+}
+
+/// A formula as read from a cell inside the table `table`: a reference to
+/// ONE of that table's columns drops the table's name. Measured through
+/// VBA's `.Formula`: `tblP[Qty]` reads `[Qty]`, `tblP[@Qty]` and
+/// `tblP[[#This Row],[Qty]]` read `[@Qty]`, while `tblP[@[Qty]:[X]]`,
+/// `tblP[[Qty]:[X]]`, `tblP[[#Headers],[Qty]]`, `tblP[#Data]` and a bare
+/// `tblP` keep it. A formula that will not tokenize comes back as it was.
+pub fn drop_own_table_name(input: &str, table: &str) -> String {
+    let Ok(tokens) = tokenize(input) else {
+        return input.to_string();
+    };
+    // The one column a specifier names, as it should be written back, and
+    // whether it is this row's cell of it.
+    fn one_column(asked: &str) -> Option<(String, bool)> {
+        let column = |text: &str| -> Option<String> {
+            let text = text.trim();
+            let bare = text.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')).unwrap_or(text);
+            (!bare.is_empty() && !bare.starts_with('#') && !bare.contains(['[', ']', ':'])).then(|| {
+                if text.starts_with('[') { text.to_string() } else { bare.to_string() }
+            })
+        };
+        if let Some(rest) = asked.strip_prefix('@') {
+            return column(rest).map(|name| (name, true));
+        }
+        if let Some(rest) = asked.strip_prefix("[#This Row],") {
+            let name = column(rest)?;
+            let bare = name.trim_start_matches('[').trim_end_matches(']').to_string();
+            let plain = bare.chars().all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '.');
+            return Some((if plain { bare } else { format!("[{bare}]") }, true));
+        }
+        column(asked).map(|name| (name, false))
+    }
+    let mut changed = false;
+    let written: Vec<Token> = tokens
+        .into_iter()
+        .map(|token| match token {
+            Token::Table { name, asked } if name.eq_ignore_ascii_case(table) => match one_column(&asked) {
+                Some((column, this_row)) => {
+                    changed = true;
+                    let asked = if this_row { format!("@{column}") } else { column };
+                    Token::Table { name: String::new(), asked }
+                }
+                None => Token::Table { name, asked },
+            },
+            other => other,
+        })
+        .collect();
     if !changed {
         return input.to_string();
     }
@@ -1331,6 +1412,31 @@ mod tests {
         );
         // Nothing to rename comes back unchanged.
         assert_eq!(rename_sheet_in_formula("=A1+B2", "Data", "Z"), "=A1+B2");
+    }
+
+    /// Read from inside its own table, a formula drops the table's name only
+    /// where it names one column. Every answer here is Excel's.
+    #[test]
+    fn a_formula_in_its_table_drops_the_name_for_one_column() {
+        let read = |formula: &str| drop_own_table_name(formula, "tblP");
+        assert_eq!(read("=SUM(tblP[Qty])"), "=SUM([Qty])");
+        assert_eq!(read("=tblP[[#This Row],[Qty]]"), "=[@Qty]");
+        assert_eq!(read("=tblP[@[Qty]:[X]]"), "=tblP[@[Qty]:[X]]");
+        assert_eq!(read("=tblP[[#Headers],[Qty]]"), "=tblP[[#Headers],[Qty]]");
+        assert_eq!(read("=SUM(tblP[[Qty]:[X]])"), "=SUM(tblP[[Qty]:[X]])");
+        assert_eq!(read("=SUM(tblP[#Data])"), "=SUM(tblP[#Data])");
+        assert_eq!(read("=SUM(tblP)"), "=SUM(tblP)");
+        assert_eq!(normalise_formula_ranges("=SUM(tblP[])"), "=SUM(tblP)");
+    }
+
+    /// A structured reference names no cell, so moving it changes nothing,
+    /// the table's name included.
+    #[test]
+    fn a_structured_reference_moves_unchanged() {
+        assert_eq!(
+            translate_formula_references("=SUM(tblP[@[Unit Price]:[Qty]])+[@Qty]*B2", 1, 0).unwrap(),
+            "=SUM(tblP[@[Unit Price]:[Qty]])+[@Qty]*B3"
+        );
     }
 
     #[test]

@@ -4003,6 +4003,7 @@ impl<'a> WorkbookHost<'a> {
             end_col: range.end_column,
             style: Some(style.to_string()),
             header_rows: 1,
+            totals_rows: 0,
             banded_rows: true,
             accent,
             band,
@@ -4080,6 +4081,107 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// A formula written into one data cell of a table fills its column, as
+    /// Excel's calculated columns do. Measured: into a column whose other
+    /// data cells are all empty, or all hold one formula (moved to their
+    /// row), the formula goes down the whole column, moved row by row; a
+    /// column holding a value, or a formula written over several cells at
+    /// once, is left as written.
+    fn spread_calculated_column(&mut self, range: CellRange) -> Result<(), String> {
+        if range.start_row != range.end_row || range.start_column != range.end_column {
+            return Ok(());
+        }
+        let (row, column) = (range.start_row, range.start_column);
+        let Some(formula) = self.cell_here(range.sheet, row, column).and_then(|cell| cell.formula.clone()) else {
+            return Ok(());
+        };
+        let Some((first_data, last_data)) = self.workbook.sheets[range.sheet].tables.iter().find_map(|table| {
+            let first = table.start_row + table.header_rows;
+            let last = table.end_row - table.totals_rows;
+            ((first..=last).contains(&row) && (table.start_col..=table.end_col).contains(&column)).then_some((first, last))
+        }) else {
+            return Ok(());
+        };
+        let others: Vec<u32> = (first_data..=last_data).filter(|other| *other != row).collect();
+        let mut held: Vec<Option<String>> = Vec::with_capacity(others.len());
+        for other in &others {
+            let cell = self.cell_here(range.sheet, *other, column);
+            match cell {
+                None => held.push(None),
+                Some(cell) if matches!(cell.value, CellValue::Empty) && cell.formula.is_none() => held.push(None),
+                Some(cell) => match &cell.formula {
+                    Some(theirs) => held.push(
+                        oxicells_core::translate_formula_references(theirs, i64::from(row) - i64::from(*other), 0).ok(),
+                    ),
+                    None => return Ok(()),
+                },
+            }
+        }
+        let all_empty = held.iter().all(Option::is_none);
+        let one_formula = held.first().cloned().flatten().is_some_and(|first| held.iter().all(|one| one.as_deref() == Some(first.as_str())));
+        if !all_empty && !one_formula {
+            return Ok(());
+        }
+        for other in others {
+            let moved = oxicells_core::translate_formula_references(&formula, i64::from(other) - i64::from(row), 0)
+                .map_err(|error| format!("cannot move {formula:?} down the table's column: {error}"))?;
+            self.set_cell_formula(CellAddress { sheet: range.sheet, row: other, column }, moved)?;
+        }
+        Ok(())
+    }
+
+    /// A row added to a table takes each calculated column's formula: a
+    /// column whose every other data row holds the same formula, once moved
+    /// to the row. Measured: `ListRows.Add` under `=[@Qty]*[@Price]` in
+    /// every row gives the new row that formula, worked out.
+    fn fill_calculated_columns(&mut self, sheet: usize, index: usize, new_row: u32) -> Result<(), String> {
+        let (first_data, last_data, start_col, end_col) = {
+            let table = &self.workbook.sheets[sheet].tables[index];
+            (
+                table.start_row + table.header_rows,
+                table.end_row - table.totals_rows,
+                table.start_col,
+                table.end_col,
+            )
+        };
+        for column in start_col..=end_col {
+            let mut shared: Option<String> = None;
+            let mut calculated = false;
+            for row in (first_data..=last_data).filter(|row| *row != new_row) {
+                let moved = self
+                    .cell_here(sheet, row, column)
+                    .and_then(|cell| cell.formula.clone())
+                    .and_then(|formula| {
+                        oxicells_core::translate_formula_references(
+                            &formula,
+                            i64::from(new_row) - i64::from(row),
+                            0,
+                        )
+                        .ok()
+                    });
+                match (moved, &shared) {
+                    (None, _) => {
+                        calculated = false;
+                        break;
+                    }
+                    (Some(formula), None) => {
+                        shared = Some(formula);
+                        calculated = true;
+                    }
+                    (Some(formula), Some(held)) if formula == *held => {}
+                    _ => {
+                        calculated = false;
+                        break;
+                    }
+                }
+            }
+            if let (true, Some(formula)) = (calculated, shared) {
+                self.set_cell_formula(CellAddress { sheet, row: new_row, column }, formula)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Put the totals row on or take it off. Measured: the row appears under
     /// the data with 集計 in the first column and `=SUBTOTAL(103,[Last])` --
     /// a count -- under the last column, or `SUBTOTAL(109, ...)`, a sum, when
@@ -4117,8 +4219,12 @@ impl<'a> WorkbookHost<'a> {
                 true,
             )?;
             self.workbook.sheets[sheet].tables[index].end_row = row;
+            self.workbook.sheets[sheet].tables[index].totals_rows = 1;
             let width = columns.len();
             let last = width - 1;
+            // A column of formulas is judged by what they work out to.
+            let data = CellRange { sheet, start_row: self.workbook.sheets[sheet].tables[index].start_row, end_row: row, start_column: end_col, end_column: end_col };
+            self.settle(data);
             let last_is_numbers = (self.workbook.sheets[sheet].tables[index].start_row + 1..row)
                 .filter_map(|held| self.cell_here(sheet, held, end_col))
                 .all(|cell| matches!(cell.value, CellValue::Number(_)));
@@ -4148,6 +4254,7 @@ impl<'a> WorkbookHost<'a> {
         } else {
             let row = end_row;
             self.workbook.sheets[sheet].tables[index].end_row = row - 1;
+            self.workbook.sheets[sheet].tables[index].totals_rows = 0;
             if let Some(extra) = self.table_extra.get_mut(&id) {
                 extra.totals = false;
             }
@@ -4374,6 +4481,7 @@ impl<'a> WorkbookHost<'a> {
                     if at_row > whole.end_row {
                         self.workbook.sheets[sheet].tables[index].end_row += 1;
                     }
+                    self.fill_calculated_columns(sheet, index, at_row)?;
                     let made = if position.is_some_and(|position| position <= count) {
                         position.unwrap_or(1)
                     } else {
@@ -10400,12 +10508,13 @@ impl<'a> WorkbookHost<'a> {
             return Value::String(String::new());
         };
         if let Some(formula) = cell.formula.as_deref() {
-            // Inside a table, a formula naming that table reads without the
-            // name: measured, the totals row reads `=SUBTOTAL(103,[Note])`.
+            // Inside a table, a formula naming one of that table's columns
+            // reads without the name: measured, the totals row reads
+            // `=SUBTOTAL(103,[Note])`.
             let formula = match self.table_holding(address) {
                 Some((sheet, index)) => {
                     let name = &self.workbook.sheets[sheet].tables[index].name;
-                    formula.replace(&format!("{name}["), "[")
+                    oxicells_calc::drop_own_table_name(formula, name)
                 }
                 None => formula.to_string(),
             };
@@ -12244,6 +12353,9 @@ impl<'a> WorkbookHost<'a> {
         sideways: bool,
         inserting: bool,
     ) -> Result<(), String> {
+        // Cells moving is a write: a formula reading them is worked out
+        // again before it is next read.
+        self.wrote = true;
         let axis = if sideways {
             ShiftAxis::Columns
         } else {
@@ -17890,6 +18002,7 @@ impl Host for WorkbookHost<'_> {
             || name.eq_ignore_ascii_case("formulalocal")
         {
             self.set_range_input(range, value, "range formula assignment", FormulaStyle::A1)?;
+            self.spread_calculated_column(range)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("formulaarray") {
@@ -17906,6 +18019,7 @@ impl Host for WorkbookHost<'_> {
                 "range formula assignment",
                 FormulaStyle::R1C1,
             )?;
+            self.spread_calculated_column(range)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("verticalalignment") {
@@ -34070,6 +34184,47 @@ End Sub
                 "1.23E+08~1235~1234.568~1E-04~-123457~-1~0~1.23457E+12~1.234E-07~#####~######~1234~#######~"
                     .to_string()
             )
+        );
+    }
+
+    /// A formula written into one cell of a table's empty column fills the
+    /// column; `[@Col]` reads this row; a table's bare name is its data; the
+    /// totals row is not data. Every answer here is Excel's.
+    #[test]
+    fn table_formulas_fill_their_column_and_read_this_row() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim lo As Object, out As String
+               Range(\"A1:C1\").Value = Array(\"Item\", \"Unit Price\", \"Qty\")
+               Range(\"A2:C2\").Value = Array(\"a\", 10, 1)
+               Range(\"A3:C3\").Value = Array(\"b\", 20, 2)
+               Range(\"A4:C4\").Value = Array(\"c\", 30, 3)
+               Set lo = ActiveSheet.ListObjects.Add(xlSrcRange, Range(\"A1:C4\"), , xlYes)
+               lo.Name = \"tblP\"
+               Range(\"D1\").Value = \"Amt\"
+               Range(\"D2\").Formula = \"=[@[Unit Price]]*tblP[@Qty]\"
+               Range(\"C4\").Value = 5
+               Range(\"H1\").Formula = \"=COLUMNS(tblP)\"
+               Range(\"H2\").Formula = \"=VLOOKUP(\"\"b\"\",tblP,2,FALSE)\"
+               Range(\"H3\").Formula = \"=ISREF(tblP[#Totals])\"
+               lo.ListRows.Add
+               Range(\"A5:C5\").Value = Array(\"d\", 1, 1)
+               lo.ShowTotals = True
+               Range(\"H4\").Formula = \"=SUM(tblP[Amt])\"
+               out = Range(\"D3\").Formula & \"|\" & Range(\"D3\").Value & \"|\" & Range(\"D4\").Value & \"|\" & Range(\"D5\").Value
+               Ask = out & \"|\" & Range(\"H1\").Value & \"|\" & Range(\"H2\").Value & \"|\" & Range(\"H3\").Value & \"|\" & Range(\"H4\").Value
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("=[@[Unit Price]]*[@Qty]|40|150|1|4|20|True|201".to_string())
         );
     }
 

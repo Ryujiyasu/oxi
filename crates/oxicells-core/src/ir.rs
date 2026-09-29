@@ -325,6 +325,9 @@ pub struct Table {
     pub style: Option<String>,
     /// How many rows at the top are the header. Excel writes 1 unless told.
     pub header_rows: u32,
+    /// How many rows at the bottom are the totals row: 0 or 1.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub totals_rows: u32,
     /// Whether every other row is shaded.
     pub banded_rows: bool,
     /// The colour the style dresses the table in, as six hex digits. A built-in

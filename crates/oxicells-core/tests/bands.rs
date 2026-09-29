@@ -262,6 +262,7 @@ fn a_table_the_row_lands_inside_grows() {
         end_row: 3,
         end_col: 1,
         header_rows: 1,
+        totals_rows: 0,
         style: None,
         banded_rows: false,
         accent: None,

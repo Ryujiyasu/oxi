@@ -56,7 +56,7 @@ pub use ast::{BinaryOp, Expr, UnaryOp};
 pub use engine::{CalcError, RecalcReport, Workbook};
 pub use numfmt::format_number;
 pub use lexer::{
-    move_formula_references, normalise_formula_ranges, rename_sheet_in_formula,
+    drop_own_table_name, move_formula_references, normalise_formula_ranges, rename_sheet_in_formula,
     shift_formula_references,
     translate_formula_references,
     transpose_formula_references, CellMove, ReferenceShift, ShiftAxis,

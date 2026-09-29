@@ -2866,6 +2866,7 @@ fn parse_table_xml(
     let mut reader = Reader::from_str(xml);
     let mut range = None;
     let mut header_rows = 1;
+    let mut totals_rows = 0;
     let mut style = None;
     let mut banded_rows = false;
     let mut outline_at: Option<usize> = None;
@@ -2887,6 +2888,9 @@ fn parse_table_xml(
                         range = get_attr(e, "ref").as_deref().and_then(parse_range_ref);
                         if let Some(count) = get_attr(e, "headerRowCount") {
                             header_rows = count.parse().unwrap_or(1);
+                        }
+                        if let Some(count) = get_attr(e, "totalsRowCount") {
+                            totals_rows = count.parse().unwrap_or(0);
                         }
                         outline_at = get_attr(e, "tableBorderDxfId")
                             .and_then(|held| held.parse::<usize>().ok());
@@ -2957,6 +2961,7 @@ fn parse_table_xml(
         style,
         outline,
         header_rows,
+        totals_rows,
         banded_rows,
         accent,
         band,
