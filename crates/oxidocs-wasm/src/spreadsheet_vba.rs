@@ -12774,8 +12774,11 @@ impl<'a> WorkbookHost<'a> {
             .max()
             .unwrap_or(0);
         let end_column = range.end_column.min(last_used.max(range.start_column));
+        let (normal_face, normal_size) = self.normal_font();
+        let digit = f64::from(self.digit_width());
         for column in range.start_column..=end_column {
-            let mut widest = 0usize;
+            // The widest text the column shows, in pixels as GDI lays it out.
+            let mut widest = 0u32;
             let rows: Vec<u32> = self.workbook.sheets[range.sheet]
                 .rows
                 .iter()
@@ -12789,12 +12792,23 @@ impl<'a> WorkbookHost<'a> {
                     &from_cell_value(&cell.value),
                     cell.style.number_format.as_deref(),
                 );
-                widest = widest.max(shown.chars().count());
+                if shown.is_empty() {
+                    continue;
+                }
+                let face = cell.style.font_name.clone().unwrap_or_else(|| normal_face.clone());
+                let size = cell.style.font_size.unwrap_or(normal_size);
+                widest = widest.max(text_px(&shown, &face, size, cell.style.bold));
             }
+            // Measured over forty strings in 游ゴシック and in Calibri: a short
+            // text gets twelve pixels of room, and a long one about a tenth of
+            // itself and five -- whichever is more. The column is then that
+            // many pixels, less the five every column has, in digit widths.
             let width = if widest == 0 {
                 FLOOR
             } else {
-                widest as f64 + 1.0
+                let ext = f64::from(widest);
+                let px = (ext + 12.0).max((ext * 1.107 + 5.0).round());
+                ((px - 5.0) / digit * 100.0).round() / 100.0
             };
             let lane = CellRange {
                 sheet: range.sheet,
@@ -12806,6 +12820,25 @@ impl<'a> WorkbookHost<'a> {
             self.set_range_column_width(lane, Value::Double(width))?;
         }
         Ok(Value::Boolean(true))
+    }
+
+    /// The Normal style's face and size: the workbook's default style, else
+    /// the first sheet's, else Calibri 11.
+    fn normal_font(&self) -> (String, f32) {
+        let face = self
+            .workbook
+            .default_style
+            .font_name
+            .clone()
+            .or_else(|| self.workbook.sheets.first().and_then(|sheet| sheet.normal_font.clone()).map(|(face, _)| face))
+            .unwrap_or_else(|| "Calibri".to_string());
+        let size = self
+            .workbook
+            .default_style
+            .font_size
+            .or_else(|| self.workbook.sheets.first().and_then(|sheet| sheet.normal_font.clone()).map(|(_, size)| size))
+            .unwrap_or(11.0);
+        (face, size)
     }
 
     fn remove_duplicates(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
@@ -16568,6 +16601,18 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("autofilter") {
                 return Ok(Some(self.sheet_filter_object(sheet)));
             }
+            // The width a column never given one has: measured, 8.38 in a
+            // book whose Normal style is 游ゴシック 11.
+            if name.eq_ignore_ascii_case("standardwidth") {
+                let held = &self.workbook.sheets[sheet];
+                let digit = self.digit_width();
+                let px = if held.default_col_width > 0.0 {
+                    column_pixels(held.default_col_width, digit)
+                } else {
+                    (8.0 * digit + 8.0).trunc()
+                };
+                return Ok(Some(Value::Double(characters_of_pixels(px, digit))));
+            }
             // Measured: FilterMode is True while a filter hides anything, and
             // False again after ShowAllData, with AutoFilterMode still True.
             if name.eq_ignore_ascii_case("filtermode") {
@@ -18104,6 +18149,72 @@ fn rows_of_arrays(array: &ArrayValue) -> Result<Option<(usize, usize, Vec<Value>
         values.extend(row.values.iter().cloned());
     }
     Ok(Some((array.values.len(), width.unwrap_or(0), values)))
+}
+
+/// GDI advance widths of printable ASCII in 游ゴシック, by pixel size.
+static YU_GOTHIC_GDI: std::sync::OnceLock<BTreeMap<String, BTreeMap<u32, Vec<u32>>>> =
+    std::sync::OnceLock::new();
+
+fn yu_gothic_gdi() -> &'static BTreeMap<String, BTreeMap<u32, Vec<u32>>> {
+    YU_GOTHIC_GDI.get_or_init(|| {
+        let raw: BTreeMap<String, serde_json::Value> =
+            serde_json::from_str(include_str!("data/yu_gothic_gdi_widths.json")).unwrap_or_default();
+        raw.into_iter()
+            .filter(|(face, _)| !face.starts_with('_'))
+            .map(|(face, sizes)| {
+                let sizes: BTreeMap<u32, Vec<u32>> = serde_json::from_value::<BTreeMap<String, Vec<u32>>>(sizes)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|(ppem, widths)| Some((ppem.parse().ok()?, widths)))
+                    .collect();
+                (face, sizes)
+            })
+            .collect()
+    })
+}
+
+/// How wide a text is in pixels, the way GDI lays a cell's text out: each
+/// character's advance rounded to the pixel at the font's pixel size.
+/// 游ゴシック is read from a table measured with GDI; faces the layout
+/// registry already holds GDI widths for use those; anything else rounds its
+/// design widths. A full-width character is the pixel size, and a half-width
+/// katakana half of it, rounded up -- in every face, since Excel draws them
+/// in the East Asian face whatever the cell's Latin one is.
+fn text_px(text: &str, face: &str, size: f32, bold: bool) -> u32 {
+    let ppem = (size * 96.0 / 72.0).round() as u32;
+    let yu = matches!(face, "游ゴシック" | "Yu Gothic" | "游ゴシック Medium" | "Yu Gothic Medium");
+    let table = yu
+        .then(|| yu_gothic_gdi().get(if bold { "Yu Gothic Bold" } else { "Yu Gothic" }))
+        .flatten()
+        .and_then(|sizes| sizes.get(&ppem));
+    // The layout registry is large, and `load` hands back a copy, so one copy
+    // is kept here and only made when the table cannot answer.
+    static REGISTRY: std::sync::OnceLock<oxidocs_core::font::FontMetricsRegistry> =
+        std::sync::OnceLock::new();
+    let registry = || REGISTRY.get_or_init(oxidocs_core::font::FontMetricsRegistry::load);
+    let gdi = if table.is_none() { registry().get_gdi_char_widths(face, size) } else { None };
+    text.chars()
+        .map(|c| {
+            let code = c as u32;
+            if (0xFF61..=0xFF9F).contains(&code) {
+                return ppem.div_ceil(2);
+            }
+            if code > 0x7F && !(0xA0..0x2000).contains(&code) {
+                return ppem;
+            }
+            if let Some(widths) = table {
+                if (0x20..=0x7E).contains(&code) {
+                    return widths[(code - 0x20) as usize];
+                }
+            }
+            if let Some(widths) = gdi {
+                if let Some(width) = widths.get(&code) {
+                    return *width;
+                }
+            }
+            (registry().get_with_bold(face, bold).char_width_pt(c, size) * 96.0 / 72.0).round() as u32
+        })
+        .sum()
 }
 
 fn cells_index(value: &Value) -> Result<i64, String> {
@@ -33425,6 +33536,36 @@ End Sub
         assert_eq!(answer, Value::String("||1|y|3|False|Double".to_string()));
     }
 
+    /// AutoFit sizes a column from its text as GDI lays it out. Every width
+    /// here is Excel's, in a book whose Normal style is 游ゴシック 11.
+    #[test]
+    fn autofit_measures_text_the_way_excel_does() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("游ゴシック".to_string());
+        workbook.default_style.font_size = Some(11.0);
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim s As Variant, i As Long, out As String
+               s = Array(\"a\", \"WWWWWWWW\", \"iiiiiiii\", \"東京都千代田区\", \"Hello World\", \"ｱｲｳｴｵ\", \"ABCDEFGHIJKLMNOPQRSTUVWXYZ\")
+               For i = 0 To UBound(s)
+                 Cells(1, i + 1).Value = s(i)
+               Next i
+               Range(\"A1:G1\").EntireColumn.AutoFit
+               For i = 0 To UBound(s)
+                 out = out & Columns(i + 1).ColumnWidth & \",\"
+               Next i
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(answer, Value::String("1.88,15.5,4.88,14.5,10.88,5.88,35.88,".to_string()));
+    }
+
     /// The Oxi leg of the Excel differential: `OXI_VBA_CASE` names a module
     /// whose `OxiGenRun` sets the workbook up, runs the case and reports;
     /// the answer goes to `OXI_VBA_OUT`. Excel runs the same module.
@@ -33440,6 +33581,9 @@ End Sub
             Err(error) => format!("!!parse {error}"),
             Ok(module) => {
                 let mut workbook = workbook();
+                // The Excel it is compared with opens a new book in 游ゴシック 11.
+                workbook.default_style.font_name = Some("游ゴシック".to_string());
+                workbook.default_style.font_size = Some(11.0);
                 let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
                 match execute_with_host(&module, "OxiGenRun", vec![], &mut host) {
                     // A case that stopped: run it again bare, for the engine's own account.
