@@ -562,7 +562,7 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
 /// and those the workbook works out itself. Kept in step with the match
 /// arms by `every_function_the_library_answers_is_known`.
 const KNOWN_FUNCTIONS: &[&str] = &[
-    "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ASC", "ASIN",
+    "ABS", "ACOS", "ACOSH", "ADDRESS", "AGGREGATE", "AND", "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC", "ASIN",
     "ASINH", "ATAN", "ATAN2", "ATANH", "AVEDEV", "AVERAGE", "AVERAGEA", "AVERAGEIF",
     "AVERAGEIFS", "BASE", "BIN2DEC", "BIN2HEX", "BIN2OCT", "BINOM.DIST", "BINOMDIST", "BITAND",
     "BITOR", "BITXOR", "CEILING", "CEILING.MATH", "CELL", "CHAR", "CHOOSE", "CHOOSECOLS",
@@ -596,7 +596,7 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.TEST", "TAKE", "TAN", "TANH", "TEXT",
     "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TOCOL", "TODAY",
     "TOROW", "TRIM", "TRIMMEAN", "TRUE", "TRUNC", "TTEST", "TYPE", "UNICHAR", "UNICODE",
-    "UNIQUE", "UPPER", "VALUE", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VLOOKUP", "VSTACK",
+    "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S", "VARA", "VARP", "VLOOKUP", "VSTACK",
     "WEEKDAY", "WEEKNUM", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XLOOKUP",
     "XMATCH", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YM",
 ];
@@ -1288,31 +1288,93 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
         // The text on one side of the nth occurrence of a delimiter. A
         // negative instance counts occurrences from the end; an instance past
-        // the last is #N/A. Match is case-sensitive, as Excel's default.
+        // the last is #N/A, or `if_not_found` when given. The delimiter may be
+        // a list of them; match_mode 1 ignores case; match_end 1 counts the
+        // end of the text (its start, counting back) as one more delimiter.
+        // A blank argument is its default: measured,
+        // `TEXTAFTER("x","-",,,,"none")` is "none" and
+        // `TEXTBEFORE("a-b-c","B",1,1)` "a-".
         "TEXTBEFORE" | "TEXTAFTER" => {
-            if args.len() < 2 {
+            if args.len() < 2 || args.len() > 6 {
                 return Err(ExcelError::Value);
             }
+            let given = |at: usize| args.get(at).filter(|one| !matches!(one.scalar(), Value::Blank));
             let hay = text(&args[0])?;
-            let needle = text(&args[1])?;
-            let instance = match args.get(2) {
-                Some(a) => num(a)? as i64,
+            let mut needles = Vec::new();
+            for one in args[1].flatten() {
+                if let Value::Error(why) = one {
+                    return Err(why);
+                }
+                needles.push(one.to_text()?);
+            }
+            let instance = match given(2) {
+                Some(a) => num(a)?.trunc() as i64,
                 None => 1,
             };
-            if needle.is_empty() || instance == 0 {
+            let ignore_case = match given(3) {
+                Some(a) => num(a)? != 0.0,
+                None => false,
+            };
+            let match_end = match given(4) {
+                Some(a) => num(a)? != 0.0,
+                None => false,
+            };
+            // Measured: an instance of 0, or further than the text is long
+            // (`TEXTBEFORE("a-b","-",5)`), is #VALUE!.
+            if instance == 0 || instance.unsigned_abs() as usize > hay.chars().count() {
                 return Err(ExcelError::Value);
             }
-            let positions: Vec<usize> = hay.match_indices(&needle).map(|(at, _)| at).collect();
-            let count = positions.len() as i64;
+            let fold = |t: &str| if ignore_case { t.to_lowercase() } else { t.to_string() };
+            let folded = fold(&hay);
+            // Case folding that changes a length would put the cuts in the
+            // wrong place; such text is matched as written.
+            let (search, needles): (String, Vec<String>) = if folded.len() == hay.len() {
+                (folded, needles.iter().map(|one| fold(one)).collect())
+            } else {
+                (hay.clone(), needles)
+            };
+            // Each occurrence as (start, length), left to right, never
+            // overlapping; the first delimiter listed wins at a place.
+            let mut found: Vec<(usize, usize)> = Vec::new();
+            let mut at = 0;
+            while at <= search.len() {
+                if !search.is_char_boundary(at) {
+                    at += 1;
+                    continue;
+                }
+                match needles.iter().find(|one| !one.is_empty() && search[at..].starts_with(one.as_str())) {
+                    Some(one) => {
+                        found.push((at, one.len()));
+                        at += one.len();
+                    }
+                    None => at += 1,
+                }
+            }
+            // An empty delimiter meets the text at its very start: measured,
+            // TEXTBEFORE of "abc" by "" is "" and TEXTAFTER "abc".
+            if needles.iter().all(String::is_empty) {
+                found = vec![(0, 0)];
+            }
+            if match_end {
+                if instance > 0 {
+                    found.push((hay.len(), 0));
+                } else {
+                    found.insert(0, (0, 0));
+                }
+            }
+            let count = found.len() as i64;
             let index = if instance > 0 { instance - 1 } else { count + instance };
             if index < 0 || index >= count {
-                return Err(ExcelError::NA);
+                return match given(5) {
+                    Some(fallback) => Ok(fallback.scalar()),
+                    None => Err(ExcelError::NA),
+                };
             }
-            let at = positions[index as usize];
+            let (cut, length) = found[index as usize];
             Ok(Value::text(if name == "TEXTBEFORE" {
-                &hay[..at]
+                &hay[..cut]
             } else {
-                &hay[at + needle.len()..]
+                &hay[cut + length..]
             }))
         }
         // A number written with its own separators: group separators are
@@ -1367,6 +1429,40 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 out.push_str(&v.to_text()?);
             }
             Ok(Value::Text(out))
+        }
+        // A value, or every value of an array, as text. Concise (0) writes
+        // text as it is; strict (1) quotes it. An error is its own word.
+        // Measured: `VALUETOTEXT(12.5)` is 12.5, `VALUETOTEXT("a-b-c",1)`
+        // "a-b-c" in quotes, `ARRAYTOTEXT(A1:A4)` "a-b-c, x, , 12.5" and
+        // `ARRAYTOTEXT(A1:A2,1)` {"a-b-c";"x"}.
+        "VALUETOTEXT" | "ARRAYTOTEXT" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(ExcelError::Value);
+            }
+            let strict = match args.get(1).map(Arg::scalar) {
+                None | Some(Value::Blank) => false,
+                Some(one) => match one.to_number()? {
+                    0.0 => false,
+                    1.0 => true,
+                    _ => return Err(ExcelError::Value),
+                },
+            };
+            let written = |one: &Value| match one {
+                Value::Text(t) if strict => format!("\"{}\"", t.replace('"', "\"\"")),
+                Value::Error(why) => why.as_str().to_string(),
+                other => other.to_text().unwrap_or_default(),
+            };
+            if name == "VALUETOTEXT" {
+                return Ok(Value::Text(written(&args[0].scalar())));
+            }
+            let block = args[0].as_range();
+            if !strict {
+                return Ok(Value::Text(block.cells.iter().map(written).collect::<Vec<_>>().join(", ")));
+            }
+            let rows: Vec<String> = (0..block.height)
+                .map(|row| (0..block.width).map(|col| written(&block.at(col, row))).collect::<Vec<_>>().join(","))
+                .collect();
+            Ok(Value::Text(format!("{{{}}}", rows.join(";"))))
         }
         "REPT" => {
             expect(args, 2)?;
