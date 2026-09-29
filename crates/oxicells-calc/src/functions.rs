@@ -393,6 +393,27 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
             Err(why) => Arg::Value(Value::Error(why)),
         };
     }
+    // MODE.MULT: every value turning up most often (twice at least), in the
+    // order each first turns up, down a column. Measured: over 3,1,1,3,2,5
+    // it spills 3 then 1.
+    if name == "MODE.MULT" {
+        let held = match numeric_operands(args) {
+            Ok(held) => held,
+            Err(why) => return Arg::Value(Value::Error(why)),
+        };
+        let times = |one: &f64| held.iter().filter(|other| *other == one).count();
+        let most = held.iter().map(times).max().unwrap_or(0);
+        if most < 2 {
+            return Arg::Value(Value::Error(ExcelError::NA));
+        }
+        let mut cells: Vec<Value> = Vec::new();
+        for one in &held {
+            if times(one) == most && !cells.contains(&Value::Number(*one)) {
+                cells.push(Value::Number(*one));
+            }
+        }
+        return Arg::Range(RangeData { width: 1, height: cells.len(), cells });
+    }
     // FREQUENCY counts into the bins and one more, down a column.
     if name == "FREQUENCY" {
         return match frequency(args) {
@@ -537,7 +558,7 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER", "ISODD", "ISOWEEKNUM", "ISREF", "ISTEXT",
     "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB", "LEN", "LENB", "LET", "LN", "LOG",
     "LOG10", "LOOKUP", "LOWER", "M", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MEDIAN", "MID",
-    "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MIRR", "MMULT", "MOD", "MODE", "MODE.SNGL",
+    "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MIRR", "MMULT", "MOD", "MODE", "MODE.MULT", "MODE.SNGL",
     "MONTH", "MROUND", "MULTINOMIAL", "N", "NA", "NETWORKDAYS", "NETWORKDAYS.INTL",
     "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST",
     "NORMSINV", "NOT", "NOW", "NPER", "NPV", "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX",

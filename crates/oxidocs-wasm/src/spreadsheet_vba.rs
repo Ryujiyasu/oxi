@@ -2625,10 +2625,12 @@ impl<'a> WorkbookHost<'a> {
         // A function that answers with a block -- UNIQUE, SORT, FREQUENCY --
         // hands it back as a two-dimensional array based at one: measured,
         // `WorksheetFunction.Unique(B1:B6)(2, 1)` is the second value.
-        if let oxicells_calc::functions::Arg::Range(block) =
-            oxicells_calc::functions::call_arg(&asked_for, &asked)
-        {
-            if block.cells.len() > 1 {
+        let answer = oxicells_calc::functions::call_arg(&asked_for, &asked);
+        if let oxicells_calc::functions::Arg::Range(block) = &answer {
+            // One cell is still a list of one: measured, `Unique` of three
+            // 7s, `Sequence(1)` and `MMult(Array(2), Array(3))` each answer
+            // a Variant() running 1 to 1.
+            if !block.cells.is_empty() {
                 let values = block
                     .cells
                     .iter()
@@ -2659,7 +2661,11 @@ impl<'a> WorkbookHost<'a> {
                 }));
             }
         }
-        match oxicells_calc::functions::call(&asked_for, &asked) {
+        let answer = match answer {
+            oxicells_calc::functions::Arg::Value(value) => value,
+            _ => oxicells_calc::functions::call(&asked_for, &asked),
+        };
+        match answer {
             oxicells_calc::Value::Error(oxicells_calc::ExcelError::Name) => Err(format!(
                 "WorksheetFunction.{name} is not supported in the browser"
             )),
@@ -24671,6 +24677,10 @@ fn vba_has_its_own(name: &str) -> bool {
         // and each of these is said another way in VBA: `&` for CONCATENATE,
         // `=` for EXACT, `IsEmpty` for ISBLANK, `Range.Rows.Count` for ROWS
         "COLUMNS", "CONCATENATE", "DATEDIF", "EXACT", "HYPERLINK", "ISBLANK", "ISREF", "ROWS",
+        // and the A forms that count text and logicals are not members at
+        // all: measured, `Application.AverageA(1, 2)` and `MaxA`, `MinA`,
+        // `StDevA`, `StDevPA`, `VarA`, `VarPA` are each 438.
+        "AVERAGEA", "MAXA", "MINA", "STDEVA", "STDEVPA", "VARA", "VARPA",
     ];
     ABSENT
         .iter()
