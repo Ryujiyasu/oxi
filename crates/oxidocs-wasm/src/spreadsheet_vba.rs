@@ -11145,17 +11145,26 @@ impl<'a> WorkbookHost<'a> {
             if table.rows == 1 && table.columns == 1 {
                 return Ok(Some(table.get(0, 0)));
             }
-            // Numbers come back Doubles, as everything through the sheet does:
-            // measured, `Transpose(Array(1, 2, 3))(2, 1)` is a Double.
-            let as_sheet_number = |value: Value| match value {
-                Value::Byte(_) | Value::Int16(_) | Value::Integer(_) | Value::LongLong(_) | Value::Single(_)
-                | Value::Currency(_) | Value::Decimal(_) => any_number(&value).map(Value::Double).unwrap_or(value),
-                other => other,
-            };
+            // What goes through comes back as the sheet hands values over:
+            // numbers as Doubles, and a Date or a Currency as the TEXT it
+            // writes -- measured, `Transpose(Array(DateSerial(2024,1,5),
+            // CCur(2), True, CDec(3), CSng(1.5), CLng(4)))` answers String,
+            // String, Boolean, Double, Double, Double -- and a Null is a type
+            // mismatch (error 13).
             let mut values = Vec::with_capacity(table.rows * table.columns);
             for column in 0..table.columns {
                 for row in 0..table.rows {
-                    values.push(as_sheet_number(table.get(row, column)));
+                    let value = table.get(row, column);
+                    values.push(match value {
+                        Value::Null => return Err(host_error(13, "type mismatch")),
+                        Value::Date(serial) => Value::String(oxivba_core::vba_date_text(serial)),
+                        Value::Currency(held) => Value::String(oxivba_core::vba_number_text(held as f64 / 10_000.0)),
+                        Value::Decimal(held) => held.to_string().parse::<f64>().map(Value::Double).unwrap_or(Value::Decimal(held)),
+                        Value::Byte(_) | Value::Int16(_) | Value::Integer(_) | Value::LongLong(_) | Value::Single(_) => {
+                            any_number(&value).map(Value::Double).unwrap_or(value)
+                        }
+                        other => other,
+                    });
                 }
             }
             // Always based at one, whatever the array that went in was based
