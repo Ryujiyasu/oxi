@@ -2345,9 +2345,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 Some(value) => Ok(value),
                 // The fourth argument is what to say when there is nothing,
                 // and without one it is #N/A as any lookup would be.
+                // An argument left empty is no answer: measured,
+                // XLOOKUP(99, D1:D6, E1:E6, , 1) is #N/A.
                 None => match args.get(3) {
-                    Some(one) => Ok(one.scalar()),
-                    None => Err(ExcelError::NA),
+                    Some(one) if !matches!(one.scalar(), Value::Blank) => Ok(one.scalar()),
+                    _ => Err(ExcelError::NA),
                 },
             }
         }
@@ -3473,10 +3475,26 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             // an ascending vector, and answer the matching cell of the
             // result vector -- or of the same vector, with none given.
             let needle = args.first().ok_or(ExcelError::Value)?.scalar();
-            let vector = args.get(1).ok_or(ExcelError::Value)?.flatten();
-            let result = match args.get(2) {
-                Some(a) => a.flatten(),
-                None => vector.clone(),
+            // The array form, a block and no result vector: looked up down
+            // its first column and answered from its last when it is at least
+            // as tall as it is wide, else along its first row and answered
+            // from its last. Measured: LOOKUP(99, D1:E6) is E6.
+            let block = args.get(1).ok_or(ExcelError::Value)?.as_range();
+            let (vector, result) = match args.get(2) {
+                Some(a) => (args[1].flatten(), a.flatten()),
+                None if block.width > 1 && block.height > 1 => {
+                    let (width, height) = (block.width, block.height);
+                    let cell = |row: usize, col: usize| block.cells[row * width + col].clone();
+                    if height >= width {
+                        ((0..height).map(|row| cell(row, 0)).collect::<Vec<_>>(), (0..height).map(|row| cell(row, width - 1)).collect())
+                    } else {
+                        ((0..width).map(|col| cell(0, col)).collect::<Vec<_>>(), (0..width).map(|col| cell(height - 1, col)).collect())
+                    }
+                }
+                None => {
+                    let vector = args[1].flatten();
+                    (vector.clone(), vector)
+                }
             };
             let found = sorted_position(vector.len(), false, |i| vector[i].clone(), &needle);
             match found {
@@ -4685,6 +4703,18 @@ fn sorted_position(count: usize, descending: bool, value_at: impl Fn(usize) -> V
     if count == 0 {
         return None;
     }
+    // A cell of another kind than the needle -- text beside a number, a
+    // Boolean -- is passed over: the search looks on from it for one of the
+    // needle's kind, forward first and then back. Measured: MATCH(9, {1, 3,
+    // 5, "apple", "Banana", "b*n", TRUE, 7}, 1) is 8.
+    let kind = |value: &Value| match value {
+        Value::Number(_) => 0,
+        Value::Text(_) => 1,
+        Value::Logical(_) => 2,
+        _ => 3,
+    };
+    let wanted = kind(needle);
+    let same_kind = |i: usize| kind(&value_at(i)) == wanted;
     let order = |i: usize| compare(&value_at(i), needle).ok();
     if descending {
         match order(0) {
@@ -4696,7 +4726,15 @@ fn sorted_position(count: usize, descending: bool, value_at: impl Fn(usize) -> V
     let (mut low, mut high) = (1usize, count);
     let mut found = None;
     while low <= high {
-        let middle = (low + high) / 2;
+        let mut middle = (low + high) / 2;
+        if !same_kind(middle - 1) {
+            let ahead = (middle..=high).find(|at| same_kind(at - 1));
+            let behind = (low..middle).rev().find(|at| same_kind(at - 1));
+            match ahead.or(behind) {
+                Some(at) => middle = at,
+                None => break,
+            }
+        }
         match order(middle - 1) {
             Some(Ordering::Equal) => {
                 found = Some(middle);
