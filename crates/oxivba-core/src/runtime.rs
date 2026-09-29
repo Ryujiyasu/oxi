@@ -6278,6 +6278,7 @@ fn call_builtin(
                 Value::Boolean(false) => Ok(Value::Byte(0)),
                 _ => Ok(Value::Byte(convert_integer(value, 0, 255, line)? as u8)),
             },
+            "ccur" | "cdec" if matches!(value, Value::Null) => Err(invalid_null(line)),
             // Text is rounded as the decimal it spells: measured,
             // `CCur("0.00005")` is 0 where `CCur(0.00005)` is 0.0001.
             "ccur" if matches!(value, Value::String(_)) && matches!(value, Value::String(text) if crate::decimal::Dec::parse(text).is_some()) => {
@@ -6336,6 +6337,11 @@ fn call_builtin(
             // `LongPtr` is `LongLong` on a 64-bit Office, which is what a
             // browser stands in for: asked of Excel, `TypeName(CLngPtr(1))` is
             // LongLong and `VarType` is 20.
+            // Null into any of these is error 94: measured for CLngLng,
+            // CSng, CCur, CDec and Sgn alike.
+            "clnglng" | "clngptr" | "csng" | "ccur" | "cdec" | "sgn" if matches!(value, Value::Null) => {
+                Err(invalid_null(line))
+            }
             "clnglng" | "clngptr" => {
                 let value = number(value).map_err(mismatch)?.round_ties_even();
                 if !value.is_finite()
@@ -6440,7 +6446,6 @@ fn call_builtin(
                 }
             },
             "sgn" => match value {
-                Value::Null => Ok(Value::Null),
                 _ => {
                     let value = number(value).map_err(mismatch)?;
                     Ok(Value::Int16(if value > 0.0 {
@@ -8731,7 +8736,7 @@ fn value_date_serial(value: &Value, this_year: i64) -> Result<f64, String> {
     let serial = match value {
         Value::Date(value) | Value::Double(value) => *value,
         Value::Int16(_) | Value::Byte(_) | Value::Integer(_) | Value::Single(_)
-        | Value::Currency(_) => number(value)?,
+        | Value::Currency(_) | Value::Decimal(_) => number(value)?,
         // A Boolean is a date too, being a number underneath. Asked of Excel,
         // `Month(True)` is 12 and `Year(True)` is 1899 -- True is -1, which is
         // the 29th of December 1899 -- while `Month(False)` is also 12,
@@ -10566,7 +10571,7 @@ fn number(value: &Value) -> Result<f64, String> {
 /// the first thing found when they were.
 fn reads_as_a_number(value: &Value) -> bool {
     match value {
-        Value::Empty | Value::Boolean(_) => true,
+        Value::Empty | Value::Boolean(_) | Value::Decimal(_) => true,
         Value::Date(_) => false,
         Value::String(text) => numeric_text(text).is_some(),
         value => any_number(value).is_some(),
@@ -10675,10 +10680,11 @@ fn truthy(value: &Value) -> Result<bool, String> {
         Value::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
         // Measured: CBool("&H0") is False.
         Value::String(value) if radix_text(value.trim()).is_some() => Ok(radix_text(value.trim()) != Some(0)),
-        Value::String(value) => value
-            .parse::<f64>()
+        // Read the way the numeric conversions read text: measured,
+        // CBool(" 12.5 "), CBool("(5)") and CBool("$1,234.5") are True.
+        Value::String(value) => numeric_text(value)
             .map(|number| number != 0.0)
-            .map_err(|_| "type mismatch converting String to Boolean".to_string()),
+            .ok_or_else(|| "type mismatch converting String to Boolean".to_string()),
         Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
         Value::Record(_) => Err("type mismatch converting a record to Boolean".to_string()),
         // An Error is a number to the conversions, and CBool is one of them:
@@ -10708,7 +10714,8 @@ fn to_decimal(value: &Value) -> Option<Result<crate::decimal::Dec, crate::decima
         // Measured: CDec("&HFFFF") is 65535.
         Value::String(text) => match Dec::parse(text) {
             Some(held) => Ok(held),
-            None => Dec::from_f64(numeric_text(text).filter(|_| text.trim().starts_with('&'))?),
+            // Measured: CDec("(5)") -5 and CDec("$1,234.5") 1234.5 too.
+            None => Dec::from_f64(numeric_text(text)?),
         },
         _ => return None,
     })
@@ -11029,13 +11036,25 @@ fn binary(
                     if matches!(lhs, Value::Date(_)) { date.partial_cmp(&read) } else { read.partial_cmp(date) }
                 }
                 (Value::Boolean(state), Value::String(text)) | (Value::String(text), Value::Boolean(state)) => {
+                    // The text is made a Boolean first: measured, `True = "7"`
+                    // is True and `True < "7"` False.
                     let read = match text.trim().to_ascii_lowercase().as_str() {
                         "true" => -1.0,
                         "false" => 0.0,
-                        _ => numeric_text(text).ok_or_else(|| mismatch("type mismatch converting String to Boolean".to_string()))?,
+                        _ => match numeric_text(text).ok_or_else(|| mismatch("type mismatch converting String to Boolean".to_string()))? {
+                            0.0 => 0.0,
+                            _ => -1.0,
+                        },
                     };
                     let own = if *state { -1.0 } else { 0.0 };
                     if matches!(lhs, Value::Boolean(_)) { own.partial_cmp(&read) } else { read.partial_cmp(&own) }
+                }
+                // A Boolean beside a Byte is made a Byte, True being 255:
+                // measured, `CByte(7) < True` is True.
+                (Value::Byte(byte), Value::Boolean(state)) | (Value::Boolean(state), Value::Byte(byte)) => {
+                    let own = if *state { 255.0 } else { 0.0 };
+                    let byte = *byte as f64;
+                    if matches!(lhs, Value::Byte(_)) { byte.partial_cmp(&own) } else { own.partial_cmp(&byte) }
                 }
                 _ => {
                     let (a, b) = numbers()?;
@@ -11334,7 +11353,9 @@ fn variant_comparison(
     }
     // A Date counts as the number here: measured, `Date > "zzz"` (a
     // Variant Date against typed text) compares the written date as text.
-    let numeric = |value: &Value| any_number(value).is_some() || matches!(value, Value::Date(_) | Value::Boolean(_));
+    let numeric = |value: &Value| {
+        any_number(value).is_some() || matches!(value, Value::Date(_) | Value::Boolean(_) | Value::Decimal(_))
+    };
     let (number_left, number_typed, string, string_typed) = match (lhs, rhs) {
         (Value::String(text), other) if numeric(other) => (false, typed.1, text, typed.0),
         (other, Value::String(text)) if numeric(other) => (true, typed.0, text, typed.1),
