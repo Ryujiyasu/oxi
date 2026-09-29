@@ -8935,8 +8935,15 @@ impl<'a> WorkbookHost<'a> {
             Some(Value::Missing) | None => None,
             Some(value) => Some(value),
         };
-        if args.len() > 3 {
-            return Err("Worksheets.Add takes Before, After and Count".to_string());
+        if args.len() > 4 {
+            return Err("Worksheets.Add takes Before, After, Count and Type".to_string());
+        }
+        // Type may name a worksheet, and nothing else is made here:
+        // measured, `Worksheets.Add(Type:=xlWorksheet)` adds a sheet.
+        if let Some(kind) = given(3) {
+            if any_whole_number(kind) != Some(-4167) {
+                return Err(host_error(1004, "Worksheets.Add makes worksheets only"));
+            }
         }
         // Count adds that many, each in front of the one before: measured,
         // `Worksheets.Add Count:=2` puts Sheet11 before Sheet10 and leaves
@@ -8949,10 +8956,14 @@ impl<'a> WorkbookHost<'a> {
             },
         };
         if count > 1 {
-            let placing: Vec<Value> = args.iter().take(2).cloned().collect();
+            // The first where it was asked for, and each after it in front of
+            // the last one added: measured, `Add Before:=Worksheets(1),
+            // Count:=2` leaves Sheet4, Sheet3 at the front.
+            let mut placing: Vec<Value> = args.iter().take(2).cloned().collect();
             let mut added = Value::Empty;
             for _ in 0..count {
                 added = self.add_worksheet(&placing)?;
+                placing = vec![added.clone()];
             }
             return Ok(added);
         }
@@ -17633,7 +17644,7 @@ impl Host for WorkbookHost<'_> {
                     ][..],
                 )
             } else {
-                Some(&["Before", "After", "Count"][..])
+                Some(&["Before", "After", "Count", "Type"][..])
             }
         } else if name.eq_ignore_ascii_case("autofilter") {
             Some(&["Field", "Criteria1", "Operator", "Criteria2", "VisibleDropDown"][..])
@@ -19431,6 +19442,18 @@ impl Host for WorkbookHost<'_> {
                     );
                 }
                 self.workbook.sheets[sheet].visibility = visibility;
+                // The active sheet hidden, the next one showing takes over (or
+                // the one before, at the end): measured, hiding the active
+                // Main leaves the sheet after it active.
+                if !self.workbook.sheets[sheet].visibility.is_shown() && sheet == self.active_sheet {
+                    let count = self.workbook.sheets.len();
+                    let next = (sheet + 1..count)
+                        .chain((0..sheet).rev())
+                        .find(|index| self.workbook.sheets[*index].visibility.is_shown());
+                    if let Some(next) = next {
+                        self.active_sheet = next;
+                    }
+                }
                 return Ok(true);
             }
         }
@@ -23290,6 +23313,8 @@ fn host_constant(name: &str) -> Option<Value> {
         "xldivide" => 5,
         "xlsheetvisible" => -1,
         "xlsheethidden" => 0,
+        "xlworksheet" => -4167,
+        "xlchart" => -4109,
         "xlsheetveryhidden" => 2,
         "xlfiltervalues" => 7,
         "xlrows" => 1,
