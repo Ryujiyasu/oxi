@@ -598,6 +598,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // only ever looks at the one it is told to. Excel: `COUNT(#REF!)` is
         // 0, `COUNTA(#REF!)` is 1, `CHOOSE(1,30,#REF!)` is 30.
             | "COUNT" | "COUNTA" | "CHOOSE"
+        // COUNTBLANK looks only for the empty: measured, an #NAME? among
+        // the cells is simply not one.
+            | "COUNTBLANK"
     );
     // And some mind only the errors handed to them DIRECTLY.
     //
@@ -5504,6 +5507,11 @@ impl Criteria {
                 .then(|| Value::Text(rest.to_string()).to_number().ok())
                 .flatten()
         };
+        // TRUE and FALSE name the logicals: measured, `COUNTIF(..,"TRUE")`
+        // counts a cell holding TRUE.
+        if rest.eq_ignore_ascii_case("true") || rest.eq_ignore_ascii_case("false") {
+            return Criteria { op, operand: Value::Logical(rest.eq_ignore_ascii_case("true")) };
+        }
         let operand = match rest.parse::<f64>().ok().or_else(as_typed) {
             Some(n) => Value::Number(n),
             // `"<>#N/A"` names the error, not the four characters of it.
@@ -5550,9 +5558,10 @@ impl Criteria {
                 };
             }
         }
-        // Otherwise a blank satisfies no comparison.
+        // Otherwise a blank satisfies no comparison but not-equal: measured,
+        // COUNTIF(A2,"<>apple") over an empty A2 is 1.
         if v.is_blank() {
-            return false;
+            return matches!(self.op, BinaryPredicate::Ne);
         }
         // `"a*"` asked of COUNTIF means "starting with a", not the two
         // characters. Only equality and inequality read wildcards; `>a*` is

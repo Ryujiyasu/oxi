@@ -9304,6 +9304,7 @@ impl<'a> WorkbookHost<'a> {
             Some(at) => self.workbook.defined_names[at] = (name.clone(), refers_to),
             None => self.workbook.defined_names.push((name.clone(), refers_to)),
         }
+        self.wrote = true;
         Ok(self.name_object(&name))
     }
 
@@ -9454,6 +9455,11 @@ impl<'a> WorkbookHost<'a> {
         let [Value::String(expression)] = args else {
             return Err("Evaluate expects one String expression".to_string());
         };
+        // What the cells hold has to be worked out first: measured, with
+        // A7 `=1/0` just written, `Evaluate("COUNTA(A7:A8)")` counts the error.
+        if self.wrote && self.calculation == -4105 {
+            self.recalculate();
+        }
         let expression = expression
             .trim()
             .strip_prefix('=')
@@ -18373,6 +18379,8 @@ impl Host for WorkbookHost<'_> {
                     Some(rest) => rest.trim().to_string(),
                     None => format!("\"{}\"", written.replace('"', "\"\"")),
                 };
+                // A formula that reads the name answers again at once.
+                self.wrote = true;
                 return Ok(true);
             }
             return Ok(false);

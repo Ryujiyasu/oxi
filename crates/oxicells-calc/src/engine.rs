@@ -2881,6 +2881,32 @@ mod tests {
         assert_eq!(at("D10"), Value::Error(ExcelError::NA));
     }
 
+    /// COUNTIF over blanks, errors and logicals, every answer Excel's:
+    /// `"<>x"` counts a blank and an error, `""` counts neither an error nor
+    /// text of spaces, and `"TRUE"` finds the logical TRUE.
+    #[test]
+    fn countif_reads_blanks_errors_and_logicals_as_excel_does() {
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        wb.set_value("Sheet1", "A1", Value::Text("apple".into())).unwrap();
+        wb.set_formula("Sheet1", "A8", "=x").unwrap();
+        wb.set_value("Sheet1", "A9", Value::Text("  ".into())).unwrap();
+        wb.set_value("Sheet1", "A10", Value::Logical(true)).unwrap();
+        wb.set_formula("Sheet1", "B1", "=COUNTIF(A8,\"\")").unwrap();
+        wb.set_formula("Sheet1", "B2", "=COUNTIF(A2,\"<>apple\")").unwrap();
+        wb.set_formula("Sheet1", "B3", "=COUNTIF(A8,\"<>apple\")").unwrap();
+        wb.set_formula("Sheet1", "B4", "=COUNTIF(A1:A10,\"TRUE\")").unwrap();
+        wb.set_formula("Sheet1", "B5", "=COUNTIF(A1:A10,\"\")").unwrap();
+        wb.set_formula("Sheet1", "B6", "=COUNTIF(A1:A10,\"<>apple\")").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "B1"), Value::Number(0.0));
+        assert_eq!(wb.value("Sheet1", "B2"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "B3"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "B4"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "B5"), Value::Number(6.0));
+        assert_eq!(wb.value("Sheet1", "B6"), Value::Number(9.0));
+    }
+
     #[test]
     fn let_binds_names_and_randbetween_rounds_both_bounds_up() {
         // Every answer here is Excel's.
