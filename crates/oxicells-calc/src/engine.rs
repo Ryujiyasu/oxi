@@ -267,6 +267,11 @@ pub struct Workbook {
     /// The state RAND draws from: seeded from the moment on first use, and
     /// moved on by every draw.
     rand_state: std::cell::Cell<u64>,
+    /// A cell being watched while its own formula is worked out, and whether
+    /// that formula read it: a formula naming its own cell is only circular
+    /// when the reading actually happens.
+    watched: std::cell::RefCell<Option<(String, (u32, u32))>>,
+    watched_read: std::cell::Cell<bool>,
     /// The sheets in the order the workbook has them, which SHEET counts by.
     sheet_order: Vec<String>,
 }
@@ -724,8 +729,22 @@ impl Workbook {
 
         for &i in &order {
             let (sheet, coord) = &keys[i];
+            // A formula naming its own cell is worked out all the same, and is
+            // circular only if it really read itself: measured,
+            // `=IF(D1>0,5,G1)` in G1 is 5 and `=CELL("address",L1)` $L$1,
+            // while `=E1` in E1 is 0.
             if reads_itself.contains(&i) {
-                self.store_cached(sheet, coord, Value::Number(0.0));
+                if let Some(expr) = self.expr_at(sheet, coord) {
+                    *self.watched.borrow_mut() = Some((sheet.clone(), *coord));
+                    self.watched_read.set(false);
+                    let value = formula_result(self.eval(&expr, sheet, 0, Some(*coord)));
+                    *self.watched.borrow_mut() = None;
+                    if !self.watched_read.get() {
+                        self.store_cached(sheet, coord, value);
+                        continue;
+                    }
+                }
+                self.keep_or_zero(sheet, coord);
                 continue;
             }
             let Some(expr) = self.expr_at(sheet, coord) else {
@@ -757,7 +776,7 @@ impl Workbook {
                 report
                     .circular
                     .push(format!("{}!{}", sheet, CellRef::new(coord.0, coord.1).to_a1()));
-                self.store_cached(sheet, coord, Value::Number(0.0));
+                self.keep_or_zero(sheet, coord);
             }
         }
 
@@ -954,6 +973,22 @@ impl Workbook {
         }
     }
 
+    /// A cell caught in a cycle keeps what it last showed; one never worked
+    /// out shows 0. Measured: `=B1+1` in A1 reads 1, and then `=A1+1` in B1
+    /// closes the loop and reads 0 while A1 stays 1 -- as does a formula
+    /// entered downstream of the loop (`=A1*2+D1` reads 0).
+    fn keep_or_zero(&mut self, sheet: &str, coord: &(u32, u32)) {
+        let held = self
+            .sheets
+            .get(sheet)
+            .and_then(|s| s.cells.get(coord))
+            .map(|cell| cell.value().clone())
+            .unwrap_or(Value::Blank);
+        if matches!(held, Value::Blank) {
+            self.store_cached(sheet, coord, Value::Number(0.0));
+        }
+    }
+
     fn store_cached(&mut self, sheet: &str, coord: &(u32, u32), value: Value) {
         if let Some(Cell::Formula { cached, .. }) = self
             .sheets
@@ -967,6 +1002,11 @@ impl Workbook {
     // -- evaluation -------------------------------------------------------
 
     fn value_at(&self, sheet: &str, col: u32, row: u32) -> Value {
+        if let Some((watched_sheet, coord)) = self.watched.borrow().as_ref() {
+            if *coord == (col, row) && watched_sheet.eq_ignore_ascii_case(sheet) {
+                self.watched_read.set(true);
+            }
+        }
         let Some(held) = self.sheets.get(sheet) else {
             return Value::Blank;
         };
@@ -1137,7 +1177,10 @@ impl Workbook {
                         None => return Arg::Value(Value::Error(ExcelError::Value)),
                     },
                 };
-                let held = self.value_at(&target, cell.col, cell.row);
+                // The value is read only for the kinds that show it, so asking where a
+                // cell is does not read it: measured, `=CELL("address",L1)` in L1
+                // is $L$1, not a circular 0.
+                let held = || self.value_at(&target, cell.col, cell.row);
                 Arg::Value(match info.as_str() {
                     "address" => {
                         let mut letters = String::new();
@@ -1155,9 +1198,9 @@ impl Workbook {
                     }
                     "col" => Value::Number(f64::from(cell.col) + 1.0),
                     "row" => Value::Number(f64::from(cell.row) + 1.0),
-                    "contents" => held,
+                    "contents" => held(),
                     "type" => Value::Text(
-                        match held {
+                        match held() {
                             Value::Blank => "b",
                             Value::Text(_) => "l",
                             _ => "v",
@@ -1503,6 +1546,40 @@ impl Workbook {
                     .map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at))
                     .collect();
                 self.call_lambda(&lambda, values, sheet, depth, skip, at)
+            }
+            // IF works out only the branch it takes, so a branch naming the
+            // formula's own cell is no circle unless it is taken: measured,
+            // `=IF(D1>0,5,G1)` in G1 is 5. A block for a condition is decided
+            // cell by cell, and then every branch is worked out as before.
+            Expr::Function { name, args } if name == "IF" && (2..=3).contains(&args.len()) => {
+                let test = self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at);
+                let single = match &test {
+                    Arg::Value(value) => Some(value.clone()),
+                    Arg::Range(block) if block.cells.len() == 1 => Some(block.cells[0].clone()),
+                    Arg::Range(_) => None,
+                };
+                let taken = single.as_ref().and_then(|value| match value {
+                    Value::Number(n) => Some(*n != 0.0),
+                    Value::Logical(state) => Some(*state),
+                    Value::Blank => Some(false),
+                    Value::Text(text) if text.eq_ignore_ascii_case("TRUE") => Some(true),
+                    Value::Text(text) if text.eq_ignore_ascii_case("FALSE") => Some(false),
+                    _ => None,
+                });
+                let mut evaluated = vec![test];
+                for (index, arg) in args.iter().enumerate().skip(1) {
+                    let wanted = match taken {
+                        Some(true) => index == 1,
+                        Some(false) => index == 2,
+                        None => true,
+                    };
+                    evaluated.push(if wanted {
+                        self.eval_arg_inner(arg, sheet, depth + 1, skip, at)
+                    } else {
+                        Arg::Value(Value::Blank)
+                    });
+                }
+                functions::call_arg(name, &evaluated)
             }
             Expr::Function { name, args } => {
                 // SUBTOTAL ignores any cell in its range that is itself a

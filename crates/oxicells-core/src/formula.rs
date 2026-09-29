@@ -382,6 +382,16 @@ fn recalculate(
 
     match mode {
         Overwrite::All => {
+            // What each formula last showed goes in with it, which a cell
+            // caught in a cycle keeps: measured, `=B1+1` in A1 reads 1 and
+            // still 1 once `=A1+1` in B1 closes the loop.
+            for sheet in sheets.iter() {
+                for row in &sheet.rows {
+                    for cell in row.cells.iter().filter(|cell| cell.formula.is_some()) {
+                        let _ = book.set_cached(&sheet.name, &a1(cell.col, row.index), to_calc(&cell.value));
+                    }
+                }
+            }
             book.recalculate();
         }
         // Only the cells that need an answer. Whatever they read is either
