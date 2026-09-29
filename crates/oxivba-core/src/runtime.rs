@@ -2188,7 +2188,7 @@ impl<'a> Runtime<'a> {
         }
         match &variable.array_bounds {
             Some(bounds) => {
-                self.make_array(bounds, &variable.type_name, frame, line, bounds.is_empty())
+                self.make_array(bounds, &variable.type_name, frame, line, bounds.is_empty(), false)
             }
             None => match &variable.value {
                 Some(expr) => {
@@ -2270,7 +2270,7 @@ impl<'a> Runtime<'a> {
         for field in &definition.fields {
             let value = match &field.array_bounds {
                 Some(bounds) => {
-                    self.make_array(bounds, &field.type_name, frame, line, bounds.is_empty())?
+                    self.make_array(bounds, &field.type_name, frame, line, bounds.is_empty(), false)?
                 }
                 None if field.type_name.fixed_length.is_none() => {
                     match self.new_record(&field.type_name.name, frame, line, depth + 1)? {
@@ -2335,7 +2335,8 @@ impl<'a> Runtime<'a> {
                 return Err(fixed_array_error(&name, Some(line)));
             }
         }
-        let mut replacement = match self.make_array(bounds, &item.type_name, frame, line, true)? {
+        let into_variant = self.is_variant_variable(frame, &name) && existing_slot.is_some();
+        let mut replacement = match self.make_array(bounds, &item.type_name, frame, line, true, into_variant)? {
             Value::Array(array) => array,
             _ => unreachable!(),
         };
@@ -2403,7 +2404,7 @@ impl<'a> Runtime<'a> {
         if matches!(&existing, Value::Array(array) if !array.resizable) {
             return Err(fixed_array_error(&item.name(), Some(line)));
         }
-        let mut replacement = match self.make_array(&item.bounds, &item.type_name, frame, line, true)?
+        let mut replacement = match self.make_array(&item.bounds, &item.type_name, frame, line, true, false)?
         {
             Value::Array(array) => array,
             _ => unreachable!(),
@@ -2443,6 +2444,7 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
         resizable: bool,
+        into_variant: bool,
     ) -> Result<Value, RuntimeError> {
         if bounds.is_empty() {
             return Ok(Value::Array(ArrayValue {
@@ -2464,6 +2466,19 @@ impl<'a> Runtime<'a> {
                 None => self.option_base(),
             };
             let upper = self.array_index(&bound.upper, frame, line)?;
+            // A Variant being made an array runs out of memory on a negative
+            // count, where an array variable finds its bounds out of range:
+            // measured, `ReDim c(3 To 1)` on `c As Variant` is 7 and on
+            // `d() As Long` 9; `ReDim c(2 To 1)` (none at all) is 9 on both.
+            if into_variant && upper < lower - 1 {
+                return Err(RuntimeError {
+                    kind: RuntimeErrorKind::Overflow,
+                    message: format!("out of memory making an array {lower} To {upper}"),
+                    line: Some(line),
+                    vba_number: Some(7),
+                    vba_source: Some("VBA".to_string()),
+                });
+            }
             if upper < lower {
                 return Err(error(
                     RuntimeErrorKind::SubscriptOutOfRange,
@@ -3074,6 +3089,22 @@ impl<'a> Runtime<'a> {
                     if let Value::Array(array) = &mut value {
                         array.resizable = true;
                     }
+                } else if let Value::Array(given) = &value {
+                    // A typed dynamic array takes only an array of its own
+                    // element type: measured, `Dim a() As Long: a = Array(1, 2)`
+                    // is 13, while `a2 = a` between two Long() is fine.
+                    let held = self.lookup_slot(frame, name).map(|slot| slot.borrow().clone());
+                    if let Some(Value::Array(held)) = held {
+                        if std::mem::discriminant(held.element_default.as_ref())
+                            != std::mem::discriminant(given.element_default.as_ref())
+                        {
+                            return Err(error(
+                                RuntimeErrorKind::TypeMismatch,
+                                "an array of another element type cannot be assigned to this typed array",
+                                Some(line),
+                            ));
+                        }
+                    }
                 }
                 let name = key(name);
                 if let Some(existing) = frame.values.get(&name) {
@@ -3133,6 +3164,17 @@ impl<'a> Runtime<'a> {
                             Some(line),
                         )),
                     };
+                }
+                // An array held in an element: `b(2)(0) = 99` writes into the
+                // array b(2) holds, as measured -- read it, change it, put it
+                // back where it came from.
+                if let Expr::Index { .. } = target.as_ref() {
+                    if let Value::Array(mut inner) = self.eval_expr(target, frame)? {
+                        let indices = self.array_arguments(args, frame, line)?;
+                        let offset = array_offset(&inner, &indices, line)?;
+                        inner.values[offset] = value;
+                        return self.assign(target, Value::Array(inner), frame, line);
+                    }
                 }
                 let name = expr_name(target).ok_or_else(|| {
                     error(
