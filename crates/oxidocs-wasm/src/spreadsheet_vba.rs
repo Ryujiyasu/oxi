@@ -2567,11 +2567,17 @@ impl<'a> WorkbookHost<'a> {
                         }
                     })
                     .collect();
-                return Ok(Value::Array(ArrayValue {
-                    dimensions: vec![
+                // A single row comes back as a plain list.
+                let dimensions = if block.height == 1 {
+                    vec![ArrayDimension { lower_bound: 1, length: block.width }]
+                } else {
+                    vec![
                         ArrayDimension { lower_bound: 1, length: block.height },
                         ArrayDimension { lower_bound: 1, length: block.width },
-                    ],
+                    ]
+                };
+                return Ok(Value::Array(ArrayValue {
+                    dimensions,
                     values,
                     element_default: Box::new(Value::Empty),
                     resizable: true,
@@ -2717,8 +2723,11 @@ impl<'a> WorkbookHost<'a> {
                     cells: values.iter().map(engine_value).collect(),
                 }));
             }
+            // A list is a row, as it is everywhere in Excel: measured,
+            // `Unique(Array(1, 2, 2, 3))` keeps all four and `Sort(Array(3,
+            // 1, 2))` leaves them be, each being a single row.
             let (width, height) = match array.dimensions.as_slice() {
-                [rows] => (1, rows.length),
+                [columns] => (columns.length, 1),
                 [rows, columns] => (columns.length, rows.length),
                 _ => return Err("WorksheetFunction takes an array of one or two axes".to_string()),
             };
