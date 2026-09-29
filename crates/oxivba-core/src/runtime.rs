@@ -10951,6 +10951,11 @@ fn binary(
             } else {
                 (a, b)
             };
+            // Measured: `0 / 0` (Empty / Empty too) is error 6, where
+            // `1 / 0` is 11.
+            if op == Div && a == 0.0 && b == 0.0 {
+                return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
+            }
             if matches!(op, Div | IntDiv | Mod) && b == 0.0 {
                 return Err((
                     RuntimeErrorKind::DivisionByZero,
@@ -10966,16 +10971,32 @@ fn binary(
                     };
                     arithmetic_result(answer, &lhs, &rhs, op)?
                 }
-                // Division and raising to a power are Double whatever they
-                // are given: asked of Excel, `4 / 2` is a Double and so is
-                // `2 ^ 2`.
-                Div => Value::Double(a / b),
+                // Division and raising to a power are Double -- asked of
+                // Excel, `4 / 2` is a Double and so is `2 ^ 2` -- save that a
+                // Single among the narrow types stays a Single: measured,
+                // `CInt(1) / CSng(1.5)`, `True / CSng(1.5)` and `Empty /
+                // CSng(1.5)` are Single, `CLng(1) / CSng(1.5)` Double.
+                Div => {
+                    let narrow = |value: &Value| {
+                        matches!(NumRank::of(value), Some(NumRank::Byte | NumRank::Int16 | NumRank::Single))
+                    };
+                    let single = matches!(lhs, Value::Single(_)) || matches!(rhs, Value::Single(_));
+                    if single && narrow(&lhs) && narrow(&rhs) {
+                        NumRank::Single.hold(a / b, None)?
+                    } else {
+                        Value::Double(a / b)
+                    }
+                }
                 // Integer division and Mod keep an integer type. Both fit in
                 // an Integer only when both sides did.
                 IntDiv => integer_result((a / b).trunc(), &lhs, &rhs)?,
                 Mod => integer_result((a as i64 % b as i64) as f64, &lhs, &rhs)?,
                 // Measured: `10 ^ 309` is error 6 and `(-8) ^ (1 / 3)` error 5.
                 Pow => {
+                    // Measured: `0 ^ -1` (Empty ^ True) is error 5.
+                    if a == 0.0 && b < 0.0 {
+                        return Err((RuntimeErrorKind::InvalidProcedureCall, "invalid procedure call or argument".to_string()));
+                    }
                     let answer = a.powf(b);
                     if answer.is_nan() {
                         return Err((RuntimeErrorKind::InvalidProcedureCall, "invalid procedure call or argument".to_string()));
@@ -11375,6 +11396,12 @@ fn arithmetic_result(
             BinaryOp::Sub => !(dates.0 && dates.1),
             _ => false,
         };
+        // A moment past the calendar is an overflow when the Date leads:
+        // measured, `#1/2/2000# + CLng(2000000000)` is error 6, while
+        // `CLng(2000000000) + #1/2/2000#` is a Date.
+        if moment && dates.0 && !(-657_434.0..2_958_466.0).contains(&answer) {
+            return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
+        }
         return Ok(if moment {
             Value::Date(answer)
         } else {
@@ -11391,6 +11418,19 @@ fn arithmetic_result(
         {
             return Ok(Value::Double(answer));
         }
+    }
+    // Text beside Currency is read into Currency for + and -: measured,
+    // `CCur(3.25) + "7"` and `"7" - CCur(3.25)` are Currency.
+    if matches!(op, BinaryOp::Add | BinaryOp::Sub)
+        && (matches!((lhs, rhs), (Value::Currency(_), Value::String(_)) | (Value::String(_), Value::Currency(_))))
+    {
+        return NumRank::Currency.hold(answer, None);
+    }
+    // Nothing less a Byte is the Byte negated, which is an Integer:
+    // measured, `Empty - CByte(200)` is Integer -200 (while `Empty + CByte(200)`
+    // is a Byte).
+    if op == BinaryOp::Sub && matches!((lhs, rhs), (Value::Empty, Value::Byte(_))) {
+        return NumRank::Int16.hold(answer, None);
     }
     // Nothing and nothing is an Integer: measured, `TypeName(Empty +
     // Empty)` is Integer.
@@ -11434,6 +11474,19 @@ fn integer_result(
     // A LongLong on either side keeps the answer a LongLong: asked of Excel,
     // `TypeName(CLngLng(1) \ 2)` and `CLngLng(1) Mod 2` are both LongLong.
     let wide = |value: &Value| matches!(NumRank::of(value), Some(NumRank::LongLong));
+    // Two Bytes stay a Byte, and a Boolean beside text stays a Boolean:
+    // measured, `CByte(200) \ CByte(200)` is Byte and `True Mod "7"` Boolean.
+    if matches!((lhs, rhs), (Value::Byte(_), Value::Byte(_))) {
+        return NumRank::Byte.hold(answer, None);
+    }
+    // (Only with the Boolean first: `"7" \ True` is a Long.)
+    if matches!((lhs, rhs), (Value::Boolean(_), Value::String(_))) {
+        return match answer {
+            0.0 => Ok(Value::Boolean(false)),
+            -1.0 => Ok(Value::Boolean(true)),
+            _ => Err((RuntimeErrorKind::Overflow, "overflow".to_string())),
+        };
+    }
     let rank = if wide(lhs) || wide(rhs) {
         NumRank::LongLong
     } else if narrow(lhs) && narrow(rhs) {
