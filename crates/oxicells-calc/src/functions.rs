@@ -410,6 +410,12 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
     // TREND answers along a straight line fitted to the known points, one
     // answer for each new x, in the new x's shape.
     if name == "TREND" {
+        if let Some(answer) = crate::functions_more::trend_many(args) {
+            return match answer {
+                Ok(block) => Arg::Range(block),
+                Err(why) => Arg::Value(Value::Error(why)),
+            };
+        }
         return match trend(args) {
             Ok(block) => Arg::Range(block),
             Err(why) => Arg::Value(Value::Error(why)),
@@ -583,17 +589,18 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "ERFC.PRECISE", "ERROR.TYPE", "EVEN", "EXACT", "EXP", "EXPAND", "EXPON.DIST", "EXPONDIST",
     "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "F.TEST", "FACT", "FACTDOUBLE", "FALSE", "FDIST",
     "FIND", "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED", "FLOOR", "FLOOR.MATH", "FLOOR.PRECISE",
-    "FORECAST", "FORECAST.LINEAR", "FTEST", "FV", "FVSCHEDULE", "GAMMA", "GAMMA.DIST", "GAMMA.INV",
-    "GAMMADIST", "GAMMAINV", "GAMMALN", "GAMMALN.PRECISE", "GAUSS", "GCD", "GEOMEAN", "GESTEP",
-    "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP", "HOUR", "HSTACK", "HYPERLINK",
-    "HYPGEOM.DIST", "HYPGEOMDIST", "IF", "IFERROR", "IFNA", "IFS", "INDEX", "INDIRECT", "INT",
-    "INTERCEPT", "INTRATE", "IPMT", "IRR", "ISBLANK", "ISERR", "ISERROR", "ISEVEN", "ISFORMULA",
-    "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER", "ISO.CEILING", "ISODD", "ISOMITTED", "ISOWEEKNUM",
-    "ISPMT", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB", "LEN", "LENB",
-    "LET", "LN", "LOG", "LOG10", "LOGINV", "LOGNORM.DIST", "LOGNORM.INV", "LOGNORMDIST", "LOOKUP",
-    "LOWER", "M", "MAKEARRAY", "MAP", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MDETERM", "MEDIAN",
-    "MID", "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MINVERSE", "MIRR", "MMULT", "MOD", "MODE",
-    "MODE.MULT", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "MUNIT", "N", "NA", "NEGBINOM.DIST",
+    "FORECAST", "FORECAST.LINEAR", "FORMULATEXT", "FTEST", "FV", "FVSCHEDULE", "GAMMA",
+    "GAMMA.DIST", "GAMMA.INV", "GAMMADIST", "GAMMAINV", "GAMMALN", "GAMMALN.PRECISE", "GAUSS",
+    "GCD", "GEOMEAN", "GESTEP", "GROWTH", "HARMEAN", "HEX2BIN", "HEX2DEC", "HEX2OCT", "HLOOKUP",
+    "HOUR", "HSTACK", "HYPERLINK", "HYPGEOM.DIST", "HYPGEOMDIST", "IF", "IFERROR", "IFNA", "IFS",
+    "INDEX", "INDIRECT", "INT", "INTERCEPT", "INTRATE", "IPMT", "IRR", "ISBLANK", "ISERR",
+    "ISERROR", "ISEVEN", "ISFORMULA", "ISLOGICAL", "ISNA", "ISNONTEXT", "ISNUMBER", "ISO.CEILING",
+    "ISODD", "ISOMITTED", "ISOWEEKNUM", "ISPMT", "ISREF", "ISTEXT", "KURT", "LAMBDA", "LARGE",
+    "LCM", "LEFT", "LEFTB", "LEN", "LENB", "LET", "LINEST", "LN", "LOG", "LOG10", "LOGEST",
+    "LOGINV", "LOGNORM.DIST", "LOGNORM.INV", "LOGNORMDIST", "LOOKUP", "LOWER", "M", "MAKEARRAY",
+    "MAP", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MDETERM", "MEDIAN", "MID", "MIDB", "MIN",
+    "MINA", "MINIFS", "MINUTE", "MINVERSE", "MIRR", "MMULT", "MOD", "MODE", "MODE.MULT",
+    "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "MUNIT", "N", "NA", "NEGBINOM.DIST",
     "NEGBINOMDIST", "NETWORKDAYS", "NETWORKDAYS.INTL", "NOMINAL", "NORM.DIST", "NORM.INV",
     "NORM.S.DIST", "NORM.S.INV", "NORMDIST", "NORMINV", "NORMSDIST", "NORMSINV", "NOT", "NOW",
     "NPER", "NPV", "NUMBERVALUE", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODD", "OFFSET", "OR",

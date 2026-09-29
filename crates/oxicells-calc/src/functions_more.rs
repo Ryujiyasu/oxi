@@ -618,6 +618,8 @@ pub(crate) fn call_block(name: &str, args: &[Arg]) -> Option<Arg> {
                 .collect();
             Ok(RangeData { width: size, height: size, cells })
         })(),
+        "LINEST" | "LOGEST" => regression_block(name == "LOGEST", args),
+        "GROWTH" => growth(args),
         _ => return None,
     };
     Some(match answer {
@@ -822,4 +824,260 @@ fn vdb(mut cost: f64, salvage: f64, mut life: f64, mut start: f64, mut end: f64,
     }
     cost -= inter_vdb(cost, salvage, life, life, start, factor);
     inter_vdb(cost, salvage, life, life - start, end - start, factor)
+}
+
+/// The known y values and x values of LINEST, LOGEST and GROWTH: the x values
+/// as one row of variables per observation. A y column with an x block as
+/// tall has a variable per x column; a y row, one per x row; x values the
+/// same size as the y values are one variable; no x values are 1, 2, 3, ...
+fn observations(args: &[Arg], logs: bool) -> Result<(Vec<f64>, Vec<Vec<f64>>), ExcelError> {
+    let given = |i: usize| match args.get(i) {
+        Some(Arg::Value(Value::Blank)) | None => None,
+        Some(arg) => Some(arg),
+    };
+    let y_block = block_of(&args[0]);
+    let mut ys = Vec::with_capacity(y_block.cells.len());
+    for value in &y_block.cells {
+        let y = match value {
+            Value::Number(n) => *n,
+            Value::Error(e) => return Err(*e),
+            _ => return Err(ExcelError::Value),
+        };
+        if logs && y <= 0.0 {
+            return Err(ExcelError::Num);
+        }
+        ys.push(if logs { y.ln() } else { y });
+    }
+    let n = ys.len();
+    let x_block = match given(1) {
+        Some(arg) => block_of(arg),
+        None => RangeData { width: 1, height: n, cells: (1..=n).map(|i| Value::Number(i as f64)).collect() },
+    };
+    let number = |value: &Value| match value {
+        Value::Number(n) => Ok(*n),
+        Value::Error(e) => Err(*e),
+        _ => Err(ExcelError::Value),
+    };
+    let mut rows = Vec::with_capacity(n);
+    if x_block.cells.len() == n {
+        for value in &x_block.cells {
+            rows.push(vec![number(value)?]);
+        }
+    } else if y_block.width == 1 && x_block.height == n {
+        for row in 0..n {
+            rows.push((0..x_block.width).map(|col| number(&x_block.at(col, row))).collect::<Result<_, _>>()?);
+        }
+    } else if y_block.height == 1 && x_block.width == n {
+        for col in 0..n {
+            rows.push((0..x_block.height).map(|row| number(&x_block.at(col, row))).collect::<Result<_, _>>()?);
+        }
+    } else {
+        return Err(ExcelError::Ref);
+    }
+    Ok((ys, rows))
+}
+
+type Fit = (Vec<f64>, f64, Vec<Vec<f64>>, Vec<f64>);
+
+/// Least squares: the slopes, the constant, the inverse of the normal
+/// matrix and the x means, the data centred first when there is a constant.
+fn least_squares(ys: &[f64], rows: &[Vec<f64>], constant: bool) -> Result<Fit, ExcelError> {
+    let n = ys.len();
+    let k = rows.first().map_or(0, Vec::len);
+    let (x_mean, y_mean) = if constant {
+        let x_mean: Vec<f64> = (0..k).map(|j| rows.iter().map(|r| r[j]).sum::<f64>() / n as f64).collect();
+        (x_mean, ys.iter().sum::<f64>() / n as f64)
+    } else {
+        (vec![0.0; k], 0.0)
+    };
+    let mut normal = vec![vec![0.0; k]; k];
+    let mut right = vec![0.0; k];
+    for (row, y) in rows.iter().zip(ys) {
+        for a in 0..k {
+            let xa = row[a] - x_mean[a];
+            right[a] += xa * (y - y_mean);
+            for b in 0..k {
+                normal[a][b] += xa * (row[b] - x_mean[b]);
+            }
+        }
+    }
+    let first_square = normal.first().and_then(|row| row.first()).copied().unwrap_or(0.0);
+    let inverted = inverse(normal).map_err(|_| ExcelError::Num)?;
+    let matrix: Vec<Vec<f64>> = (0..k)
+        .map(|a| {
+            (0..k)
+                .map(|b| match &inverted.cells[a * k + b] {
+                    Value::Number(v) => *v,
+                    _ => 0.0,
+                })
+                .collect()
+        })
+        .collect();
+    // One variable is worked as TREND works it, so the two agree.
+    let slopes: Vec<f64> = if k == 1 {
+        vec![right[0] / first_square]
+    } else {
+        (0..k).map(|a| (0..k).map(|b| matrix[a][b] * right[b]).sum()).collect()
+    };
+    let intercept = if constant { y_mean - (0..k).map(|j| slopes[j] * x_mean[j]).sum::<f64>() } else { 0.0 };
+    Ok((slopes, intercept, matrix, x_mean))
+}
+
+/// LINEST and LOGEST: the slopes last variable first, then the constant;
+/// with statistics, four rows more as Excel lays them out, #N/A where a row
+/// has nothing more to say.
+fn regression_block(logs: bool, args: &[Arg]) -> Result<RangeData, ExcelError> {
+    if args.is_empty() || args.len() > 4 {
+        return Err(ExcelError::Value);
+    }
+    let flag = |i: usize, default: bool| match args.get(i).map(Arg::scalar) {
+        None | Some(Value::Blank) => Ok(default),
+        Some(value) => value.to_logical(),
+    };
+    let constant = flag(2, true)?;
+    let stats = flag(3, false)?;
+    let (ys, rows) = observations(args, logs)?;
+    let n = ys.len();
+    let k = rows.first().map_or(0, Vec::len);
+    let (slopes, intercept, matrix, x_mean) = least_squares(&ys, &rows, constant)?;
+    let shown = |v: f64| Value::Number(if logs { v.exp() } else { v });
+    let width = k + 1;
+    let mut cells: Vec<Value> = slopes.iter().rev().map(|m| shown(*m)).collect();
+    cells.push(shown(intercept));
+    if !stats {
+        return Ok(RangeData { width, height: 1, cells });
+    }
+    let fitted: Vec<f64> =
+        rows.iter().map(|r| intercept + r.iter().zip(&slopes).map(|(x, m)| x * m).sum::<f64>()).collect();
+    let y_mean = ys.iter().sum::<f64>() / n as f64;
+    let ss_resid: f64 = ys.iter().zip(&fitted).map(|(y, f)| (y - f).powi(2)).sum();
+    let ss_total: f64 =
+        if constant { ys.iter().map(|y| (y - y_mean).powi(2)).sum() } else { ys.iter().map(|y| y * y).sum() };
+    let ss_reg = ss_total - ss_resid;
+    let freedom = n as f64 - k as f64 - if constant { 1.0 } else { 0.0 };
+    let na = Value::Error(ExcelError::NA);
+    let variance = if freedom > 0.0 { ss_resid / freedom } else { f64::NAN };
+    let mut errors: Vec<Value> = (0..k).rev().map(|j| Value::Number((matrix[j][j] * variance).sqrt())).collect();
+    if constant {
+        let mut extra = 1.0 / n as f64;
+        for a in 0..k {
+            for b in 0..k {
+                extra += x_mean[a] * matrix[a][b] * x_mean[b];
+            }
+        }
+        errors.push(Value::Number((extra * variance).sqrt()));
+    } else {
+        errors.push(na.clone());
+    }
+    cells.extend(errors);
+    for row in [
+        // r squared as one less the unexplained share: measured, LOGEST's
+        // 0.720442481699332 comes out that way and not as ss_reg/ss_total.
+        vec![Value::Number(1.0 - ss_resid / ss_total), Value::Number(variance.sqrt())],
+        vec![Value::Number((ss_reg / k as f64) / variance), Value::Number(freedom)],
+        vec![Value::Number(ss_reg), Value::Number(ss_resid)],
+    ] {
+        let mut row = row;
+        while row.len() < width {
+            row.push(na.clone());
+        }
+        cells.extend(row.into_iter().take(width));
+    }
+    Ok(RangeData { width, height: 5, cells })
+}
+
+/// TREND with several x variables, the one-variable case being left to
+/// TREND itself.
+pub(crate) fn trend_many(args: &[Arg]) -> Option<Result<RangeData, ExcelError>> {
+    let x = args.get(1).filter(|arg| !matches!(arg, Arg::Value(Value::Blank)))?;
+    let (y, x) = (block_of(&args[0]), block_of(x));
+    if x.cells.len() == y.cells.len() {
+        return None;
+    }
+    Some((|| {
+        let constant = match args.get(3).map(Arg::scalar) {
+            None | Some(Value::Blank) => true,
+            Some(value) => value.to_logical()?,
+        };
+        let (ys, rows) = observations(args, false)?;
+        let (slopes, intercept, _, _) = least_squares(&ys, &rows, constant)?;
+        let k = slopes.len();
+        let new_block = match args.get(2).filter(|arg| !matches!(arg, Arg::Value(Value::Blank))) {
+            Some(arg) => block_of(arg),
+            None => x.clone(),
+        };
+        let number = |value: &Value| match value {
+            Value::Number(n) => Ok(*n),
+            Value::Error(e) => Err(*e),
+            _ => Err(ExcelError::Value),
+        };
+        let (points, across) = if new_block.width == k { (new_block.height, true) } else { (new_block.width, false) };
+        let mut cells = Vec::with_capacity(points);
+        for p in 0..points {
+            let mut fitted = intercept;
+            for (j, slope) in slopes.iter().enumerate() {
+                let value = if across { new_block.at(j, p) } else { new_block.at(p, j) };
+                fitted += slope * number(&value)?;
+            }
+            cells.push(Value::Number(fitted));
+        }
+        Ok(if across {
+            RangeData { width: 1, height: points, cells }
+        } else {
+            RangeData { width: points, height: 1, cells }
+        })
+    })())
+}
+
+/// GROWTH: the exponential curve through the known points, at the new x values.
+fn growth(args: &[Arg]) -> Result<RangeData, ExcelError> {
+    if args.is_empty() || args.len() > 4 {
+        return Err(ExcelError::Value);
+    }
+    let constant = match args.get(3).map(Arg::scalar) {
+        None | Some(Value::Blank) => true,
+        Some(value) => value.to_logical()?,
+    };
+    let (ys, rows) = observations(args, true)?;
+    let (slopes, intercept, _, _) = least_squares(&ys, &rows, constant)?;
+    let k = slopes.len();
+    let blank = |i: usize| matches!(args.get(i), Some(Arg::Value(Value::Blank)) | None);
+    let new_block = if !blank(2) {
+        block_of(&args[2])
+    } else if !blank(1) {
+        block_of(&args[1])
+    } else {
+        let y = block_of(&args[0]);
+        RangeData { width: y.width, height: y.height, cells: (1..=y.cells.len()).map(|i| Value::Number(i as f64)).collect() }
+    };
+    let number = |value: &Value| match value {
+        Value::Number(n) => Ok(*n),
+        Value::Error(e) => Err(*e),
+        _ => Err(ExcelError::Value),
+    };
+    if k == 1 {
+        let cells = new_block
+            .cells
+            .iter()
+            .map(|x| number(x).map(|x| Value::Number((intercept + slopes[0] * x).exp())))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(RangeData { width: new_block.width, height: new_block.height, cells });
+    }
+    let (points, across) = if new_block.width == k { (new_block.height, true) } else { (new_block.width, false) };
+    let mut cells = Vec::with_capacity(points);
+    for p in 0..points {
+        // b * m1^x1 * m2^x2 ..., as LOGEST states the curve: measured, the
+        // last digit of GROWTH over two variables comes out that way.
+        let mut fitted = intercept.exp();
+        for (j, slope) in slopes.iter().enumerate() {
+            let x = if across { new_block.at(j, p) } else { new_block.at(p, j) };
+            fitted *= slope.exp().powf(number(&x)?);
+        }
+        cells.push(Value::Number(fitted));
+    }
+    Ok(if across {
+        RangeData { width: 1, height: points, cells }
+    } else {
+        RangeData { width: points, height: 1, cells }
+    })
 }

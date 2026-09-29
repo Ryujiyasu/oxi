@@ -1379,6 +1379,21 @@ impl Workbook {
                     _ => Arg::Value(Value::Error(ExcelError::Value)),
                 }
             }
+            // FORMULATEXT: the formula a cell holds, as written; #N/A for a
+            // cell holding none. Measured: over `=A1+1` it is "=A1+1".
+            Expr::Function { name, args } if name == "FORMULATEXT" && args.len() == 1 => {
+                let Some((target, range)) = self.reference_of(&args[0], sheet, depth + 1, at) else {
+                    return Arg::Value(Value::Error(ExcelError::Value));
+                };
+                let corner = (range.start.col.min(range.end.col), range.start.row.min(range.end.row));
+                match self.sheets.get(&target).and_then(|held| held.cells.get(&corner)) {
+                    Some(Cell::Formula { source, .. }) => {
+                        let body = source.strip_prefix('=').unwrap_or(source);
+                        Arg::Value(Value::Text(format!("={body}")))
+                    }
+                    _ => Arg::Value(Value::Error(ExcelError::NA)),
+                }
+            }
             // The helpers that hand values to a LAMBDA written in place:
             // MAP, REDUCE, SCAN, BYROW, BYCOL and MAKEARRAY. Measured:
             // `MAP(A1:A3,LAMBDA(v,v*10))` over 3,1,2 is 30,10,20,
