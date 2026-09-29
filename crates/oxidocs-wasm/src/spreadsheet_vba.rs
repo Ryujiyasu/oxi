@@ -12798,6 +12798,11 @@ impl<'a> WorkbookHost<'a> {
 
     fn auto_fit_columns(&mut self, range: CellRange) -> Result<Value, String> {
         const FLOOR: f64 = 5.88;
+        // A formula written a moment ago is fitted by its answer, which
+        // Excel has already worked out.
+        if self.holds_formula(self.cut_to_contents(range)?) {
+            self.recalculate();
+        }
         // `Cells.EntireColumn.AutoFit` fits every column there is; only the
         // ones with something in them can change.
         let last_used = self.workbook.sheets[range.sheet]
