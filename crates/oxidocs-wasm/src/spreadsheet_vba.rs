@@ -1775,6 +1775,12 @@ struct WorkbookHost<'a> {
     /// Filtering a second field narrows what the first left showing, so the
     /// tests accumulate and every row is judged against all of them.
     auto_filter: Option<AutoFilter>,
+    /// What `Find` and `Replace` last used for LookIn, LookAt and
+    /// SearchOrder: Excel keeps them for the next call that leaves them out.
+    /// Measured: after `Find("apple", LookAt:=xlWhole)`, a plain
+    /// `Find("apple", SearchDirection:=xlPrevious)` still looks at whole
+    /// cells -- while MatchCase is not kept.
+    find_settings: (i64, i64, i64),
     selection: CellRange,
     /// The one cell in front of the selection. Selecting a block puts it on
     /// the block's top-left, but `Activate` moves it about INSIDE the block
@@ -1938,6 +1944,7 @@ impl<'a> WorkbookHost<'a> {
             clipboard: None,
             pending_cut: None,
             auto_filter: None,
+            find_settings: (-4163, 2, 1),
             selection: CellRange::single(CellAddress {
                 sheet: active_sheet,
                 row: 1,
@@ -11245,20 +11252,22 @@ impl<'a> WorkbookHost<'a> {
             .first()
             .filter(|value| !matches!(value, Value::Missing))
             .ok_or_else(|| "Range.Find What argument is required".to_string())?;
-        let look_in = find_integer_argument(args.get(2), -4163, "LookIn")?;
+        let (kept_in, kept_at, kept_order) = self.find_settings;
+        let look_in = find_integer_argument(args.get(2), kept_in, "LookIn")?;
         if !matches!(look_in, -4163 | -4123) {
             return Err(format!("unsupported Range.Find LookIn constant: {look_in}"));
         }
-        let look_at = find_integer_argument(args.get(3), 2, "LookAt")?;
+        let look_at = find_integer_argument(args.get(3), kept_at, "LookAt")?;
         if !matches!(look_at, 1 | 2) {
             return Err(format!("unsupported Range.Find LookAt constant: {look_at}"));
         }
-        let search_order = find_integer_argument(args.get(4), 1, "SearchOrder")?;
+        let search_order = find_integer_argument(args.get(4), kept_order, "SearchOrder")?;
         if !matches!(search_order, 1 | 2) {
             return Err(format!(
                 "unsupported Range.Find SearchOrder constant: {search_order}"
             ));
         }
+        self.find_settings = (look_in, look_at, search_order);
         let search_direction = find_integer_argument(args.get(5), 1, "SearchDirection")?;
         if !matches!(search_direction, 1 | 2) {
             return Err(format!(
@@ -11408,18 +11417,21 @@ impl<'a> WorkbookHost<'a> {
             .get(1)
             .filter(|value| !matches!(value, Value::Missing))
             .ok_or_else(|| "Range.Replace Replacement argument is required".to_string())?;
-        let look_at = find_integer_argument(args.get(2), 2, "LookAt")?;
+        let (_, kept_at, kept_order) = self.find_settings;
+        let look_at = find_integer_argument(args.get(2), kept_at, "LookAt")?;
         if !matches!(look_at, 1 | 2) {
             return Err(format!(
                 "unsupported Range.Replace LookAt constant: {look_at}"
             ));
         }
-        let search_order = find_integer_argument(args.get(3), 1, "SearchOrder")?;
+        let search_order = find_integer_argument(args.get(3), kept_order, "SearchOrder")?;
         if !matches!(search_order, 1 | 2) {
             return Err(format!(
                 "unsupported Range.Replace SearchOrder constant: {search_order}"
             ));
         }
+        self.find_settings.1 = look_at;
+        self.find_settings.2 = search_order;
         let match_case = find_boolean_argument(args.get(4), false, "MatchCase")?;
         let match_byte = find_boolean_argument(args.get(5), false, "MatchByte")?;
         if find_boolean_argument(args.get(6), false, "SearchFormat")? {
