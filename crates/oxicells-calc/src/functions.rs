@@ -3297,13 +3297,18 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             )?;
             Ok(Value::Number(s as f64))
         }
+        // Each part is cut to a whole number no greater than 32767, and the
+        // clock they add up to may not run backwards: measured, TIME(0,-1,0)
+        // and TIME(32768,0,0) are #NUM! where TIME(25,0,0) is 1/24.
         "TIME" => {
             expect(args, 3)?;
-            Ok(Value::Number(datetime::fraction_from_time(
-                num(&args[0])?,
-                num(&args[1])?,
-                num(&args[2])?,
-            )))
+            let (hours, minutes, seconds) = (num(&args[0])?.trunc(), num(&args[1])?.trunc(), num(&args[2])?.trunc());
+            if [hours, minutes, seconds].iter().any(|part| *part > 32_767.0)
+                || hours * 3600.0 + minutes * 60.0 + seconds < 0.0
+            {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(datetime::fraction_from_time(hours, minutes, seconds)))
         }
         "YEAR" => Ok(Value::Number(
             datetime::date_from_serial(serial(one_arg(args)?)?)?.year as f64,
@@ -3315,7 +3320,12 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             datetime::date_from_serial(serial(one_arg(args)?)?)?.day as f64,
         )),
         "HOUR" | "MINUTE" | "SECOND" => {
-            let (h, m, s) = datetime::time_from_fraction(one(args)?);
+            // Measured: MINUTE(-0.5) is #NUM!.
+            let moment = one(args)?;
+            if moment < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            let (h, m, s) = datetime::time_from_fraction(moment);
             Ok(Value::Number(match name {
                 "HOUR" => h as f64,
                 "MINUTE" => m as f64,
@@ -3368,9 +3378,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "DATEVALUE" => {
             let s = text(&args[0])?;
             match datetime::text_as_datetime(&s) {
-                // A serial below 1 is a time with no date, which DATEVALUE
-                // refuses.
-                Some(serial) if serial >= 1.0 => Ok(Value::Number(serial.floor())),
+                // A time with no date is day 0: measured, DATEVALUE("12:00")
+                // is 0.
+                Some(serial) if serial >= 0.0 => Ok(Value::Number(serial.floor())),
                 _ => Err(ExcelError::Value),
             }
         }

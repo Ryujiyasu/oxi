@@ -120,13 +120,17 @@ pub fn serial_from_date(year: i64, month: i64, day: i64) -> Result<i64, ExcelErr
     let month_index = year * 12 + (month - 1);
     let (year, month) = (month_index.div_euclid(12), month_index.rem_euclid(12) + 1);
 
-    let unix_days = days_from_civil(year, month, 1) + (day - 1);
-    let serial = if unix_days <= UNIX_DAYS_TO_1900 + 58 {
+    // The day counts on from the first of the month in SERIALS, so it runs
+    // through the phantom 29 February 1900 as Excel's does: measured,
+    // DATE(1900,2,29) and DATE(1900,3,0) are both 60.
+    let first = days_from_civil(year, month, 1);
+    let first_serial = if first <= UNIX_DAYS_TO_1900 + 58 {
         // On or before 1900-02-28.
-        unix_days + OFFSET_BEFORE_PHANTOM
+        first + OFFSET_BEFORE_PHANTOM
     } else {
-        unix_days + OFFSET_AFTER_PHANTOM
+        first + OFFSET_AFTER_PHANTOM
     };
+    let serial = first_serial + (day - 1);
 
     if !(0..=MAX_SERIAL).contains(&serial) {
         return Err(ExcelError::Num);
@@ -303,7 +307,10 @@ fn calendar(said: &[&str]) -> Option<i64> {
             }
         }
     };
-    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+    // Excel's calendar has a 29 February 1900: measured, DATEVALUE("1900/2/29")
+    // is 60.
+    let phantom = year == 1900 && month == 2 && day == 29;
+    if !phantom && (!(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month)) {
         return None;
     }
     serial_from_date(year, month, day).ok()
