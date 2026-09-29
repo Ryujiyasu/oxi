@@ -11145,10 +11145,17 @@ impl<'a> WorkbookHost<'a> {
             if table.rows == 1 && table.columns == 1 {
                 return Ok(Some(table.get(0, 0)));
             }
+            // Numbers come back Doubles, as everything through the sheet does:
+            // measured, `Transpose(Array(1, 2, 3))(2, 1)` is a Double.
+            let as_sheet_number = |value: Value| match value {
+                Value::Byte(_) | Value::Int16(_) | Value::Integer(_) | Value::LongLong(_) | Value::Single(_)
+                | Value::Currency(_) | Value::Decimal(_) => any_number(&value).map(Value::Double).unwrap_or(value),
+                other => other,
+            };
             let mut values = Vec::with_capacity(table.rows * table.columns);
             for column in 0..table.columns {
                 for row in 0..table.rows {
-                    values.push(table.get(row, column));
+                    values.push(as_sheet_number(table.get(row, column)));
                 }
             }
             // Always based at one, whatever the array that went in was based
