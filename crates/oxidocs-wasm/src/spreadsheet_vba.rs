@@ -319,6 +319,8 @@ enum HostObject {
     Hyperlinks(HyperlinkScope),
     /// `Worksheet.PageSetup`.
     PageSetup(usize),
+    /// A sheet's `Protection`: what its protection allows.
+    SheetProtection(usize),
     /// The tables of a sheet, one table by its number, and a table's rows
     /// and columns.
     ListObjects(usize),
@@ -533,6 +535,9 @@ struct Protection {
     allow_deleting_columns: bool,
     allow_deleting_rows: bool,
     allow_sorting: bool,
+    allow_inserting_hyperlinks: bool,
+    allow_filtering: bool,
+    allow_using_pivot_tables: bool,
 }
 
 impl Protection {
@@ -564,6 +569,9 @@ impl Protection {
             allow_deleting_columns: flag(11, false)?,
             allow_deleting_rows: flag(12, false)?,
             allow_sorting: flag(13, false)?,
+            allow_inserting_hyperlinks: flag(10, false)?,
+            allow_filtering: flag(14, false)?,
+            allow_using_pivot_tables: flag(15, false)?,
         })
     }
 }
@@ -2027,6 +2035,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Hyperlink(_) => "Hyperlink",
                 HostObject::Hyperlinks(_) => "Hyperlinks",
                 HostObject::PageSetup(_) => "PageSetup",
+                HostObject::SheetProtection(_) => "Protection",
                 HostObject::ListObjects(_) => "ListObjects",
                 HostObject::ListObject(_) => "ListObject",
                 HostObject::ListRows(_) => "ListRows",
@@ -8212,6 +8221,7 @@ impl<'a> WorkbookHost<'a> {
                     range(held).map(|held| HostObject::Hyperlinks(HyperlinkScope::Range(held)))
                 }
                 HostObject::PageSetup(sheet) => moved(sheet).map(HostObject::PageSetup),
+                HostObject::SheetProtection(sheet) => moved(sheet).map(HostObject::SheetProtection),
                 HostObject::ListObjects(sheet) => moved(sheet).map(HostObject::ListObjects),
                 HostObject::Validation(held) => range(held).map(HostObject::Validation),
                 HostObject::FormatConditions(held) => range(held).map(HostObject::FormatConditions),
@@ -16569,6 +16579,28 @@ impl Host for WorkbookHost<'_> {
         if let Some(sheet) = self.page_setup_sheet(receiver) {
             return self.page_setup_member(sheet, name);
         }
+        // What `Protect` allowed: measured, after `Protect AllowFiltering:=
+        // True` the sheet's Protection says AllowFiltering True and
+        // AllowInsertingRows False.
+        if let Some(HostObject::SheetProtection(sheet)) = self.objects.get(receiver.handle as usize) {
+            let held = self.protected.get(*sheet).cloned().flatten();
+            let allowed = |pick: fn(&Protection) -> bool| Value::Boolean(held.as_ref().is_some_and(pick));
+            let lower = name.to_ascii_lowercase();
+            return Ok(Some(match lower.as_str() {
+                "allowformattingcells" => allowed(|p| p.allow_formatting_cells),
+                "allowformattingcolumns" => allowed(|p| p.allow_formatting_columns),
+                "allowformattingrows" => allowed(|p| p.allow_formatting_rows),
+                "allowinsertingcolumns" => allowed(|p| p.allow_inserting_columns),
+                "allowinsertingrows" => allowed(|p| p.allow_inserting_rows),
+                "allowinsertinghyperlinks" => allowed(|p| p.allow_inserting_hyperlinks),
+                "allowdeletingcolumns" => allowed(|p| p.allow_deleting_columns),
+                "allowdeletingrows" => allowed(|p| p.allow_deleting_rows),
+                "allowsorting" => allowed(|p| p.allow_sorting),
+                "allowfiltering" => allowed(|p| p.allow_filtering),
+                "allowusingpivottables" => allowed(|p| p.allow_using_pivot_tables),
+                _ => return Ok(None),
+            }));
+        }
         if let Some((id, part)) = self.table_part(receiver) {
             return self.table_member(id, part, name, &[]);
         }
@@ -16955,6 +16987,9 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("pagesetup") {
                 return Ok(Some(self.object(HostObject::PageSetup(sheet))));
+            }
+            if name.eq_ignore_ascii_case("protection") {
+                return Ok(Some(self.object(HostObject::SheetProtection(sheet))));
             }
             if name.eq_ignore_ascii_case("outline") {
                 return Ok(Some(self.object(HostObject::Outline(sheet))));
