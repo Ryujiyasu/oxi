@@ -661,6 +661,12 @@ impl<'a> Runtime<'a> {
                     return Ok(array.values[offset].clone());
                 }
             }
+            // The default member stands for `Value`, `Item` and `obj(args)`.
+            if ["value", "item", "_default"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+                if let Some(default) = this.member_with_id(&receiver.kind, "0").filter(|d| !d.eq_ignore_ascii_case(name)) {
+                    return this.call_kind(&default, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet], args.to_vec(), Some(line));
+                }
+            }
             Err(no_such_member(format!("the class has no member {name}"), Some(line)))
         })
     }
@@ -709,6 +715,28 @@ impl<'a> Runtime<'a> {
             placed[at] = value.clone();
         }
         self.instance_member(receiver, name, &placed, line)
+    }
+
+    /// The procedure a class marks with `VB_UserMemId = id`: 0 is its
+    /// default member, -4 its enumerator.
+    fn member_with_id(&self, class: &str, id: &str) -> Option<String> {
+        let module = self.classes.get(&class.to_ascii_lowercase())?;
+        module.items.iter().find_map(|item| {
+            let ModuleItem::Procedure(procedure) = item else {
+                return None;
+            };
+            procedure.body.iter().find_map(|statement| match statement {
+                Statement::Comment { text, .. } => {
+                    let rest = text.strip_prefix("Attribute ")?;
+                    let (member, value) = rest.split_once('=')?;
+                    let member = member.trim();
+                    let (owner, attribute) = member.split_once('.')?;
+                    (attribute.trim().eq_ignore_ascii_case("VB_UserMemId") && value.trim() == id)
+                        .then(|| owner.trim().to_string())
+                }
+                _ => None,
+            })
+        })
     }
 
     /// The interfaces a class names with `Implements`.
@@ -4367,8 +4395,18 @@ impl<'a> Runtime<'a> {
                     .iter()
                     .map(|entry| entry.key.clone())
                     .collect(),
-                InternalObject::Instance(_) => {
-                    return Err(no_such_member("the class cannot be walked with For Each".to_string(), Some(line)))
+                InternalObject::Instance(instance) => {
+                    // For Each walks what the class's enumerator hands back:
+                    // `Set NewEnum = mItems.[_NewEnum]`.
+                    let class = instance.class.clone();
+                    let Some(enumerator) = self.member_with_id(&class, "-4") else {
+                        return Err(no_such_member("the class cannot be walked with For Each".to_string(), Some(line)));
+                    };
+                    let walked = self.instance_member(receiver, &enumerator, &[], line)?;
+                    return match walked {
+                        Value::Object(inner) => self.host_enumerate(&inner, line),
+                        _ => Err(no_such_member("the class's enumerator is not an object".to_string(), Some(line))),
+                    };
                 }
             }));
         }
@@ -4396,6 +4434,11 @@ impl<'a> Runtime<'a> {
                     Some(line),
                 )
             })?;
+        // `[_NewEnum]`: what a class's enumerator hands back, which For Each
+        // walks as the collection itself.
+        if name.eq_ignore_ascii_case("_newenum") && args.is_empty() {
+            return Ok(Value::Object(receiver.clone()));
+        }
         match object {
             InternalObject::Collection(entries) if name.eq_ignore_ascii_case("add") => {
                 if !(1..=4).contains(&args.len()) {

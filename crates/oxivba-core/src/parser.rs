@@ -979,6 +979,13 @@ impl<'a> Parser<'a> {
             return Statement::LineNumber { value, span };
         }
 
+        // `Attribute Item.VB_UserMemId = 0` inside a procedure, as the VBE
+        // exports a class's default member or enumerator: not a statement,
+        // kept as its text for the runtime to read.
+        if self.at_kw("attribute") && matches!(self.kind_at(1), TokenKind::Ident(_)) {
+            let (text, _) = self.consume_line();
+            return Statement::Comment { text, span };
+        }
         // A label: `foo:` at the head of a line, distinguished from `foo := x`
         // and from `foo: bar` only by the colon coming straight after the name.
         if matches!(self.kind(), TokenKind::Ident(_))
