@@ -10418,7 +10418,18 @@ impl<'a> WorkbookHost<'a> {
         let mut values = Vec::new();
         for row in first_row..last_row {
             for column in first_column..last_column {
-                values.push(table.get(row, column));
+                // What an array hands a worksheet function comes back as the
+                // sheet holds it: measured, `Index(Array(1, 2), 1)` is a
+                // Double, and a Currency or a Date comes back as its text.
+                values.push(match table.get(row, column) {
+                    Value::Int16(_) | Value::Integer(_) | Value::Byte(_) | Value::Single(_)
+                    | Value::LongLong(_) | Value::Decimal(_) => {
+                        Value::Double(any_number(&table.get(row, column)).unwrap_or_default())
+                    }
+                    Value::Currency(units) => Value::String(vba_number_text(units as f64 / 10_000.0)),
+                    Value::Date(serial) => Value::String(oxivba_core::vba_date_text(serial)),
+                    held => held,
+                });
             }
         }
         if values.len() == 1 {
@@ -10961,6 +10972,19 @@ impl<'a> WorkbookHost<'a> {
         let mut direct: Vec<Option<f64>> = Vec::new();
         let mut direct_given = 0usize;
         for value in args {
+            if let Value::Array(array) = value {
+                // An array cannot carry a Null across: measured,
+                // `Count(Array(Null))` is error 13.
+                if array.values.iter().any(|held| matches!(held, Value::Null)) {
+                    return Err(host_error(13, "type mismatch"));
+                }
+                // And every element of it is a value, an Empty one included:
+                // measured, `CountA(Array(1, "", Empty))` is 3.
+                if name.eq_ignore_ascii_case("counta") {
+                    direct_given += array.values.len();
+                    continue;
+                }
+            }
             match value {
                 Value::Object(_) | Value::Array(_) => self.append_worksheet_function_values(value, &mut values)?,
                 Value::Missing => {}
