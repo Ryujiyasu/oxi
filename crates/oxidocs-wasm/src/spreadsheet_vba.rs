@@ -9790,6 +9790,15 @@ impl<'a> WorkbookHost<'a> {
             let from = self.active_cell;
             return formula_to_r1c1(&written, from.row.saturating_sub(1), from.column).map(Value::String);
         }
+        // Where the name stands among the workbook's names as Names counts
+        // them: measured, with _ok, Sheet2!Loc, Loc, Rate, ... Rate is 4.
+        if name.eq_ignore_ascii_case("index") {
+            let held = self.workbook.defined_names[at].0.clone();
+            let mut all: Vec<String> = self.workbook.defined_names.iter().map(|(name, _)| name.clone()).collect();
+            self.sort_names(&mut all);
+            let place = all.iter().position(|name| *name == held).map_or(0, |at| at + 1);
+            return Ok(Value::Integer(place as i64));
+        }
         // The names Excel writes for itself are hidden; the ones a macro adds
         // are not. Measured: `Sheet1!_FilterDatabase` answers False.
         if name.eq_ignore_ascii_case("visible") {
@@ -16761,6 +16770,14 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("cells") {
                     return self.cells_object(sheet, args).map(Some);
                 }
+                // `Worksheets(2).Names(1)`: the sheet's own names, by index or
+                // leaf.
+                if name.eq_ignore_ascii_case("names") {
+                    if args.is_empty() {
+                        return Ok(Some(self.object(HostObject::SheetNames(sheet))));
+                    }
+                    return self.sheet_names_member(sheet, "item", args);
+                }
                 if name.eq_ignore_ascii_case("activate") {
                     if !args.is_empty() {
                         return Err("Worksheet.Activate does not accept arguments".to_string());
@@ -18910,8 +18927,9 @@ impl Host for WorkbookHost<'_> {
             return Ok(Some(self.object(HostObject::Worksheet(range.sheet))));
         }
         if name.eq_ignore_ascii_case("name") {
-            // Excel answers with the Name itself, and with Nothing where the
-            // block has not been given one.
+            // Excel answers with the Name itself, and refuses where the block
+            // has not been given one: measured, `Range("A1").Name Is Nothing`
+            // is error 1004.
             let stands_for = self.address_of(range);
             let held = self
                 .workbook
@@ -18919,10 +18937,10 @@ impl Host for WorkbookHost<'_> {
                 .iter()
                 .find(|(_, refers_to)| refers_to.eq_ignore_ascii_case(&stands_for))
                 .map(|(held, _)| held.clone());
-            return Ok(Some(match held {
-                Some(held) => self.name_object(&held),
-                None => Value::Nothing,
-            }));
+            return match held {
+                Some(held) => Ok(Some(self.name_object(&held))),
+                None => Err(host_error(1004, "the range has no name")),
+            };
         }
         // Both of these SET the row-or-column sense rather than passing one
         // along: asked of Excel, `Range("A1:C3").EntireRow.Count` is 3 — its
@@ -24031,6 +24049,18 @@ fn check_name(name: &str) -> Result<(), String> {
     }
     if parse_a1_reference(name).is_ok() {
         return refuse("it is shaped like a cell reference");
+    }
+    // Nor may it read as an R1C1 reference: measured, "R" and "C1R" are
+    // refused (1004), as are R, C, R2, C3, R2C3 and C3R2 alike.
+    let lower = name.to_ascii_lowercase();
+    let r1c1 = |text: &str, first: char, second: char| -> bool {
+        let Some(rest) = text.strip_prefix(first) else { return false };
+        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        let rest = &rest[digits..];
+        rest.is_empty() || rest.strip_prefix(second).is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
+    };
+    if r1c1(&lower, 'r', 'c') || r1c1(&lower, 'c', 'r') {
+        return refuse("it is shaped like an R1C1 reference");
     }
     Ok(())
 }
