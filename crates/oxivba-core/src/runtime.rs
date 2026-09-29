@@ -5735,7 +5735,12 @@ fn call_format_builtin(
                 parens,
             );
             if percent {
-                result.push('%');
+                // The sign goes inside the brackets: measured,
+                // `FormatPercent(-0.5, 0, , vbTrue)` is (50%).
+                match result.strip_suffix(')') {
+                    Some(inside) if result.starts_with('(') => result = format!("{inside}%)"),
+                    _ => result.push('%'),
+                }
             } else if name == "formatcurrency" {
                 result = currency_symbol(result);
             }
@@ -6247,6 +6252,15 @@ fn call_text_conversion_builtin(
                 ));
             }
             let rendered = text(&numeric_literal(value)).map_err(mismatch)?;
+            // Str writes a fraction without its nought: measured,
+            // `Str(0.1 + 0.2)` is " .3".
+            let rendered = match rendered.strip_prefix("0.") {
+                Some(rest) => format!(".{rest}"),
+                None => match rendered.strip_prefix("-0.") {
+                    Some(rest) => format!("-.{rest}"),
+                    None => rendered,
+                },
+            };
             Ok(Value::String(if value.is_sign_negative() {
                 rendered
             } else {
@@ -7107,8 +7121,76 @@ fn clock(parts: DateParts, seconds: bool) -> String {
     }
 }
 
+/// A magnitude written with so many decimals the way VBA's pictures round
+/// it: the number is first taken to fifteen significant digits, and that
+/// decimal is rounded half away from zero. Measured: `Format(1.005,
+/// "0.00")` is 1.01 though the double sits below 1.005, `FormatNumber(0.5,
+/// 0)` is 1 and `FormatNumber(2.5, 0)` 3, and a number past fifteen digits
+/// is padded with noughts -- `123,456,789,012,346,000`.
+fn decimal_fixed(value: f64, places: usize) -> String {
+    let magnitude = value.abs();
+    if magnitude == 0.0 || !magnitude.is_finite() {
+        return format!("{:.*}", places, 0.0);
+    }
+    let written = format!("{magnitude:.14e}");
+    let (mantissa, exponent) = written.split_once('e').unwrap_or((&written, "0"));
+    let exponent: i64 = exponent.parse().unwrap_or(0);
+    let mut digits: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).map(|b| b - b'0').collect();
+    // Digits before the point.
+    let mut point = exponent + 1;
+    let keep = point + places as i64;
+    if keep < 0 {
+        return format!("{:.*}", places, 0.0);
+    }
+    let keep = keep as usize;
+    if keep < digits.len() {
+        let up = digits[keep] >= 5;
+        digits.truncate(keep);
+        if up {
+            let mut at = digits.len();
+            loop {
+                if at == 0 {
+                    digits.insert(0, 1);
+                    point += 1;
+                    break;
+                }
+                at -= 1;
+                if digits[at] == 9 {
+                    digits[at] = 0;
+                } else {
+                    digits[at] += 1;
+                    break;
+                }
+            }
+        }
+    }
+    let needed = (point + places as i64).max(0) as usize;
+    while digits.len() < needed {
+        digits.push(0);
+    }
+    let text: String = digits.iter().map(|d| (b'0' + d) as char).collect();
+    let (whole, fraction) = if point <= 0 {
+        let zeros = "0".repeat((-point) as usize);
+        ("0".to_string(), format!("{zeros}{text}"))
+    } else {
+        let point = point as usize;
+        (text[..point.min(text.len())].to_string(), text[point.min(text.len())..].to_string())
+    };
+    let whole = if whole.is_empty() { "0".to_string() } else { whole };
+    let mut fraction = fraction;
+    fraction.truncate(places);
+    while fraction.len() < places {
+        fraction.push('0');
+    }
+    if places == 0 {
+        whole
+    } else {
+        format!("{whole}.{fraction}")
+    }
+}
+
 fn fixed_number(value: f64, digits: usize, grouping: bool, leading: bool, parens: bool) -> String {
-    let raw = format!("{:.*}", digits, value.abs());
+    let raw = decimal_fixed(value, digits);
     // What rounds to nothing has no sign: measured, `FormatNumber(-0.004)`
     // is 0.00 and `FormatCurrency(-0.004)` $0.00.
     let negative = value < 0.0 && raw.bytes().any(|b| (b'1'..=b'9').contains(&b));
@@ -7393,9 +7475,7 @@ fn digit_places(tokens: &[Token], upto: usize) -> (usize, usize, usize, usize, b
 /// The digits of a magnitude, laid into the places the picture asked for.
 fn laid_out(magnitude: f64, whole: usize, whole_required: usize, fraction: usize,
             fraction_required: usize, grouped: bool) -> (String, String) {
-    let scaled = 10_f64.powi(fraction as i32);
-    let rounded = (magnitude * scaled).abs().round() / scaled;
-    let text = format!("{rounded:.*}", fraction);
+    let text = decimal_fixed(magnitude, fraction);
     let (integer_text, fraction_text) = match text.split_once('.') {
         Some((left, right)) => (left.to_string(), right.to_string()),
         None => (text, String::new()),
