@@ -3399,7 +3399,46 @@ fn fin_rate(periods: f64, payment: f64, present: f64, future: f64, kind: f64, gu
         }
         rate = next;
     }
-    Err(ExcelError::Num)
+    // Newton from the guess can run away where a rate is still there to be
+    // found: measured, `RATE(360, -1073.64, 200000)` is 0.00416664453634559,
+    // which Newton from 0.1 overshoots. Find where the balance changes sign
+    // and close in on it.
+    let equation = |rate: f64| fin_equation(rate, periods, payment, present, future, kind).ok().filter(|v| v.is_finite());
+    const MARKS: [f64; 22] = [
+        -0.99, -0.9, -0.5, -0.2, -0.1, -0.05, -0.01, -0.001, 1e-6, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02,
+        0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 10.0,
+    ];
+    let mut brackets: Vec<(f64, f64)> = Vec::new();
+    for pair in MARKS.windows(2) {
+        if let (Some(low), Some(high)) = (equation(pair[0]), equation(pair[1])) {
+            if low == 0.0 {
+                return fin_finite(pair[0]);
+            }
+            if low.signum() != high.signum() {
+                brackets.push((pair[0], pair[1]));
+            }
+        }
+    }
+    let Some(&(mut low, mut high)) = brackets
+        .iter()
+        .min_by(|a, b| (a.0 - guess).abs().total_cmp(&(b.0 - guess).abs()))
+    else {
+        return Err(ExcelError::Num);
+    };
+    let low_sign = equation(low).map(f64::signum).ok_or(ExcelError::Num)?;
+    for _ in 0..200 {
+        let middle = (low + high) / 2.0;
+        if middle == low || middle == high {
+            break;
+        }
+        match equation(middle) {
+            Some(value) if value == 0.0 => return fin_finite(middle),
+            Some(value) if value.signum() == low_sign => low = middle,
+            Some(_) => high = middle,
+            None => return Err(ExcelError::Num),
+        }
+    }
+    fin_finite((low + high) / 2.0)
 }
 
 fn fin_irr(values: &[f64], guess: f64) -> Result<Value, ExcelError> {

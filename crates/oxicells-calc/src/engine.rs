@@ -600,9 +600,14 @@ impl Workbook {
         let mut dependents: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); keys.len()];
         let mut indegree = vec![0usize; keys.len()];
 
+        // A formula that reads its own cell -- `=SUM(5:6)` sitting in row 5
+        // -- is a cycle of one: measured, Excel leaves it at 0.
+        let mut reads_itself = BTreeSet::new();
         for (i, (sheet, coord)) in keys.iter().enumerate() {
             self.each_dependency(sheet, coord, &at, &mut |j| {
-                if j != i && dependents[j].insert(i) {
+                if j == i {
+                    reads_itself.insert(i);
+                } else if dependents[j].insert(i) {
                     indegree[i] += 1;
                 }
             });
@@ -648,6 +653,10 @@ impl Workbook {
 
         for &i in &order {
             let (sheet, coord) = &keys[i];
+            if reads_itself.contains(&i) {
+                self.store_cached(sheet, coord, Value::Number(0.0));
+                continue;
+            }
             let Some(expr) = self.expr_at(sheet, coord) else {
                 continue;
             };
@@ -668,6 +677,11 @@ impl Workbook {
             return report;
         }
         for (i, (sheet, coord)) in keys.iter().enumerate() {
+            if reads_itself.contains(&i) {
+                report
+                    .circular
+                    .push(format!("{}!{}", sheet, CellRef::new(coord.0, coord.1).to_a1()));
+            }
             if !emitted.contains(&i) {
                 report
                     .circular
@@ -2736,6 +2750,26 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "B1"), Value::Number(1101.0));
         assert_eq!(wb.value("Sheet1", "B2"), Value::Number(1001.0));
         assert_eq!(wb.value("Sheet1", "B3"), Value::Number(1111.0));
+    }
+
+    /// A formula reading its own cell is a cycle and stays 0, as Excel
+    /// leaves it: measured, `=SUM(5:6)` in D5 is 0. RATE finds a rate Newton
+    /// from the guess misses: `RATE(360,-1073.64,200000)` is 0.0041666445...
+    #[test]
+    fn a_formula_reading_itself_is_zero_and_rate_is_found() {
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        wb.set_value("Sheet1", "A5", Value::Number(5.0)).unwrap();
+        wb.set_value("Sheet1", "A6", Value::Number(7.0)).unwrap();
+        wb.set_formula("Sheet1", "D5", "=SUM(5:6)").unwrap();
+        wb.set_formula("Sheet1", "E1", "=RATE(360,-1073.64,200000)").unwrap();
+        let report = wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D5"), Value::Number(0.0));
+        assert_eq!(report.circular, vec!["Sheet1!D5".to_string()]);
+        match wb.value("Sheet1", "E1") {
+            Value::Number(rate) => assert!((rate - 0.00416664453634559).abs() < 1e-12, "{rate}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// An error as the criterion counts the cells holding that error.
