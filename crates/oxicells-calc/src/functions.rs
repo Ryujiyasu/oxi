@@ -304,6 +304,12 @@ fn one_at_a_time(name: &str) -> bool {
         // arithmetic on one number
         "ABS" | "INT" | "MOD" | "POWER" | "SQRT" | "ROUND" | "ROUNDDOWN"
             | "ROUNDUP" | "CEILING" | "FLOOR" | "CEILING.MATH" | "FLOOR.MATH"
+            | "EXP" | "LN" | "LOG" | "LOG10" | "SIN" | "COS" | "TAN" | "ASIN"
+            | "ACOS" | "ATAN" | "ATAN2" | "SINH" | "COSH" | "TANH" | "ASINH"
+            | "ACOSH" | "ATANH" | "SQRTPI"
+            | "DEC2HEX" | "DEC2BIN" | "DEC2OCT" | "HEX2DEC" | "BIN2DEC"
+            | "OCT2DEC" | "BIN2HEX" | "HEX2BIN" | "BIN2OCT" | "OCT2BIN"
+            | "HEX2OCT" | "OCT2HEX"
         // one piece of text
             | "LEN" | "LEFT" | "RIGHT" | "MID" | "LOWER" | "UPPER" | "TRIM"
             | "FIND" | "SEARCH" | "SUBSTITUTE" | "REPLACE" | "REPT" | "EXACT"
@@ -365,6 +371,13 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
         if let Some(line) = a_whole_line(args) {
             return line;
         }
+    }
+    // FREQUENCY counts into the bins and one more, down a column.
+    if name == "FREQUENCY" {
+        return match frequency(args) {
+            Ok(block) => Arg::Range(block),
+            Err(why) => Arg::Value(Value::Error(why)),
+        };
     }
     // The ones that hand back a block rather than a value.
     if matches!(name, "UNIQUE" | "SORT" | "FILTER" | "SORTBY") {
@@ -622,6 +635,158 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
 
         // ---- arithmetic --------------------------------------------------
         "ABS" => Ok(Value::Number(one(args)?.abs())),
+        // Logarithms, powers of e and the circle, with Excel's errors: a
+        // logarithm of nought or less is #NUM!, and of base 1 #DIV/0!.
+        "EXP" => fin(one(args)?.exp()),
+        "LN" => {
+            let n = one(args)?;
+            if n <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(n.ln()))
+        }
+        "LOG10" => {
+            let n = one(args)?;
+            if n <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(n.log10()))
+        }
+        "LOG" => {
+            let n = one(args)?;
+            let base = match args.get(1) {
+                Some(a) => num(a)?,
+                None => 10.0,
+            };
+            if n <= 0.0 || base <= 0.0 {
+                return Err(ExcelError::Num);
+            }
+            if base == 1.0 {
+                return Err(ExcelError::DivZero);
+            }
+            Ok(Value::Number(if base == 10.0 { n.log10() } else { n.ln() / base.ln() }))
+        }
+        "PI" => Ok(Value::Number(std::f64::consts::PI)),
+        "SQRTPI" => {
+            let n = one(args)?;
+            if n < 0.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number((n * std::f64::consts::PI).sqrt()))
+        }
+        "SIN" => fin(one(args)?.sin()),
+        "COS" => fin(one(args)?.cos()),
+        "TAN" => fin(one(args)?.tan()),
+        "SINH" => fin(one(args)?.sinh()),
+        "COSH" => fin(one(args)?.cosh()),
+        "TANH" => fin(one(args)?.tanh()),
+        "ATAN" => fin(one(args)?.atan()),
+        "ASINH" => fin(one(args)?.asinh()),
+        "ASIN" | "ACOS" => {
+            let n = one(args)?;
+            if !(-1.0..=1.0).contains(&n) {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(if name == "ASIN" { n.asin() } else { n.acos() }))
+        }
+        "ACOSH" => {
+            let n = one(args)?;
+            if n < 1.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(n.acosh()))
+        }
+        "ATANH" => {
+            let n = one(args)?;
+            if n <= -1.0 || n >= 1.0 {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(n.atanh()))
+        }
+        // ATAN2 takes x first, the other way round from most languages.
+        "ATAN2" => {
+            expect(args, 2)?;
+            let (x, y) = (num(&args[0])?, num(&args[1])?);
+            if x == 0.0 && y == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            Ok(Value::Number(y.atan2(x)))
+        }
+        "DEC2HEX" | "DEC2BIN" | "DEC2OCT" => {
+            let radix = match name { "DEC2HEX" => 16, "DEC2BIN" => 2, _ => 8 };
+            let n = num(one_arg(args)?)?.trunc() as i64;
+            to_base(n, radix, args.get(1))
+        }
+        "HEX2DEC" | "BIN2DEC" | "OCT2DEC" => {
+            let radix = match name { "HEX2DEC" => 16, "BIN2DEC" => 2, _ => 8 };
+            Ok(Value::Number(from_base(&text(one_arg(args)?)?, radix)? as f64))
+        }
+        "BIN2HEX" | "BIN2OCT" | "HEX2BIN" | "HEX2OCT" | "OCT2BIN" | "OCT2HEX" => {
+            let from = match &name[..3] { "BIN" => 2, "HEX" => 16, _ => 8 };
+            let to = match &name[4..] { "BIN" => 2, "HEX" => 16, _ => 8 };
+            let n = from_base(&text(one_arg(args)?)?, from)?;
+            to_base(n, to, args.get(1))
+        }
+        // Paired data: pairs where either side is not a number are passed
+        // over, and the two ranges must be the same size.
+        "CORREL" | "PEARSON" | "RSQ" | "SLOPE" | "INTERCEPT" | "COVAR" | "COVARIANCE.P"
+        | "COVARIANCE.S" | "STEYX" => {
+            expect(args, 2)?;
+            let fit = Fit::of(&args[0], &args[1])?;
+            match name {
+                "CORREL" | "PEARSON" => fit.correl().map(Value::Number),
+                "RSQ" => fit.correl().map(|r| Value::Number(r * r)),
+                "SLOPE" => fit.slope().map(Value::Number),
+                "INTERCEPT" => fit.slope().map(|b| Value::Number(fit.mean_y - b * fit.mean_x)),
+                "COVAR" | "COVARIANCE.P" => Ok(Value::Number(fit.sxy / fit.n)),
+                "COVARIANCE.S" => {
+                    if fit.n < 2.0 {
+                        return Err(ExcelError::DivZero);
+                    }
+                    Ok(Value::Number(fit.sxy / (fit.n - 1.0)))
+                }
+                _ => {
+                    if fit.n < 3.0 || fit.sxx == 0.0 {
+                        return Err(ExcelError::DivZero);
+                    }
+                    Ok(Value::Number(((fit.syy - fit.sxy * fit.sxy / fit.sxx) / (fit.n - 2.0)).sqrt()))
+                }
+            }
+        }
+        "FORECAST" | "FORECAST.LINEAR" => {
+            expect(args, 3)?;
+            let x = num(&args[0])?;
+            let fit = Fit::of(&args[1], &args[2])?;
+            let slope = fit.slope()?;
+            Ok(Value::Number(fit.mean_y + slope * (x - fit.mean_x)))
+        }
+        "HARMEAN" => {
+            let numbers = numeric_operands(args)?;
+            if numbers.is_empty() || numbers.iter().any(|n| *n <= 0.0) {
+                return Err(ExcelError::Num);
+            }
+            Ok(Value::Number(numbers.len() as f64 / numbers.iter().map(|n| 1.0 / n).sum::<f64>()))
+        }
+        "SKEW" | "KURT" => {
+            let numbers = numeric_operands(args)?;
+            let n = numbers.len() as f64;
+            let least = if name == "SKEW" { 3.0 } else { 4.0 };
+            if n < least {
+                return Err(ExcelError::DivZero);
+            }
+            let mean = numbers.iter().sum::<f64>() / n;
+            let sd = (numbers.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+            if sd == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            Ok(Value::Number(if name == "SKEW" {
+                n / ((n - 1.0) * (n - 2.0)) * numbers.iter().map(|x| ((x - mean) / sd).powi(3)).sum::<f64>()
+            } else {
+                n * (n + 1.0) / ((n - 1.0) * (n - 2.0) * (n - 3.0))
+                    * numbers.iter().map(|x| ((x - mean) / sd).powi(4)).sum::<f64>()
+                    - 3.0 * (n - 1.0).powi(2) / ((n - 2.0) * (n - 3.0))
+            }))
+        }
         "SQRT" => {
             let n = one(args)?;
             if n < 0.0 {
@@ -3764,6 +3929,168 @@ fn index_at(table: &RangeData, row: usize, col: usize) -> Result<Value, ExcelErr
     Ok(table.at(col - 1, row - 1))
 }
 
+/// A finite answer, or #NUM! for one that ran off to infinity.
+fn fin(n: f64) -> Result<Value, ExcelError> {
+    if n.is_finite() {
+        Ok(Value::Number(n))
+    } else {
+        Err(ExcelError::Num)
+    }
+}
+
+/// How many digits a base's ten-digit two's complement spans, and so where a
+/// negative number starts.
+fn base_bits(radix: u32) -> u32 {
+    match radix {
+        2 => 10,
+        8 => 30,
+        _ => 40,
+    }
+}
+
+/// DEC2HEX and its kin: a negative number is written in ten digits of two's
+/// complement and ignores `places`; a positive one is padded to `places`,
+/// which may not be fewer than it needs.
+fn to_base(n: i64, radix: u32, places: Option<&Arg>) -> Result<Value, ExcelError> {
+    let bits = base_bits(radix);
+    let half = 1i64 << (bits - 1);
+    if n < -half || n >= half {
+        return Err(ExcelError::Num);
+    }
+    if n < 0 {
+        let held = (n + (1i64 << bits)) as u64;
+        return Ok(Value::Text(format_radix(held, radix)));
+    }
+    let mut written = format_radix(n as u64, radix);
+    if let Some(places) = places {
+        let places = num(places)?.trunc();
+        if places < written.len() as f64 || places > 10.0 {
+            return Err(ExcelError::Num);
+        }
+        while written.len() < places as usize {
+            written.insert(0, '0');
+        }
+    }
+    Ok(Value::Text(written))
+}
+
+fn format_radix(mut n: u64, radix: u32) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut digits = Vec::new();
+    while n > 0 {
+        digits.push(std::char::from_digit((n % radix as u64) as u32, radix).unwrap().to_ascii_uppercase());
+        n /= radix as u64;
+    }
+    digits.iter().rev().collect()
+}
+
+/// HEX2DEC and its kin: up to ten digits, the tenth-digit sign bit read as
+/// two's complement.
+fn from_base(text: &str, radix: u32) -> Result<i64, ExcelError> {
+    let text = text.trim();
+    if text.len() > 10 {
+        return Err(ExcelError::Num);
+    }
+    if text.is_empty() {
+        return Ok(0);
+    }
+    let n = i64::from_str_radix(text, radix).map_err(|_| ExcelError::Num)?;
+    let bits = base_bits(radix);
+    Ok(if n >= 1i64 << (bits - 1) { n - (1i64 << bits) } else { n })
+}
+
+/// Sums of squares for two paired samples.
+struct Fit {
+    n: f64,
+    mean_x: f64,
+    mean_y: f64,
+    sxx: f64,
+    syy: f64,
+    sxy: f64,
+}
+
+impl Fit {
+    /// `ys` then `xs`, the order SLOPE and CORREL are written in.
+    fn of(ys: &Arg, xs: &Arg) -> Result<Fit, ExcelError> {
+        let (ys, xs) = (ys.flatten(), xs.flatten());
+        if ys.len() != xs.len() {
+            return Err(ExcelError::NA);
+        }
+        let mut pairs = Vec::new();
+        for (y, x) in ys.iter().zip(&xs) {
+            if let Value::Error(e) = y {
+                return Err(*e);
+            }
+            if let Value::Error(e) = x {
+                return Err(*e);
+            }
+            if let (Value::Number(y), Value::Number(x)) = (y, x) {
+                pairs.push((*x, *y));
+            }
+        }
+        if pairs.is_empty() {
+            return Err(ExcelError::DivZero);
+        }
+        let n = pairs.len() as f64;
+        let mean_x = pairs.iter().map(|p| p.0).sum::<f64>() / n;
+        let mean_y = pairs.iter().map(|p| p.1).sum::<f64>() / n;
+        let (mut sxx, mut syy, mut sxy) = (0.0, 0.0, 0.0);
+        for (x, y) in pairs {
+            sxx += (x - mean_x) * (x - mean_x);
+            syy += (y - mean_y) * (y - mean_y);
+            sxy += (x - mean_x) * (y - mean_y);
+        }
+        Ok(Fit { n, mean_x, mean_y, sxx, syy, sxy })
+    }
+
+    fn slope(&self) -> Result<f64, ExcelError> {
+        if self.sxx == 0.0 {
+            return Err(ExcelError::DivZero);
+        }
+        Ok(self.sxy / self.sxx)
+    }
+
+    fn correl(&self) -> Result<f64, ExcelError> {
+        if self.sxx == 0.0 || self.syy == 0.0 {
+            return Err(ExcelError::DivZero);
+        }
+        Ok(self.sxy / (self.sxx * self.syy).sqrt())
+    }
+}
+
+/// FREQUENCY: how many of the data fall at or under each bin and above the
+/// one before, then how many are above them all. Bins are counted in rising
+/// order and answered in the order given.
+fn frequency(args: &[Arg]) -> Result<RangeData, ExcelError> {
+    expect(args, 2)?;
+    let data: Vec<f64> = args[0]
+        .flatten()
+        .into_iter()
+        .filter_map(|v| if let Value::Number(n) = v { Some(n) } else { None })
+        .collect();
+    let bins: Vec<f64> = args[1]
+        .flatten()
+        .into_iter()
+        .filter_map(|v| if let Value::Number(n) = v { Some(n) } else { None })
+        .collect();
+    let mut order: Vec<usize> = (0..bins.len()).collect();
+    order.sort_by(|a, b| bins[*a].partial_cmp(&bins[*b]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut counts = vec![0.0; bins.len() + 1];
+    for value in data {
+        match order.iter().find(|at| value <= bins[**at]) {
+            Some(at) => counts[*at] += 1.0,
+            None => counts[bins.len()] += 1.0,
+        }
+    }
+    Ok(RangeData {
+        width: 1,
+        height: counts.len(),
+        cells: counts.into_iter().map(Value::Number).collect(),
+    })
+}
+
 fn expect(args: &[Arg], n: usize) -> Result<(), ExcelError> {
     if args.len() < n {
         Err(ExcelError::Value)
@@ -4563,6 +4890,64 @@ mod tests {
         assert_eq!(call("DATEVALUE", &[t("3/15/2024")]), Value::Number(serial));
         assert_eq!(call("DATEVALUE", &[t("15-Mar-2024")]), Value::Number(serial));
         assert_eq!(call("DATEVALUE", &[t("not a date")]), Value::Error(ExcelError::Value));
+        // Logarithms, the circle, bases and paired data -- every answer Excel's.
+        let t2 = |a: &str| Arg::Value(Value::text(a));
+        for (name, args, want) in [
+            ("LN", vec![v(10.0)], 10f64.ln()),
+            ("LOG10", vec![v(1000.0)], 3.0),
+            ("LOG", vec![v(8.0), v(2.0)], 3.0),
+            ("LOG", vec![v(100.0)], 2.0),
+            ("ATAN2", vec![v(1.0), v(1.0)], std::f64::consts::FRAC_PI_4),
+            ("HEX2DEC", vec![t2("FFFFFFFFFF")], -1.0),
+            ("BIN2DEC", vec![t2("1010")], 10.0),
+        ] {
+            assert_eq!(call(name, &args), Value::Number(want), "{name}");
+        }
+        for (name, args) in [
+            ("LN", vec![v(0.0)]),
+            ("ASIN", vec![v(2.0)]),
+            ("ACOSH", vec![v(0.5)]),
+            ("ATANH", vec![v(1.0)]),
+            ("DEC2HEX", vec![v(255.0), v(1.0)]),
+            ("DEC2BIN", vec![v(512.0)]),
+            ("HEX2BIN", vec![t2("200")]),
+        ] {
+            assert_eq!(call(name, &args), Value::Error(ExcelError::Num), "{name}");
+        }
+        assert_eq!(call("LOG", &[v(10.0), v(1.0)]), Value::Error(ExcelError::DivZero));
+        assert_eq!(call("ATAN2", &[v(0.0), v(0.0)]), Value::Error(ExcelError::DivZero));
+        for (name, args, want) in [
+            ("DEC2HEX", vec![v(-1.0)], "FFFFFFFFFF"),
+            ("DEC2BIN", vec![v(-1.0)], "1111111111"),
+            ("DEC2HEX", vec![v(255.0), v(4.0)], "00FF"),
+            ("DEC2OCT", vec![v(-8.0)], "7777777770"),
+            ("BIN2HEX", vec![t2("1111111111")], "FFFFFFFFFF"),
+            ("HEX2BIN", vec![t2("1FF")], "111111111"),
+        ] {
+            assert_eq!(call(name, &args), Value::text(want), "{name}");
+        }
+        let a = Arg::Range(RangeData {
+            width: 1,
+            height: 6,
+            cells: [3.0, 7.0, 7.0, 1.0, 9.0, 4.0].map(Value::Number).to_vec(),
+        });
+        let b = Arg::Range(RangeData {
+            width: 1,
+            height: 6,
+            cells: vec![v(2.0).scalar(), v(5.0).scalar(), Value::text("x"), v(1.0).scalar(), v(8.0).scalar(), v(3.0).scalar()],
+        });
+        let close = |got: Value, want: f64| match got {
+            Value::Number(n) => assert!((n - want).abs() < 1e-12, "{n} vs {want}"),
+            other => panic!("{other:?}"),
+        };
+        close(call("INTERCEPT", &[a.clone(), b.clone()]), 0.506493506493507);
+        close(call("RSQ", &[a.clone(), b.clone()]), 0.963712757830405);
+        close(call("STEYX", &[a.clone(), b.clone()]), 0.702500173314211);
+        close(call("COVAR", &[a.clone(), b.clone()]), 6.96);
+        close(call("COVARIANCE.S", &[a.clone(), b]), 8.7);
+        close(call("SKEW", &[a.clone()]), -0.172562731898406);
+        close(call("KURT", &[a.clone()]), -1.34119207860588);
+        close(call("HARMEAN", &[a]), 3.03006012024048);
         // TIMEVALUE, every answer Excel's.
         for (text, want) in [
             ("1:00", 1.0 / 24.0),

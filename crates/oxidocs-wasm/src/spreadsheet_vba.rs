@@ -2525,7 +2525,39 @@ impl<'a> WorkbookHost<'a> {
         // The engine's own dispatch is written in capitals, as the parser
         // hands names to it; a macro writes `Substitute` and would find
         // nothing at all.
-        let asked_for = name.to_ascii_uppercase();
+        // VBA cannot write a dot in a name, so `Norm_S_Dist` is NORM.S.DIST.
+        let asked_for = name.to_ascii_uppercase().replace('_', ".");
+        // A function that answers with a block -- UNIQUE, SORT, FREQUENCY --
+        // hands it back as a two-dimensional array based at one: measured,
+        // `WorksheetFunction.Unique(B1:B6)(2, 1)` is the second value.
+        if let oxicells_calc::functions::Arg::Range(block) =
+            oxicells_calc::functions::call_arg(&asked_for, &asked)
+        {
+            if block.cells.len() > 1 {
+                let values = block
+                    .cells
+                    .iter()
+                    .map(|cell| match cell {
+                        oxicells_calc::Value::Number(number) => Value::Double(*number),
+                        oxicells_calc::Value::Text(text) => Value::String(text.clone()),
+                        oxicells_calc::Value::Logical(state) => Value::Boolean(*state),
+                        oxicells_calc::Value::Blank => Value::Empty,
+                        oxicells_calc::Value::Error(why) => {
+                            Value::Error(spreadsheet_error_number(why.as_str()))
+                        }
+                    })
+                    .collect();
+                return Ok(Value::Array(ArrayValue {
+                    dimensions: vec![
+                        ArrayDimension { lower_bound: 1, length: block.height },
+                        ArrayDimension { lower_bound: 1, length: block.width },
+                    ],
+                    values,
+                    element_default: Box::new(Value::Empty),
+                    resizable: true,
+                }));
+            }
+        }
         match oxicells_calc::functions::call(&asked_for, &asked) {
             oxicells_calc::Value::Error(oxicells_calc::ExcelError::Name) => Err(format!(
                 "WorksheetFunction.{name} is not supported in the browser"
@@ -10111,7 +10143,8 @@ impl<'a> WorkbookHost<'a> {
         name: &str,
         args: &[Value],
     ) -> Result<Value, String> {
-        if args.is_empty() {
+        // PI alone takes nothing.
+        if args.is_empty() && !name.eq_ignore_ascii_case("pi") {
             return Err(format!(
                 "WorksheetFunction.{name} expects at least one argument"
             ));
