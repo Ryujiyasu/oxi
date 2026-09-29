@@ -6577,6 +6577,39 @@ fn reads_as_date(pattern: &str) -> bool {
     bare.contains("a/p") || bare.contains("ttttt")
 }
 
+/// VBA's `Format` knows none of Excel's bracketed codes -- colours,
+/// conditions, elapsed `[h]`, locales -- and simply drops them. Measured:
+/// `Format(1.25, "[h]:nn")` is ":00", `Format(5, "[Red]0")` 5 and
+/// `Format(1.25, "[h]")`, with nothing left, 1.25.
+fn without_brackets(pattern: &str) -> String {
+    let mut kept = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                kept.push(c);
+            }
+            '\\' if !quoted => {
+                kept.push(c);
+                if let Some(next) = chars.next() {
+                    kept.push(next);
+                }
+            }
+            '[' if !quoted => {
+                for inner in chars.by_ref() {
+                    if inner == ']' {
+                        break;
+                    }
+                }
+            }
+            _ => kept.push(c),
+        }
+    }
+    kept
+}
+
 fn format_value(
     value: &Value,
     pattern: &str,
@@ -6590,6 +6623,8 @@ fn format_value(
     if matches!(value, Value::Null | Value::Empty) {
         return Ok(String::new());
     }
+    let pattern = without_brackets(pattern);
+    let pattern = pattern.as_str();
     if pattern.is_empty() {
         return text(value);
     }
@@ -9540,6 +9575,41 @@ fn to_decimal(value: &Value) -> Option<Result<crate::decimal::Dec, crate::decima
     })
 }
 
+/// The width a bitwise operator reads a value at: 0 Boolean, 1 Byte,
+/// 2 Integer (Empty too), 3 Long -- every floating, money, date and text
+/// value is made a Long -- and 4 LongLong.
+fn logical_rank(value: &Value) -> u8 {
+    match value {
+        Value::Boolean(_) => 0,
+        Value::Byte(_) => 1,
+        Value::Int16(_) | Value::Empty | Value::Null => 2,
+        Value::LongLong(_) => 4,
+        _ => 3,
+    }
+}
+
+/// What `And`, `Or`, `Xor`, `Eqv`, `Imp` and `Not` answer in. Measured:
+/// Booleans alone stay Boolean and Bytes alone stay Byte (`Not CByte(1)` is
+/// 254), a mix of the two or anything with an Integer is an Integer
+/// (`True Xor CByte(1)` is -2, `Empty Or 1` Integer 1), and past that the
+/// wider side wins with Long for anything not whole (`CCur(3) And 1` and
+/// `"5" And 3` are Longs).
+fn logical_answer(bits: i64, left: u8, right: u8) -> Result<Value, (RuntimeErrorKind, String)> {
+    let overflow = || (RuntimeErrorKind::Overflow, "overflow".to_string());
+    Ok(match (left, right) {
+        (0, 0) => Value::Boolean(bits != 0),
+        (1, 1) => Value::Byte(bits as u8),
+        (l, r) if l.max(r) <= 2 => Value::Int16(bits as i16),
+        (l, r) if l.max(r) == 3 => {
+            if i32::try_from(bits).is_err() {
+                return Err(overflow());
+            }
+            Value::Integer(bits)
+        }
+        _ => Value::LongLong(bits),
+    })
+}
+
 fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
     if matches!(value, Value::Error(_)) {
         return Err("type mismatch using Error value as an operand".to_string());
@@ -9558,13 +9628,17 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
             Value::Boolean(value) => Ok(Value::Boolean(!value)),
             // Every whole type turns over on its bits, and answers in the
             // type it was given: `Not 5` is -6.
-            Value::Int16(value) => Ok(Value::Int16(!value)),
-            Value::Byte(value) => Ok(Value::Int16(!(value as i16))),
-            Value::Integer(value) => Ok(Value::Integer(!value)),
             // Nothing to turn over: asked of Excel, `Not Null` is Null, where
             // `Not 5` is -6.
             Value::Null => Ok(Value::Null),
-            other => Ok(Value::Boolean(!truthy(&other)?)),
+            // Anything else is made whole first and answers in the type
+            // `logical_answer` picks: measured, `Not CByte(1)` is Byte 254,
+            // `Not 1.5` Long -3 and `Not "3"` Long -4.
+            other => {
+                let bits = number(&other)?.round_ties_even() as i64;
+                logical_answer(!bits, logical_rank(&other), logical_rank(&other))
+                    .map_err(|(_, message)| message)
+            }
         },
     }
 }
@@ -9677,23 +9751,24 @@ fn binary(
             return Ok(Value::Null);
         }
     } else if matches!(op, And | Or) && (matches!(lhs, Value::Null) || matches!(rhs, Value::Null)) {
-        // Three-valued logic: a Null only stays Null while the other side
-        // cannot settle the answer on its own. Asked of Excel,
+        // Three-valued logic on bits: a Null only stays Null while the other
+        // side cannot settle every bit on its own. Asked of Excel,
         // `Null And False` is False and `Null Or True` is True, while
-        // `Null And True` and `Null Or False` are both Null.
-        let settles = |value: &Value| match value {
-            Value::Null => None,
-            value => truthy(value).ok(),
-        };
-        let decided = match op {
-            And => [settles(&lhs), settles(&rhs)].contains(&Some(false)),
-            _ => [settles(&lhs), settles(&rhs)].contains(&Some(true)),
-        };
-        return Ok(if decided {
-            Value::Boolean(matches!(op, Or))
-        } else {
-            Value::Null
-        });
+        // `Null And True` and `Null Or False` are both Null -- and
+        // `Null And 0` is the Integer 0.
+        let other = if matches!(lhs, Value::Null) { &rhs } else { &lhs };
+        if !matches!(other, Value::Null) {
+            let bits = number(other).map_err(|message| (RuntimeErrorKind::TypeMismatch, message))?;
+            let bits = bits.round_ties_even() as i64;
+            let settled = match op {
+                And => bits == 0,
+                _ => bits == -1 || matches!(other, Value::Byte(255)),
+            };
+            if settled {
+                return logical_answer(bits, logical_rank(other), logical_rank(other));
+            }
+        }
+        return Ok(Value::Null);
     } else if matches!(lhs, Value::Null) || matches!(rhs, Value::Null) {
         return Ok(Value::Null);
     }
@@ -9804,7 +9879,6 @@ fn binary(
             //
             // What is given is made whole VBA's way first, half to the even
             // side: `2.7 And 3` is 3. A numeric string is read as a number.
-            let both_boolean = matches!(lhs, Value::Boolean(_)) && matches!(rhs, Value::Boolean(_));
             let bits = |value: &Value| -> Result<i64, (RuntimeErrorKind, String)> {
                 Ok(number(value).map_err(mismatch)?.round_ties_even() as i64)
             };
@@ -9817,11 +9891,7 @@ fn binary(
                 Imp => !a | b,
                 _ => unreachable!(),
             };
-            Ok(if both_boolean {
-                Value::Boolean(answer != 0)
-            } else {
-                Value::Integer(answer)
-            })
+            logical_answer(answer, logical_rank(&lhs), logical_rank(&rhs))
         }
         Is => unreachable!(),
         Like => Ok(Value::Boolean(like_pattern(
@@ -15042,7 +15112,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             value,
-            Value::String("Boolean/False|Boolean/True|Long".to_string())
+            Value::String("Boolean/False|Boolean/True|Integer".to_string())
         );
     }
 

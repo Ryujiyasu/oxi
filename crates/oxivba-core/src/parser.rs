@@ -2360,7 +2360,12 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_postfix()?;
         while self.at_punct(Punct::Caret) {
             self.pos += 1;
-            let rhs = self.parse_postfix()?;
+            // A sign may open the exponent: measured, `2 ^ -1` is 0.5.
+            let rhs = if self.at_punct(Punct::Minus) || self.at_punct(Punct::Plus) {
+                self.parse_unary()?
+            } else {
+                self.parse_postfix()?
+            };
             lhs = binary(BinaryOp::Pow, lhs, rhs);
         }
         Some(lhs)
@@ -2789,8 +2794,10 @@ mod tests {
                 if matches!(*lhs, Expr::Literal(
                     Literal::TypedNumber { value: 42.0, suffix: '^' }, _))
         ));
+        // With a space it is the power operator and a signed exponent:
+        // measured, `2 ^ +1` is 2 and `2 ^ -1` 0.5.
         let spaced = only_proc("Sub T()\nx = 42 ^ + 2\nEnd Sub");
-        assert!(matches!(spaced.body[0], Statement::Unknown { .. }));
+        assert!(!matches!(spaced.body[0], Statement::Unknown { .. }));
     }
 
     #[test]
