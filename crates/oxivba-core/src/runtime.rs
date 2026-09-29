@@ -5589,6 +5589,10 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "trim"
             | "typename"
             | "environ"
+            | "chrb"
+            | "chrb$"
+            | "curdir"
+            | "curdir$"
             | "ubound"
             | "ucase"
             | "val"
@@ -5843,6 +5847,10 @@ fn call_builtin(
                 | "instrb"
                 | "environ"
                 | "environ$"
+                | "chrb"
+                | "chrb$"
+                | "curdir"
+                | "curdir$"
                 | "chr"
                 | "chrw"
                 | "instr"
@@ -9657,6 +9665,27 @@ fn call_string_builtin(
                 return Err(wrong_count("1 argument"));
             }
             Ok(Value::String(String::new()))
+        }
+        // `ChrB` answers a string of ONE byte, which a String of UTF-16
+        // units cannot hold; its length is what shows, and that is nothing:
+        // measured, `Len(ChrB(67))` is 0. Past a byte is error 5.
+        "chrb" | "chrb$" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            let value = integer_argument(&args[0], line)?;
+            if !(0..=255).contains(&value) {
+                return Err(invalid_procedure_call("ChrB takes a byte".to_string(), line));
+            }
+            Ok(Value::String(String::new()))
+        }
+        // The folder a macro stands in; a browser has none of its own, so
+        // the drive's root answers (measured only as non-empty).
+        "curdir" | "curdir$" => {
+            if args.len() > 1 {
+                return Err(wrong_count("at most 1 argument"));
+            }
+            Ok(Value::String("C:\\".to_string()))
         }
         "asc" | "ascw" => {
             if args.len() != 1 {
