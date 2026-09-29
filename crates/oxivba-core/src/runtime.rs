@@ -3445,6 +3445,36 @@ impl<'a> Runtime<'a> {
     ) -> Result<Option<Value>, RuntimeError> {
         if let Some(receiver) = receiver {
             if self.internal_objects.contains_key(&receiver.handle) {
+                // A named argument goes to its own place: measured,
+                // `c.Add "w", After:="kx"` puts w after kx rather than
+                // keying it "kx".
+                if argument_names.iter().any(Option::is_some) {
+                    let is_collection = matches!(
+                        self.internal_objects.get(&receiver.handle),
+                        Some(InternalObject::Collection(_))
+                    );
+                    let parameters: &[&str] = match (is_collection, name.to_ascii_lowercase().as_str()) {
+                        (true, "add") => &["Item", "Key", "Before", "After"],
+                        (true, _) => &["Index"],
+                        (false, "add") => &["Key", "Item"],
+                        (false, _) => &["Key"],
+                    };
+                    let mut placed = vec![Value::Missing; parameters.len().max(args.len())];
+                    for (at, (value, named)) in args.iter().zip(argument_names).enumerate() {
+                        let slot = match named {
+                            None => at,
+                            Some(named) => parameters
+                                .iter()
+                                .position(|parameter| parameter.eq_ignore_ascii_case(named))
+                                .ok_or_else(|| raised_error(448, String::new(), "Named argument not found".to_string(), line))?,
+                        };
+                        placed[slot] = value.clone();
+                    }
+                    while matches!(placed.last(), Some(Value::Missing)) {
+                        placed.pop();
+                    }
+                    return self.internal_call(receiver, name, &placed, line).map(Some);
+                }
                 return self.internal_call(receiver, name, args, line).map(Some);
             }
         }
@@ -4313,13 +4343,26 @@ fn dictionary_keys_equal(left: &Value, right: &Value, text_compare: bool) -> boo
             left.to_lowercase() == right.to_lowercase()
         }
         (Value::String(left), Value::String(right)) => left == right,
-        (Value::Integer(left), Value::Integer(right)) => left == right,
-        (Value::Double(left), Value::Double(right)) => left == right,
-        (Value::Integer(left), Value::Double(right)) => *left as f64 == *right,
-        (Value::Double(left), Value::Integer(right)) => *left == *right as f64,
         (Value::Boolean(left), Value::Boolean(right)) => left == right,
+        // A number is its value whatever its type: measured, a key added as
+        // the literal 1 (an Integer) is found again by `d(1)`.
+        (left, right) if dictionary_number(left).is_some() && dictionary_number(right).is_some() => {
+            dictionary_number(left) == dictionary_number(right)
+        }
         (Value::Empty, Value::Empty) => true,
         _ => false,
+    }
+}
+
+fn dictionary_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Int16(number) => Some(f64::from(*number)),
+        Value::Integer(number) | Value::LongLong(number) => Some(*number as f64),
+        Value::Byte(number) => Some(f64::from(*number)),
+        Value::Single(number) => Some(f64::from(*number)),
+        Value::Double(number) => Some(*number),
+        Value::Currency(number) => Some(*number as f64 / 10_000.0),
+        _ => None,
     }
 }
 
@@ -13781,6 +13824,33 @@ mod tests {
             value,
             Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
         );
+    }
+
+    /// Named arguments to a Collection go to their places, and a Dictionary
+    /// finds a number key whatever type it was given as. Measured in Excel.
+    #[test]
+    fn collection_named_arguments_and_numeric_dictionary_keys() {
+        let value = run(
+            "Public Function Ask() As String
+               Dim c As New Collection, d As Object, v As Variant, s As String
+               c.Add \"x\", \"kx\"
+               c.Add \"y\", \"ky\"
+               c.Add \"z\", Before:=1
+               c.Add \"w\", After:=\"kx\"
+               For Each v In c
+                 s = s & v
+               Next v
+               Set d = CreateObject(\"Scripting.Dictionary\")
+               d.Add 1, \"one\"
+               d.Add \"1\", \"strone\"
+               Ask = s & \"|\" & d.Count & d(1) & d(1#) & d(\"1\")
+             End Function
+",
+            "Ask",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("zxwy|2oneonestrone".to_string()));
     }
 
     /// Text through a picture of `@` and `&`, and text that is no number or
