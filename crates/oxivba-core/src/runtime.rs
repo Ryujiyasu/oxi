@@ -2403,7 +2403,13 @@ impl<'a> Runtime<'a> {
     fn statically_typed(&self, expr: &Expr, frame: &Frame) -> bool {
         match expr {
             Expr::Literal(..) | Expr::TypedIdent { .. } => true,
-            Expr::Binary { op: BinaryOp::Concat, .. } => true,
+            // `&` hands back a String only when both sides were typed; with a
+            // Variant on either side the result is a Variant too. Measured:
+            // `Timer >= 0 & Now > 0 & Time >= 0` is True, the joined text
+            // being a Variant that a number is always less than.
+            Expr::Binary { op: BinaryOp::Concat, lhs, rhs, .. } => {
+                self.statically_typed(lhs, frame) && self.statically_typed(rhs, frame)
+            }
             Expr::Ident(name, _) => {
                 // Timer is a Single, not a Variant: measured, `Timer >= "0"`
                 // compares as numbers.
@@ -10625,7 +10631,7 @@ fn variant_comparison(
     }
     // A Date counts as the number here: measured, `Date > "zzz"` (a
     // Variant Date against typed text) compares the written date as text.
-    let numeric = |value: &Value| any_number(value).is_some() || matches!(value, Value::Date(_));
+    let numeric = |value: &Value| any_number(value).is_some() || matches!(value, Value::Date(_) | Value::Boolean(_));
     let (number_left, number_typed, string, string_typed) = match (lhs, rhs) {
         (Value::String(text), other) if numeric(other) => (false, typed.1, text, typed.0),
         (other, Value::String(text)) if numeric(other) => (true, typed.0, text, typed.1),
