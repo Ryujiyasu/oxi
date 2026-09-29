@@ -1455,7 +1455,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     (j * mean.ln() - mean - ln_gamma(j + 1.0)).exp()
                 }
             };
-            let answer = if cumulative { (0..=x as i64).map(|j| mass(j as f64)).sum() } else { mass(x) };
+            // Measured to the last digit: the point mass by exact products
+            // (POISSON.DIST(4,2.5,FALSE) 0.133601885781085), the running sum
+            // by logarithms (POISSON.DIST(2,3,TRUE) 0.423190081126843).
+            let by_logs = |j: f64| (j * mean.ln() - mean - ln_gamma(j + 1.0)).exp();
+            let answer = if cumulative { (0..=x as i64).map(|j| by_logs(j as f64)).sum() } else { mass(x) };
             Ok(Value::Number(answer))
         }
         "EXPON.DIST" | "EXPONDIST" => {
