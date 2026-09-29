@@ -43,6 +43,8 @@ pub enum Token {
     Caret,
     Percent,
     Amp,
+    /// `@`, implicit intersection: `=@A1:A3` in row 2 is A2.
+    At,
 
     Eq,
     Ne,
@@ -108,15 +110,27 @@ const ERROR_LITERALS: &[(&str, ExcelError)] = &[
 ];
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
+    tokenize_spanned(input).map(|spanned| spanned.into_iter().map(|(token, _)| token).collect())
+}
+
+/// The tokens, each with the byte offset in `input` it starts at.
+fn tokenize_spanned(input: &str) -> Result<Vec<(Token, usize)>, ParseError> {
     // A leading '=' is how a formula is stored in a cell; accept it either way.
     let src = input.trim();
+    let base = input.len() - input.trim_start().len() + usize::from(src.starts_with('='));
     let src = src.strip_prefix('=').unwrap_or(src);
 
     let bytes = src.as_bytes();
     let mut tokens = Vec::new();
+    let mut starts: Vec<usize> = Vec::new();
     let mut i = 0usize;
+    let mut last_start = 0usize;
 
     while i < bytes.len() {
+        while starts.len() < tokens.len() {
+            starts.push(base + last_start);
+        }
+        last_start = i;
         let c = bytes[i] as char;
 
         if c.is_ascii_whitespace() {
@@ -152,6 +166,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
             '^' => Some(Token::Caret),
             '%' => Some(Token::Percent),
             '&' => Some(Token::Amp),
+            '@' => Some(Token::At),
             '=' => Some(Token::Eq),
             '<' => Some(Token::Lt),
             '>' => Some(Token::Gt),
@@ -233,8 +248,338 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
 
         return Err(ParseError::UnexpectedChar(c, i));
     }
+    while starts.len() < tokens.len() {
+        starts.push(base + last_start);
+    }
 
-    Ok(tokens)
+    Ok(tokens.into_iter().zip(starts).collect())
+}
+
+/// A formula written through `.Formula` as Excel keeps it: with `@` wherever
+/// a legacy formula would have taken one cell out of a range. `multi_name`
+/// says whether a defined name stands for more than one cell.
+///
+/// Measured through `.Formula2` after `.Formula`: a range, or a name for one,
+/// where one value is wanted takes `@` (`=@A1:A3`, `=LEN(@A1:A3)`,
+/// `=@A1:A3+1`, `=IF(@A1:A3>1,1,0)`); a function that may answer with a
+/// block takes it in front (`=@INDEX(A1:A3,0)`, `=@OFFSET(A1,0,0,2,1)`,
+/// `=@INDIRECT("A1")`); a parameter that takes a range leaves it be
+/// (`=SUM(A1:A3)`, `=VLOOKUP(@A1:A3,A1:B3,2,0)`), though an expression in it
+/// is still worked one value at a time (`=SUM(@A1:A3*2)`); and an array
+/// parameter leaves everything in it be (`=SUMPRODUCT((A1:A3>1)*B1:B3)`).
+/// A function not in the tables is left untouched, as is a formula that
+/// will not read.
+pub fn implied_intersections(input: &str, multi_name: &dyn Fn(&str) -> bool) -> String {
+    let Ok(tokens) = tokenize_spanned(input) else {
+        return input.to_string();
+    };
+    let mut reader = AtReader { tokens: &tokens, pos: 0, multi_name };
+    let Some(tree) = reader.expr() else {
+        return input.to_string();
+    };
+    if reader.pos != tokens.len() {
+        return input.to_string();
+    }
+    let mut marks = Vec::new();
+    mark_intersections(&tree, AtContext::Value, &mut marks);
+    if marks.is_empty() {
+        return input.to_string();
+    }
+    marks.sort_unstable();
+    marks.dedup();
+    let mut output = String::with_capacity(input.len() + marks.len());
+    let mut from = 0;
+    for at in marks {
+        output.push_str(&input[from..at]);
+        output.push('@');
+        from = at;
+    }
+    output.push_str(&input[from..]);
+    output
+}
+
+/// A formula as `.Formula` shows it: every `@` taken out. Measured, `=@A1:A3`
+/// written through `.Formula` reads back `=A1:A3`.
+pub fn without_intersections(input: &str) -> String {
+    let Ok(tokens) = tokenize_spanned(input) else {
+        return input.to_string();
+    };
+    let cuts: Vec<usize> = tokens.iter().filter(|(token, _)| *token == Token::At).map(|(_, at)| *at).collect();
+    if cuts.is_empty() {
+        return input.to_string();
+    }
+    let mut output = String::with_capacity(input.len());
+    for (index, ch) in input.char_indices() {
+        if !cuts.contains(&index) {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+/// What a place in a formula wants: one value, a range (which an expression
+/// in it still works out one value at a time), or anything at all.
+#[derive(Clone, Copy, PartialEq)]
+enum AtContext {
+    Value,
+    Range,
+    Array,
+}
+
+enum AtNode {
+    /// A number, text, a single cell, or anything else that is one value.
+    Plain { number: Option<f64>, cell: bool },
+    /// A range, or a name standing for one.
+    Block { start: usize },
+    /// Operators, whose operands are worked one value at a time.
+    Operation(Vec<AtNode>),
+    /// A `@` already written.
+    Written,
+    Group(Vec<AtNode>),
+    Call { start: usize, name: String, args: Vec<Option<AtNode>> },
+}
+
+struct AtReader<'a> {
+    tokens: &'a [(Token, usize)],
+    pos: usize,
+    multi_name: &'a dyn Fn(&str) -> bool,
+}
+
+impl AtReader<'_> {
+    fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.pos).map(|(token, _)| token)
+    }
+
+    fn start(&self) -> usize {
+        self.tokens.get(self.pos).map_or(0, |(_, at)| *at)
+    }
+
+    fn expr(&mut self) -> Option<AtNode> {
+        let mut parts = vec![self.unary()?];
+        while matches!(
+            self.peek(),
+            Some(
+                Token::Plus
+                    | Token::Minus
+                    | Token::Star
+                    | Token::Slash
+                    | Token::Caret
+                    | Token::Amp
+                    | Token::Eq
+                    | Token::Ne
+                    | Token::Lt
+                    | Token::Le
+                    | Token::Gt
+                    | Token::Ge
+            )
+        ) {
+            self.pos += 1;
+            parts.push(self.unary()?);
+        }
+        Some(if parts.len() == 1 { parts.pop()? } else { AtNode::Operation(parts) })
+    }
+
+    fn unary(&mut self) -> Option<AtNode> {
+        match self.peek()? {
+            Token::Minus | Token::Plus => {
+                self.pos += 1;
+                let operand = self.unary()?;
+                Some(AtNode::Operation(vec![operand]))
+            }
+            Token::At => {
+                self.pos += 1;
+                self.unary()?;
+                Some(AtNode::Written)
+            }
+            _ => {
+                let start = self.start();
+                let mut node = self.primary()?;
+                if self.peek() == Some(&Token::Colon) {
+                    while self.peek() == Some(&Token::Colon) {
+                        self.pos += 1;
+                        self.primary()?;
+                    }
+                    node = AtNode::Block { start };
+                }
+                if self.peek() == Some(&Token::Percent) {
+                    while self.peek() == Some(&Token::Percent) {
+                        self.pos += 1;
+                    }
+                    node = AtNode::Operation(vec![node]);
+                }
+                Some(node)
+            }
+        }
+    }
+
+    fn primary(&mut self) -> Option<AtNode> {
+        let start = self.start();
+        let token = self.peek()?.clone();
+        self.pos += 1;
+        match token {
+            Token::Number(number) => Some(AtNode::Plain { number: Some(number), cell: false }),
+            Token::Text(_) | Token::ErrorLit(_) | Token::Table { .. } => Some(AtNode::Plain { number: None, cell: false }),
+            Token::Name { name, sheet } => {
+                if self.peek() == Some(&Token::LParen) && sheet.is_none() {
+                    self.pos += 1;
+                    let mut args = Vec::new();
+                    if self.peek() == Some(&Token::RParen) {
+                        self.pos += 1;
+                        return Some(AtNode::Call { start, name: name.to_ascii_uppercase(), args });
+                    }
+                    loop {
+                        if matches!(self.peek(), Some(Token::Comma | Token::RParen)) {
+                            args.push(None);
+                        } else {
+                            args.push(Some(self.expr()?));
+                        }
+                        match self.peek()? {
+                            Token::Comma => self.pos += 1,
+                            Token::RParen => {
+                                self.pos += 1;
+                                break;
+                            }
+                            _ => return None,
+                        }
+                    }
+                    return Some(AtNode::Call { start, name: name.to_ascii_uppercase(), args });
+                }
+                if parse_a1(&name).is_some() {
+                    return Some(AtNode::Plain { number: None, cell: true });
+                }
+                if sheet.is_none() && (self.multi_name)(&name) {
+                    return Some(AtNode::Block { start });
+                }
+                Some(AtNode::Plain { number: None, cell: false })
+            }
+            Token::LParen => {
+                let mut inner = vec![self.expr()?];
+                while self.peek() == Some(&Token::Comma) {
+                    self.pos += 1;
+                    inner.push(self.expr()?);
+                }
+                if self.peek() != Some(&Token::RParen) {
+                    return None;
+                }
+                self.pos += 1;
+                Some(AtNode::Group(inner))
+            }
+            Token::LBrace => {
+                while self.peek()? != &Token::RBrace {
+                    self.pos += 1;
+                }
+                self.pos += 1;
+                Some(AtNode::Plain { number: None, cell: false })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// How each parameter of a function takes what it is given: `V` one value,
+/// `R` a range (an expression in it still one value at a time), `A` an
+/// array. The last letter repeats. Measured through `.Formula2`; a function
+/// not listed is left as written.
+fn parameter_kinds(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "LEN" | "LEFT" | "RIGHT" | "MID" | "LOWER" | "UPPER" | "PROPER" | "TRIM" | "TEXT" | "VALUE"
+        | "ROUND" | "ROUNDUP" | "ROUNDDOWN" | "INT" | "ABS" | "MOD" | "ISNUMBER" | "ISTEXT"
+        | "ISBLANK" | "ISERROR" | "ISNA" | "IFERROR" | "IFNA" | "DATE" | "YEAR" | "MONTH" | "DAY"
+        | "WEEKDAY" | "FIND" | "SEARCH" | "SUBSTITUTE" | "REPT" | "EXACT" | "NOT" | "SQRT" | "CHAR"
+        | "CONCATENATE" | "TRANSPOSE" => "V",
+        "IF" | "CHOOSE" => "VR",
+        "VLOOKUP" | "HLOOKUP" => "VAV",
+        "MATCH" | "XLOOKUP" => "VA",
+        "LOOKUP" => "VA",
+        "COUNTIF" | "AVERAGEIF" | "SUMIF" => "RVR",
+        "LARGE" | "SMALL" => "RV",
+        "RANK" => "VRV",
+        "INDEX" => "AV",
+        "OFFSET" => "RV",
+        "ROW" | "COLUMN" | "SUM" | "MAX" | "MIN" | "AVERAGE" | "COUNT" | "COUNTA" | "PRODUCT"
+        | "MEDIAN" | "STDEV" | "AND" | "OR" | "N" => "R",
+        "SUMPRODUCT" | "MMULT" | "CONCAT" | "TEXTJOIN" | "EOMONTH" | "EDATE" | "ROWS" | "COLUMNS"
+        | "INDIRECT" | "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "SEQUENCE" => "A",
+        _ => return None,
+    })
+}
+
+fn parameter_kind(name: &str, index: usize) -> AtContext {
+    // The pairs of COUNTIFS / SUMIFS: a range, then what to look for.
+    match name {
+        "COUNTIFS" => {
+            return if index % 2 == 0 { AtContext::Range } else { AtContext::Value };
+        }
+        "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => {
+            return if index == 0 || index % 2 == 1 { AtContext::Range } else { AtContext::Value };
+        }
+        _ => {}
+    }
+    let Some(kinds) = parameter_kinds(name) else {
+        return AtContext::Array;
+    };
+    let letter = kinds.as_bytes().get(index).or_else(|| kinds.as_bytes().last()).copied();
+    match letter {
+        Some(b'V') => AtContext::Value,
+        Some(b'R') => AtContext::Range,
+        _ => AtContext::Array,
+    }
+}
+
+/// Whether a function may answer with more than one cell where it stands.
+fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
+    let is_block = |node: &Option<AtNode>| matches!(node, Some(AtNode::Block { .. }));
+    let loose_index = |node: &Option<AtNode>| match node {
+        None => true,
+        Some(AtNode::Plain { number: Some(number), .. }) => *number == 0.0,
+        Some(AtNode::Plain { cell: true, .. }) | Some(AtNode::Block { .. }) => true,
+        _ => false,
+    };
+    match name {
+        "INDIRECT" | "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "SEQUENCE" | "TRANSPOSE" | "MMULT" => true,
+        "OFFSET" => args.iter().skip(3).take(2).any(|size| match size {
+            Some(AtNode::Plain { number: Some(number), .. }) => *number != 1.0,
+            None => false,
+            Some(_) => true,
+        }),
+        "INDEX" => args.iter().skip(1).take(2).any(loose_index),
+        "IF" => args.iter().skip(1).any(is_block),
+        "CHOOSE" => args.iter().skip(1).any(is_block),
+        "ROW" | "COLUMN" => args.first().is_some_and(is_block),
+        _ => false,
+    }
+}
+
+fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>) {
+    match node {
+        AtNode::Plain { .. } | AtNode::Written => {}
+        AtNode::Block { start } => {
+            if context == AtContext::Value {
+                marks.push(*start);
+            }
+        }
+        AtNode::Operation(parts) => {
+            let inner = if context == AtContext::Array { AtContext::Array } else { AtContext::Value };
+            for part in parts {
+                mark_intersections(part, inner, marks);
+            }
+        }
+        AtNode::Group(inner) => {
+            if let [only] = inner.as_slice() {
+                mark_intersections(only, context, marks);
+            }
+        }
+        AtNode::Call { start, name, args } => {
+            if context == AtContext::Value && may_answer_a_block(name, args) {
+                marks.push(*start);
+            }
+            for (index, arg) in args.iter().enumerate() {
+                if let Some(arg) = arg {
+                    mark_intersections(arg, parameter_kind(name, index), marks);
+                }
+            }
+        }
+    }
 }
 
 /// Move relative A1 references as Excel does when a formula cell is copied.
@@ -1107,6 +1452,7 @@ pub(crate) fn render_token(output: &mut String, token: Token) {
         }
         Token::ErrorLit(value) => output.push_str(value.as_str()),
         Token::LBrace => output.push('{'),
+        Token::At => output.push('@'),
         Token::RBrace => output.push('}'),
         Token::Semicolon => output.push(';'),
         Token::Table { name, asked } => {
@@ -1412,6 +1758,46 @@ mod tests {
         );
         // Nothing to rename comes back unchanged.
         assert_eq!(rename_sheet_in_formula("=A1+B2", "Data", "Z"), "=A1+B2");
+    }
+
+    /// A legacy formula takes `@` where Excel's `.Formula2` shows it. Every
+    /// pair here was measured: written through `.Formula`, read back
+    /// through `.Formula2`, with Nm naming B1:B3.
+    #[test]
+    fn a_legacy_formula_takes_an_at_where_excel_puts_one() {
+        let multi = |name: &str| name.eq_ignore_ascii_case("Nm");
+        for (written, kept) in [
+            ("=A1:A3", "=@A1:A3"),
+            ("=A1:A3+1", "=@A1:A3+1"),
+            ("=SUM(A1:A3)", "=SUM(A1:A3)"),
+            ("=Nm", "=@Nm"),
+            ("=INDEX(A1:A3,0)", "=@INDEX(A1:A3,0)"),
+            ("=INDEX(A1:A3,2)", "=INDEX(A1:A3,2)"),
+            ("=INDEX(A1:A3,MATCH(2,A1:A3,0))", "=INDEX(A1:A3,MATCH(2,A1:A3,0))"),
+            ("=SUMPRODUCT(A1:A3*2)", "=SUMPRODUCT(A1:A3*2)"),
+            ("=IF(A1:A3>1,1,0)", "=IF(@A1:A3>1,1,0)"),
+            ("=IF(A1:A3>1,B1:B3,0)", "=@IF(@A1:A3>1,B1:B3,0)"),
+            ("=VLOOKUP(A1:A3,A1:B3,2,0)", "=VLOOKUP(@A1:A3,A1:B3,2,0)"),
+            ("=SUM(A1:A3*2)", "=SUM(@A1:A3*2)"),
+            ("=COUNTIF(A1:A3,A1:A3)", "=COUNTIF(A1:A3,@A1:A3)"),
+            ("=SUMIFS(B1:B3,A1:A3,A1:A3)", "=SUMIFS(B1:B3,A1:A3,@A1:A3)"),
+            ("=ROW(A1)", "=ROW(A1)"),
+            ("=COLUMN(A1:B1)", "=@COLUMN(A1:B1)"),
+            ("=INDIRECT(\"A1\")", "=@INDIRECT(\"A1\")"),
+            ("=OFFSET(A1,1,0)", "=OFFSET(A1,1,0)"),
+            ("=OFFSET(A1,0,0,2,1)", "=@OFFSET(A1,0,0,2,1)"),
+            ("=TRANSPOSE(A1:A3)", "=@TRANSPOSE(@A1:A3)"),
+            ("=MAX(IF(A1:A3>1,A1:A3))", "=MAX(IF(@A1:A3>1,A1:A3))"),
+            ("=(A1:A3)*1", "=(@A1:A3)*1"),
+            ("=$A:$A", "=@$A:$A"),
+            ("=1:1", "=@1:1"),
+            ("=A1:A1", "=@A1:A1"),
+            ("=A1+B1", "=A1+B1"),
+            ("=MYOWN(A1:A3)", "=MYOWN(A1:A3)"),
+        ] {
+            assert_eq!(implied_intersections(written, &multi), kept, "{written}");
+            assert_eq!(without_intersections(kept), written, "{kept}");
+        }
     }
 
     /// Read from inside its own table, a formula drops the table's name only

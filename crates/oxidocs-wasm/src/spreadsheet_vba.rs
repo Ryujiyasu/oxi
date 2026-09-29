@@ -4081,6 +4081,35 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// A formula written the legacy way -- `.Formula`, `.Value` -- is kept as
+    /// Excel keeps it, with `@` wherever it takes one cell of a range; see
+    /// `oxicells_calc::implied_intersections` for what was measured.
+    fn imply_intersections(&mut self, range: CellRange) {
+        let names = self.workbook.defined_names.clone();
+        let multi = move |name: &str| {
+            names.iter().any(|(called, stands_for)| {
+                let bare = called.rsplit('!').next().unwrap_or(called);
+                bare.eq_ignore_ascii_case(name) && stands_for.contains(':')
+            })
+        };
+        let Some(sheet) = self.workbook.sheets.get_mut(range.sheet) else {
+            return;
+        };
+        for row in sheet.rows.iter_mut().filter(|row| (range.start_row..=range.end_row).contains(&row.index)) {
+            for cell in row.cells.iter_mut().filter(|cell| (range.start_column..=range.end_column).contains(&cell.col)) {
+                if cell.array_block.is_some() {
+                    continue;
+                }
+                if let Some(formula) = cell.formula.as_mut() {
+                    let implied = oxicells_calc::implied_intersections(formula, &multi);
+                    if implied != *formula {
+                        *formula = implied;
+                    }
+                }
+            }
+        }
+    }
+
     /// A formula written into one data cell of a table fills its column, as
     /// Excel's calculated columns do. Measured: into a column whose other
     /// data cells are all empty, or all hold one formula (moved to their
@@ -10497,7 +10526,19 @@ impl<'a> WorkbookHost<'a> {
     /// 1e20 answers all twenty-one digits where the General format would show
     /// it in exponent form. So this is the raw value written out, which is a
     /// different question from `.Text`.
+    /// A cell's formula as `.Formula` shows it: without the `@` Excel keeps
+    /// where a legacy formula takes one cell of a range.
     fn cell_formula(&self, address: CellAddress) -> Value {
+        match self.cell_formula2(address) {
+            Value::String(written) if written.starts_with('=') && written.contains('@') => {
+                Value::String(oxicells_calc::without_intersections(&written))
+            }
+            other => other,
+        }
+    }
+
+    /// The same as `.Formula2` shows it, `@` and all.
+    fn cell_formula2(&self, address: CellAddress) -> Value {
         let Some(cell) = self
             .workbook
             .sheets
@@ -10541,6 +10582,10 @@ impl<'a> WorkbookHost<'a> {
     /// TEXT `=A1*3` — which is what a leading apostrophe leaves — answers with
     /// that text unchanged, as it does through `.Formula`.
     fn cell_formula_r1c1(&self, address: CellAddress) -> Result<Value, String> {
+        self.cell_formula_r1c1_as(address, false)
+    }
+
+    fn cell_formula_r1c1_as(&self, address: CellAddress, dynamic: bool) -> Result<Value, String> {
         let holds_formula = self
             .workbook
             .sheets
@@ -10548,7 +10593,8 @@ impl<'a> WorkbookHost<'a> {
             .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
             .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
             .is_some_and(|cell| cell.formula.is_some());
-        match self.cell_formula(address) {
+        let written = if dynamic { self.cell_formula2(address) } else { self.cell_formula(address) };
+        match written {
             Value::String(written) if holds_formula => formula_to_r1c1(
                 &written,
                 address.row.saturating_sub(1),
@@ -10560,10 +10606,15 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_formula(&self, range: CellRange, style: FormulaStyle) -> Result<Value, String> {
+        self.range_formula_as(range, style, false)
+    }
+
+    fn range_formula_as(&self, range: CellRange, style: FormulaStyle, dynamic: bool) -> Result<Value, String> {
         Self::range_cell_count(range)?;
-        let written = |address| match style {
-            FormulaStyle::A1 => Ok(self.cell_formula(address)),
-            FormulaStyle::R1C1 => self.cell_formula_r1c1(address),
+        let written = |address| match (style, dynamic) {
+            (FormulaStyle::A1, false) => Ok(self.cell_formula(address)),
+            (FormulaStyle::A1, true) => Ok(self.cell_formula2(address)),
+            (FormulaStyle::R1C1, _) => self.cell_formula_r1c1_as(address, dynamic),
         };
         if range.is_single() {
             return written(range.addresses().next().unwrap());
@@ -16980,17 +17031,17 @@ impl Host for WorkbookHost<'_> {
         // whose function names and separators are English: measured,
         // `FormulaLocal` of `=A1*2` is `=A1*2` and `NumberFormatLocal` of
         // General is `General`.
-        if name.eq_ignore_ascii_case("formula")
-            || name.eq_ignore_ascii_case("formula2")
-            || name.eq_ignore_ascii_case("formulalocal")
-        {
+        if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formulalocal") {
             return self.range_formula(range, FormulaStyle::A1).map(Some);
         }
-        if name.eq_ignore_ascii_case("formular1c1")
-            || name.eq_ignore_ascii_case("formula2r1c1")
-            || name.eq_ignore_ascii_case("formular1c1local")
-        {
+        if name.eq_ignore_ascii_case("formula2") {
+            return self.range_formula_as(range, FormulaStyle::A1, true).map(Some);
+        }
+        if name.eq_ignore_ascii_case("formular1c1") || name.eq_ignore_ascii_case("formular1c1local") {
             return self.range_formula(range, FormulaStyle::R1C1).map(Some);
+        }
+        if name.eq_ignore_ascii_case("formula2r1c1") {
+            return self.range_formula_as(range, FormulaStyle::R1C1, true).map(Some);
         }
         if name.eq_ignore_ascii_case("hasformula") {
             return self.range_has_formula(range).map(Some);
@@ -17980,6 +18031,7 @@ impl Host for WorkbookHost<'_> {
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
             self.set_range_input(range, value, "range assignment", FormulaStyle::A1)?;
+            self.imply_intersections(range);
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("name") {
@@ -18002,6 +18054,9 @@ impl Host for WorkbookHost<'_> {
             || name.eq_ignore_ascii_case("formulalocal")
         {
             self.set_range_input(range, value, "range formula assignment", FormulaStyle::A1)?;
+            if !name.eq_ignore_ascii_case("formula2") {
+                self.imply_intersections(range);
+            }
             self.spread_calculated_column(range)?;
             return Ok(true);
         }
@@ -18019,6 +18074,9 @@ impl Host for WorkbookHost<'_> {
                 "range formula assignment",
                 FormulaStyle::R1C1,
             )?;
+            if !name.eq_ignore_ascii_case("formula2r1c1") {
+                self.imply_intersections(range);
+            }
             self.spread_calculated_column(range)?;
             return Ok(true);
         }

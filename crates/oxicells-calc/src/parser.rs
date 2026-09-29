@@ -178,6 +178,15 @@ impl Parser {
                     operand: Box::new(self.parse_unary()?),
                 })
             }
+            // `@A1:A3`: one cell of the range, the one in line with the
+            // formula's own cell.
+            Some(Token::At) => {
+                self.pos += 1;
+                Ok(Expr::Function {
+                    name: "_AT".to_string(),
+                    args: vec![self.parse_unary()?],
+                })
+            }
             _ => self.parse_range(),
         }
     }

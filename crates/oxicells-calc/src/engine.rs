@@ -867,6 +867,36 @@ impl Workbook {
             // Whether the argument names cells, rather than what they hold.
             // A table part that is not there -- `[#Totals]` with no totals
             // row -- is not a reference.
+            // `@`: of a range, the one cell in line with the asking cell --
+            // its row in a column, its column in a row, #VALUE! where there
+            // is none; of a block of answers, the first.
+            Expr::Function { name, args } if name == "_AT" && args.len() == 1 => {
+                if let Some((target, range)) = self.reference_of(&args[0], sheet, depth + 1, at) {
+                    let (start, end) = (range.start, range.end);
+                    let cell = if start == end {
+                        Some(start)
+                    } else {
+                        match at {
+                            Some((col, row)) if start.col == end.col && (start.row..=end.row).contains(&row) => {
+                                Some(CellRef::new(start.col, row))
+                            }
+                            Some((col, row)) if start.row == end.row && (start.col..=end.col).contains(&col) => {
+                                Some(CellRef::new(col, start.row))
+                            }
+                            _ => None,
+                        }
+                    };
+                    return match cell {
+                        Some(cell) => Arg::Range(self.materialise(&target, &RangeRef::single(cell), skip)),
+                        None => Arg::Value(Value::Error(ExcelError::Value)),
+                    };
+                }
+                match self.eval_arg(&args[0], sheet, depth + 1, at) {
+                    Arg::Range(block) => Arg::Value(block.cells.into_iter().next().unwrap_or(Value::Blank)),
+                    value => value,
+                }
+            }
+
             Expr::Function { name, args } if name == "ISREF" => match args.as_slice() {
                 [only] => Arg::Value(Value::Logical(self.reference_of(only, sheet, depth + 1, at).is_some())),
                 _ => Arg::Value(Value::Error(ExcelError::Value)),
@@ -2452,6 +2482,23 @@ mod tests {
         assert_eq!(wb.value("Sheet1", "B1"), Value::Number(1101.0));
         assert_eq!(wb.value("Sheet1", "B2"), Value::Number(1001.0));
         assert_eq!(wb.value("Sheet1", "B3"), Value::Number(1111.0));
+    }
+
+    /// `@` takes the cell of a range in line with the asking cell, and
+    /// #VALUE! where none is. Measured: `=@A1:A3` in D2 is A2's 2, in M5 is
+    /// #VALUE!; `=@A1:A3` beside a row range takes its column.
+    #[test]
+    fn an_at_takes_the_cell_in_line() {
+        let mut wb = two_columns();
+        wb.set_formula("Sheet1", "D2", "=@A1:A3").unwrap();
+        wb.set_formula("Sheet1", "M5", "=@A1:A3").unwrap();
+        wb.set_formula("Sheet1", "B7", "=@A1:C1").unwrap();
+        wb.set_formula("Sheet1", "E3", "=@A1:A3+1").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D2"), Value::Number(2.0));
+        assert_eq!(wb.value("Sheet1", "M5"), Value::Error(ExcelError::Value));
+        assert_eq!(wb.value("Sheet1", "B7"), Value::Number(10.0));
+        assert_eq!(wb.value("Sheet1", "E3"), Value::Number(4.0));
     }
 
     #[test]
