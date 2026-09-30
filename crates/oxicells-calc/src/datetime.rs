@@ -194,6 +194,9 @@ pub fn end_of_month(serial: i64, months: i64) -> Result<i64, ExcelError> {
 /// may be written with slashes, with hyphens, or with the month's name, and
 /// the month's name may come first or in the middle.
 pub fn text_as_datetime(text: &str) -> Option<f64> {
+    if let Some(serial) = kanji_moment(text.trim()) {
+        return serial;
+    }
     let mut said: Vec<&str> = text.split_whitespace().collect();
     if said.is_empty() {
         return None;
@@ -302,6 +305,10 @@ fn calendar_of_two(fields: &[&str]) -> Option<i64> {
     }
     if valid(month, number) {
         return serial_from_date(this_year, month, number).ok();
+    }
+    // A month and a four-figure year: measured, "Mar 2024" is 3/1/2024.
+    if !day_only && digits == 4 {
+        return serial_from_date(number, month, 1).ok();
     }
     if day_only || digits > 2 {
         return None;
@@ -517,4 +524,51 @@ mod tests {
             d(2026, 4, 30)
         );
     }
+}
+
+/// Dates and times written with 年, 月, 日, 時, 分 and 秒, as far as Excel
+/// reads them here: measured, DATEVALUE("3月5日") is this year's 5 March,
+/// "2024年3月" 3/1/2024, TIMEVALUE("10時30分") 10:30 -- while
+/// "2024年3月5日" is no date to it. None when the text is none of these, and
+/// Some(None) when it is one of them written wrong.
+fn kanji_moment(text: &str) -> Option<Option<f64>> {
+    let number = |part: &str| -> Option<i64> {
+        (!part.is_empty() && part.len() <= 4 && part.bytes().all(|b| b.is_ascii_digit())).then(|| part.parse().ok()).flatten()
+    };
+    if let Some(rest) = text.strip_suffix('日') {
+        if rest.contains('年') {
+            return None;
+        }
+        let (month, day) = rest.split_once('月')?;
+        let (month, day) = (number(month)?, number(day)?);
+        let this_year = THIS_YEAR.with(|held| held.get());
+        if this_year == 0 || !(1..=12).contains(&month) || day < 1 || day > days_in_month(this_year, month) {
+            return Some(None);
+        }
+        return Some(serial_from_date(this_year, month, day).ok().map(|serial| serial as f64));
+    }
+    if let Some(rest) = text.strip_suffix('月') {
+        let (year, month) = rest.split_once('年')?;
+        let (year, month) = (number(year)?, number(month)?);
+        if !(1..=12).contains(&month) {
+            return Some(None);
+        }
+        return Some(serial_from_date(year, month, 1).ok().map(|serial| serial as f64));
+    }
+    let (hour, rest) = text.split_once('時')?;
+    let hour = number(hour)?;
+    let (minute, rest) = match rest.split_once('分') {
+        Some((minute, rest)) => (number(minute)?, rest),
+        None if rest.is_empty() => (0, rest),
+        None => return None,
+    };
+    let second = match rest.strip_suffix('秒') {
+        Some(second) => number(second)?,
+        None if rest.is_empty() => 0,
+        None => return None,
+    };
+    if minute >= 60 || second >= 60 {
+        return Some(None);
+    }
+    Some(Some((hour * 3600 + minute * 60 + second) as f64 / 86_400.0))
 }

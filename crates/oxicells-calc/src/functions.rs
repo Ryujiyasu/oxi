@@ -3454,6 +3454,12 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             match datetime::text_as_datetime(&s) {
                 // Round the clock in seconds, not days, so "25:00" is exactly
                 // an hour rather than a day's worth of rounding short of one.
+                // With a date in front the time is what is left of the
+                // whole once the day is taken off, rounding and all:
+                // measured, "2024/3/5 25:00" is 0.0416666666642413.
+                Some(serial) if serial >= 1.0 && s.split_whitespace().next().is_some_and(|first| !first.contains(':')) => {
+                    Ok(Value::Number(serial - serial.floor()))
+                }
                 Some(serial) => Ok(Value::Number((serial * 86_400.0).rem_euclid(86_400.0) / 86_400.0)),
                 None => Err(ExcelError::Value),
             }
