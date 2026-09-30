@@ -11733,7 +11733,11 @@ fn binary(
             };
             Ok(Value::LongLong(answer.ok_or_else(overflow)?))
         }
-        Add | Sub | Mul if currency_exact(&lhs, &rhs).is_some() => {
+        // Text times Currency is a Double: measured, TypeName("2.5" * 1.5@).
+        Add | Sub | Mul
+            if currency_exact(&lhs, &rhs).is_some()
+                && !(op == Mul && (matches!(lhs, Value::String(_)) || matches!(rhs, Value::String(_)))) =>
+        {
             let (a, b) = currency_exact(&lhs, &rhs).expect("just asked");
             let overflow = || (RuntimeErrorKind::Overflow, "overflow".to_string());
             let units = match op {
@@ -18404,6 +18408,13 @@ fn currency_exact(lhs: &Value, rhs: &Value) -> Option<(i128, i128)> {
             // the largest LongLong + CCur(0) is -1 and the largest less one
             // CCur'd is -2.
             Value::LongLong(n) => Some(i128::from(n.wrapping_mul(10_000))),
+            // Text is read as the Currency it spells, half to even: measured,
+            // "12345678901234.5678" + 0@ keeps every figure.
+            Value::String(written) => {
+                let held = crate::decimal::Dec::parse(written)?.round(4);
+                let units = i128::try_from(held.magnitude).ok()?.checked_mul(10i128.pow(4 - u32::from(held.scale).min(4)))?;
+                (units <= i128::from(i64::MAX) + 1).then_some(if held.negative { -units } else { units })
+            }
             _ => None,
         }
     };
