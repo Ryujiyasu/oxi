@@ -11428,6 +11428,12 @@ fn to_decimal(value: &Value) -> Option<Result<crate::decimal::Dec, crate::decima
         Value::Int16(held) => Dec::from_i128(*held as i128),
         Value::Integer(held) | Value::LongLong(held) => Dec::from_i128(*held as i128),
         Value::Currency(held) => Ok(Dec { negative: *held < 0, magnitude: held.unsigned_abs() as u128, scale: 4 }),
+        // A Single is read at its own seven figures: measured,
+        // CDec("1.1") + CSng(0.1) is 1.2.
+        Value::Single(held) if held.is_finite() => match Dec::parse(&format!("{:.6e}", held)) {
+            Some(read) => Ok(read.reduced()),
+            None => Dec::from_f64(*held as f64),
+        },
         Value::Single(held) => Dec::from_f64(*held as f64),
         Value::Double(held) | Value::Date(held) => Dec::from_f64(*held),
         // Measured: CDec("&HFFFF") is 65535.
@@ -11593,7 +11599,15 @@ fn binary(
     // ordinary way (Double, Long).
     if matches!(lhs, Value::Decimal(_)) || matches!(rhs, Value::Decimal(_)) {
         if !matches!(lhs, Value::Null) && !matches!(rhs, Value::Null) && op != Concat {
-            if let (Some(left), Some(right)) = (to_decimal(&lhs), to_decimal(&rhs)) {
+            // A Single is summed at its seven figures but compared at its
+            // every bit: measured, CDec("1.1") + CSng(0.1) is 1.2 while
+            // CSng(0.1) = CDec(0.1) is False.
+            let compares = matches!(op, Eq | Ne | Lt | Le | Gt | Ge);
+            let bits = |value: &Value| match value {
+                Value::Single(held) if compares => Value::Double(f64::from(*held)),
+                other => other.clone(),
+            };
+            if let (Some(left), Some(right)) = (to_decimal(&bits(&lhs)), to_decimal(&bits(&rhs))) {
                 let overflow = || (RuntimeErrorKind::Overflow, "overflow".to_string());
                 let (left, right) = (left.map_err(|_| overflow())?, right.map_err(|_| overflow())?);
                 let answer = match op {
