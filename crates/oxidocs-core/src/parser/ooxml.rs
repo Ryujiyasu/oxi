@@ -1944,6 +1944,13 @@ fn parse_body(
                             && pr.floating_images.is_empty()
                             && pr.shapes.is_empty()
                             && pr.text_boxes.is_empty();
+                        // S1613: keep the host paragraph's style for its display
+                        // equations (the paragraph itself is not emitted).
+                        let s1613_host = if math_only && std::env::var_os("OXI_S1613_DISABLE").is_none() {
+                            Some(Box::new(pr.paragraph.style.clone()))
+                        } else {
+                            None
+                        };
                         // S537 (2026-06-10): image-only paragraphs — the inline image
                         // IS the paragraph's line in Word (COM repro _s537_inline_line:
                         // image-only para line = extent EXACTLY, 120.00pt for a 120pt
@@ -2197,7 +2204,12 @@ fn parse_body(
                             }
                         }
                         // OMML math blocks become sibling Block::Math entries.
-                        for mb in pr.math_blocks {
+                        for mut mb in pr.math_blocks {
+                            if let crate::ir::MathBlock::Display { host, .. } = &mut mb {
+                                if host.is_none() {
+                                    *host = s1613_host.clone();
+                                }
+                            }
                             current_blocks.push(Block::Math(mb));
                         }
                         // S898a (2026-07-17): an image-only paragraph inside a

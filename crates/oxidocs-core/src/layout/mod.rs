@@ -3285,6 +3285,12 @@ impl Drop for ParagraphFloatBandGuard {
     }
 }
 
+thread_local! {
+    /// S1612: cell first paragraph (by address) -> style id of the paragraph above.
+    static S1612_ABOVE: std::cell::RefCell<std::collections::HashMap<usize, Option<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 struct TableLayoutGuard;
 impl TableLayoutGuard {
     fn new() -> Self {
@@ -16337,7 +16343,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // Phase 3: emit positioned LayoutElements for math primitives.
                     // Fraction/Sup/Sub/SubSup render stacked; other primitives
                     // fall back to flat text for now.
-                    let math_font_size: f32 = 10.5;
+                    // S1613 (2026-09-30, default ON, opt-out OXI_S1613_DISABLE): a
+                    // display equation takes its host paragraph's size and spacing.
+                    // `_pb_dispmath_h_gen.py` (blind-G EN educational__005f2e39 slice,
+                    // docDefaults after 200): Word M1->M2 x 26.64 / 36.72, a/b 36.36 /
+                    // 46.32, the document's t= 60.60 / 70.56 and S= 56.28 / 66.36 with
+                    // after 0 / 200 -- the paragraph's 10pt after always applies; Oxi
+                    // gave both arms the same height (it dropped the paragraph). The
+                    // x arm (no run size) is 11pt, the document default: Cambria
+                    // Math's natural line 12.90 vs Word 12.84; Oxi's fixed 10.5 gave
+                    // 12.31.
+                    let s1613_host = match math_block {
+                        crate::ir::MathBlock::Display { host: Some(h), .. } => Some(h.as_ref()),
+                        _ => None,
+                    };
+                    let math_font_size: f32 = s1613_host
+                        .and_then(|h| h.ppr_rpr.as_ref().and_then(|r| r.font_size)
+                            .or_else(|| h.default_run_style.as_ref().and_then(|r| r.font_size)))
+                        .unwrap_or(10.5);
+                    if let Some(h) = s1613_host {
+                        cursor.advance(h.space_before.unwrap_or(0.0));
+                    }
                     // S524 (coverage, 2026-06-09): apply the display equation's jc
                     // (default Center) — Word CENTERS display math (oMathPara) at the
                     // page center; Oxi previously hard-coded the left margin. PDF-confirmed
@@ -16500,6 +16526,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             _ => advance,
                         };
                         cursor.advance(advance);
+                    }
+                    if let Some(h) = s1613_host {
+                        cursor.advance(h.space_after.unwrap_or(0.0));
                     }
                 }
             }
@@ -42214,6 +42243,57 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         unreachable!()
     }
 
+    /// S1612: record, for every cell's FIRST paragraph, the style of the
+    /// paragraph directly above it -- the last paragraph of the cell covering the
+    /// same grid column in the previous row, or (row 0) the body paragraph before
+    /// the table. `cell_effective_spacing` reads it for the contextualSpacing
+    /// test on the cell's space-before.
+    fn s1612_fill_above(&self, table: &Table, block_idx: Option<usize>, page: &Page) {
+        if std::env::var_os("OXI_S1612_DISABLE").is_some() {
+            return;
+        }
+        let before_table: Option<Option<String>> = block_idx
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| page.blocks.get(i))
+            .and_then(|b| match b {
+                Block::Paragraph(p) => Some(p.style.style_id.clone()),
+                _ => None,
+            });
+        let starts = |row: &TableRow| -> Vec<(usize, usize, usize)> {
+            let mut g = row.grid_before as usize;
+            let mut out = Vec::new();
+            for (ci, c) in row.cells.iter().enumerate() {
+                let span = c.grid_span.max(1) as usize;
+                out.push((ci, g, g + span));
+                g += span;
+            }
+            out
+        };
+        S1612_ABOVE.with(|m| {
+            let mut m = m.borrow_mut();
+            for (ri, row) in table.rows.iter().enumerate() {
+                let prev = if ri > 0 { Some((&table.rows[ri - 1], starts(&table.rows[ri - 1]))) } else { None };
+                for (ci, g0, _) in starts(row) {
+                    let Some(Block::Paragraph(first)) = row.cells[ci].blocks.iter()
+                        .find(|b| matches!(b, Block::Paragraph(_))) else { continue };
+                    let above: Option<Option<String>> = match &prev {
+                        None => before_table.clone(),
+                        Some((prow, pstarts)) => pstarts.iter()
+                            .find(|(_, a, b)| *a <= g0 && g0 < *b)
+                            .and_then(|(pci, _, _)| prow.cells[*pci].blocks.iter().rev()
+                                .find_map(|b| match b {
+                                    Block::Paragraph(p) => Some(p.style.style_id.clone()),
+                                    _ => None,
+                                })),
+                    };
+                    if let Some(a) = above {
+                        m.insert(first as *const Paragraph as usize, a);
+                    }
+                }
+            }
+        });
+    }
+
     fn layout_table_with_fit_pass(
         &self,
         table: &Table,
@@ -42251,6 +42331,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     ) -> Vec<LayoutElement> {
         let flow_entry_page = pages.len();
         let _s1429_guard = TableLayoutGuard::new();
+        self.s1612_fill_above(table, block_idx, page);
         if std::env::var("OXI_DBG_TBLSTART").is_ok() {
             let head: String = table.rows.first().and_then(|r| r.cells.first()).map(|c| c.blocks.iter().filter_map(|b| match b {
                 Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(12).collect::<String>()),
@@ -59580,6 +59661,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             0.0
         } else {
             est_sa
+        };
+        // S1612 (2026-09-29, default ON, opt-out OXI_S1612_DISABLE): the FIRST
+        // paragraph's space-before follows the same contextualSpacing test against
+        // the paragraph directly ABOVE it (previous row's cell in that grid column,
+        // or the body paragraph before the table). `_pb_cellctx_edge_gen.py`
+        // (blind-G EN educational__005f2e39 slice, 9pt cells before 60/after 60 +
+        // ctx): Normal cells pitch 10.875 (both sides gone), ctx off 16.875,
+        // Style1 cells 13.875 (before gone against the Style1 cell above, after
+        // kept against the Normal end mark); row 1 keeps its before when the
+        // paragraph above the table has another style. Oxi kept the before.
+        let est_sb = if is_first && para.style.contextual_spacing
+            && std::env::var_os("OXI_S1612_DISABLE").is_none()
+        {
+            let own = para.style.style_id.as_deref().or(self.cell_default_style_id.as_deref());
+            let above = S1612_ABOVE.with(|m| m.borrow().get(&(para as *const Paragraph as usize)).cloned());
+            match above {
+                Some(a) if a.as_deref().or(self.cell_default_style_id.as_deref()) == own => 0.0,
+                _ => est_sb,
+            }
+        } else {
+            est_sb
         };
         // S952 (2026-07-20, opt-out OXI_S952_DISABLE): a TABLE STYLE's pPr
         // before/afterAutospacing applies to the cell paragraphs with the S882

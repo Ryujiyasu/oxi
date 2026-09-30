@@ -1982,6 +1982,7 @@ mod tests {
     fn display_style_is_selected_for_display_block() {
         let block = MathBlock::Display {
             content: vec![MathExpr::Text("a".to_string())],
+            host: None,
             jc: MathAlignment::Center,
         };
         let b = layout_math_block(&block, 12.0);
@@ -2068,6 +2069,7 @@ mod tests {
                 MathExpr::Text("=".to_string()),
                 MathExpr::Text("mc".to_string()),
             ],
+            host: None,
             jc: MathAlignment::Center,
         };
         let t = extract_flat_text_block(&block);

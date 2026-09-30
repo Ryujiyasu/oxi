@@ -40,6 +40,11 @@ pub enum MathBlock {
         /// Horizontal alignment of the display equation within its paragraph.
         /// COM-verified: defaults to "center" if `<m:oMathParaPr>/<m:jc>` absent.
         jc: MathAlignment,
+        /// S1613: the style of the paragraph that held only this equation
+        /// (spacing before/after, paragraph-mark run size). None = unknown
+        /// (cells, text boxes, tests): the layout keeps its old defaults.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<Box<crate::ir::ParagraphStyle>>,
     },
 }
 
@@ -403,7 +408,7 @@ mod tests {
     #[test]
     fn mathblock_initial_style() {
         let inline = MathBlock::Inline(vec![]);
-        let display = MathBlock::Display { content: vec![], jc: MathAlignment::Center };
+        let display = MathBlock::Display { content: vec![], jc: MathAlignment::Center, host: None };
         assert_eq!(MathStyle::from_block(&inline), MathStyle::Text);
         assert_eq!(MathStyle::from_block(&display), MathStyle::Display);
     }

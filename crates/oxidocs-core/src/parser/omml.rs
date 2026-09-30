@@ -118,7 +118,7 @@ pub fn parse_omath_para(
             _ => {}
         }
     }
-    Ok(MathBlock::Display { content, jc })
+    Ok(MathBlock::Display { content, jc, host: None })
 }
 
 /// Parse a sequence of math expressions, reading events until the
@@ -1269,7 +1269,7 @@ mod tests {
         </m:oMathPara>"#;
         let block = parse(xml);
         match block {
-            MathBlock::Display { content, jc } => {
+            MathBlock::Display { content, jc, .. } => {
                 assert_eq!(jc, MathAlignment::Center);
                 assert_eq!(content.len(), 1);
                 assert!(matches!(&content[0], MathExpr::Text(s) if s == "E=mc"));
