@@ -11121,6 +11121,12 @@ fn numeric_text(text: &str) -> Option<f64> {
             return numeric_text(body).map(|value| if negative { -value } else { value });
         }
     }
+    // A separator may stand anywhere among the digits but not before them:
+    // measured, CDbl("1,2") is 12 and "1,,2" 12, while IsNumeric(",1") is
+    // False and CDbl(",123") error 13.
+    if trimmed.trim_start_matches(['+', '-']).starts_with(',') {
+        return None;
+    }
     // The grouping and currency marks Excel accepts, and nothing else -- a
     // trailing `%` is refused, so they cannot simply all be stripped.
     let bare: String = trimmed
