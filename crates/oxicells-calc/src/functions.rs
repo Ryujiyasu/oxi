@@ -1420,7 +1420,17 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             };
             // Measured: an instance of 0, or further than the text is long
             // (`TEXTBEFORE("a-b","-",5)`), is #VALUE!.
-            if instance == 0 || instance.unsigned_abs() as usize > hay.chars().count() {
+            // An empty delimiter sits before the first character, whatever
+            // the instance: measured, TEXTAFTER("ab","",3) is "ab" and
+            // TEXTBEFORE("","") is "".
+            if instance > 0 && needles.iter().all(|one| one.is_empty()) {
+                return Ok(Value::Text(if name == "TEXTBEFORE" { String::new() } else { hay }));
+            }
+            // Empty text is searched when no instance is named, and so not
+            // found: measured, TEXTAFTER("","-") is #N/A where
+            // TEXTAFTER("","-",1) is #VALUE!.
+            let unnamed_on_empty = hay.is_empty() && given(2).is_none();
+            if instance == 0 || (!unnamed_on_empty && instance.unsigned_abs() as usize > hay.chars().count()) {
                 return Err(ExcelError::Value);
             }
             let fold = |t: &str| if ignore_case { t.to_lowercase() } else { t.to_string() };
