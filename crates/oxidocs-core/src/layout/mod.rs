@@ -4783,6 +4783,27 @@ impl LayoutEngine {
         }
     }
 
+    /// S1614: the ascent (pt) of a numbering marker set in Arial Unicode MS in a
+    /// Latin document -- AUM's own 1.332em box, not S1564's Arial (see the body
+    /// S1037 site). None for any other marker.
+    fn s1614_aum_marker_asc(&self, para: &Paragraph) -> Option<f32> {
+        if std::env::var_os("OXI_S1614_DISABLE").is_some() || self.doc_body_has_real_cjk {
+            return None;
+        }
+        para.style.list_marker.as_ref()?;
+        let ms = s1037_marker_style(para)?;
+        if self.resolve_font_family(ms, &para.style) != Some("Arial Unicode MS") {
+            return None;
+        }
+        let fs = self.resolve_font_size(ms, &para.style);
+        let m = self.registry.get_with_style(
+            "Arial Unicode MS Latin",
+            self.resolve_bold(ms, &para.style),
+            self.resolve_italic(ms, &para.style),
+        );
+        Some(m.win_ascent * fs)
+    }
+
     fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         match self.resolve_font_family(run_style, para_style) {
             Some(family) => self.registry.get_with_style(
@@ -24336,7 +24357,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 match s1037_marker_style(para) {
                     Some(ms) => {
                         let mfs = ms.font_size.unwrap_or(marker_fs);
-                        self.metrics_for(ms, &para.style).win_ascent * mfs
+                        // S1614 (2026-09-30, default ON, opt-out OXI_S1614_DISABLE):
+                        // a NUMBERING MARKER in Arial Unicode MS keeps AUM's own
+                        // ascent (1.332em) even with the face absent -- S1564's
+                        // Arial box is for text RUNS. `_pb_ckl_heading_gen.py`
+                        // (blind-G EN policies__0097fbf2, ChecklistLevel1 headings,
+                        // marker AUM hint=eastAsia, Calibri-Bold 10 text): Word row
+                        // pitch 17.25 with the AUM marker, 12.75 with no numbering
+                        // and 12.75 with the level font set to Arial; a 12pt marker
+                        // 19.5. The PDF draws the digit in Calibri-Bold, but the line
+                        // grows by AUM's ascent overflow (10pt +3.8, 12pt +6.46).
+                        let aum_marker = std::env::var_os("OXI_S1614_DISABLE").is_none()
+                            && !self.doc_body_has_real_cjk
+                            && self.resolve_font_family(ms, &para.style) == Some("Arial Unicode MS");
+                        let m = if aum_marker {
+                            self.registry.get_with_style(
+                                "Arial Unicode MS Latin",
+                                self.resolve_bold(ms, &para.style),
+                                self.resolve_italic(ms, &para.style),
+                            )
+                        } else {
+                            self.metrics_for(ms, &para.style)
+                        };
+                        m.win_ascent * mfs
                     }
                     None => 0.0,
                 }
@@ -50059,9 +50102,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 effective_line_rule,
                                                 Some("exact") | Some("atLeast")
                                             )
-                                            && list_marker_info
+                                            && (list_marker_info
                                                 .as_ref()
                                                 .map_or(false, |(m, _, _)| m.contains('\u{F0B7}'))
+                                                || self.s1614_aum_marker_asc(para).is_some())
                                             && std::env::var("OXI_S1125_DISABLE").is_err()
                                         {
                                             let mut s1125_asc: f32 = 0.0;
@@ -50093,7 +50137,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     .as_ref()
                                                     .map(|(_, f, _)| *f)
                                                     .unwrap_or(0.0);
-                                                content_h += (2059.0 / 2048.0 * mfs
+                                                // S1614: an AUM numbering marker uses its own ascent.
+                                                let marker_asc = self.s1614_aum_marker_asc(para)
+                                                    .unwrap_or(2059.0 / 2048.0 * mfs);
+                                                content_h += (marker_asc
                                                     - s1125_asc
                                                     - s1125_ext)
                                                     .max(0.0);
@@ -59109,11 +59156,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             if in_cell
                 && !self.doc_body_has_real_cjk
                 && !matches!(eff_lr, Some("exact") | Some("atLeast"))
-                && para
+                && (para
                     .style
                     .list_marker
                     .as_deref()
                     .map_or(false, |m| m.contains('\u{F0B7}'))
+                    || self.s1614_aum_marker_asc(para).is_some())
                 && std::env::var("OXI_S1125_DISABLE").is_err()
             {
                 let mut s1125_asc: f32 = 0.0;
@@ -59143,7 +59191,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .unwrap_or_default()
                         });
                     let mfs = self.resolve_font_size(&marker_style, &para.style);
-                    let extra = (2059.0 / 2048.0 * mfs - s1125_asc - s1125_ext).max(0.0);
+                    let marker_asc = self.s1614_aum_marker_asc(para).unwrap_or(2059.0 / 2048.0 * mfs);
+                    let extra = (marker_asc - s1125_asc - s1125_ext).max(0.0);
                     height += extra;
                     if let Some(first) = float_measure.as_deref_mut().and_then(|m| m.heights.first_mut()) {
                         *first += extra;
