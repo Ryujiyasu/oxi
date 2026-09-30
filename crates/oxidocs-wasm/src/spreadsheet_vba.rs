@@ -14328,6 +14328,17 @@ impl<'a> WorkbookHost<'a> {
         };
         let default_px = self.workbook.sheets[sheet_index].default_row_height / 0.75;
         let base_px = font_default_row_px(&face, size).map(f32::from).unwrap_or(default_px);
+        // The room a wrapped cell's text has in each column: its pixels less
+        // five, measured as for what a cell shows.
+        let rooms: std::collections::BTreeMap<u32, u32> = self.workbook.sheets[sheet_index]
+            .rows
+            .iter()
+            .filter(|row| (range.start_row..=range.end_row).contains(&row.index))
+            .flat_map(|row| row.cells.iter().filter(|cell| cell.style.wrap_text).map(|cell| cell.col))
+            .collect::<std::collections::BTreeSet<u32>>()
+            .into_iter()
+            .map(|column| (column, (self.column_px(sheet_index, column) - 5.0).max(0.0) as u32))
+            .collect();
         let sheet = &mut self.workbook.sheets[sheet_index];
         for row in &mut sheet.rows {
             if !(range.start_row..=range.end_row).contains(&row.index) {
@@ -14349,8 +14360,21 @@ impl<'a> WorkbookHost<'a> {
                 let Some(font_px) = font_default_row_px(cell_face, cell_size) else {
                     continue;
                 };
-                let lines = if cell.style.wrap_text {
-                    cell.value.display().matches('\n').count() as f32 + 1.0
+                // A wrapped cell takes a line for each piece its text breaks
+                // into at the column's width: measured in a column of 8.38,
+                // "the quick brown fox jumps over" asks four lines (75), a
+                // 34-letter word five, and fifteen kana four.
+                // A number is never broken over lines.
+                let lines = if cell.style.wrap_text && !matches!(cell.value, CellValue::Number(_)) {
+                    let room = rooms.get(&cell.col).copied().unwrap_or(0);
+                    let bold = cell.style.bold;
+                    let measure = |text: &str| text_px(text, cell_face, cell_size, bold);
+                    cell.value
+                        .display()
+                        .split('\n')
+                        .map(|line| wrapped_line_count(line, room, &measure))
+                        .sum::<u32>()
+                        .max(1) as f32
                 } else {
                     1.0
                 };
@@ -20942,6 +20966,82 @@ fn yu_gothic_gdi() -> &'static BTreeMap<String, BTreeMap<u32, Vec<u32>>> {
 /// The widest line a wrapped line of text breaks into within `room`
 /// pixels: words go on a line while they fit, and a word wider than the
 /// room stands on a line of its own.
+/// How many lines a line of text wraps into within `room` pixels: words
+/// (with the spaces after them, which take no room at a line's end) go on
+/// a line while they fit, a word wider than the room is broken letter by
+/// letter, and each full-width character may stand at a break of its own.
+fn wrapped_line_count(line: &str, room: u32, measure: &dyn Fn(&str) -> u32) -> u32 {
+    let mut pieces: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for one in line.chars() {
+        if u32::from(one) > 0x2000 {
+            if !current.is_empty() {
+                pieces.push(std::mem::take(&mut current));
+            }
+            pieces.push(one.to_string());
+        } else if one == ' ' {
+            current.push(one);
+            pieces.push(std::mem::take(&mut current));
+        } else {
+            if current.ends_with(' ') {
+                pieces.push(std::mem::take(&mut current));
+            }
+            current.push(one);
+        }
+    }
+    if !current.is_empty() {
+        pieces.push(current);
+    }
+    let fits = |text: &str| measure(text.trim_end_matches(' ')) <= room;
+    // A closing bracket may not begin a line and an opening one may not end
+    // one; either takes its neighbour down with it: measured, "（あいうえお）
+    // かきくけこ「さしすせ」" asks ten lines two characters wide where plain
+    // kana ask nine.
+    let no_start = |text: &str| text.starts_with(['）', '」', '』', '】', '〕', '〉', '》', '］', '｝']);
+    let no_end = |one: char| matches!(one, '（' | '「' | '『' | '【' | '〔' | '〈' | '《' | '［' | '｛');
+    let mut count = 1;
+    let mut held = String::new();
+    for piece in pieces {
+        let joined = format!("{held}{piece}");
+        if held.is_empty() || fits(&joined) {
+            if fits(&joined) {
+                held = joined;
+                continue;
+            }
+        } else {
+            count += 1;
+            let mut carried = String::new();
+            if no_start(&piece) && held.chars().count() > 1 {
+                if let Some(last) = held.pop() {
+                    carried.push(last);
+                }
+            }
+            while held.chars().count() > 1 && held.chars().last().is_some_and(no_end) {
+                if let Some(last) = held.pop() {
+                    carried.insert(0, last);
+                }
+            }
+            held.clear();
+            let piece = format!("{carried}{piece}");
+            if fits(&piece) {
+                held = piece;
+                continue;
+            }
+        }
+        // A piece too wide for a line of its own is broken letter by letter.
+        for one in piece.chars() {
+            let next = format!("{held}{one}");
+            if !held.is_empty() && !fits(&next) {
+                count += 1;
+                held = one.to_string();
+            } else {
+                held = next;
+            }
+        }
+    }
+    count
+}
+
 fn widest_wrapped_line(line: &str, room: u32, measure: &dyn Fn(&str) -> u32) -> u32 {
     let whole = measure(line);
     if whole <= room {
@@ -25374,7 +25474,23 @@ fn plain_number(body: &str) -> Option<f64> {
     if !readable {
         return None;
     }
-    body.parse::<f64>().ok()
+    // What is typed past the fifteenth figure is dropped, not rounded:
+    // measured, "1234567890123456789012345" is 1.23456789012345E+24.
+    let mut seen = 0usize;
+    let kept: String = body
+        .chars()
+        .map(|one| {
+            if !one.is_ascii_digit() {
+                return one;
+            }
+            if seen == 0 && one == '0' {
+                return one;
+            }
+            seen += 1;
+            if seen > 15 { '0' } else { one }
+        })
+        .collect();
+    kept.parse::<f64>().ok()
 }
 
 /// A written decimal number that may have its thousands separated.
