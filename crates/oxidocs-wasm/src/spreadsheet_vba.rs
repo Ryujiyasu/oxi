@@ -9641,6 +9641,11 @@ impl<'a> WorkbookHost<'a> {
         let (row, column) = (base.row.saturating_sub(1), base.column);
         let bare = !formula.trim_start().starts_with('=');
         let written = if bare { format!("={formula}") } else { formula.clone() };
+        // What will not read as a formula answers #VALUE!: measured, "=A1+",
+        // "=nosuch(" and "" are Error 2015, where "abc" converts as a name.
+        if formula.trim().is_empty() || formula_is_malformed(&written[1..]) {
+            return Ok(Value::Error(2015));
+        }
         let r1c1 = |text: &str| formula_to_r1c1(text, row, column);
         let a1 = |text: &str| oxicells_calc::formula_from_r1c1(text, row, column);
         let mut text = if from == -4150 { a1(&written)? } else { written };
@@ -9654,7 +9659,12 @@ impl<'a> WorkbookHost<'a> {
         if bare {
             text = text.trim_start_matches('=').to_string();
         }
-        Ok(Value::String(text))
+        // A sheet of this book is named with the book in front: measured,
+        // "Sheet1!A1" to R1C1 is "[Book1]Sheet1!RC", while a sheet there is
+        // not ('My Sheet'!A1) stays as written.
+        let book = self.file_name.clone().unwrap_or_else(|| "Book1".to_string());
+        let sheets: Vec<String> = self.workbook.sheets.iter().map(|sheet| sheet.name.clone()).collect();
+        Ok(Value::String(book_qualified_sheets(&text, &book, &sheets)))
     }
 
     /// `Worksheet.Names`: Add, Item and Count over the names spelt with this
@@ -37097,4 +37107,76 @@ why: {error}"),
         };
         std::fs::write(out, answer).unwrap();
     }
+}
+
+/// A formula's references to the book's own sheets, with the book's name put
+/// in front the way Excel writes a reference that could leave the book:
+/// `Sheet1!RC` becomes `[Book1]Sheet1!RC` and `'My Sheet'!A1`
+/// `'[Book1]My Sheet'!A1`. Quoted text is left alone.
+fn book_qualified_sheets(text: &str, book: &str, sheets: &[String]) -> String {
+    let known = |name: &str| sheets.iter().any(|sheet| sheet.eq_ignore_ascii_case(name));
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + book.len() * 2);
+    let mut at = 0;
+    while at < chars.len() {
+        match chars[at] {
+            '"' => {
+                out.push('"');
+                at += 1;
+                while at < chars.len() {
+                    out.push(chars[at]);
+                    at += 1;
+                    if chars[at - 1] == '"' {
+                        if chars.get(at) == Some(&'"') {
+                            out.push('"');
+                            at += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            '\'' => {
+                let mut end = at + 1;
+                let mut name = String::new();
+                while end < chars.len() {
+                    if chars[end] == '\'' {
+                        if chars.get(end + 1) == Some(&'\'') {
+                            name.push('\'');
+                            end += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    name.push(chars[end]);
+                    end += 1;
+                }
+                let closed: String = chars[at..(end + 1).min(chars.len())].iter().collect();
+                if chars.get(end + 1) == Some(&'!') && known(&name) {
+                    out.push_str(&format!("'[{book}]{}'", name.replace('\'', "''")));
+                } else {
+                    out.push_str(&closed);
+                }
+                at = end + 1;
+            }
+            c if c.is_alphabetic() || c == '_' => {
+                let start = at;
+                while at < chars.len() && (chars[at].is_alphanumeric() || matches!(chars[at], '_' | '.')) {
+                    at += 1;
+                }
+                let word: String = chars[start..at].iter().collect();
+                let fresh = start == 0 || !matches!(chars[start - 1], ']' | '[');
+                if fresh && chars.get(at) == Some(&'!') && known(&word) {
+                    out.push_str(&format!("[{book}]{word}"));
+                } else {
+                    out.push_str(&word);
+                }
+            }
+            c => {
+                out.push(c);
+                at += 1;
+            }
+        }
+    }
+    out
 }
