@@ -12034,7 +12034,28 @@ fn like_pattern(
     let tokens = parse_like_pattern(pattern);
     let value = value.chars().collect::<Vec<_>>();
     let mut memo = BTreeMap::new();
-    like_matches(&value, &tokens, 0, 0, text_compare, &mut memo)
+    let found = like_matches(&value, &tokens, 0, 0, text_compare, &mut memo)
+        .map_err(|message| (RuntimeErrorKind::InvalidPattern, message))?;
+    // A ß, æ or œ in the text may also be read as the two letters it spells,
+    // each taken by any part of the pattern: measured, ChrW(&HDF) Like "S*"
+    // and ChrW(&HE6) Like "A?" are True under Option Compare Text.
+    if found || !text_compare {
+        return Ok(found);
+    }
+    let mut spelled = Vec::with_capacity(value.len() + 4);
+    for &character in &value {
+        match like_fold(character, true) {
+            'ß' => spelled.extend(['s', 's']),
+            'æ' => spelled.extend(['a', 'e']),
+            'œ' => spelled.extend(['o', 'e']),
+            _ => spelled.push(character),
+        }
+    }
+    if spelled.len() == value.len() {
+        return Ok(false);
+    }
+    let mut memo = BTreeMap::new();
+    like_matches(&spelled, &tokens, 0, 0, true, &mut memo)
         .map_err(|message| (RuntimeErrorKind::InvalidPattern, message))
 }
 
@@ -12160,7 +12181,7 @@ fn like_matches(
                 }
                 LikeToken::AnyMany | LikeToken::Nothing => unreachable!(),
             };
-            matches
+            (matches
                 && like_matches(
                     value,
                     pattern,
@@ -12168,7 +12189,8 @@ fn like_matches(
                     pattern_index + 1,
                     text_compare,
                     memo,
-                )?
+                )?)
+                || (text_compare && like_spelled_out(value, pattern, value_index, pattern_index, memo)?)
         }
         Some(_) => false,
     };
@@ -12176,13 +12198,67 @@ fn like_matches(
     Ok(result)
 }
 
-fn like_character_equal(left: char, right: char, text_compare: bool) -> bool {
-    left == right || (text_compare && left.to_lowercase().eq(right.to_lowercase()))
+/// Under a text comparison ß, æ and œ are the two letters they spell, on
+/// either side: measured, "SS" Like ChrW(&HDF), "ss" Like "[" & ChrW(&HDF)
+/// & "]", ChrW(&HDF) & "e" Like "SSE" and ChrW(&HE6) Like "AE" are True,
+/// while ChrW(&HDF) Like "?" still takes the one letter.
+fn like_spelled_out(
+    value: &[char],
+    pattern: &[LikeToken],
+    value_index: usize,
+    pattern_index: usize,
+    memo: &mut BTreeMap<(usize, usize), bool>,
+) -> Result<bool, String> {
+    let spelled = |character: char| match like_fold(character, true) {
+        'ß' => Some(('s', 's')),
+        'æ' => Some(('a', 'e')),
+        'œ' => Some(('o', 'e')),
+        _ => None,
+    };
+    let pair_at = |at: usize| -> Option<(char, char)> {
+        Some((like_fold(*value.get(at)?, true), like_fold(*value.get(at + 1)?, true)))
+    };
+    // One letter in the pattern that spells two in the text.
+    let one_in_pattern = match &pattern[pattern_index] {
+        LikeToken::Literal(expected) => spelled(*expected),
+        LikeToken::Class { negated: false, ranges } => {
+            ranges.iter().filter(|(start, end)| start == end).find_map(|(start, _)| {
+                spelled(*start).filter(|pair| pair_at(value_index) == Some(*pair))
+            })
+        }
+        _ => None,
+    };
+    if let Some(pair) = one_in_pattern {
+        if pair_at(value_index) == Some(pair)
+            && like_matches(value, pattern, value_index + 2, pattern_index + 1, true, memo)?
+        {
+            return Ok(true);
+        }
+    }
+    // One letter in the text that two literals in the pattern spell.
+    if let (Some((first, second)), Some(LikeToken::Literal(a)), Some(LikeToken::Literal(b))) =
+        (spelled(value[value_index]), pattern.get(pattern_index), pattern.get(pattern_index + 1))
+    {
+        if like_fold(*a, true) == first
+            && like_fold(*b, true) == second
+            && like_matches(value, pattern, value_index + 1, pattern_index + 2, true, memo)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
+fn like_character_equal(left: char, right: char, text_compare: bool) -> bool {
+    left == right || (text_compare && like_fold(left, true) == like_fold(right, true))
+}
+
+/// A letter as a text comparison in Like reads it: by the case table,
+/// measured -- ChrW(&H3A3) Like ChrW(&H3C2) and ChrW(&H1C5) Like
+/// ChrW(&H1C6) are False.
 fn like_fold(value: char, text_compare: bool) -> char {
-    if text_compare {
-        value.to_lowercase().next().unwrap_or(value)
+    if text_compare && (value as u32) < 0x10000 {
+        char::from_u32(u32::from(crate::case_table::lower_unit(value as u16))).unwrap_or(value)
     } else {
         value
     }
