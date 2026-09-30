@@ -11543,6 +11543,16 @@ fn binary(
             if op == Div && a == 0.0 && b == 0.0 {
                 return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
             }
+            // `\` and `Mod` work in Longs (LongLongs beside one): an operand
+            // past a Long overflows even where the answer would be small --
+            // measured, a 20-digit Decimal Mod 3 is error 6.
+            if matches!(op, IntDiv | Mod)
+                && !matches!(lhs, Value::LongLong(_))
+                && !matches!(rhs, Value::LongLong(_))
+                && [a, b].iter().any(|side| *side > f64::from(i32::MAX) || *side < f64::from(i32::MIN))
+            {
+                return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
+            }
             if matches!(op, Div | IntDiv | Mod) && b == 0.0 {
                 return Err((
                     RuntimeErrorKind::DivisionByZero,

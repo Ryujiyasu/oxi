@@ -143,9 +143,17 @@ impl Dec {
     /// A whole number and scale brought into range: the scale is cut back,
     /// rounding half to even, until the magnitude fits and the scale is at
     /// most 28.
-    fn settle(negative: bool, mut wide: Wide, mut scale: u32) -> Result<Dec, Overflow> {
+    fn settle(negative: bool, wide: Wide, scale: u32) -> Result<Dec, Overflow> {
+        Dec::settle_beyond(negative, wide, scale, false)
+    }
+
+    /// `settle`, told whether anything was already left over below the
+    /// digits it is given -- a division's remainder -- so that a cut digit
+    /// of 5 is known to be more than half: measured, CDec(1) / CDec(7) ends
+    /// ...429, not ...428.
+    fn settle_beyond(negative: bool, mut wide: Wide, mut scale: u32, beyond: bool) -> Result<Dec, Overflow> {
         let mut last = 0u64;
-        let mut sticky = false;
+        let mut sticky = beyond;
         let mut cut = false;
         loop {
             let fits = wide.fits();
@@ -314,20 +322,25 @@ impl Dec {
         // One more digit and the rest for rounding.
         let mut wide = quotient;
         let mut scale = places - shift;
+        let mut beyond = false;
         if remainder != 0 {
             let doubled = remainder * 2;
             let bump = doubled > divisor || (doubled == divisor && wide.0[0] & 1 == 1);
             // Settle below cuts places; round what the division left here
             // only when no cutting follows.
-            if scale >= 0 && scale as u32 <= MAX_SCALE && wide.fits().is_some() && bump {
-                wide = wide.add(&Wide::from_u128(1));
+            if scale >= 0 && scale as u32 <= MAX_SCALE && wide.fits().is_some() {
+                if bump {
+                    wide = wide.add(&Wide::from_u128(1));
+                }
+            } else {
+                beyond = true;
             }
         }
         while scale < 0 {
             wide = wide.mul_small(10);
             scale += 1;
         }
-        Some(Dec::settle(self.negative != other.negative, wide, scale as u32))
+        Some(Dec::settle_beyond(self.negative != other.negative, wide, scale as u32, beyond))
     }
 
     pub fn cmp(&self, other: &Dec) -> Ordering {
