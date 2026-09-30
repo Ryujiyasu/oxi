@@ -11864,8 +11864,24 @@ fn binary(
             //
             // What is given is made whole VBA's way first, half to the even
             // side: `2.7 And 3` is 3. A numeric string is read as a number.
+            // A LongLong is taken to its last bit; anything else must fit
+            // a Long unless a LongLong stands beside it: measured,
+            // (max - 1) And max is ...806 and 3000000000# And 1 is 6.
+            let wide = matches!(lhs, Value::LongLong(_)) || matches!(rhs, Value::LongLong(_));
             let bits = |value: &Value| -> Result<i64, (RuntimeErrorKind, String)> {
-                Ok(number(value).map_err(mismatch)?.round_ties_even() as i64)
+                if let Value::LongLong(n) = value {
+                    return Ok(*n);
+                }
+                let whole = number(value).map_err(mismatch)?.round_ties_even();
+                let (low, high) = if wide {
+                    (i64::MIN as f64, i64::MAX as f64)
+                } else {
+                    (f64::from(i32::MIN), f64::from(i32::MAX))
+                };
+                if !(low..=high).contains(&whole) {
+                    return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
+                }
+                Ok(whole as i64)
             };
             let (a, b) = (bits(&lhs)?, bits(&rhs)?);
             let answer = match op {
