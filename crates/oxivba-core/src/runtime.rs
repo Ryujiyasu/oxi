@@ -5587,17 +5587,26 @@ fn err_call(
             .transpose()?
             .map_or(0, |value| value.round_ties_even() as i64);
         frame.error_state.raised_help = Some((help_file, help_context));
+        // What is left out is taken from the error still standing, if one
+        // is: measured, a handler's `Err.Raise Err.Number + 1` (or any other
+        // number) keeps the Source "src" and Description "desc" of what it
+        // caught, and raising 1500 over a division by zero keeps "Division
+        // by zero".
+        let standing = (frame.error_state.number != 0)
+            .then(|| (frame.error_state.source.clone(), frame.error_state.description.clone()));
         let source = args
             .get(1)
             .filter(|value| !matches!(value, Value::Missing | Value::Empty))
             .map(|value| text(value).map_err(mismatch))
             .transpose()?
+            .or_else(|| standing.as_ref().map(|(source, _)| source.clone()).filter(|source| !source.is_empty()))
             .unwrap_or_else(|| frame.source_name.clone());
         let description = args
             .get(2)
             .filter(|value| !matches!(value, Value::Missing | Value::Empty))
             .map(|value| text(value).map_err(mismatch))
             .transpose()?
+            .or_else(|| standing.as_ref().map(|(_, description)| description.clone()).filter(|text| !text.is_empty()))
             .unwrap_or_else(|| vba_error_description(number).to_string());
         return Err(raised_error(number, source, description, line));
     }
