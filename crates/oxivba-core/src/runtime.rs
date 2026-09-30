@@ -352,6 +352,8 @@ pub struct Runtime<'a> {
     max_depth: usize,
     module_values: BTreeMap<String, ValueSlot>,
     module_constants: BTreeSet<String>,
+    /// Each Enum's members by name, for `Color.Blue` written in full.
+    enum_members: BTreeMap<String, BTreeMap<String, i64>>,
     module_auto_new: BTreeMap<String, String>,
     module_fixed_strings: BTreeMap<String, usize>,
     /// The type each module-level variable was declared with, read alongside a
@@ -422,6 +424,11 @@ struct ErrorState {
     description: String,
     source: String,
     line: Option<u32>,
+    help_file: String,
+    help_context: i64,
+    /// What `Err.Raise` was given for HelpFile and HelpContext, carried to
+    /// the handler that records the error it raises.
+    raised_help: Option<(String, i64)>,
 }
 
 enum InternalObject {
@@ -505,6 +512,7 @@ impl<'a> Runtime<'a> {
             max_depth: 128,
             module_values: BTreeMap::new(),
             module_constants: BTreeSet::new(),
+            enum_members: BTreeMap::new(),
             module_auto_new: BTreeMap::new(),
             module_fixed_strings: BTreeMap::new(),
             module_declared: BTreeMap::new(),
@@ -968,6 +976,7 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 ModuleItem::Enum(definition) => {
+                    let enum_key = key(&definition.name);
                     let mut next = 0_i64;
                     for (name, expression) in definition.members {
                         let value = match expression {
@@ -995,6 +1004,7 @@ impl<'a> Runtime<'a> {
                             None => next,
                         };
                         let name = key(&name);
+                        self.enum_members.entry(enum_key.clone()).or_default().insert(name.clone(), value);
                         self.module_values
                             .insert(name.clone(), Rc::new(RefCell::new(Value::Integer(value))));
                         self.module_constants.insert(name);
@@ -1489,7 +1499,14 @@ impl<'a> Runtime<'a> {
                 .to_string(),
             _ => vba_error_description(number).to_string(),
         };
+        let (help_file, help_context) = match failure.kind {
+            RuntimeErrorKind::UserDefined => frame.error_state.raised_help.take().unwrap_or_default(),
+            _ => Default::default(),
+        };
         frame.error_state = ErrorState {
+            help_file,
+            help_context,
+            raised_help: None,
             number,
             description,
             // Measured: a run-time error's Source is the project's name.
@@ -3425,6 +3442,17 @@ impl<'a> Runtime<'a> {
             Expr::Member {
                 object, name, span, ..
             } => {
+                // `Color.Blue`: an Enum's member named with its Enum,
+                // measured to read as the member alone.
+                if let Expr::Ident(owner, _) = object.as_ref() {
+                    if self.lookup_slot(frame, owner).is_none() {
+                        if let Some(members) = self.enum_members.get(&key(owner)) {
+                            if let Some(value) = members.get(&key(name)) {
+                                return Ok(Value::Integer(*value));
+                            }
+                        }
+                    }
+                }
                 let receiver = self.eval_object(object, frame, span.line)?;
                 if is_err_object(&receiver) {
                     return err_property(frame, name, span.line);
@@ -5140,6 +5168,9 @@ fn vba_error_description(number: i64) -> &'static str {
         453 => "Specified DLL function not found",
         457 => "This key is already associated with an element of this collection",
         458 => "Variable uses an Automation type not supported in Visual Basic",
+        // Measured: Err.Raise -5 and vbObjectError + 513 both describe
+        // themselves so.
+        number if number < 0 => "Automation error",
         _ => "Application-defined or object-defined error",
     }
 }
@@ -5195,9 +5226,10 @@ fn err_property(frame: &Frame, name: &str, line: u32) -> Result<Value, RuntimeEr
     } else if name.eq_ignore_ascii_case("erl") {
         Ok(Value::Integer(frame.error_state.line.unwrap_or(0) as i64))
     } else if name.eq_ignore_ascii_case("helpfile") {
-        Ok(Value::String(String::new()))
-    } else if name.eq_ignore_ascii_case("helpcontext") || name.eq_ignore_ascii_case("lastdllerror")
-    {
+        Ok(Value::String(frame.error_state.help_file.clone()))
+    } else if name.eq_ignore_ascii_case("helpcontext") {
+        Ok(Value::Integer(frame.error_state.help_context))
+    } else if name.eq_ignore_ascii_case("lastdllerror") {
         Ok(Value::Integer(0))
     } else {
         Err(error(
@@ -5256,6 +5288,23 @@ fn err_call(
         }
         let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, Some(line));
         let number = number(&args[0]).map_err(mismatch)?.round_ties_even() as i64;
+        // Measured: 0 and anything past 65535 raise 5 in their place.
+        if number == 0 || number > 65_535 {
+            return Err(invalid_procedure_call(format!("Err.Raise {number} is not a raisable number"), Some(line)));
+        }
+        let help_file = args
+            .get(3)
+            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
+            .map(|value| text(value).map_err(mismatch))
+            .transpose()?
+            .unwrap_or_default();
+        let help_context = args
+            .get(4)
+            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
+            .map(|value| crate::runtime::number(value).map_err(mismatch))
+            .transpose()?
+            .map_or(0, |value| value.round_ties_even() as i64);
+        frame.error_state.raised_help = Some((help_file, help_context));
         let source = args
             .get(1)
             .filter(|value| !matches!(value, Value::Missing | Value::Empty))
