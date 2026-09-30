@@ -7499,9 +7499,12 @@ fn call_builtin(
             }
             let source = text(&args[0])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
-            return parse_val(&source)
-                .map(Value::Double)
-                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line));
+            // Past a Double's range is an overflow: measured, Val("1E400") is 6.
+            return match parse_val(&source) {
+                Ok(held) if held.is_finite() => Ok(Value::Double(held)),
+                Ok(_) => Err(error(RuntimeErrorKind::Overflow, "overflow in Val", line)),
+                Err(message) => Err(error(RuntimeErrorKind::TypeMismatch, message, line)),
+            };
         }
         if name == "ismissing" {
             if args.len() != 1 {
@@ -9255,8 +9258,9 @@ fn format_value(
             "<" => return Ok(crate::case_table::lower(&held)),
             ">" => return Ok(crate::case_table::upper(&held)),
             // Text that is no number is left as it is: measured,
-            // `Format("abc", "0.00")` is abc.
-            _ if number(value).is_err() => return Ok(held.clone()),
+            // `Format("abc", "0.00")` is abc, and so is `Format("1E400",
+            // "0")`, a number past a Double's range.
+            _ if !number(value).is_ok_and(f64::is_finite) => return Ok(held.clone()),
             _ => {}
         }
     }
@@ -10372,7 +10376,19 @@ fn call_date_builtin(
             // The two neighbours that are NOT moments keep their own types:
             // DateDiff, being a count of intervals, is a Long, and Timer,
             // being seconds since midnight, is a Single.
-            let serial = parsed.map_err(mismatch)?;
+            // A number off the calendar is an overflow, where text that will
+            // not read is a mismatch: measured, CDate(3E+6) is 6.
+            let numeric = matches!(
+                args[0],
+                Value::Byte(_) | Value::Int16(_) | Value::Integer(_) | Value::LongLong(_) | Value::Single(_) | Value::Double(_) | Value::Currency(_) | Value::Decimal(_)
+            );
+            let serial = parsed.map_err(|message| {
+                if numeric {
+                    error(RuntimeErrorKind::Overflow, message, line)
+                } else {
+                    mismatch(message)
+                }
+            })?;
             Ok(Value::Date(match name {
                 "datevalue" => serial.floor(),
                 "timevalue" => serial.rem_euclid(1.0),
