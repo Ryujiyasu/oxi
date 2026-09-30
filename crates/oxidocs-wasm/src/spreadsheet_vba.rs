@@ -14326,8 +14326,20 @@ impl<'a> WorkbookHost<'a> {
     /// worked out here -- only the breaks the text carries -- which is the
     /// one thing this falls short of Excel on.
     fn auto_fit_rows(&mut self, range: CellRange) -> Result<Value, String> {
-        use oxicells_core::row_defaults::font_default_row_px;
+        use oxicells_core::row_defaults::{font_default_row_px, font_line_box};
         let sheet_index = range.sheet;
+        // A formula written a moment ago is fitted by its answer: measured,
+        // =REPT("ab ",10) set to wrap asks four lines.
+        if self.holds_formula(self.cut_to_contents(range)?) {
+            self.recalculate();
+        }
+        // A merged cell is passed over: measured, a long wrapped text merged
+        // across A1:B1 leaves the row at 18.75.
+        let merged: Vec<CellRange> = self
+            .merges_on(sheet_index)
+            .into_iter()
+            .filter(|merge| merge.start_row != merge.end_row || merge.start_column != merge.end_column)
+            .collect();
         let (face, size) = {
             let sheet = &self.workbook.sheets[sheet_index];
             match sheet.normal_font.clone() {
@@ -14367,9 +14379,21 @@ impl<'a> WorkbookHost<'a> {
             let thick_top = row.cells.iter().any(|cell| heavy(&cell.style.border_top));
             let thick_bottom = row.cells.iter().any(|cell| heavy(&cell.style.border_bottom));
             for cell in &row.cells {
+                let at = CellAddress { sheet: sheet_index, row: row.index, column: cell.col };
+                if merged.iter().any(|merge| range_contains(*merge, CellRange::single(at))) {
+                    continue;
+                }
                 let cell_face = cell.style.font_name.as_deref().unwrap_or(&face);
                 let cell_size = cell.style.font_size.unwrap_or(size);
-                let Some(font_px) = font_default_row_px(cell_face, cell_size) else {
+                // A bold line stands in its own box: measured, two bold
+                // lines of 游ゴシック 11 ask 36 and six 144 -- 24 pixels each
+                // where a plain line asks 25.
+                let line_px = if cell.style.bold {
+                    font_line_box(cell_face, cell_size, true).map(|(px, _)| px)
+                } else {
+                    None
+                };
+                let Some(font_px) = line_px.or_else(|| font_default_row_px(cell_face, cell_size)) else {
                     continue;
                 };
                 // A wrapped cell takes a line for each piece its text breaks
@@ -14378,9 +14402,12 @@ impl<'a> WorkbookHost<'a> {
                 // 34-letter word five, and fifteen kana four.
                 // A number is never broken over lines.
                 let lines = if cell.style.wrap_text && !matches!(cell.value, CellValue::Number(_)) {
-                    let room = rooms.get(&cell.col).copied().unwrap_or(0);
+                    // Each level of indent takes twelve pixels of the room,
+                    // and bold wants two more than its glyphs: measured,
+                    // forty "a"s ask 8, 10, 14 and 20 lines at levels 0-3.
+                    let room = rooms.get(&cell.col).copied().unwrap_or(0).saturating_sub(cell.style.indent * 12);
                     let bold = cell.style.bold;
-                    let measure = |text: &str| text_px(text, cell_face, cell_size, bold);
+                    let measure = |text: &str| text_px(text, cell_face, cell_size, bold) + if bold { 2 } else { 0 };
                     cell.value
                         .display()
                         .split('\n')
@@ -14393,6 +14420,8 @@ impl<'a> WorkbookHost<'a> {
                 px = px.max(f32::from(font_px) * lines);
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
+            // No row is taller than 409.5 points.
+            let px = px.min(546.0);
             row.height = Some(px * 0.75);
             row.custom_height = false;
         }
