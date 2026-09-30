@@ -26348,7 +26348,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && !s562b_empty_full
                 && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
                 && para.style.line_spacing.unwrap_or(1.0) <= 1.0;
-            let break_threshold = if s1152_full_box || s1484_full_box {
+            // S1617 (2026-09-30, opt-in OXI_S1617=1) -- FALSIFIED, kept only as a lever.
+            // It asked for the FULL line box at a typed-grid page bottom once a table
+            // sits on the page. The table probe that seemed to show it
+            // (`_pb_gridbottom_tbl_gen.py`) was really showing S1618: Word starts the
+            // block after a table 0.75 lower than Oxi did, and with that width restored
+            // the ordinary leniency explains every arm. Default ON it pushed five last
+            // lines that Word keeps (1245d99e, 13abeaf6, 01c5a769, 03704f36,
+            // ohnochingin_02).
+            let s1617_table_on_page = std::env::var("OXI_S1617").as_deref() == Ok("1")
+                && grid_pitch.is_some()
+                && !page.doc_grid_no_type
+                && page.grid_char_pitch.is_none()
+                && !s548b_exact_full
+                && !s562b_empty_full
+                && current_elements.iter().any(|e| e.cell_row_index.is_some());
+            let break_threshold = if s1152_full_box || s1484_full_box || s1617_table_on_page {
                 effective_lh
             } else if s693_nonlast {
                 let nat_over = cursor.cursor_y + natural_lh - effective_break_bottom;
@@ -42670,8 +42685,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // S242 (2026-05-23): removed OXI_LEGACY_BUGA_ALWAYS legacy env-var
         // fallback during hardening pass. OXI_BUG_A_REVERT preserved as
         // research toggle (binary opt-out for diagnostic purposes).
-        let bug_a_enabled = if std::env::var("OXI_BUG_A_REVERT").is_ok() {
-            false // research toggle: always skip
+        // S1618 (2026-09-30, default ON, opt-out OXI_S1618_DISABLE): Bug A's
+        // border width belongs UNDER the table, not above it. Word draws a
+        // `lines`-grid table's top border AT the cursor (tokyoshugyo slice 649.3
+        // vs cursor 649.25; policies__074da728 619.54, Oxi without Bug A 619.45,
+        // with it 620.2), and starts the next block at the bottom rule's LOWER
+        // edge: `_pb_gridbottom_tbl_gen.py` T_51700 (sz 6 borders) Word PDF
+        // rules 619.18/636.70/670.78 = Oxi's 618.75/636.20/670.35 + 0.43 (the
+        // same offset top and bottom), while «※雇用期間» sits 0.68 lower than
+        // Oxi's (Oxi starts it at the rule's top edge). Retiring Bug A alone
+        // lost those 0.75 for everything below a table (S1617 was a wrong
+        // reading of that loss), so the width now advances after the last row.
+        // Scope: a TYPED grid. Without one (EN reports__0013bcb8, docGrid with no
+        // type) Word draws the top rule at the cursor too (p3 71.04, Oxi 71.10)
+        // but the first row grows by the width (next rule 91.46 = Bug A's 91.48),
+        // so there the cursor keeps Bug A's advance.
+        let s1618_on = std::env::var_os("OXI_S1618_DISABLE").is_none()
+            && grid_pitch.is_some()
+            && !page.doc_grid_no_type;
+        let bug_a_enabled = if std::env::var("OXI_BUG_A_REVERT").is_ok() || s1618_on {
+            false
         } else {
             // Default (S151): apply only for non-linesAndChars docs
             grid_char_pitch.is_none()
@@ -42686,6 +42719,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let top_bw = table.style.border_width.unwrap_or(0.4);
             cursor.advance(top_bw);
         }
+        let s1618_foot = if s1618_on
+            && std::env::var("OXI_BUG_A_REVERT").is_err()
+            && grid_char_pitch.is_none()
+            && table.style.border
+            && !separate_outer_edges
+        {
+            table.style.border_width.unwrap_or(0.4)
+        } else {
+            0.0
+        };
 
         let num_rows = table.rows.len();
         let dump_table = std::env::var("OXI_DUMP_TABLE").is_ok();
@@ -52808,7 +52851,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // it one 0.25pt step later, identically with vMerge and vAlign
                 // removed and in a one-column section; Oxi without S819 kept it
                 // 2.5pt longer.
-                let s1606 = std::env::var("OXI_S1606").as_deref() == Ok("1");
+                // Default ON with S1618 (Bug A's width moved under the table); opt-out
+                // OXI_S1606_DISABLE.
+                let s1606 = std::env::var_os("OXI_S1606_DISABLE").is_none();
                 let s819_q = if (!self.doc_body_has_real_cjk || s1606)
                     && s819_natural_split
                     && std::env::var("OXI_S819_DISABLE").is_err()
@@ -55257,6 +55302,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             if foot > 0.0 {
                 cursor.advance(foot);
             }
+        }
+        if s1618_foot > 0.0 {
+            cursor.advance(s1618_foot);
         }
 
         // S740: final flush — trailing page transitions + the LAST row's notes,
