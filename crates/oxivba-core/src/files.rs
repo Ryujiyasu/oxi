@@ -143,6 +143,45 @@ impl Files {
         Ok(())
     }
 
+    /// A number for a TextStream, from 1000 on, never one FreeFile hands out.
+    pub fn open_stream(&mut self, path: &str, mode: OpenMode) -> Result<i64, FileError> {
+        let number = (1000..).find(|number| !self.open.contains_key(number)).unwrap_or(1000);
+        let name = key(path);
+        match mode {
+            OpenMode::Input if !self.contents.contains_key(&name) => return Err(FileError::NotFound),
+            OpenMode::Output => {
+                self.contents.insert(name.clone(), (path.trim().to_string(), Vec::new()));
+            }
+            _ => {
+                self.contents.entry(name.clone()).or_insert_with(|| (path.trim().to_string(), Vec::new()));
+            }
+        }
+        self.open.insert(number, Handle { path: name, mode, position: 0, column: 0 });
+        Ok(number)
+    }
+
+    pub fn exists(&self, path: &str) -> bool {
+        self.contents.contains_key(&key(path))
+    }
+
+    /// Whether any kept file lies in the folder.
+    pub fn folder_exists(&self, path: &str) -> bool {
+        let folder = key(path);
+        let folder = folder.trim_end_matches('\\');
+        self.contents.keys().any(|held| held.rsplit_once('\\').is_some_and(|(parent, _)| parent == folder || parent.starts_with(&format!("{folder}\\"))))
+    }
+
+    /// What is left to read, for ReadAll.
+    pub fn read_rest(&mut self, number: i64) -> Result<String, FileError> {
+        let (bytes, position) = self.reading(number)?;
+        if *position >= bytes.len() {
+            return Err(FileError::PastEnd);
+        }
+        let rest = String::from_utf8_lossy(&bytes[*position..]).into_owned();
+        *position = bytes.len();
+        Ok(rest)
+    }
+
     /// `Close`: the numbers given, or every file when none is.
     pub fn close(&mut self, numbers: &[i64]) {
         if numbers.is_empty() {

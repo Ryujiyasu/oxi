@@ -436,6 +436,10 @@ struct ErrorState {
 enum InternalObject {
     Collection(Vec<CollectionEntry>),
     Dictionary(DictionaryObject),
+    /// `Scripting.FileSystemObject`, over the run's kept files.
+    FileSystem,
+    /// A TextStream: the file it has open, and the line it stands on.
+    TextStream { number: i64, line: i64 },
     /// An instance of one of the project's class modules, with its own
     /// module-level variables (None while they are the live ones).
     Instance(ClassInstance),
@@ -1868,7 +1872,7 @@ impl<'a> Runtime<'a> {
         let trailing = items.len() > 1 && items.last().is_some_and(|item| item.value.is_none());
         let mut written = String::new();
         let mut column = self.files.column(number).map_err(|failure| file_failure(failure, line))?;
-        let mut push = |written: &mut String, column: &mut usize, text: &str| {
+        let push = |written: &mut String, column: &mut usize, text: &str| {
             written.push_str(text);
             match text.rfind('\n') {
                 Some(at) => *column = text[at + 1..].chars().count(),
@@ -3487,6 +3491,8 @@ impl<'a> Runtime<'a> {
                     compare_text: false,
                 }),
             )
+        } else if type_name.eq_ignore_ascii_case("scripting.filesystemobject") {
+            ("FileSystemObject", InternalObject::FileSystem)
         } else if let Some(class_module) = self.classes.get(&type_name.to_ascii_lowercase()).copied() {
             let name = class_module
                 .items
@@ -5429,6 +5435,9 @@ impl<'a> Runtime<'a> {
                         _ => Err(no_such_member("the class's enumerator is not an object".to_string(), Some(line))),
                     };
                 }
+                InternalObject::FileSystem | InternalObject::TextStream { .. } => {
+                    return Err(no_such_member("the object cannot be walked with For Each".to_string(), Some(line)));
+                }
             }));
         }
         let Some(host) = self.host.as_deref_mut() else {
@@ -5436,6 +5445,182 @@ impl<'a> Runtime<'a> {
         };
         host.enumerate(receiver)
             .map_err(|message| host_failure(message, line))
+    }
+
+    /// `Scripting.FileSystemObject`'s members. The path helpers answer as
+    /// Windows does -- measured: GetFileName("C:\a\b\report.final.xlsx")
+    /// report.final.xlsx, GetBaseName report.final, GetExtensionName xlsx,
+    /// GetParentFolderName C:\a\b, GetFileName("C:\a\b\") b, the
+    /// parent of C:\ "" -- and the files are the run's own.
+    fn file_system_call(&mut self, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
+        use crate::files::OpenMode;
+        let text_at = |index: usize| -> Result<String, RuntimeError> {
+            match args.get(index) {
+                Some(value) => text(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line))),
+                None => Err(error(RuntimeErrorKind::ArgumentCount, format!("FileSystemObject.{name} wants an argument"), Some(line))),
+            }
+        };
+        let number_at = |index: usize, default: i64| -> i64 {
+            args.get(index)
+                .filter(|value| !matches!(value, Value::Missing | Value::Empty))
+                .and_then(|value| number(value).ok())
+                .map_or(default, |held| held as i64)
+        };
+        let flag_at = |index: usize, default: bool| -> bool {
+            args.get(index)
+                .filter(|value| !matches!(value, Value::Missing | Value::Empty))
+                .map_or(default, |value| number(value).is_ok_and(|held| held != 0.0))
+        };
+        let trimmed = |path: &str| path.trim_end_matches(['\\', '/']).to_string();
+        let leaf = |path: &str| {
+            let path = trimmed(path);
+            path.rsplit(['\\', '/']).next().unwrap_or("").to_string()
+        };
+        let lower = name.to_ascii_lowercase();
+        let stream = |this: &mut Self, number: i64| {
+            let handle = this.next_internal_handle;
+            this.next_internal_handle += 1;
+            this.internal_objects.insert(handle, InternalObject::TextStream { number, line: 1 });
+            Value::Object(ObjectRef { handle, kind: "TextStream".to_string(), life: None })
+        };
+        let failure = |failure: crate::files::FileError| file_failure(failure, line);
+        Ok(match lower.as_str() {
+            "getfilename" => {
+                let path = text_at(0)?;
+                if trimmed(&path).ends_with(':') { Value::String(String::new()) } else { Value::String(leaf(&path)) }
+            }
+            "getbasename" | "getextensionname" => {
+                let name_part = leaf(&text_at(0)?);
+                let (base, extension) = match name_part.rfind('.') {
+                    Some(at) => (name_part[..at].to_string(), name_part[at + 1..].to_string()),
+                    None => (name_part.clone(), String::new()),
+                };
+                Value::String(if lower == "getbasename" { base } else { extension })
+            }
+            "getparentfoldername" => {
+                let path = trimmed(&text_at(0)?);
+                Value::String(match path.rfind(['\\', '/']) {
+                    Some(at) if path[..at].ends_with(':') => format!("{}\\", &path[..at]),
+                    Some(at) => path[..at].to_string(),
+                    None => String::new(),
+                })
+            }
+            "getdrivename" => {
+                let path = text_at(0)?;
+                Value::String(match path.find(':') {
+                    Some(at) => path[..=at].to_string(),
+                    None => String::new(),
+                })
+            }
+            "buildpath" => {
+                let (folder, name_part) = (text_at(0)?, text_at(1)?);
+                Value::String(if folder.ends_with(['\\', '/']) || folder.is_empty() {
+                    format!("{folder}{name_part}")
+                } else {
+                    format!("{folder}\\{name_part}")
+                })
+            }
+            "fileexists" => Value::Boolean(self.files.exists(&text_at(0)?)),
+            "folderexists" => Value::Boolean(self.files.folder_exists(&text_at(0)?)),
+            "deletefile" => {
+                self.files.kill(&text_at(0)?).map_err(failure)?;
+                Value::Empty
+            }
+            "copyfile" => {
+                self.files.copy(&text_at(0)?, &text_at(1)?).map_err(failure)?;
+                Value::Empty
+            }
+            "movefile" => {
+                self.files.rename(&text_at(0)?, &text_at(1)?).map_err(failure)?;
+                Value::Empty
+            }
+            "createtextfile" => {
+                let path = text_at(0)?;
+                if !flag_at(1, true) && self.files.exists(&path) {
+                    return Err(file_failure(crate::files::FileError::AlreadyExists, line));
+                }
+                let number = self.files.open_stream(&path, OpenMode::Output).map_err(failure)?;
+                stream(self, number)
+            }
+            "opentextfile" => {
+                let path = text_at(0)?;
+                let mode = match number_at(1, 1) {
+                    2 => OpenMode::Output,
+                    8 => OpenMode::Append,
+                    _ => OpenMode::Input,
+                };
+                if mode == OpenMode::Input && !self.files.exists(&path) && flag_at(2, false) {
+                    self.files.open_stream(&path, OpenMode::Output).map_err(failure).map(|number| self.files.close(&[number]))?;
+                }
+                let number = self.files.open_stream(&path, mode).map_err(failure)?;
+                stream(self, number)
+            }
+            _ => {
+                return Err(no_such_member(format!("FileSystemObject has no member {name}"), Some(line)));
+            }
+        })
+    }
+
+    /// A TextStream's members: WriteLine ends a line with CR LF, ReadLine
+    /// and ReadAll read on from where the stream stands, Line counts from 1.
+    fn text_stream_call(&mut self, receiver: &ObjectRef, number: i64, at: i64, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
+        let failure = |failure: crate::files::FileError| file_failure(failure, line);
+        let text_at = |index: usize| -> Result<String, RuntimeError> {
+            match args.get(index).filter(|value| !matches!(value, Value::Missing)) {
+                Some(value) => text(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line))),
+                None => Ok(String::new()),
+            }
+        };
+        let set_line = |this: &mut Self, next: i64| {
+            if let Some(InternalObject::TextStream { line: held, .. }) = this.internal_objects.get_mut(&receiver.handle) {
+                *held = next;
+            }
+        };
+        Ok(match name.to_ascii_lowercase().as_str() {
+            "writeline" => {
+                self.files.write(number, &format!("{}\r\n", text_at(0)?)).map_err(failure)?;
+                set_line(self, at + 1);
+                Value::Empty
+            }
+            "write" => {
+                let written = text_at(0)?;
+                self.files.write(number, &written).map_err(failure)?;
+                set_line(self, at + written.matches('\n').count() as i64);
+                Value::Empty
+            }
+            "writeblanklines" => {
+                let count = args.first().and_then(|value| crate::runtime::number(value).ok()).unwrap_or(0.0).max(0.0) as usize;
+                self.files.write(number, &"\r\n".repeat(count)).map_err(failure)?;
+                set_line(self, at + count as i64);
+                Value::Empty
+            }
+            "readline" => {
+                let read = self.files.read_line(number).map_err(failure)?;
+                set_line(self, at + 1);
+                Value::String(read)
+            }
+            "skipline" => {
+                self.files.read_line(number).map_err(failure)?;
+                set_line(self, at + 1);
+                Value::Empty
+            }
+            "readall" => {
+                let read = self.files.read_rest(number).map_err(failure)?;
+                set_line(self, at + read.matches('\n').count() as i64);
+                Value::String(read)
+            }
+            "read" => {
+                let count = args.first().and_then(|value| crate::runtime::number(value).ok()).unwrap_or(0.0).max(0.0) as usize;
+                Value::String(self.files.read_characters(number, count).map_err(failure)?)
+            }
+            "atendofstream" => Value::Boolean(self.files.at_end(number).map_err(failure)?),
+            "line" => Value::Integer(at),
+            "close" => {
+                self.files.close(&[number]);
+                Value::Empty
+            }
+            _ => return Err(no_such_member(format!("TextStream has no member {name}"), Some(line))),
+        })
     }
 
     fn internal_call(
@@ -5460,6 +5645,15 @@ impl<'a> Runtime<'a> {
         if name.eq_ignore_ascii_case("_newenum") && args.is_empty() {
             return Ok(Value::Object(receiver.clone()));
         }
+        match object {
+            InternalObject::FileSystem => return self.file_system_call(name, args, line),
+            InternalObject::TextStream { number, line: at } => {
+                let (number, at) = (*number, *at);
+                return self.text_stream_call(receiver, number, at, name, args, line);
+            }
+            _ => {}
+        }
+        let object = self.internal_objects.get_mut(&receiver.handle).expect("looked up above");
         match object {
             InternalObject::Collection(entries) if name.eq_ignore_ascii_case("add") => {
                 if !(1..=4).contains(&args.len()) {
@@ -5684,6 +5878,9 @@ impl<'a> Runtime<'a> {
             )),
             // Instances are answered before this is reached.
             InternalObject::Instance(_) => Err(no_such_member(format!("the class has no member {name}"), Some(line))),
+            InternalObject::FileSystem | InternalObject::TextStream { .. } => {
+                Err(no_such_member(format!("the object has no member {name}"), Some(line)))
+            }
         }
     }
 
