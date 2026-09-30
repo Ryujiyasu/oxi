@@ -363,6 +363,8 @@ pub struct Runtime<'a> {
     static_values: BTreeMap<(String, String), ValueSlot>,
     /// The files the run has opened and written, kept in memory.
     files: crate::files::Files,
+    /// How many names GetTempName has handed out.
+    temp_names: u64,
     module_initialized: bool,
     /// The class modules, by name in lower case.
     classes: BTreeMap<String, &'a Module>,
@@ -440,6 +442,10 @@ enum InternalObject {
     FileSystem,
     /// A TextStream: the file it has open, and the line it stands on.
     TextStream { number: i64, line: i64 },
+    /// FileSystemObject's File, Folder and a folder's Files, by path.
+    FileItem(String),
+    FolderItem(String),
+    FileList(String),
     /// An instance of one of the project's class modules, with its own
     /// module-level variables (None while they are the live ones).
     Instance(ClassInstance),
@@ -525,6 +531,7 @@ impl<'a> Runtime<'a> {
             module_variants: BTreeSet::new(),
             static_values: BTreeMap::new(),
             files: crate::files::Files::default(),
+            temp_names: 0,
             module_initialized: false,
             classes: BTreeMap::new(),
             main_module: module,
@@ -1979,6 +1986,12 @@ impl<'a> Runtime<'a> {
                 match kind {
                     FileSystemUnaryKind::Kill => {
                         self.files.kill(&path).map_err(|failure| file_failure(failure, span.line))
+                    }
+                    FileSystemUnaryKind::MkDir => {
+                        self.files.make_folder(&path).map_err(|failure| file_failure(failure, span.line))
+                    }
+                    FileSystemUnaryKind::RmDir => {
+                        self.files.remove_folder(&path, false).map_err(|failure| file_failure(failure, span.line))
                     }
                     // Folders are not kept; making, leaving and moving between
                     // them has nothing to change.
@@ -5133,6 +5146,13 @@ impl<'a> Runtime<'a> {
     }
 
     fn let_value(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
+        // A FileSystemObject File or Folder stands for its Path: measured,
+        // "x" & f.ParentFolder writes the folder's path.
+        if let Value::Object(receiver) = &value {
+            if let Some(InternalObject::FileItem(path) | InternalObject::FolderItem(path)) = self.internal_objects.get(&receiver.handle) {
+                return Ok(Value::String(path.clone()));
+            }
+        }
         match value {
             // An object with no default member cannot become a value, and
             // Excel answers 438 to the attempt -- not the type mismatch this
@@ -5435,7 +5455,12 @@ impl<'a> Runtime<'a> {
                         _ => Err(no_such_member("the class's enumerator is not an object".to_string(), Some(line))),
                     };
                 }
-                InternalObject::FileSystem | InternalObject::TextStream { .. } => {
+                InternalObject::FileList(folder) => {
+                    let folder = folder.clone();
+                    let paths = self.files.files_in(&folder);
+                    return Ok(Some(paths.into_iter().map(|path| self.fso_object("File", InternalObject::FileItem(path))).collect()));
+                }
+                InternalObject::FileSystem | InternalObject::TextStream { .. } | InternalObject::FileItem(_) | InternalObject::FolderItem(_) => {
                     return Err(no_such_member("the object cannot be walked with For Each".to_string(), Some(line)));
                 }
             }));
@@ -5521,6 +5546,51 @@ impl<'a> Runtime<'a> {
                 })
             }
             "fileexists" => Value::Boolean(self.files.exists(&text_at(0)?)),
+            "createfolder" => {
+                let path = text_at(0)?;
+                self.files.make_folder(&path).map_err(failure)?;
+                self.fso_object("Folder", InternalObject::FolderItem(path))
+            }
+            "deletefolder" => {
+                self.files.remove_folder(&text_at(0)?, true).map_err(failure)?;
+                Value::Empty
+            }
+            "getfile" => {
+                let path = text_at(0)?;
+                if !self.files.exists(&path) {
+                    return Err(file_failure(crate::files::FileError::NotFound, line));
+                }
+                self.fso_object("File", InternalObject::FileItem(path))
+            }
+            "getfolder" => {
+                let path = text_at(0)?;
+                if !self.files.folder_exists(&path) {
+                    return Err(file_failure(crate::files::FileError::PathNotFound, line));
+                }
+                self.fso_object("Folder", InternalObject::FolderItem(path.trim_end_matches(['\\', '/']).to_string()))
+            }
+            // Measured: C:\x\..\y\z.txt is C:\y\z.txt.
+            "getabsolutepathname" => {
+                let path = text_at(0)?.replace('/', "\\");
+                let mut parts: Vec<&str> = Vec::new();
+                for part in path.split('\\') {
+                    match part {
+                        "." | "" if !parts.is_empty() => {}
+                        ".." => {
+                            if parts.len() > 1 {
+                                parts.pop();
+                            }
+                        }
+                        other => parts.push(other),
+                    }
+                }
+                Value::String(parts.join("\\"))
+            }
+            // Measured: twelve characters ending .tmp, as rad4E3F1.tmp.
+            "gettempname" => {
+                self.temp_names += 1;
+                Value::String(format!("rad{:05X}.tmp", (self.temp_names * 7919) & 0xFFFFF))
+            }
             "folderexists" => Value::Boolean(self.files.folder_exists(&text_at(0)?)),
             "deletefile" => {
                 self.files.kill(&text_at(0)?).map_err(failure)?;
@@ -5558,6 +5628,48 @@ impl<'a> Runtime<'a> {
             _ => {
                 return Err(no_such_member(format!("FileSystemObject has no member {name}"), Some(line)));
             }
+        })
+    }
+
+    fn fso_object(&mut self, kind: &str, object: InternalObject) -> Value {
+        let handle = self.next_internal_handle;
+        self.next_internal_handle += 1;
+        self.internal_objects.insert(handle, object);
+        Value::Object(ObjectRef { handle, kind: kind.to_string(), life: None })
+    }
+
+    /// A File's members. Measured: Name a.txt, Size 5, Path the full path,
+    /// ParentFolder the folder's path.
+    fn file_item_call(&mut self, path: &str, name: &str, line: u32) -> Result<Value, RuntimeError> {
+        let parent = path.rsplit_once(['\\', '/']).map_or(String::new(), |(parent, _)| parent.to_string());
+        Ok(match name.to_ascii_lowercase().as_str() {
+            "name" => Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()),
+            "path" | "_default" => Value::String(path.to_string()),
+            "size" => Value::Integer(self.files.length(path).map_err(|failure| file_failure(failure, line))? as i64),
+            "parentfolder" => self.fso_object("Folder", InternalObject::FolderItem(parent)),
+            "delete" => {
+                self.files.kill(path).map_err(|failure| file_failure(failure, line))?;
+                Value::Empty
+            }
+            _ => return Err(no_such_member(format!("File has no member {name}"), Some(line))),
+        })
+    }
+
+    /// A Folder's members: Name, Path, Files, ParentFolder.
+    fn folder_item_call(&mut self, path: &str, name: &str, line: u32) -> Result<Value, RuntimeError> {
+        Ok(match name.to_ascii_lowercase().as_str() {
+            "name" => Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()),
+            "path" | "_default" => Value::String(path.to_string()),
+            "files" => self.fso_object("Files", InternalObject::FileList(path.to_string())),
+            "parentfolder" => {
+                let parent = path.rsplit_once(['\\', '/']).map_or(String::new(), |(parent, _)| parent.to_string());
+                self.fso_object("Folder", InternalObject::FolderItem(parent))
+            }
+            "delete" => {
+                self.files.remove_folder(path, true).map_err(|failure| file_failure(failure, line))?;
+                Value::Empty
+            }
+            _ => return Err(no_such_member(format!("Folder has no member {name}"), Some(line))),
         })
     }
 
@@ -5650,6 +5762,29 @@ impl<'a> Runtime<'a> {
             InternalObject::TextStream { number, line: at } => {
                 let (number, at) = (*number, *at);
                 return self.text_stream_call(receiver, number, at, name, args, line);
+            }
+            InternalObject::FileItem(path) => {
+                let path = path.clone();
+                return self.file_item_call(&path, name, line);
+            }
+            InternalObject::FolderItem(path) => {
+                let path = path.clone();
+                return self.folder_item_call(&path, name, line);
+            }
+            InternalObject::FileList(folder) => {
+                let folder = folder.clone();
+                let paths = self.files.files_in(&folder);
+                return match name.to_ascii_lowercase().as_str() {
+                    "count" => Ok(Value::Integer(paths.len() as i64)),
+                    "item" => {
+                        let wanted = args.first().map(|value| text(value).unwrap_or_default()).unwrap_or_default();
+                        match paths.into_iter().find(|path| path.rsplit(['\\', '/']).next().is_some_and(|leaf| leaf.eq_ignore_ascii_case(&wanted))) {
+                            Some(path) => Ok(self.fso_object("File", InternalObject::FileItem(path))),
+                            None => Err(file_failure(crate::files::FileError::NotFound, line)),
+                        }
+                    }
+                    _ => Err(no_such_member(format!("Files has no member {name}"), Some(line))),
+                };
             }
             _ => {}
         }
@@ -5878,9 +6013,11 @@ impl<'a> Runtime<'a> {
             )),
             // Instances are answered before this is reached.
             InternalObject::Instance(_) => Err(no_such_member(format!("the class has no member {name}"), Some(line))),
-            InternalObject::FileSystem | InternalObject::TextStream { .. } => {
-                Err(no_such_member(format!("the object has no member {name}"), Some(line)))
-            }
+            InternalObject::FileSystem
+            | InternalObject::TextStream { .. }
+            | InternalObject::FileItem(_)
+            | InternalObject::FolderItem(_)
+            | InternalObject::FileList(_) => Err(no_such_member(format!("the object has no member {name}"), Some(line))),
         }
     }
 

@@ -50,6 +50,8 @@ pub enum FileError {
     AlreadyExists = 58,
     /// 62, Input past end of file.
     PastEnd = 62,
+    /// 76, Path not found.
+    PathNotFound = 76,
 }
 
 impl FileError {
@@ -64,6 +66,7 @@ impl FileError {
             FileError::AlreadyOpen => "File already open",
             FileError::AlreadyExists => "File already exists",
             FileError::PastEnd => "Input past end of file",
+            FileError::PathNotFound => "Path not found",
         }
     }
 }
@@ -75,6 +78,8 @@ pub struct Files {
     open: BTreeMap<i64, Handle>,
     /// What `Dir` with no arguments goes on to answer.
     listing: Vec<String>,
+    /// Folders made with MkDir or CreateFolder, by key.
+    folders: std::collections::BTreeSet<String>,
 }
 
 /// A path as Windows compares it.
@@ -164,11 +169,49 @@ impl Files {
         self.contents.contains_key(&key(path))
     }
 
-    /// Whether any kept file lies in the folder.
+    /// Whether the folder was made, or any kept file lies in it.
     pub fn folder_exists(&self, path: &str) -> bool {
         let folder = key(path);
         let folder = folder.trim_end_matches('\\');
-        self.contents.keys().any(|held| held.rsplit_once('\\').is_some_and(|(parent, _)| parent == folder || parent.starts_with(&format!("{folder}\\"))))
+        self.folders.contains(folder)
+            || self.folders.iter().any(|held| held.starts_with(&format!("{folder}\\")))
+            || self.contents.keys().any(|held| held.rsplit_once('\\').is_some_and(|(parent, _)| parent == folder || parent.starts_with(&format!("{folder}\\"))))
+    }
+
+    /// `MkDir` / `CreateFolder`: 58 when it is there already.
+    pub fn make_folder(&mut self, path: &str) -> Result<(), FileError> {
+        let folder = key(path).trim_end_matches('\\').to_string();
+        if self.folders.contains(&folder) {
+            return Err(FileError::AlreadyExists);
+        }
+        self.folders.insert(folder);
+        Ok(())
+    }
+
+    /// `RmDir` / `DeleteFolder`: the folder and, for DeleteFolder, what is
+    /// in it; 76 when there is no such folder.
+    pub fn remove_folder(&mut self, path: &str, with_contents: bool) -> Result<(), FileError> {
+        let folder = key(path).trim_end_matches('\\').to_string();
+        if !self.folder_exists(&folder) {
+            return Err(FileError::PathNotFound);
+        }
+        let inside = format!("{folder}\\");
+        if with_contents {
+            self.contents.retain(|held, _| !held.starts_with(&inside));
+            self.folders.retain(|held| !held.starts_with(&inside));
+        }
+        self.folders.remove(&folder);
+        Ok(())
+    }
+
+    /// The written names of the files directly in a folder, in order.
+    pub fn files_in(&self, path: &str) -> Vec<String> {
+        let folder = key(path).trim_end_matches('\\').to_string();
+        self.contents
+            .iter()
+            .filter(|(held, _)| held.rsplit_once('\\').is_some_and(|(parent, _)| parent == folder))
+            .map(|(_, (written, _))| written.clone())
+            .collect()
     }
 
     /// What is left to read, for ReadAll.
