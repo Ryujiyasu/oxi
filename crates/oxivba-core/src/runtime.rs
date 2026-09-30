@@ -2447,7 +2447,14 @@ impl<'a> Runtime<'a> {
         let to = self.eval_expr(&loop_.to, frame)?;
         let step = match &loop_.step {
             Some(step) => self.eval_expr(step, frame)?,
-            None => Value::Integer(1),
+            None => Value::Int16(1),
+        };
+        // The counter runs in the widest of the three types: measured, a
+        // Variant counter For v = 1 To 3 is an Integer, For v = CByte(1) To
+        // 3 an Integer and For v = 1 To 2.5 a Double.
+        let rank = match (NumRank::of(&from), NumRank::of(&to), NumRank::of(&step)) {
+            (Some(a), Some(b), Some(c)) => Some(a.max(b).max(c)),
+            _ => None,
         };
         let limit = number(&to).map_err(|message| {
             error(
@@ -2463,6 +2470,13 @@ impl<'a> Runtime<'a> {
                 Some(loop_.span.line),
             )
         })?;
+        let from = match rank {
+            Some(rank) => match number(&from) {
+                Ok(held) => rank.hold(held, Some(loop_.span.line)).map_err(|(kind, message)| error(kind, message, Some(loop_.span.line)))?,
+                Err(_) => from,
+            },
+            None => from,
+        };
         self.assign(&loop_.counter, from, frame, loop_.span.line)?;
 
         loop {
@@ -2491,7 +2505,12 @@ impl<'a> Runtime<'a> {
             let current_number = number(&current).map_err(|message| {
                 error(RuntimeErrorKind::TypeMismatch, message, Some(loop_.span.line))
             })?;
-            let next = numeric_result(current_number + increment, &current, &step);
+            let next = match rank {
+                Some(rank) => rank
+                    .hold(current_number + increment, Some(loop_.span.line))
+                    .map_err(|(kind, message)| error(kind, message, Some(loop_.span.line)))?,
+                None => numeric_result(current_number + increment, &current, &step),
+            };
             self.assign(&loop_.counter, next, frame, loop_.span.line)?;
         }
     }
