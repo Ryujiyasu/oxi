@@ -11597,6 +11597,17 @@ fn binary(
                 // False.
                 (Value::Single(a), Value::Double(b)) => a.partial_cmp(&(*b as f32)),
                 (Value::Double(a), Value::Single(b)) => (*a as f32).partial_cmp(b),
+                // So beside a Currency or a number written as text, while a
+                // Long and a Decimal keep their own: measured, s = c and
+                // s = "0.1" are True, s = 16777217 (Long) False.
+                (Value::Single(a), Value::Currency(b)) => a.partial_cmp(&((*b as f64 / 10_000.0) as f32)),
+                (Value::Currency(a), Value::Single(b)) => ((*a as f64 / 10_000.0) as f32).partial_cmp(b),
+                (Value::Single(a), Value::String(b)) if numeric_text(b).is_some() => {
+                    a.partial_cmp(&(numeric_text(b).unwrap_or_default() as f32))
+                }
+                (Value::String(a), Value::Single(b)) if numeric_text(a).is_some() => {
+                    (numeric_text(a).unwrap_or_default() as f32).partial_cmp(b)
+                }
                 // Empty takes the shape of whatever it is put beside. Against
                 // text it is a zero-length string, which is why
                 // `Range("A1").Value = ""` on a blank cell is True -- and why
