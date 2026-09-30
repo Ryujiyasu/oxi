@@ -3535,6 +3535,22 @@ impl<'a> Runtime<'a> {
                                     Some(span.line),
                                 ));
                             }
+                            // A variable holding no array cannot be indexed:
+                            // measured, `v = Empty: x = v(1, 1)` is 13.
+                            Some(held)
+                                if !matches!(held, Value::Array(_) | Value::Record(_))
+                                    && !self.module.items.iter().any(|item| {
+                                        matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name))
+                                    })
+                                    && !(self.owner.is_some()
+                                        && self.has_procedure_of(self.main_module, name, &[ProcKind::Function, ProcKind::Sub])) =>
+                            {
+                                return Err(error(
+                                    RuntimeErrorKind::TypeMismatch,
+                                    format!("{name} holds no array to index"),
+                                    Some(span.line),
+                                ));
+                            }
                             _ => {}
                         }
                     }
