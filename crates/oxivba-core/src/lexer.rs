@@ -443,7 +443,16 @@ impl<'a> Lexer<'a> {
                 // second handle's opening hash is not the first handle's date
                 // terminator. A separator immediately before it distinguishes
                 // that shape without narrowing VBA's accepted date spellings.
-                if !text.trim_end().ends_with([',', ';']) {
+                // Nor is `#1, s: Input #1` a date: a comma in a date only
+                // follows a month's name (`#January 1, 2003#`), and a file
+                // handle's comes after its number.
+                let handle_run = (text.contains(',') && !text.trim_start().starts_with(|one: char| one.is_ascii_alphabetic()))
+                    // ...and a colon in one is a time's, with a digit after
+                    // it, where `#1: Close #1` has the next statement.
+                    || text.match_indices(':').any(|(at, _)| {
+                        text[at + 1..].trim_start().starts_with(|one: char| one.is_ascii_alphabetic())
+                    });
+                if !text.trim_end().ends_with([',', ';']) && !handle_run {
                     self.push_here(TokenKind::DateLit(text), start, i + 1);
                     self.pos = i + 1;
                     self.at_line_start = false;

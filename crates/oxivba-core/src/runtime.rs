@@ -16,7 +16,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::ast::{
+use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
     Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
     OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ReDimItem, ResumeTarget, SelectCaseStmt,
@@ -361,6 +361,8 @@ pub struct Runtime<'a> {
     module_declared: BTreeMap<String, String>,
     module_variants: BTreeSet<String>,
     static_values: BTreeMap<(String, String), ValueSlot>,
+    /// The files the run has opened and written, kept in memory.
+    files: crate::files::Files,
     module_initialized: bool,
     /// The class modules, by name in lower case.
     classes: BTreeMap<String, &'a Module>,
@@ -518,6 +520,7 @@ impl<'a> Runtime<'a> {
             module_declared: BTreeMap::new(),
             module_variants: BTreeSet::new(),
             static_values: BTreeMap::new(),
+            files: crate::files::Files::default(),
             module_initialized: false,
             classes: BTreeMap::new(),
             main_module: module,
@@ -1754,6 +1757,34 @@ impl<'a> Runtime<'a> {
                 self.raise_event(&raised.name, values, raised.span.line)?;
                 Ok(Flow::Continue)
             }
+            Statement::Open(open) => {
+                self.exec_open(open, frame)?;
+                Ok(Flow::Continue)
+            }
+            Statement::Close { files, span } => {
+                let mut numbers = Vec::with_capacity(files.len());
+                for file in files {
+                    numbers.push(self.file_number(file, frame, span.line)?);
+                }
+                self.files.close(&numbers);
+                Ok(Flow::Continue)
+            }
+            Statement::FileReset { .. } => {
+                self.files.close(&[]);
+                Ok(Flow::Continue)
+            }
+            Statement::FileOutput(output) => {
+                self.exec_file_output(output, frame)?;
+                Ok(Flow::Continue)
+            }
+            Statement::FileInput(input) => {
+                self.exec_file_input(input, frame)?;
+                Ok(Flow::Continue)
+            }
+            Statement::FileSystem(action) => {
+                self.exec_file_system(action, frame)?;
+                Ok(Flow::Continue)
+            }
             Statement::Unknown { text, span } => Err(error(
                 RuntimeErrorKind::Unsupported,
                 format!("cannot execute unparsed VBA: {text}"),
@@ -1768,6 +1799,214 @@ impl<'a> Runtime<'a> {
                 line_of(other),
             )),
         }
+    }
+
+    /// A file number as written, `#1` or `1`.
+    fn file_number(&mut self, expr: &Expr, frame: &mut Frame, line: u32) -> Result<i64, RuntimeError> {
+        let value = self.eval_expr(expr, frame)?;
+        number(&value)
+            .map(|held| held.round_ties_even() as i64)
+            .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))
+    }
+
+    fn path_text(&mut self, expr: &Expr, frame: &mut Frame, line: u32) -> Result<String, RuntimeError> {
+        let value = self.eval_expr(expr, frame)?;
+        text(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))
+    }
+
+    fn exec_open(&mut self, open: &FileOpenStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
+        use crate::files::OpenMode;
+        let line = open.span.line;
+        let path = self.path_text(&open.path, frame, line)?;
+        let number = self.file_number(&open.file_number, frame, line)?;
+        let mode = match open.mode {
+            FileMode::Input => OpenMode::Input,
+            FileMode::Output => OpenMode::Output,
+            FileMode::Append => OpenMode::Append,
+            _ => {
+                return Err(error(
+                    RuntimeErrorKind::Unsupported,
+                    "Binary and Random files are not kept yet",
+                    Some(line),
+                ))
+            }
+        };
+        self.files.open(&path, mode, number).map_err(|failure| file_failure(failure, line))
+    }
+
+    /// `Print #` and `Write #`. Print writes a positive number with a space
+    /// in front, every number with one after, moves to the next fourteen-
+    /// column zone at a comma and to a column at `Tab(n)`; Write quotes text
+    /// and marks logicals, dates and Null with #s. Measured: `Print #f, 1,
+    /// 2.5, "x"` writes " 1 " then 2.5 at column 15 and x at 29, and
+    /// `Write #f, "quoted", 3.25, True, #1/2/2003#, Null` writes
+    /// `"quoted",3.25,#TRUE#,#2003-01-02#,#NULL#`.
+    fn exec_file_output(&mut self, output: &FileOutputStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
+        let line = output.span.line;
+        let number = self.file_number(&output.file_number, frame, line)?;
+        self.files.handle(number).map_err(|failure| file_failure(failure, line))?;
+        let items = &output.items;
+        let trailing = items.len() > 1 && items.last().is_some_and(|item| item.value.is_none());
+        let mut written = String::new();
+        let mut column = self.files.column(number).map_err(|failure| file_failure(failure, line))?;
+        let mut push = |written: &mut String, column: &mut usize, text: &str| {
+            written.push_str(text);
+            match text.rfind('\n') {
+                Some(at) => *column = text[at + 1..].chars().count(),
+                None => *column += text.chars().count(),
+            }
+        };
+        let mut fields = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            if output.kind == FileOutputKind::Print && index > 0 && item.separator == FileOutputSeparator::Comma {
+                let next = (*&column / 14 + 1) * 14;
+                let pad = " ".repeat(next - column);
+                push(&mut written, &mut column, &pad);
+            }
+            let Some(value_expr) = &item.value else {
+                // Write keeps a field left out between two others: measured,
+                // `Write #1, "x", , 7` writes "x",,7.
+                if output.kind == FileOutputKind::Write && index > 0 && index + 1 < items.len() {
+                    fields.push(String::new());
+                }
+                continue;
+            };
+            if output.kind == FileOutputKind::Print {
+                // Tab(n) and Spc(n) place the next field rather than print.
+                if let Expr::Index { target, args, .. } = value_expr {
+                    if let Expr::Ident(name, _) = target.as_ref() {
+                        let place = name.eq_ignore_ascii_case("tab") || name.eq_ignore_ascii_case("spc");
+                        if place && args.len() == 1 && self.lookup_slot(frame, name).is_none() {
+                            let amount = match &args[0].value {
+                                Some(expr) => {
+                                    let value = self.eval_expr(expr, frame)?;
+                                    crate::runtime::number(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))? as i64
+                                }
+                                None => 0,
+                            };
+                            if name.eq_ignore_ascii_case("spc") {
+                                let pad = " ".repeat(amount.max(0) as usize);
+                                push(&mut written, &mut column, &pad);
+                            } else {
+                                let target_column = (amount.max(1) - 1) as usize;
+                                if target_column < column {
+                                    push(&mut written, &mut column, "\r\n");
+                                }
+                                let pad = " ".repeat(target_column - column);
+                                push(&mut written, &mut column, &pad);
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+            let value = self.eval_expr(value_expr, frame)?;
+            match output.kind {
+                FileOutputKind::Print => {
+                    let field = print_field(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?;
+                    push(&mut written, &mut column, &field);
+                }
+                FileOutputKind::Write => {
+                    fields.push(write_field(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?);
+                }
+            }
+        }
+        if output.kind == FileOutputKind::Write {
+            written.push_str(&fields.join(","));
+            if trailing {
+                written.push(',');
+            }
+        }
+        if !trailing {
+            written.push_str("\r\n");
+        }
+        self.files.write(number, &written).map_err(|failure| file_failure(failure, line))
+    }
+
+    /// `Line Input #` and `Input #`. A field read by Input is the type it
+    /// was written as: #TRUE# a Boolean, #2003-01-02# a Date, #NULL# Null, a
+    /// number a Double, anything else text -- and the variable it goes into
+    /// takes it as an assignment would.
+    fn exec_file_input(&mut self, input: &FileInputStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
+        let line = input.span.line;
+        let number = self.file_number(&input.file_number, frame, line)?;
+        if input.line {
+            let read = self.files.read_line(number).map_err(|failure| file_failure(failure, line))?;
+            if let Some(target) = input.targets.first() {
+                self.assign(target, Value::String(read), frame, line)?;
+            }
+            return Ok(());
+        }
+        for target in &input.targets {
+            let (field, quoted) = self.files.read_field(number).map_err(|failure| file_failure(failure, line))?;
+            let value = if quoted {
+                Value::String(field)
+            } else {
+                read_input_field(&field)
+            };
+            self.assign(target, value, frame, line)?;
+        }
+        Ok(())
+    }
+
+    fn exec_file_system(&mut self, action: &FileSystemStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
+        match action {
+            FileSystemStmt::Unary { kind, path, span } => {
+                let path = self.path_text(path, frame, span.line)?;
+                match kind {
+                    FileSystemUnaryKind::Kill => {
+                        self.files.kill(&path).map_err(|failure| file_failure(failure, span.line))
+                    }
+                    // Folders are not kept; making, leaving and moving between
+                    // them has nothing to change.
+                    _ => Ok(()),
+                }
+            }
+            FileSystemStmt::Copy { source, destination, span } => {
+                let source = self.path_text(source, frame, span.line)?;
+                let destination = self.path_text(destination, frame, span.line)?;
+                self.files.copy(&source, &destination).map_err(|failure| file_failure(failure, span.line))
+            }
+            FileSystemStmt::Rename { source, destination, span } => {
+                let source = self.path_text(source, frame, span.line)?;
+                let destination = self.path_text(destination, frame, span.line)?;
+                self.files.rename(&source, &destination).map_err(|failure| file_failure(failure, span.line))
+            }
+            FileSystemStmt::SetAttr { .. } => Ok(()),
+        }
+    }
+
+    /// The file functions: FreeFile, EOF, LOF, Loc, FileLen and Dir.
+    fn file_function(&mut self, name: &str, args: &[Value], line: u32) -> Option<Result<Value, RuntimeError>> {
+        let number_of = |value: &Value| number(value).map(|held| held.round_ties_even() as i64);
+        let failure = |failure: crate::files::FileError| file_failure(failure, line);
+        let mismatch = |message: String| error(RuntimeErrorKind::TypeMismatch, message, Some(line));
+        Some(match (name.to_ascii_lowercase().as_str(), args) {
+            ("freefile", []) => Ok(Value::Int16(self.files.free_number(false) as i16)),
+            ("freefile", [range]) => {
+                let upper = number_of(range).map_err(mismatch).map(|held| held != 0);
+                upper.map(|upper| Value::Int16(self.files.free_number(upper) as i16))
+            }
+            ("eof", [file]) => number_of(file)
+                .map_err(mismatch)
+                .and_then(|file| self.files.at_end(file).map_err(failure))
+                .map(Value::Boolean),
+            ("lof", [file]) => number_of(file)
+                .map_err(mismatch)
+                .and_then(|file| self.files.length_of_open(file).map_err(failure))
+                .map(|length| Value::Integer(length as i64)),
+            ("loc", [file]) => number_of(file)
+                .map_err(mismatch)
+                .and_then(|file| self.files.location(file).map_err(failure))
+                .map(Value::Integer),
+            ("filelen", [path]) => text(path)
+                .map_err(mismatch)
+                .and_then(|path| self.files.length(&path).map_err(failure))
+                .map(|length| Value::Integer(length as i64)),
+            ("dir" | "dir$", []) => Ok(Value::String(self.files.dir(None))),
+            ("dir" | "dir$", [path, ..]) => text(path).map_err(mismatch).map(|path| Value::String(self.files.dir(Some(&path)))),
+            _ => return None,
+        })
     }
 
     fn erase_array(
@@ -3657,7 +3896,7 @@ impl<'a> Runtime<'a> {
                 if name.eq_ignore_ascii_case("erl") {
                     return Ok(Value::Integer(frame.error_state.line.unwrap_or(0) as i64));
                 }
-                if ["date", "doevents", "now", "rnd", "time", "timer"]
+                if ["date", "doevents", "now", "rnd", "time", "timer", "freefile", "dir", "curdir"]
                     .iter()
                     .any(|builtin| name.eq_ignore_ascii_case(builtin))
                 {
@@ -4436,6 +4675,9 @@ impl<'a> Runtime<'a> {
         } else {
             None
         };
+        if let Some(result) = self.file_function(name, &args, line.unwrap_or(0)) {
+            return result;
+        }
         // Array counts from the module's Option Base: measured, under Option
         // Base 1 Array(10, 20, 30) runs 1 To 3 and Array() 1 To 0.
         if name.eq_ignore_ascii_case("array") {
@@ -6194,6 +6436,13 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "environ"
             | "chrb"
             | "chrb$"
+            | "freefile"
+            | "eof"
+            | "lof"
+            | "loc"
+            | "filelen"
+            | "dir"
+            | "dir$"
             | "curdir"
             | "curdir$"
             | "ubound"
@@ -19002,3 +19251,85 @@ fn widened_operand(value: &Value, rank: u8) -> Option<Value> {
         _ => Value::Double(whole as f64),
     })
 }
+
+/// A file operation's failure as the error VBA raises for it.
+fn file_failure(failure: crate::files::FileError, line: u32) -> RuntimeError {
+    raised_error(failure.number(), "VBAProject".to_string(), failure.description().to_string(), line)
+}
+
+/// A value as `Print #` writes it: a positive number with a space in front,
+/// every number with one after.
+fn print_field(value: &Value) -> Result<String, String> {
+    Ok(match value {
+        Value::Empty => String::new(),
+        Value::Null => "Null".to_string(),
+        Value::Boolean(_) | Value::String(_) | Value::Date(_) => text(value)?,
+        Value::Error(code) => format!("Error {code}"),
+        _ => {
+            let written = text(value)?;
+            if written.starts_with('-') {
+                format!("{written} ")
+            } else {
+                format!(" {written} ")
+            }
+        }
+    })
+}
+
+/// A value as `Write #` writes it.
+fn write_field(value: &Value) -> Result<String, String> {
+    Ok(match value {
+        Value::Empty => String::new(),
+        Value::Null => "#NULL#".to_string(),
+        Value::Boolean(state) => if *state { "#TRUE#" } else { "#FALSE#" }.to_string(),
+        Value::String(held) => format!("\"{held}\""),
+        Value::Error(code) => format!("#ERROR {code}#"),
+        Value::Date(serial) => {
+            let parts = serial_date_parts(*serial)?;
+            let day = serial.floor();
+            let fraction = serial - day;
+            let seconds = (fraction * 86_400.0).round() as i64;
+            let time = format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60);
+            if day == 0.0 && fraction != 0.0 {
+                format!("#{time}#")
+            } else if fraction == 0.0 {
+                format!("#{:04}-{:02}-{:02}#", parts.year, parts.month, parts.day)
+            } else {
+                format!("#{:04}-{:02}-{:02} {time}#", parts.year, parts.month, parts.day)
+            }
+        }
+        _ => text(value)?,
+    })
+}
+
+/// A field `Input #` read without quotes, as the value it was written as.
+fn read_input_field(field: &str) -> Value {
+    let upper = field.to_ascii_uppercase();
+    match upper.as_str() {
+        "#TRUE#" => return Value::Boolean(true),
+        "#FALSE#" => return Value::Boolean(false),
+        "#NULL#" => return Value::Null,
+        "" => return Value::Empty,
+        _ => {}
+    }
+    if let Some(inside) = field.strip_prefix('#').and_then(|rest| rest.strip_suffix('#')) {
+        let (date, time) = inside.split_once(' ').unwrap_or((inside, ""));
+        let mut serial = 0.0;
+        let pieces: Vec<i64> = date.split('-').filter_map(|piece| piece.parse().ok()).collect();
+        if let [year, month, day] = pieces.as_slice() {
+            if let Ok(held) = date_serial(*year, *month, *day) {
+                serial = held;
+            }
+        }
+        let clock: Vec<f64> = time.split(':').filter_map(|piece| piece.parse().ok()).collect();
+        if let [hours, minutes, seconds] = clock.as_slice() {
+            serial += (hours * 3600.0 + minutes * 60.0 + seconds) / 86_400.0;
+        }
+        return Value::Date(serial);
+    }
+    match field.parse::<f64>() {
+        Ok(held) => Value::Double(held),
+        Err(_) => Value::String(field.to_string()),
+    }
+}
+

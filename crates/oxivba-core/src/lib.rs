@@ -31,6 +31,7 @@ pub mod analysis;
 pub mod ast;
 pub mod case_table;
 pub mod decimal;
+pub mod files;
 pub mod fingerprint;
 pub mod lexer;
 pub mod parser;
