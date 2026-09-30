@@ -6188,6 +6188,26 @@ fn call_builtin(
             if let Value::Decimal(held) = &args[0] {
                 return Ok(Value::Decimal(held.round(places as u32)));
             }
+            // A LongLong is already whole; a Currency rounds in its own units,
+            // a half to the even neighbour: measured, Round of the largest
+            // Currency to 2 places is ...477.58 and to none overflows.
+            if let Value::LongLong(n) = args[0] {
+                return Ok(Value::LongLong(n));
+            }
+            if let Value::Currency(units) = args[0] {
+                if places >= 4 {
+                    return Ok(Value::Currency(units));
+                }
+                let step = 10_i128.pow(4 - places as u32);
+                let units = i128::from(units);
+                let (quotient, remainder) = (units / step, units % step);
+                let twice = remainder.abs() * 2;
+                let bump = twice > step || (twice == step && quotient % 2 != 0);
+                let quotient = if bump { quotient + units.signum() } else { quotient };
+                return i64::try_from(quotient * step)
+                    .map(Value::Currency)
+                    .map_err(|_| error(RuntimeErrorKind::Overflow, "overflow rounding Currency", line));
+            }
             let value = number(&args[0])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
             if places > 15 {
@@ -6447,6 +6467,19 @@ fn call_builtin(
         match name.as_str() {
             // Abs keeps the type it was handed, the way Round does: asked of
             // Excel, `Abs(-1)` is an Integer, because the literal -1 is one.
+            // A LongLong and a Currency keep every digit: measured, Abs of
+            // -max is max, and of the least LongLong 6.
+            "abs" if matches!(value, Value::LongLong(_) | Value::Currency(_)) => match value {
+                Value::LongLong(n) => n
+                    .checked_abs()
+                    .map(Value::LongLong)
+                    .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Abs", line)),
+                Value::Currency(units) => units
+                    .checked_abs()
+                    .map(Value::Currency)
+                    .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Abs", line)),
+                _ => unreachable!(),
+            },
             "abs" => match value {
                 Value::Null => Ok(Value::Null),
                 Value::Decimal(held) => Ok(Value::Decimal(held.abs())),
@@ -6648,6 +6681,17 @@ fn call_builtin(
                 // A whole number is already whole, to its last digit:
                 // measured, Int of the largest LongLong is itself.
                 Value::LongLong(_) | Value::Integer(_) | Value::Int16(_) | Value::Byte(_) => Ok(value.clone()),
+                // A Currency is cut in its own units: measured, Int of the
+                // largest is 922337203685477 and Int of its negative
+                // overflows.
+                Value::Currency(units) => {
+                    let (whole, rest) = (units / 10_000, units % 10_000);
+                    let whole = if name == "int" && rest < 0 { whole - 1 } else { whole };
+                    whole
+                        .checked_mul(10_000)
+                        .map(Value::Currency)
+                        .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Int", line))
+                }
                 _ => {
                     // They keep the type, the way Abs and Round do. Asked of
                     // Excel, `Int(#1/2/2003#)` is a Date and says `1/2/2003`,
