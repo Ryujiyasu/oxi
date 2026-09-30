@@ -313,20 +313,129 @@ pub fn compare(a: &Value, b: &Value) -> Result<Ordering, ExcelError> {
     }
 }
 
-/// Excel's text comparison is case-insensitive: `="a"="A"` is `TRUE`.
+/// Excel's text comparison, a collation rather than a comparison of codes.
+/// Case never counts: `="a"="A"` is TRUE. Past that, level by level:
+///
+/// 1. the letters themselves, with ligatures spelled out, width, kana kind
+///    and accents set aside, and hyphens and apostrophes passed over --
+///    measured, `="ß"="ss"` is TRUE, `="é"<"f"` TRUE, `="a-b"<"ab"` FALSE,
+///    and `="Ⅰ"<"H"` TRUE (Roman numerals before the letters);
+/// 2. accents: `="é"="e"` is FALSE;
+/// 3. width and kana kind: `="A"="ａ"` and `="ア"="ｱ"` are FALSE, and SORT
+///    puts Ａ before a, and ァ, ア, ｱ, あ in that order;
+/// 4. the hyphens and apostrophes: SORT puts coop before co-op.
 fn compare_text(a: &str, b: &str) -> Ordering {
-    let mut left = a.chars().flat_map(char::to_lowercase);
-    let mut right = b.chars().flat_map(char::to_lowercase);
-    loop {
-        match (left.next(), right.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) => match x.cmp(&y) {
-                Ordering::Equal => continue,
-                other => return other,
-            },
+    if a.is_ascii() && b.is_ascii() && !a.contains(['-', '\'']) && !b.contains(['-', '\'']) {
+        let left = a.bytes().map(|byte| byte.to_ascii_lowercase());
+        let right = b.bytes().map(|byte| byte.to_ascii_lowercase());
+        return left.cmp(right);
+    }
+    let (left, right) = (collation_units(a), collation_units(b));
+    let passed = |unit: &CollationUnit| unit.passed;
+    let level = |units: &[CollationUnit], pick: fn(&CollationUnit) -> char| -> Vec<char> {
+        units.iter().filter(|unit| !passed(unit)).map(pick).collect()
+    };
+    level(&left, |unit| unit.base)
+        .cmp(&level(&right, |unit| unit.base))
+        .then_with(|| level(&left, |unit| unit.accented).cmp(&level(&right, |unit| unit.accented)))
+        .then_with(|| {
+            let kinds = |units: &[CollationUnit]| units.iter().filter(|unit| !unit.passed).map(|unit| unit.kind).collect::<Vec<u8>>();
+            kinds(&left).cmp(&kinds(&right))
+        })
+        .then_with(|| left.iter().filter(|unit| unit.passed).count().cmp(&right.iter().filter(|unit| unit.passed).count()))
+}
+
+/// One letter as the collation sees it: its base, its base with any accent
+/// kept, and its kind (width, kana script, size) for the third level.
+struct CollationUnit {
+    base: char,
+    accented: char,
+    kind: u8,
+    passed: bool,
+}
+
+fn collation_units(text: &str) -> Vec<CollationUnit> {
+    let mut units = Vec::with_capacity(text.len());
+    for character in text.chars().flat_map(char::to_lowercase) {
+        let push = |units: &mut Vec<CollationUnit>, base: char, accented: char, kind: u8| {
+            units.push(CollationUnit { base, accented, kind, passed: false });
+        };
+        match character {
+            '-' | '\'' => units.push(CollationUnit { base: character, accented: character, kind: 1, passed: true }),
+            'ß' => {
+                push(&mut units, 's', 's', 1);
+                push(&mut units, 's', 's', 1);
+            }
+            'æ' | 'œ' | '\u{FB01}' | '\u{FB02}' | '\u{0133}' => {
+                let (first, second) = match character {
+                    'æ' => ('a', 'e'),
+                    'œ' => ('o', 'e'),
+                    '\u{FB01}' => ('f', 'i'),
+                    '\u{FB02}' => ('f', 'l'),
+                    _ => ('i', 'j'),
+                };
+                push(&mut units, first, first, 1);
+                push(&mut units, second, second, 1);
+            }
+            // Roman numerals come before every letter.
+            '\u{2170}'..='\u{217F}' => {
+                let low = char::from_u32(character as u32 - 0x2170 + 1).unwrap_or(character);
+                push(&mut units, low, low, 1);
+            }
+            // Full-width Latin is the Latin letter, dressed wider.
+            '\u{FF01}'..='\u{FF5E}' => {
+                let narrow = char::from_u32(character as u32 - 0xFEE0).unwrap_or(character);
+                push(&mut units, narrow, narrow, 0);
+            }
+            _ => {
+                let (katakana, kind) = kana_collation(character);
+                let base = accent_base(katakana);
+                push(&mut units, base, katakana, kind);
+            }
         }
+    }
+    units
+}
+
+/// A kana as full-size katakana, with its kind: 0 small, 1 katakana,
+/// 2 half-width, 3 hiragana. Anything else is itself, of kind 1.
+fn kana_collation(character: char) -> (char, u8) {
+    let code = character as u32;
+    let (code, kind) = match code {
+        0x3041..=0x3096 => (code + 0x60, 3),
+        0xFF66..=0xFF9D => (HALF_WIDTH_KATAKANA[(code - 0xFF66) as usize] as u32, 2),
+        _ => (code, 1),
+    };
+    // The small kana stand beside their full-size letter.
+    let (code, kind) = match code {
+        0x30A1 | 0x30A3 | 0x30A5 | 0x30A7 | 0x30A9 | 0x30C3 | 0x30E3 | 0x30E5 | 0x30E7 | 0x30EE => {
+            (code + 1, if kind == 1 { 0 } else { kind })
+        }
+        0x30F5 => (0x30AB, 0),
+        0x30F6 => (0x30B1, 0),
+        _ => (code, kind),
+    };
+    (char::from_u32(code).unwrap_or(character), kind)
+}
+
+const HALF_WIDTH_KATAKANA: [char; 56] = [
+    'ヲ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ャ', 'ュ', 'ョ', 'ッ', 'ー', 'ア', 'イ', 'ウ', 'エ', 'オ', 'カ', 'キ', 'ク', 'ケ', 'コ',
+    'サ', 'シ', 'ス', 'セ', 'ソ', 'タ', 'チ', 'ツ', 'テ', 'ト', 'ナ', 'ニ', 'ヌ', 'ネ', 'ノ', 'ハ', 'ヒ', 'フ', 'ヘ', 'ホ', 'マ',
+    'ミ', 'ム', 'メ', 'モ', 'ヤ', 'ユ', 'ヨ', 'ラ', 'リ', 'ル', 'レ', 'ロ', 'ワ', 'ン',
+];
+
+/// A Latin letter with its accent taken off.
+fn accent_base(character: char) -> char {
+    match character {
+        'à'..='å' => 'a',
+        'ç' => 'c',
+        'è'..='ë' => 'e',
+        'ì'..='ï' => 'i',
+        'ñ' => 'n',
+        'ò'..='ö' | 'ø' => 'o',
+        'ù'..='ü' => 'u',
+        'ý' | 'ÿ' => 'y',
+        other => other,
     }
 }
 

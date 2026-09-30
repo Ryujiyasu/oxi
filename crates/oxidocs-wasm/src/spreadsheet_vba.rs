@@ -25295,12 +25295,23 @@ fn cell_input(value: Value, this_year: i64) -> Result<CellInput, String> {
     // stay the text they were.
     if let Value::String(written) = &value {
         if written.chars().any(|one| matches!(one, '\u{FF01}'..='\u{FF5E}' | '\u{3000}')) {
+            // Inside a formula's quoted text the letters stay as written:
+            // measured, `="A"="ａ"` keeps its ａ, and is FALSE.
+            let formula = matches!(written.chars().next(), Some('=' | '＝'));
+            let mut quoted = false;
             let narrowed: String = written
                 .chars()
-                .map(|one| match one {
-                    '\u{FF01}'..='\u{FF5E}' => char::from_u32(one as u32 - 0xFEE0).unwrap_or(one),
-                    '\u{3000}' => ' ',
-                    _ => one,
+                .map(|one| {
+                    let narrow = match one {
+                        '\u{FF01}'..='\u{FF5E}' => char::from_u32(one as u32 - 0xFEE0).unwrap_or(one),
+                        '\u{3000}' => ' ',
+                        _ => one,
+                    };
+                    if formula && narrow == '"' {
+                        quoted = !quoted;
+                        return narrow;
+                    }
+                    if quoted { one } else { narrow }
                 })
                 .collect();
             if narrowed.starts_with('=') && narrowed.len() > 1 && !formula_is_malformed(&narrowed[1..]) {

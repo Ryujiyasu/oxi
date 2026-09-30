@@ -188,6 +188,10 @@ fn answers_to(candidate: &Value, key: &Value) -> bool {
         if has_wildcards(pattern) {
             return wildcard_match(held, pattern);
         }
+        // An exact lookup asks for the same letters, case aside -- not the
+        // collation's likeness: measured, MATCH("ss",{..."ß","ss"},0) finds
+        // "ss", and MATCH("ｱ",{"ア",...,"ｱ"},0) the half-width one.
+        return held.to_lowercase() == pattern.to_lowercase();
     }
     compare(candidate, key) == Ok(Ordering::Equal)
 }
