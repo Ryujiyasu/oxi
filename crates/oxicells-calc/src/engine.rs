@@ -219,6 +219,23 @@ struct Sheet {
     /// spilled each -- None for one remembered from before and not yet
     /// worked out again.
     spilled: BTreeMap<(u32, u32), (Value, Option<(u32, u32)>)>,
+    /// Each dressed cell's number format and horizontal alignment, by
+    /// `(col, row)`, for CELL to read.
+    dress: BTreeMap<(u32, u32), (Option<String>, Option<String>)>,
+    /// The file's column widths, zero-based, and the width of any other.
+    widths: (Vec<f32>, f32),
+}
+
+thread_local! {
+    static DIGIT_WIDTH: std::cell::Cell<f64> = const { std::cell::Cell::new(7.0) };
+}
+
+/// The width in pixels of a digit of the workbook's Normal font, which
+/// CELL("width") needs to turn a file's column width back into characters.
+pub fn set_digit_width(pixels: f64) {
+    if pixels > 0.0 {
+        DIGIT_WIDTH.with(|held| held.set(pixels));
+    }
 }
 
 /// What a recalculation did.
@@ -323,6 +340,20 @@ impl Workbook {
         if !self.sheet_order.iter().any(|held| held == name) {
             self.sheet_order.push(name.to_string());
         }
+    }
+
+    /// Say how a cell (0-based) is dressed: its number format and its
+    /// horizontal alignment, which CELL("format") and CELL("prefix") read.
+    pub fn set_cell_dress(&mut self, sheet: &str, col: u32, row: u32, format: Option<&str>, align: Option<&str>) {
+        let held = self.sheets.entry(sheet.to_string()).or_default();
+        held.dress.insert((col, row), (format.map(str::to_string), align.map(str::to_string)));
+    }
+
+    /// The sheet's column widths as the file keeps them, zero-based, and the
+    /// width of a column it does not list.
+    pub fn set_column_widths(&mut self, sheet: &str, widths: Vec<f32>, default: f32) {
+        let held = self.sheets.entry(sheet.to_string()).or_default();
+        held.widths = (widths, default);
     }
 
     /// Say that a row (0-based) is hidden, and whether a filter hid it.
@@ -1204,6 +1235,44 @@ impl Workbook {
                     }
                     "col" => Value::Number(f64::from(cell.col) + 1.0),
                     "row" => Value::Number(f64::from(cell.row) + 1.0),
+                    // An unsaved book has no file name: measured, "".
+                    "filename" => Value::Text(String::new()),
+                    "protect" => Value::Number(1.0),
+                    "format" | "parentheses" | "color" => {
+                        let format = self.dress_of(&target, cell.col, cell.row).0.unwrap_or_default();
+                        let (code, parentheses, color) = cell_format_code(&format);
+                        match info.as_str() {
+                            "format" => Value::Text(code),
+                            "parentheses" => Value::Number(f64::from(u8::from(parentheses))),
+                            _ => Value::Number(f64::from(u8::from(color))),
+                        }
+                    }
+                    // Text says how it is aligned: measured, ' for left, "
+                    // for right and ^ for centred; anything else says nothing.
+                    "prefix" => Value::Text(match held() {
+                        Value::Text(_) => match self.dress_of(&target, cell.col, cell.row).1.as_deref() {
+                            Some("right") => "\"",
+                            Some("center") => "^",
+                            Some("fill") => "\\",
+                            _ => "'",
+                        }
+                        .to_string(),
+                        _ => String::new(),
+                    }),
+                    // The column's width in characters, rounded: measured, 8
+                    // for a fresh column and 13 for one set to 12.5.
+                    "width" => {
+                        let (widths, default) = self
+                            .sheets
+                            .get(&target)
+                            .map(|held| held.widths.clone())
+                            .unwrap_or_default();
+                        let file = widths.get(cell.col as usize).copied().filter(|width| *width > 0.0).or(Some(default).filter(|width| *width > 0.0));
+                        let digit = DIGIT_WIDTH.with(|held| held.get());
+                        // A column the file does not size is the standard 8.43.
+                        let characters = file.map_or(8.43, |file| (f64::from(file) * digit - 5.0) / digit);
+                        Value::Number(characters.max(0.0).round())
+                    }
                     "contents" => held(),
                     "type" => Value::Text(
                         match held() {
@@ -2268,6 +2337,13 @@ impl Workbook {
     /// A LAMBDA by name: one a LET named, else a defined name that holds
     /// one -- measured, Names.Add "Twice", "=LAMBDA(n,n*2)" makes
     /// `=Twice(8)` 16.
+    fn dress_of(&self, sheet: &str, col: u32, row: u32) -> (Option<String>, Option<String>) {
+        self.sheets
+            .get(sheet)
+            .and_then(|held| held.dress.get(&(col, row)).cloned())
+            .unwrap_or_default()
+    }
+
     fn named_lambda(&self, name: &str, sheet: &str) -> Option<Expr> {
         self.lambda_scope
             .borrow()
@@ -4349,4 +4425,120 @@ mod tests {
             );
         }
     }
+}
+
+/// CELL("format")'s code for a number format, with whether it puts the
+/// positive numbers in brackets and colours the negative ones. Measured on
+/// a Japanese Excel: General, fractions, text and elapsed times are G; 0 F0,
+/// 0.00 F2, #,##0 ,0, 0% P0, 0.00E+00 S2, $#,##0.00 C2; a date with year,
+/// month and day D1 (time or not), a month and year D2, a month and day D3,
+/// an era D4; h:mm:ss AM/PM D6, h:mm AM/PM D7, h:mm:ss D8, h:mm D9; "-" after
+/// when the negative section has a colour, "()" when the positive section
+/// has a bracket.
+fn cell_format_code(format: &str) -> (String, bool, bool) {
+    let sections = split_format_sections(format);
+    let first = sections.first().cloned().unwrap_or_default();
+    let parentheses = first.contains('(');
+    let color = sections.get(1).is_some_and(|negative| {
+        let lower = negative.to_lowercase();
+        ["[black]", "[blue]", "[cyan]", "[green]", "[magenta]", "[red]", "[white]", "[yellow]", "[color"]
+            .iter()
+            .any(|name| lower.contains(name))
+    });
+    let lower = first.to_lowercase();
+    // Brackets other than an elapsed time's say nothing of the kind.
+    let elapsed = lower.contains("[h") || lower.contains("[m") || lower.contains("[s");
+    let bare: String = {
+        let mut out = String::new();
+        let mut depth = 0;
+        for character in lower.chars() {
+            match character {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ if depth > 0 => {}
+                _ => out.push(character),
+            }
+        }
+        out
+    };
+    let era = lower.contains("$-411") && (bare.contains('g') || bare.contains('e'));
+    let has = |c: char| bare.contains(c);
+    // Minutes and seconds with no hour are no time of day: measured, mm:ss is G.
+    let minutes_only = has('s') && !has('h') && !has('d') && !has('y');
+    let mut code = if lower.is_empty() || lower == "general" || lower == "@" || has('?') || elapsed || minutes_only {
+        "G".to_string()
+    } else if era {
+        "D4".to_string()
+    } else if has('y') || has('d') || (has('m') && !has('0') && !has('#')) || has('h') || has('s') {
+        let ampm = bare.contains("am/pm") || bare.contains("a/p");
+        let (year, day, hour, second) = (has('y'), has('d'), has('h'), has('s'));
+        let month = bare.replace("am/pm", "").contains('m') && !hour || (hour && bare.matches('m').count() > 1);
+        if year && day {
+            "D1".to_string()
+        } else if year && month {
+            "D2".to_string()
+        } else if day || (month && !hour) {
+            if !hour && !second && bare.contains('m') && !day && !year { "G".to_string() } else { "D3".to_string() }
+        } else if hour {
+            match (second, ampm) {
+                (true, true) => "D6".to_string(),
+                (false, true) => "D7".to_string(),
+                (true, false) => "D8".to_string(),
+                (false, false) => "D9".to_string(),
+            }
+        } else {
+            "G".to_string()
+        }
+    } else {
+        let decimals = bare
+            .split_once('.')
+            .map_or(0, |(_, after)| after.chars().take_while(|c| matches!(c, '0' | '#' | '?')).count());
+        let grouped = {
+            let chars: Vec<char> = bare.chars().collect();
+            chars.windows(3).any(|w| matches!(w[0], '0' | '#') && w[1] == ',' && matches!(w[2], '0' | '#'))
+        };
+        let kind = if bare.contains('%') {
+            "P"
+        } else if bare.contains("e+") || bare.contains("e-") {
+            "S"
+        } else if bare.contains('$') {
+            "C"
+        } else if grouped {
+            ","
+        } else {
+            "F"
+        };
+        format!("{kind}{decimals}")
+    };
+    if color {
+        code.push('-');
+    }
+    if parentheses {
+        code.push_str("()");
+    }
+    (code, parentheses, color)
+}
+
+/// A number format's sections, with quoted text and escaped characters
+/// taken out so that what is left is the pattern.
+fn split_format_sections(format: &str) -> Vec<String> {
+    let mut sections = vec![String::new()];
+    let mut chars = format.chars();
+    while let Some(character) = chars.next() {
+        match character {
+            '"' => {
+                for inner in chars.by_ref() {
+                    if inner == '"' {
+                        break;
+                    }
+                }
+            }
+            '\\' => {
+                chars.next();
+            }
+            ';' => sections.push(String::new()),
+            other => sections.last_mut().expect("one section at least").push(other),
+        }
+    }
+    sections
 }

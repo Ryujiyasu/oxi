@@ -2287,6 +2287,7 @@ impl<'a> WorkbookHost<'a> {
 
     fn recalculate(&mut self) {
         self.lend_user_functions();
+        oxicells_calc::set_digit_width(f64::from(self.digit_width()));
         match self.now {
             Some(now) => oxicells_core::formula::evaluate_workbook_formulas_at(self.workbook, now),
             None => oxicells_core::formula::evaluate_workbook_formulas(self.workbook),

@@ -221,6 +221,11 @@ fn tokenize_spanned(input: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 .iter()
                 .find(|(lit, _)| rest.len() >= lit.len() && rest[..lit.len()].eq_ignore_ascii_case(lit));
             match matched {
+                // Measured: #SPILL! and #CALC! are no values a formula may
+                // write -- `=ISERROR(#SPILL!)` is refused (1004).
+                Some((_, ExcelError::Spill | ExcelError::Calc)) => {
+                    return Err(ParseError::UnexpectedChar('#', i));
+                }
                 Some((lit, err)) => {
                     tokens.push(Token::ErrorLit(*err));
                     i += lit.len();

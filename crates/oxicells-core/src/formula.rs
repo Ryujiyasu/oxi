@@ -243,6 +243,22 @@ fn assemble_sheets(
 
     for sheet in sheets.iter() {
         book.add_sheet(&sheet.name);
+        // What CELL asks of a cell beyond its value: the widths of the
+        // columns and each cell's number format and alignment.
+        book.set_column_widths(&sheet.name, sheet.col_widths.clone(), sheet.default_col_width);
+        for row in &sheet.rows {
+            for cell in &row.cells {
+                if cell.style.number_format.is_some() || cell.style.horizontal_align.is_some() {
+                    book.set_cell_dress(
+                        &sheet.name,
+                        cell.col,
+                        row.index.saturating_sub(1),
+                        cell.style.number_format.as_deref(),
+                        cell.style.horizontal_align.as_deref(),
+                    );
+                }
+            }
+        }
         // A table's own name is how a formula reaches its columns:
         // `tblNomina[[#This Row],[DATE]]`. The IR counts a table's rows from
         // ONE and its columns from zero; the engine counts both from zero, so
