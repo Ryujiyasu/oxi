@@ -11409,6 +11409,11 @@ fn binary(
         }
         Eq | Ne | Lt | Le | Gt | Ge => {
             let ordering = match (&lhs, &rhs) {
+                // Under Option Compare Text the comparison is StrComp's text
+                // one: measured, `"a" = "A"` is True there.
+                (Value::String(a), Value::String(b)) if option_compare_text => {
+                    Some(strcomp_text_key(a).encode_utf16().cmp(strcomp_text_key(b).encode_utf16()))
+                }
                 (Value::String(a), Value::String(b)) => a.partial_cmp(b),
                 // Empty takes the shape of whatever it is put beside. Against
                 // text it is a zero-length string, which is why
