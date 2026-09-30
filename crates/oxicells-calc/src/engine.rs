@@ -44,7 +44,7 @@ struct TableRef {
 impl TableRef {
     /// The sheet column a heading names, counted as the sheet counts.
     fn column(&self, heading: &str) -> Option<u32> {
-        let wanted = heading.trim().to_uppercase();
+        let wanted = crate::case_fold::table_key(heading.trim());
         self.headings
             .iter()
             .position(|one| *one == wanted)
@@ -419,7 +419,7 @@ impl Workbook {
         headings: Vec<String>,
     ) {
         self.tables.insert(
-            name.to_uppercase(),
+            crate::case_fold::table_key(name),
             TableRef {
                 sheet: sheet.to_string(),
                 first_row: rows.0,
@@ -428,7 +428,7 @@ impl Workbook {
                 last_col: cols.1,
                 header_rows,
                 totals_rows,
-                headings: headings.into_iter().map(|one| one.to_uppercase()).collect(),
+                headings: headings.iter().map(|one| crate::case_fold::table_key(one)).collect(),
             },
         );
     }
@@ -1170,7 +1170,7 @@ impl Workbook {
                 match self.name_bound(name, sheet) {
                     Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
                     // A table's bare name is its data: `COLUMNS(tbl)`.
-                    None if self.tables.contains_key(&name.to_uppercase()) => {
+                    None if self.tables.contains_key(&crate::case_fold::table_key(name)) => {
                         self.a_table_column(name, "", sheet, at)
                     }
                     None => Arg::Value(Value::Error(ExcelError::Name)),
@@ -1855,7 +1855,7 @@ impl Workbook {
                 })
             })
         } else {
-            self.tables.get(&name.to_uppercase())
+            self.tables.get(&crate::case_fold::table_key(name))
         };
         let Some(table) = found else {
             return Err(ExcelError::Name);
@@ -2539,7 +2539,7 @@ impl Workbook {
                     let bound = bound.clone();
                     self.reference_of(&bound, sheet, depth, at)
                 }
-                None if self.tables.contains_key(&name.to_uppercase()) => {
+                None if self.tables.contains_key(&crate::case_fold::table_key(name)) => {
                     self.table_range(name, "", sheet, at).ok()
                 }
                 None => None,

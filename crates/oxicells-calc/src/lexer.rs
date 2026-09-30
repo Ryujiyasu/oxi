@@ -944,6 +944,98 @@ pub fn normalise_formula_ranges(input: &str) -> String {
     output
 }
 
+/// A formula's table references spelt as the tables are: the table's name
+/// and every column it names as they were given, the special items as Excel
+/// writes them. `table` answers a table's own name and its headings, or
+/// None where there is no such table. A table or a column that is not there
+/// is refused. Measured through VBA's `.Formula`: `=SUM(tbl[amt])` reads
+/// back `=SUM(Tbl[Amt])`, `=tbl[[#headers],[qty two]]`
+/// `=Tbl[[#Headers],[Qty Two]]`, and `=SUM(Tbl[nope])` and `=SUM(nope[Amt])`
+/// are 1004.
+pub fn canonical_tables(
+    input: &str,
+    table: &dyn Fn(&str) -> Option<(String, Vec<String>)>,
+) -> Result<String, String> {
+    let Ok(tokens) = tokenize_spanned(input) else {
+        return Ok(input.to_string());
+    };
+    let mut output = String::with_capacity(input.len());
+    let mut from = 0;
+    for (token, start) in &tokens {
+        let Token::Table { name, asked } = token else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        let Some((own, headings)) = table(name) else {
+            return Err(format!("there is no table {name:?}"));
+        };
+        let length = name.len() + asked.len() + 2;
+        let written = &input[*start..];
+        // Only a reference written exactly as it tokenized is respelt.
+        if !written.starts_with(name.as_str()) || written.len() < length || !written[..length].ends_with(']') {
+            continue;
+        }
+        let asked = respell_specifier(asked, &headings)?;
+        output.push_str(&input[from..*start]);
+        output.push_str(&own);
+        output.push('[');
+        output.push_str(&asked);
+        output.push(']');
+        from = start + length;
+    }
+    output.push_str(&input[from..]);
+    Ok(output)
+}
+
+/// The inside of a table reference's brackets with each column spelt as its
+/// heading is and each special item as Excel writes it.
+fn respell_specifier(asked: &str, headings: &[String]) -> Result<String, String> {
+    let item = |text: &str| -> Result<String, String> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(text.to_string());
+        }
+        if let Some(special) = trimmed.strip_prefix('#') {
+            let known = ["All", "Data", "Headers", "Totals", "This Row"];
+            return Ok(match known.iter().find(|one| one.eq_ignore_ascii_case(special)) {
+                Some(one) => format!("#{one}"),
+                None => text.to_string(),
+            });
+        }
+        // A heading with an escaped character is left as written.
+        if trimmed.contains('\'') {
+            return Ok(text.to_string());
+        }
+        let key = crate::case_fold::table_key(trimmed);
+        match headings.iter().find(|heading| crate::case_fold::table_key(heading) == key) {
+            Some(heading) => Ok(heading.clone()),
+            None => Err(format!("the table has no column {trimmed:?}")),
+        }
+    };
+    if !asked.contains('[') {
+        return match asked.strip_prefix('@') {
+            Some(rest) => Ok(format!("@{}", item(rest)?)),
+            None => item(asked),
+        };
+    }
+    let mut out = String::with_capacity(asked.len());
+    let mut rest = asked;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(']') else {
+            out.push_str(&rest[open..]);
+            return Ok(out);
+        };
+        out.push('[');
+        out.push_str(&item(&after[..close])?);
+        out.push(']');
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 /// A formula as read from a cell inside the table `table`: a reference to
 /// ONE of that table's columns drops the table's name. Measured through
 /// VBA's `.Formula`: `tblP[Qty]` reads `[Qty]`, `tblP[@Qty]` and

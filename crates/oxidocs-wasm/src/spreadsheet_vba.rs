@@ -5143,7 +5143,7 @@ impl<'a> WorkbookHost<'a> {
                 Value::String(named) => self.workbook.sheets[sheet]
                     .tables
                     .iter()
-                    .find(|table| table.name.eq_ignore_ascii_case(named))
+                    .find(|table| same_table_name(&table.name, named))
                     .map(|table| table.name.clone())
                     .ok_or_else(|| format!("the sheet has no table {named:?}"))?,
                 value => {
@@ -5191,7 +5191,7 @@ impl<'a> WorkbookHost<'a> {
             Value::String(name) => table
                 .columns
                 .iter()
-                .position(|held| held.eq_ignore_ascii_case(name))
+                .position(|held| same_table_name(held, name))
                 .map(|slot| slot as u32 + 1)
                 .ok_or_else(|| format!("the table has no column {name:?}"))?,
             value => positive_index(value, "ListColumns index")?,
@@ -5220,7 +5220,7 @@ impl<'a> WorkbookHost<'a> {
                     }
                     let old = self.workbook.sheets[sheet].tables[index].name.clone();
                     if self.workbook.sheets.iter().flat_map(|held| held.tables.iter()).any(|table| {
-                        table.name.eq_ignore_ascii_case(new_name) && table.name != old
+                        same_table_name(&table.name, new_name) && table.name != old
                     }) {
                         return Err(format!("there is already a table named {new_name:?}"));
                     }
@@ -13096,6 +13096,16 @@ impl<'a> WorkbookHost<'a> {
         let book = self.file_name.as_deref().unwrap_or("Book1");
         let placed = without_own_book(&placed, book);
         let placed = oxicells_calc::canonical_formula(&placed, &sheet_case, &name_case);
+        let table_case = |asked: &str| {
+            self.workbook
+                .sheets
+                .iter()
+                .flat_map(|sheet| sheet.tables.iter())
+                .find(|table| same_table_name(&table.name, asked))
+                .map(|table| (table.name.clone(), table.columns.clone()))
+        };
+        let placed = oxicells_calc::canonical_tables(&placed, &table_case)
+            .map_err(|why| host_error(1004, format!("{placed:?} is not a formula: {why}")))?;
         // What is no formula at all is refused: measured, `"=A1["` and
         // `"=SUM(T1[n])"` over a table named T1 (a cell's name) are 1004.
         if placed.starts_with('=') && oxicells_calc::parse(&placed).is_err() {
@@ -22618,6 +22628,11 @@ fn find_value_text(value: &Value) -> String {
 /// finds a sheet named "nß", "NFI" one named "n" & ChrW(&HFB01) and
 /// ChrW(&H3A3) one named with the final sigma, while Georgian capitals, the
 /// dotless i, wide letters and half-width kana are not found.
+/// Whether a table or table column named `held` answers to `asked`.
+fn same_table_name(held: &str, asked: &str) -> bool {
+    held.eq_ignore_ascii_case(asked) || oxicells_calc::case_fold::table_key(held) == oxicells_calc::case_fold::table_key(asked)
+}
+
 /// Whether a defined name `held` answers to `asked`, as a formula finds it.
 fn same_defined_name(held: &str, asked: &str) -> bool {
     held.eq_ignore_ascii_case(asked) || oxicells_calc::case_fold::name_key(held) == oxicells_calc::case_fold::name_key(asked)

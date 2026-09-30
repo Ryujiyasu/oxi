@@ -101,6 +101,31 @@ pub fn fold_text(text: &str) -> String {
     text.chars().map(fold).collect()
 }
 
+/// A table's name or a column heading as a structured reference matches it:
+/// case set aside by the table and ligatures spelled out, width kept.
+/// Measured, TAE[HSS] reads the table "t" & ChrW(&HE6) and its column
+/// "h" & ChrW(&HDF), while [Ha] does not reach a column "h" & ChrW(&HFF41).
+pub fn table_key(text: &str) -> String {
+    let mut key = String::with_capacity(text.len());
+    for one in text.chars() {
+        spell(fold(one), &mut key);
+    }
+    key
+}
+
+/// A folded letter with a ligature written out as its two letters.
+fn spell(one: char, key: &mut String) {
+    match one {
+        '\u{df}' => key.push_str("ss"),
+        '\u{e6}' => key.push_str("ae"),
+        '\u{153}' => key.push_str("oe"),
+        '\u{fb01}' => key.push_str("fi"),
+        '\u{fb02}' => key.push_str("fl"),
+        '\u{133}' => key.push_str("ij"),
+        other => key.push(other),
+    }
+}
+
 /// A defined name as Excel matches it: narrowed as ASC narrows, case set
 /// aside by the table and ligatures spelled out. Measured, a name "n" &
 /// ChrW(&HFF41) answers to "Na", "nア" to "Nｱ", "nß" to "NSS" and "næ" to
@@ -117,15 +142,7 @@ pub fn name_key(text: &str) -> String {
             one.to_string()
         };
         for one in narrowed.chars() {
-            match fold(one) {
-                '\u{df}' => key.push_str("ss"),
-                '\u{e6}' => key.push_str("ae"),
-                '\u{153}' => key.push_str("oe"),
-                '\u{fb01}' => key.push_str("fi"),
-                '\u{fb02}' => key.push_str("fl"),
-                '\u{133}' => key.push_str("ij"),
-                other => key.push(other),
-            }
+            spell(fold(one), &mut key);
         }
     }
     key
