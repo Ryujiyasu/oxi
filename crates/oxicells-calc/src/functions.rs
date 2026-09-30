@@ -829,7 +829,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "COUNTBLANK" => Ok(Value::Number(
             args.iter()
                 .flat_map(|a| a.flatten())
-                .filter(|v| v.is_blank())
+                // Empty text counts as blank: measured, a cell holding
+                // ="" is counted.
+                .filter(|v| v.is_blank() || matches!(v, Value::Text(text) if text.is_empty()))
                 .count() as f64,
         )),
 

@@ -1553,6 +1553,16 @@ impl Workbook {
             {
                 Arg::Value(Value::Error(ExcelError::Value))
             }
+            // AGGREGATE's first thirteen take references only: measured,
+            // AGGREGATE(1,6,{1,2,#N/A}) is #VALUE!, where 14 to 19 take an
+            // array.
+            Expr::Function { name, args }
+                if name == "AGGREGATE"
+                    && matches!(args.first(), Some(Expr::Literal(Value::Number(n))) if (1.0..14.0).contains(n))
+                    && args.iter().skip(2).any(|arg| matches!(arg, Expr::Array(_))) =>
+            {
+                Arg::Value(Value::Error(ExcelError::Value))
+            }
             Expr::Function { name, args } if name == "GROUPBY" => self.group_by(args, sheet, depth, skip, at),
             Expr::Function { name, args } if name == "PIVOTBY" => self.pivot_by(args, sheet, depth, skip, at),
             Expr::Function { name, args }
