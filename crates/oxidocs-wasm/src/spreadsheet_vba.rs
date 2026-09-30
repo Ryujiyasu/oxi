@@ -11205,8 +11205,13 @@ impl<'a> WorkbookHost<'a> {
             let mut proper = String::with_capacity(text.len());
             let mut starting = true;
             for character in text.chars() {
+                // A capital of two letters keeps the letter, as in PROPER.
                 if starting {
-                    proper.extend(character.to_uppercase());
+                    let mut upper = character.to_uppercase();
+                    proper.push(match (upper.next(), upper.next()) {
+                        (Some(single), None) => single,
+                        _ => character,
+                    });
                 } else {
                     proper.extend(character.to_lowercase());
                 }
@@ -21403,7 +21408,7 @@ fn lookup_compare(cell: &Value, needle: &Value) -> Option<Ordering> {
     match (lookup_key(cell)?, lookup_key(needle)?) {
         (LookupKey::Number(cell), LookupKey::Number(needle)) => cell.partial_cmp(&needle),
         (LookupKey::Text(cell), LookupKey::Text(needle)) => {
-            Some(cell.to_lowercase().cmp(&needle.to_lowercase()))
+            Some(oxicells_calc::case_fold::fold_text(cell).cmp(&oxicells_calc::case_fold::fold_text(needle)))
         }
         (LookupKey::Boolean(cell), LookupKey::Boolean(needle)) => Some(cell.cmp(&needle)),
         _ => None,
@@ -21431,7 +21436,7 @@ enum WildcardToken {
 /// the character after it. A trailing `~` contributes nothing at all.
 fn wildcard_tokens(pattern: &str) -> Vec<WildcardToken> {
     let mut tokens = Vec::new();
-    let mut characters = pattern.to_lowercase().chars().collect::<Vec<_>>().into_iter();
+    let mut characters = oxicells_calc::case_fold::fold_text(pattern).chars().collect::<Vec<_>>().into_iter();
     while let Some(character) = characters.next() {
         match character {
             '~' => {
@@ -21448,7 +21453,7 @@ fn wildcard_tokens(pattern: &str) -> Vec<WildcardToken> {
 }
 
 fn wildcard_matches(candidate: &str, pattern: &str) -> bool {
-    let candidate = candidate.to_lowercase().chars().collect::<Vec<_>>();
+    let candidate = oxicells_calc::case_fold::fold_text(candidate).chars().collect::<Vec<_>>();
     let tokens = wildcard_tokens(pattern);
     let mut candidate_index = 0;
     let mut token_index = 0;
@@ -22610,10 +22615,12 @@ fn find_value_text(value: &Value) -> String {
 /// the single `ガ`.
 fn compared(one: char, match_case: bool, match_byte: bool) -> char {
     let one = if match_byte { one } else { one_width(one) };
+    // Case is set aside by Excel's own table: measured, Find("σ") lands on
+    // ς and Find of a Georgian letter never on its Mtavruli capital.
     if match_case {
         one
     } else {
-        one.to_lowercase().next().unwrap_or(one)
+        oxicells_calc::case_fold::fold(one)
     }
 }
 

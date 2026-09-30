@@ -77,7 +77,7 @@ const EXTRA: &[(u16, u16)] = &[
 ];
 
 /// One letter as a case-blind comparison reads it.
-pub(crate) fn fold(character: char) -> char {
+pub fn fold(character: char) -> char {
     let Ok(unit) = u16::try_from(character as u32) else {
         return character;
     };
@@ -97,7 +97,7 @@ pub(crate) fn fold(character: char) -> char {
 }
 
 /// Text as a case-blind comparison reads it, letter for letter.
-pub(crate) fn fold_text(text: &str) -> String {
+pub fn fold_text(text: &str) -> String {
     text.chars().map(fold).collect()
 }
 
