@@ -24709,9 +24709,22 @@ fn written_time(text: &str) -> Option<(f64, &'static str)> {
     }
     let hour = digits_only(parts[0])?;
     let minute = digits_only(parts[1])?;
-    let second = match parts.get(2) {
+    // Seconds may carry a fraction: measured, "12:00:00.5" is half a second
+    // past noon, shown mm:ss.0.
+    let (seconds_text, tenths) = match parts.get(2).and_then(|part| part.split_once('.')) {
+        Some((whole, fraction)) if meridiem.is_none() => (Some(whole), Some(fraction)),
+        _ => (parts.get(2).copied(), None),
+    };
+    let second = match seconds_text {
         Some(part) => Some(digits_only(part)?),
         None => None,
+    };
+    let fraction_of_second = match tenths {
+        Some(fraction) => {
+            digits_only(fraction)?;
+            format!("0.{fraction}").parse::<f64>().ok()?
+        }
+        None => 0.0,
     };
     if minute > 59 || second.is_some_and(|second| second > 59) {
         return None;
@@ -24722,8 +24735,11 @@ fn written_time(text: &str) -> Option<(f64, &'static str)> {
         Some(false) if hour == 12 => 0,
         _ => hour,
     };
-    let fraction = (hour as f64 * 3600.0 + minute as f64 * 60.0 + second.unwrap_or(0) as f64)
+    let fraction = (hour as f64 * 3600.0 + minute as f64 * 60.0 + second.unwrap_or(0) as f64 + fraction_of_second)
         / 86_400.0;
+    if tenths.is_some() {
+        return Some((fraction, "mm:ss.0"));
+    }
     let shown = match (meridiem.is_some(), second.is_some(), hour >= 24) {
         (_, _, true) => "[h]:mm:ss",
         (true, true, _) => "h:mm:ss AM/PM",
@@ -24828,8 +24844,8 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
                     let serial = excel_serial(year, *month as u32, *day as u32)?;
                     Some((serial, "m/d/yyyy"))
                 }
-                // Measured: `3/2024` is March 2024, shown `mmm-yy`.
-                [(month, _), (year, 4)] if separator == '/' => {
+                // Measured: `3/2024` and `3-2024` are March 2024, shown `mmm-yy`.
+                [(month, _), (year, 4)] => {
                     let serial = excel_serial(*year, *month as u32, 1)?;
                     Some((serial, "mmm-yy"))
                 }
@@ -24883,11 +24899,18 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
     // `January 5, 2024` and `Feb 30`.
     let words: Vec<&str> = text.split_whitespace().collect();
     match words.as_slice() {
-        [month, day, year] => {
+        [month, day, year] if month_named(month).is_some() => {
             let month = month_named(month)?;
             let day = digits_only(day.strip_suffix(',')?)?;
             let year = widened_year(digits_only(year)?, year.len());
             let serial = excel_serial(year, month, day as u32)?;
+            Some((serial, "d-mmm-yy"))
+        }
+        // `5 Mar 24` reads as `5-Mar-24` does: measured, 3/5/2024 shown
+        // d-mmm-yy.
+        [day, month, year] if digits_only(day).is_some() && month_named(month).is_some() => {
+            let year = widened_year(digits_only(year)?, year.len());
+            let serial = excel_serial(year, month_named(month)?, digits_only(day)? as u32)?;
             Some((serial, "d-mmm-yy"))
         }
         // `5 Jan` reads as `5-Jan` does: measured, the 5th of January of this
@@ -24898,11 +24921,13 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
         }
         [month, number] => {
             let month = month_named(month)?;
+            let digits = number.len();
             let number = digits_only(number)?;
             match excel_serial(this_year, month, number as u32) {
                 Some(serial) => Some((serial, "d-mmm")),
                 None => {
-                    let year = widened_year(number, 2);
+                    // Measured: "Mar 2024" is March 2024, not 3924.
+                    let year = widened_year(number, digits);
                     let serial = excel_serial(year, month, 1)?;
                     Some((serial, "mmm-yy"))
                 }
