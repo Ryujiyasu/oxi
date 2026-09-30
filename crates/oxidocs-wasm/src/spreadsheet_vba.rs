@@ -15660,6 +15660,32 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// The block a merge takes in: the asked one grown over every merged
+    /// area it touches, again until none is left half in. Measured: B2:C3
+    /// merged beside A1:B2 makes A1:C3, H1:H2 inside H1:I2 keeps H1:I2, and
+    /// E5:G5 across over E5:F6 merges E5:G5 and E6:G6.
+    fn merge_reach(&self, mut range: CellRange) -> CellRange {
+        let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
+            return range;
+        };
+        loop {
+            let mut grown = range;
+            for existing in &sheet.merge_cells {
+                let existing = merge_range(range.sheet, existing);
+                if ranges_overlap(grown, existing) {
+                    grown.start_row = grown.start_row.min(existing.start_row);
+                    grown.start_column = grown.start_column.min(existing.start_column);
+                    grown.end_row = grown.end_row.max(existing.end_row);
+                    grown.end_column = grown.end_column.max(existing.end_column);
+                }
+            }
+            if ranges_equal(grown, range) {
+                return range;
+            }
+            range = grown;
+        }
+    }
+
     fn merge_range(&mut self, range: CellRange) -> Result<(), String> {
         if range.is_single() {
             return Ok(());
@@ -15670,15 +15696,12 @@ impl<'a> WorkbookHost<'a> {
             .sheets
             .get_mut(range.sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
-        for existing in &sheet.merge_cells {
-            let existing = merge_range(range.sheet, existing);
-            if ranges_overlap(range, existing) {
-                if ranges_equal(range, existing) {
-                    return Ok(());
-                }
-                return Err("Range.Merge overlaps an existing merged range".to_string());
-            }
+        if sheet.merge_cells.iter().any(|existing| ranges_equal(range, merge_range(range.sheet, existing))) {
+            return Ok(());
         }
+        // A merge it overlaps is let go and the new one made: measured,
+        // E5:G5 merged over E5:F6 leaves E5's MergeArea E5:G5.
+        sheet.merge_cells.retain(|existing| !ranges_overlap(range, merge_range(range.sheet, existing)));
         for row in &mut sheet.rows {
             if !(range.start_row..=range.end_row).contains(&row.index) {
                 continue;
@@ -16172,6 +16195,32 @@ impl<'a> WorkbookHost<'a> {
             .ok_or_else(|| "Range.Copy destination must be a Range".to_string())?;
         let row_count = source.end_row - source.start_row + 1;
         let column_count = source.end_column - source.start_column + 1;
+        // A destination that holds the source a whole number of times over
+        // takes it in each place: measured, `Range("J1").Copy Range("J2:J3")`
+        // fills both.
+        let (down, across) = (
+            destination.end_row - destination.start_row + 1,
+            destination.end_column - destination.start_column + 1,
+        );
+        if (down > row_count || across > column_count)
+            && down % row_count == 0
+            && across % column_count == 0
+        {
+            for tile_row in 0..down / row_count {
+                for tile_column in 0..across / column_count {
+                    let tile = CellRange {
+                        start_row: destination.start_row + tile_row * row_count,
+                        start_column: destination.start_column + tile_column * column_count,
+                        end_row: destination.start_row + tile_row * row_count + row_count - 1,
+                        end_column: destination.start_column + tile_column * column_count + column_count - 1,
+                        ..destination
+                    };
+                    let tile = self.object(HostObject::Range(tile));
+                    self.copy_range(source, &[tile])?;
+                }
+            }
+            return Ok(Value::Empty);
+        }
         let end_row = destination
             .start_row
             .checked_add(row_count - 1)
@@ -17566,6 +17615,7 @@ impl Host for WorkbookHost<'_> {
                     // the block: asked of Excel, `D1:E2` merged across leaves
                     // `D1:E1` and `D2:E2`, each keeping its own leftmost
                     // value where the block would have kept only D1's.
+                    let range = self.merge_reach(range);
                     if across {
                         for row in range.start_row..=range.end_row {
                             self.merge_range(CellRange {
@@ -32592,14 +32642,15 @@ End Sub
              End Sub\n",
         )
         .unwrap();
-        let failure = {
+        // Measured: a merge over part of another takes the whole of it in,
+        // D1:E1 over C1:D1 making C1:E1.
+        {
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
-            execute_with_host(&overlap, "OverlapMerge", vec![], &mut host).unwrap_err()
-        };
-        assert!(failure
-            .message
-            .contains("overlaps an existing merged range"));
+            execute_with_host(&overlap, "OverlapMerge", vec![], &mut host).unwrap();
+        }
         assert_eq!(workbook.sheets[0].merge_cells.len(), 1);
+        let merge = &workbook.sheets[0].merge_cells[0];
+        assert_eq!((merge.start_row, merge.start_col, merge.end_row, merge.end_col), (1, 2, 1, 4));
     }
 
     #[test]
