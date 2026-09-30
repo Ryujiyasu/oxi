@@ -3228,7 +3228,9 @@ impl<'a> Runtime<'a> {
         args: &[Argument],
         frame: &Frame,
     ) -> Option<i64> {
-        if !name.eq_ignore_ascii_case("len") {
+        // LenB answers the same size: measured, LenB of a Long is 4 and of a
+        // LongLong 8, where a Variant holding 12345 is 10.
+        if !name.eq_ignore_ascii_case("len") && !name.eq_ignore_ascii_case("lenb") {
             return None;
         }
         let [argument] = args else {
@@ -3248,7 +3250,7 @@ impl<'a> Runtime<'a> {
             "byte" => Some(1),
             "integer" | "boolean" => Some(2),
             "long" | "single" => Some(4),
-            "double" | "currency" | "date" | "longlong" => Some(8),
+            "double" | "currency" | "date" | "longlong" | "longptr" => Some(8),
             _ => None,
         }
     }
