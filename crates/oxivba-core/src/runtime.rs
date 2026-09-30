@@ -1572,11 +1572,19 @@ impl<'a> Runtime<'a> {
                     _ => self.eval_expr(value, frame)?,
                 };
                 if !matches!(value, Value::Object(_) | Value::Nothing) {
-                    return Err(error(
-                        RuntimeErrorKind::TypeMismatch,
-                        "Set requires an object value or Nothing",
-                        Some(span.line),
-                    ));
+                    // Into an object variable it is 424, into a Variant 13:
+                    // measured, `Set o = d` (o As Object, d = "x") and
+                    // `Set v = d` (v As Variant, d = 5).
+                    let into_object = expr_name(target).is_some_and(|name| {
+                        self.lookup_slot(frame, name).is_some() && !self.is_variant_variable(frame, name)
+                    });
+                    return Err(RuntimeError {
+                        kind: RuntimeErrorKind::TypeMismatch,
+                        message: "Set requires an object value or Nothing".to_string(),
+                        line: Some(span.line),
+                        vba_number: Some(if into_object { 424 } else { 13 }),
+                        vba_source: Some("VBA".to_string()),
+                    });
                 }
                 self.assign(target, value, frame, span.line)?;
                 // What the variable held may have been the last reference.
@@ -4217,11 +4225,14 @@ impl<'a> Runtime<'a> {
                 "object variable or With block variable not set",
                 Some(line),
             )),
-            _ => Err(error(
-                RuntimeErrorKind::TypeMismatch,
-                "VBA member access requires an object",
-                Some(line),
-            )),
+            // Measured: `d = "abc": v = d.Length` is 424, Object required.
+            _ => Err(RuntimeError {
+                kind: RuntimeErrorKind::TypeMismatch,
+                message: "VBA member access requires an object".to_string(),
+                line: Some(line),
+                vba_number: Some(424),
+                vba_source: Some("VBA".to_string()),
+            }),
         }
     }
 
@@ -4287,6 +4298,13 @@ impl<'a> Runtime<'a> {
             // `Worksheets(1)` are all 438, while `r = Range("A1")` comes
             // through as the cell's value because a Range HAS a default
             // member.
+            // A Collection's default member is Item, which wants an index:
+            // measured, `v = c` is 450, not 438.
+            Value::Object(receiver) if matches!(receiver.kind.as_str(), "Collection" | "Dictionary") => Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                "a Collection's default member Item wants an index",
+                Some(line),
+            )),
             Value::Object(receiver) => self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
                 no_such_member(
                     format!("{} has no default scalar Value property", receiver.kind),
@@ -4822,8 +4840,8 @@ impl<'a> Runtime<'a> {
                 };
                 Ok(dictionary_array(values))
             }
-            InternalObject::Dictionary(_) => Err(error(
-                RuntimeErrorKind::Unsupported,
+            // Measured: `d.Bogus` on a Dictionary is 438.
+            InternalObject::Dictionary(_) => Err(no_such_member(
                 format!("Dictionary method is not available: {name}"),
                 Some(line),
             )),
