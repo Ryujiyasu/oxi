@@ -113,6 +113,11 @@ def aggregate_dump(dump: dict) -> dict:
                 # typical short-cell wrap (< 5 lines = 87pt) is OK for most cases
                 # but disambiguates separated table instances (>60pt gap).
                 base_key = (pi, cpi, cri, cci)
+                # S1616: a NESTED table cell carries its ancestor path; without it
+                # the inner cell (0,1) collided with the outer cell (0,1) and their
+                # paragraphs merged (forms__005d851e).
+                if el.get("cell_path"):
+                    base_key = base_key + (tuple(tuple(x) for x in el["cell_path"]),)
                 key = base_key
                 instance = 0
                 while key in groups and not el.get("vert") and (cpi is not None or cri is not None or cci is not None):

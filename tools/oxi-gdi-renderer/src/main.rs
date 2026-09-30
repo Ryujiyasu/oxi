@@ -1207,13 +1207,23 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             // this the text-prefix matcher can never match vertical docs and
             // the gate goes blind (probevert truncation scored PASS 1.0).
             let vert_json = if vert { ", \"vert\": true" } else { "" };
+            // S1616: the ancestor (row, cell, block) path of a NESTED table cell,
+            // so aggregate_dump can tell a nested cell from the outer cell that
+            // shares its (para, cell_para, row, col) key.
+            let path_json = if el.cell_ancestor_path.is_empty() {
+                String::new()
+            } else {
+                let parts: Vec<String> = el.cell_ancestor_path.iter()
+                    .map(|(r, c, b)| format!("[{},{},{}]", r, c, b)).collect();
+                format!(", \"cell_path\": [{}]", parts.join(","))
+            };
             let source_json = el.source_text.as_ref().map(|text| {
                 format!(", \"source_text\": {}, \"source_char_len\": {}",
                     serde_json::to_string(text).unwrap(), el.source_char_len.unwrap_or(0))
             }).unwrap_or_default();
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}{}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}{}{}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json, path_json).unwrap();
         }
         out.push_str("\n    ]}");
     }
