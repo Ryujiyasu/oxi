@@ -438,8 +438,8 @@ impl Workbook {
     /// name of that spelling first, then the workbook's. Measured on a copied
     /// sheet: `=loc+mine` reads the copy's own `loc` and `mine`.
     fn name_bound(&self, name: &str, sheet: &str) -> Option<&Expr> {
-        let upper = name.to_uppercase();
-        let scope = sheet.to_uppercase();
+        let upper = crate::case_fold::name_key(name);
+        let scope = crate::case_fold::name_key(sheet);
         self.names
             .get(&format!("{scope}!{upper}"))
             .or_else(|| self.names.get(&format!("'{}'!{upper}", scope.replace('\'', "''"))))
@@ -448,7 +448,7 @@ impl Workbook {
 
     pub fn define_name(&mut self, name: &str, formula: &str) -> Result<(), CalcError> {
         let expr = parse(formula)?;
-        self.names.insert(name.to_uppercase(), expr);
+        self.names.insert(crate::case_fold::name_key(name), expr);
         Ok(())
     }
 

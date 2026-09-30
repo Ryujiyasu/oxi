@@ -3381,7 +3381,7 @@ impl<'a> WorkbookHost<'a> {
             .workbook
             .defined_names
             .iter()
-            .position(|(held, _)| held.eq_ignore_ascii_case(name))
+            .position(|(held, _)| same_defined_name(held, name))
         {
             return Some(at);
         }
@@ -3390,7 +3390,7 @@ impl<'a> WorkbookHost<'a> {
         }
         self.workbook.defined_names.iter().position(|(held, _)| {
             held.rsplit_once('!')
-                .is_some_and(|(_, leaf)| leaf.eq_ignore_ascii_case(name))
+                .is_some_and(|(_, leaf)| same_defined_name(leaf, name))
         })
     }
 
@@ -9894,7 +9894,7 @@ impl<'a> WorkbookHost<'a> {
         let own = (!name.contains('!'))
             .then(|| {
                 let scoped = format!("{}!{}", self.workbook.sheets[sheet].name, name.trim());
-                self.workbook.defined_names.iter().position(|(held, _)| held.eq_ignore_ascii_case(&scoped))
+                self.workbook.defined_names.iter().position(|(held, _)| same_defined_name(held, &scoped))
             })
             .flatten();
         let Some((held, refers_to)) = own
@@ -13079,7 +13079,7 @@ impl<'a> WorkbookHost<'a> {
                 .defined_names
                 .iter()
                 .map(|(called, _)| called.rsplit('!').next().unwrap_or(called))
-                .find(|called| called.eq_ignore_ascii_case(asked))
+                .find(|called| same_defined_name(called, asked))
                 .map(str::to_string)
                 .or_else(|| {
                     self.user_functions
@@ -22618,6 +22618,11 @@ fn find_value_text(value: &Value) -> String {
 /// finds a sheet named "nß", "NFI" one named "n" & ChrW(&HFB01) and
 /// ChrW(&H3A3) one named with the final sigma, while Georgian capitals, the
 /// dotless i, wide letters and half-width kana are not found.
+/// Whether a defined name `held` answers to `asked`, as a formula finds it.
+fn same_defined_name(held: &str, asked: &str) -> bool {
+    held.eq_ignore_ascii_case(asked) || oxicells_calc::case_fold::name_key(held) == oxicells_calc::case_fold::name_key(asked)
+}
+
 fn sheet_name_key(name: &str, widthless: bool) -> String {
     let mut key = String::with_capacity(name.len());
     for one in name.chars() {

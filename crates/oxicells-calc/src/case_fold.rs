@@ -101,6 +101,36 @@ pub fn fold_text(text: &str) -> String {
     text.chars().map(fold).collect()
 }
 
+/// A defined name as Excel matches it: narrowed as ASC narrows, case set
+/// aside by the table and ligatures spelled out. Measured, a name "n" &
+/// ChrW(&HFF41) answers to "Na", "nア" to "Nｱ", "nß" to "NSS" and "næ" to
+/// "NAE", while a Georgian capital and the dotless i match nothing else.
+pub fn name_key(text: &str) -> String {
+    let mut key = String::with_capacity(text.len());
+    for one in text.chars() {
+        let code = one as u32;
+        let narrowed: String = if (0xFF01..=0xFF5E).contains(&code) {
+            char::from_u32(code - 0xFEE0).unwrap_or(one).to_string()
+        } else if let Some(half) = crate::functions::asc_halfwidth(one) {
+            half.to_string()
+        } else {
+            one.to_string()
+        };
+        for one in narrowed.chars() {
+            match fold(one) {
+                '\u{df}' => key.push_str("ss"),
+                '\u{e6}' => key.push_str("ae"),
+                '\u{153}' => key.push_str("oe"),
+                '\u{fb01}' => key.push_str("fi"),
+                '\u{fb02}' => key.push_str("fl"),
+                '\u{133}' => key.push_str("ij"),
+                other => key.push(other),
+            }
+        }
+    }
+    key
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

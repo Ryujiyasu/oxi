@@ -6057,7 +6057,7 @@ fn is_last_of_feb(serial: i64) -> Result<bool, ExcelError> {
 /// Full-width ASCII is a plain offset the caller handles. Generated from
 /// Unicode's compatibility mapping and checked against Excel; the combining
 /// voiced marks U+3099/U+309A are deliberately absent, as Excel leaves them.
-fn asc_halfwidth(c: char) -> Option<&'static str> {
+pub(crate) fn asc_halfwidth(c: char) -> Option<&'static str> {
     Some(match c {
         '\u{3000}' => "\u{20}",
         '\u{3001}' => "\u{FF64}",
