@@ -14364,7 +14364,6 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn auto_fit_columns(&mut self, range: CellRange) -> Result<Value, String> {
-        const FLOOR: f64 = 5.88;
         // A formula written a moment ago is fitted by its answer, which
         // Excel has already worked out.
         if self.holds_formula(self.cut_to_contents(range)?) {
@@ -14384,6 +14383,11 @@ impl<'a> WorkbookHost<'a> {
         for column in range.start_column..=end_column {
             // The widest text the column shows, in pixels as GDI lays it out.
             let mut widest = 0u32;
+            // A wrapped cell is fitted by the lines it breaks into at the
+            // column's present width: measured, "x" & vbLf & "longer line
+            // here" in a column of 8.38 fits to 8.25, its widest line
+            // "longer line", and "abc" & vbLf & "de" to 4.
+            let wrap_room = (self.column_px(range.sheet, column) - 5.0).max(0.0) as u32;
             let rows: Vec<u32> = self.workbook.sheets[range.sheet]
                 .rows
                 .iter()
@@ -14425,15 +14429,23 @@ impl<'a> WorkbookHost<'a> {
                 } else {
                     shown
                 };
+                if cell.style.wrap_text && !matches!(cell.value, CellValue::Number(_)) {
+                    for line in measured.split('\n') {
+                        widest = widest.max(widest_wrapped_line(line, wrap_room, &|text| text_px(text, &face, size, bold)));
+                    }
+                    continue;
+                }
                 widest = widest.max(text_px(&measured, &face, size, bold));
+            }
+            // A column with nothing to show keeps its width: measured, an
+            // untouched column, one holding "" or a formula answering "",
+            // and one of width 20 with nothing in it all stay as they were.
+            if widest == 0 {
+                continue;
             }
             // The column is the fitted pixels, less the five every column
             // has, in digit widths.
-            let width = if widest == 0 {
-                FLOOR
-            } else {
-                ((fitted_px(widest) - 5.0) / digit * 100.0).round() / 100.0
-            };
+            let width = ((fitted_px(widest) - 5.0) / digit * 100.0).round() / 100.0;
             let lane = CellRange {
                 sheet: range.sheet,
                 start_row: range.start_row,
@@ -20927,6 +20939,28 @@ fn yu_gothic_gdi() -> &'static BTreeMap<String, BTreeMap<u32, Vec<u32>>> {
 /// design widths. A full-width character is the pixel size, and a half-width
 /// katakana half of it, rounded up -- in every face, since Excel draws them
 /// in the East Asian face whatever the cell's Latin one is.
+/// The widest line a wrapped line of text breaks into within `room`
+/// pixels: words go on a line while they fit, and a word wider than the
+/// room stands on a line of its own.
+fn widest_wrapped_line(line: &str, room: u32, measure: &dyn Fn(&str) -> u32) -> u32 {
+    let whole = measure(line);
+    if whole <= room {
+        return whole;
+    }
+    let mut widest = 0;
+    let mut current = String::new();
+    for word in line.split(' ') {
+        let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
+        if current.is_empty() || measure(&candidate) <= room {
+            current = candidate;
+        } else {
+            widest = widest.max(measure(&current));
+            current = word.to_string();
+        }
+    }
+    widest.max(measure(&current))
+}
+
 fn text_px(text: &str, face: &str, size: f32, bold: bool) -> u32 {
     let ppem = (size * 96.0 / 72.0).round() as u32;
     let yu = matches!(face, "游ゴシック" | "Yu Gothic" | "游ゴシック Medium" | "Yu Gothic Medium");
@@ -20943,6 +20977,12 @@ fn text_px(text: &str, face: &str, size: f32, bold: bool) -> u32 {
     text.chars()
         .map(|c| {
             let code = c as u32;
+            // A control character takes no room: measured, "a" & vbCr &
+            // "bcdefgh" and "ab" & vbTab & "cd" autofit as if it were not
+            // there.
+            if code < 0x20 {
+                return 0;
+            }
             if (0xFF61..=0xFF9F).contains(&code) {
                 return ppem.div_ceil(2);
             }
