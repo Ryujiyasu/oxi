@@ -456,6 +456,11 @@ impl Parser {
         if self.peek() == Some(&Token::LParen) {
             self.pos += 1;
             let args = self.parse_args()?;
+            // A LET wants name-value pairs and then what it works out:
+            // measured, `=LET(x,1)` is refused as a formula (1004).
+            if name.eq_ignore_ascii_case("LET") && (args.len() < 3 || args.len() % 2 == 0) {
+                return Err(ParseError::UnexpectedToken("LET needs name, value pairs and a calculation".to_string()));
+            }
             let mut call = Expr::Function {
                 name: name.to_uppercase(),
                 args,

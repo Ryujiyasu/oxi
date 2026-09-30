@@ -264,6 +264,9 @@ pub struct Workbook {
     /// The LAMBDAs a LET has given a name, innermost last, so that
     /// `LET(f,LAMBDA(x,x*2),f(4))` can call one by it.
     lambda_scope: std::cell::RefCell<Vec<(String, Expr)>>,
+    /// The optional LAMBDA parameters (`[b]`) a call left out, innermost
+    /// last, for ISOMITTED to find.
+    omitted: std::cell::RefCell<Vec<String>>,
     /// The state RAND draws from: seeded from the moment on first use, and
     /// moved on by every draw.
     rand_state: std::cell::Cell<u64>,
@@ -1500,7 +1503,9 @@ impl Workbook {
             // Outside a LAMBDA nothing is left out: measured, ISOMITTED(1)
             // is FALSE.
             Expr::Function { name, args } if name == "ISOMITTED" && args.len() == 1 => {
-                Arg::Value(Value::Logical(false))
+                let left_out = matches!(&args[0], Expr::Name(label)
+                    if self.omitted.borrow().iter().any(|held| held.eq_ignore_ascii_case(label)));
+                Arg::Value(Value::Logical(left_out))
             }
             Expr::Function { name, args } if name == "LET" => {
                 if args.len() < 3 || args.len() % 2 == 0 {
@@ -1542,8 +1547,8 @@ impl Workbook {
             // A LAMBDA nobody calls is #CALC!: measured, `=LAMBDA(x,x)`.
             Expr::Function { name, .. } if name == "LAMBDA" => Arg::Value(Value::Error(ExcelError::Calc)),
             // A LAMBDA a LET named, called by that name.
-            Expr::Function { name, args } if self.named_lambda(name).is_some() => {
-                let lambda = self.named_lambda(name).expect("just asked");
+            Expr::Function { name, args } if self.named_lambda(name, sheet).is_some() => {
+                let lambda = self.named_lambda(name, sheet).expect("just asked");
                 let values = args
                     .iter()
                     .map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at))
@@ -2260,18 +2265,26 @@ impl Workbook {
 
     /// Call a LAMBDA written in place with these values for its
     /// parameters, each bound the way LET binds a name.
-    fn named_lambda(&self, name: &str) -> Option<Expr> {
+    /// A LAMBDA by name: one a LET named, else a defined name that holds
+    /// one -- measured, Names.Add "Twice", "=LAMBDA(n,n*2)" makes
+    /// `=Twice(8)` 16.
+    fn named_lambda(&self, name: &str, sheet: &str) -> Option<Expr> {
         self.lambda_scope
             .borrow()
             .iter()
             .rev()
             .find(|(held, _)| held.eq_ignore_ascii_case(name))
             .map(|(_, lambda)| lambda.clone())
+            .or_else(|| {
+                self.name_bound(name, sheet)
+                    .filter(|held| matches!(held, Expr::Function { name, .. } if name == "LAMBDA"))
+                    .cloned()
+            })
     }
 
     fn call_lambda(&self, lambda: &Expr, values: Vec<Arg>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
         if let Expr::Name(label) = lambda {
-            return match self.named_lambda(label) {
+            return match self.named_lambda(label, sheet) {
                 Some(named) => self.call_lambda(&named, values, sheet, depth + 1, skip, at),
                 None => Arg::Value(Value::Error(ExcelError::Value)),
             };
@@ -2279,27 +2292,46 @@ impl Workbook {
         let Expr::Function { name, args } = lambda else {
             return Arg::Value(Value::Error(ExcelError::Value));
         };
-        if name != "LAMBDA" || args.len() != values.len() + 1 {
+        if name != "LAMBDA" || args.is_empty() || values.len() > args.len() - 1 {
             return Arg::Value(Value::Error(ExcelError::Value));
         }
-        let mut labels = Vec::with_capacity(values.len());
-        for parameter in &args[..values.len()] {
-            let Expr::Name(label) = parameter else {
-                return Arg::Value(Value::Error(ExcelError::Value));
-            };
-            labels.push(label.clone());
+        // A parameter in brackets, `[b]`, may be left out: measured,
+        // LAMBDA(a,[b],IF(ISOMITTED(b),"no b",b))(1) is "no b".
+        let mut labels = Vec::with_capacity(args.len() - 1);
+        for parameter in &args[..args.len() - 1] {
+            match parameter {
+                Expr::Name(label) => labels.push((label.clone(), false)),
+                Expr::Table { name, asked } if name.is_empty() => labels.push((asked.to_uppercase(), true)),
+                _ => return Arg::Value(Value::Error(ExcelError::Value)),
+            }
+        }
+        if labels[values.len()..].iter().any(|(_, optional)| !optional) {
+            return Arg::Value(Value::Error(ExcelError::Value));
         }
         let bound = labels.len();
+        let mut left_out = 0;
         {
             let mut scope = self.let_scope.borrow_mut();
-            for (label, value) in labels.into_iter().zip(values) {
-                scope.push((label, value));
+            let mut omitted = self.omitted.borrow_mut();
+            let mut values = values.into_iter();
+            for (label, _) in labels {
+                match values.next() {
+                    Some(value) => scope.push((label, value)),
+                    None => {
+                        omitted.push(label.clone());
+                        left_out += 1;
+                        scope.push((label, Arg::Value(Value::Logical(false))));
+                    }
+                }
             }
         }
         let answer = self.eval_arg_inner(&args[args.len() - 1], sheet, depth + 1, skip, at);
         let mut scope = self.let_scope.borrow_mut();
         let kept = scope.len() - bound;
         scope.truncate(kept);
+        let mut omitted = self.omitted.borrow_mut();
+        let kept = omitted.len() - left_out;
+        omitted.truncate(kept);
         answer
     }
 
@@ -2366,7 +2398,14 @@ impl Workbook {
                     } else {
                         RangeData { width: 1, height: data.height, cells: (0..data.height).map(|row| data.at(line, row)).collect() }
                     };
-                    cells.push(one(self.call_lambda(lambda, vec![Arg::Range(piece)], sheet, depth, skip, at)));
+                    // One value per line: measured, BYROW(A1:B3,LAMBDA(r,r))
+                    // is a single #CALC!.
+                    match self.call_lambda(lambda, vec![Arg::Range(piece)], sheet, depth, skip, at) {
+                        Arg::Range(block) if block.cells.len() > 1 => {
+                            return Arg::Value(Value::Error(ExcelError::Calc));
+                        }
+                        answer => cells.push(one(answer)),
+                    }
                 }
                 if by_row {
                     Arg::Range(RangeData { width: 1, height: lines, cells })
