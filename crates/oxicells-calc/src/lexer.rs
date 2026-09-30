@@ -987,6 +987,71 @@ pub fn canonical_tables(
     Ok(output)
 }
 
+/// A formula with each reference to a table put through `swap`: it is
+/// handed the table's name as written and the inside of the brackets, or
+/// None for the table's bare name, and answers what to write instead or
+/// None to leave the reference as it is. A formula that will not tokenize
+/// comes back as it was.
+pub fn map_table_references(input: &str, swap: &dyn Fn(&str, Option<&str>) -> Option<String>) -> String {
+    let Ok(tokens) = tokenize_spanned(input) else {
+        return input.to_string();
+    };
+    let mut output = String::with_capacity(input.len());
+    let mut from = 0;
+    for (index, (token, start)) in tokens.iter().enumerate() {
+        if *start < from {
+            continue;
+        }
+        let (length, replacement) = match token {
+            // A table named like a cell reads as that cell with brackets after
+            // it; the brackets still make it the table.
+            Token::Name { sheet: None, name }
+                if input[*start..].starts_with(name.as_str()) && input[*start + name.len()..].starts_with('[') =>
+            {
+                let open = *start + name.len() + 1;
+                let mut depth = 1;
+                let mut close = None;
+                for (offset, one) in input[open..].char_indices() {
+                    match one {
+                        '[' => depth += 1,
+                        ']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                close = Some(open + offset);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let Some(close) = close else { continue };
+                (close + 1 - *start, swap(name, Some(&input[open..close])))
+            }
+            Token::Table { name, asked } if !name.is_empty() => {
+                let length = name.len() + asked.len() + 2;
+                let written = &input[*start..];
+                if !written.starts_with(name.as_str()) || written.len() < length || !written[..length].ends_with(']') {
+                    continue;
+                }
+                (length, swap(name, Some(asked)))
+            }
+            Token::Name { sheet: None, name }
+                if !matches!(tokens.get(index + 1), Some((Token::LParen, _)))
+                    && input[*start..].starts_with(name.as_str()) =>
+            {
+                (name.len(), swap(name, None))
+            }
+            _ => continue,
+        };
+        let Some(replacement) = replacement else { continue };
+        output.push_str(&input[from..*start]);
+        output.push_str(&replacement);
+        from = start + length;
+    }
+    output.push_str(&input[from..]);
+    output
+}
+
 /// A formula with a table column's new name where it named the old one:
 /// in every reference to the table `table`, and, when the formula stands
 /// inside that table (`inside`), in its references that give no table name.

@@ -4705,10 +4705,21 @@ impl<'a> WorkbookHost<'a> {
             // A column of formulas is judged by what they work out to.
             let data = CellRange { sheet, start_row: self.workbook.sheets[sheet].tables[index].start_row, end_row: row, start_column: end_col, end_column: end_col };
             self.settle(data);
-            // An empty cell is not a number: measured, a table given an empty
-            // row by `ListRows.Add` totals its last column with 103, a count.
-            let last_is_numbers = (self.workbook.sheets[sheet].tables[index].start_row + 1..row)
-                .all(|held| self.cell_here(sheet, held, end_col).is_some_and(|cell| matches!(cell.value, CellValue::Number(_))));
+            // Blank cells are passed over; what is left must be numbers, and
+            // there must be one: measured, a last column of 1 and a blank is
+            // 109, a sum, while one all blank, or holding a text or a
+            // logical beside its numbers, is 103, a count.
+            let values: Vec<bool> = (self.workbook.sheets[sheet].tables[index].start_row + 1..row)
+                .filter_map(|held| self.cell_here(sheet, held, end_col))
+                .filter(|cell| !matches!(cell.value, CellValue::Empty))
+                // A date is not a number here: measured, a last column of
+                // dates is totalled with 103.
+                .map(|cell| {
+                    matches!(cell.value, CellValue::Number(_))
+                        && !cell.style.number_format.as_deref().is_some_and(oxicells_calc::numfmt::looks_like_a_date)
+                })
+                .collect();
+            let last_is_numbers = !values.is_empty() && values.iter().all(|number| *number);
             {
                 let extra = self.table_extra.entry(id).or_default();
                 extra.totals = true;
@@ -4882,15 +4893,28 @@ impl<'a> WorkbookHost<'a> {
                     held.end_row = asked.end_row;
                     let width = (asked.end_column - asked.start_column + 1) as usize;
                     let mut columns = Vec::with_capacity(width);
+                    // A column with no heading is given one, written into
+                    // its heading cell: measured, Resize over an empty C1
+                    // names the column 列1 and C1 reads 列1.
+                    let mut headed: Vec<(u32, String)> = Vec::new();
                     for column in asked.start_column..=asked.end_column {
                         let shown = self
                             .cell_here(sheet, asked.start_row, column)
                             .map(|cell| shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref()))
                             .unwrap_or_default();
-                        columns.push(if shown.is_empty() { next_column_name(&columns) } else { shown });
+                        if shown.is_empty() {
+                            let fresh = next_column_name(&columns);
+                            headed.push((column, fresh.clone()));
+                            columns.push(fresh);
+                        } else {
+                            columns.push(shown);
+                        }
                     }
                     let auto_named: Vec<bool> = (asked.start_column..=asked.end_column)
                         .map(|column| {
+                            if headed.iter().any(|(at, _)| *at == column) {
+                                return true;
+                            }
                             let slot = column.checked_sub(whole.start_column).map(|slot| slot as usize);
                             slot.and_then(|slot| {
                                 self.table_extra
@@ -4901,6 +4925,9 @@ impl<'a> WorkbookHost<'a> {
                         })
                         .collect();
                     self.workbook.sheets[sheet].tables[index].columns = columns;
+                    for (column, heading) in headed {
+                        self.set_cell_value(CellAddress { sheet, row: asked.start_row, column }, CellValue::String(heading))?;
+                    }
                     if let Some(extra) = self.table_extra.get_mut(&id) {
                         extra.calculations.resize(width, 0);
                         extra.auto_named = auto_named;
@@ -5371,66 +5398,68 @@ impl<'a> WorkbookHost<'a> {
                 to_row
             )
         };
+        // Which rows and columns a specifier asks for: its `#` items say the
+        // rows (none is the data), its columns one or a span of them.
+        // Measured after `Unlist`: `=ROWS(T)` reads `=ROWS(Sheet1!$A$2:$C$4)`
+        // and `=T[[#Headers],[Qty]]` `=Sheet1!$B$1`.
         let replace = |inside: &str| -> Option<String> {
             let inside = inside.trim();
-            let (rows, column) = match inside.to_ascii_lowercase().as_str() {
-                "#all" => ((table.start_row, table.end_row), None),
-                "#data" | "" => ((first_data, last_data), None),
-                "#headers" => ((table.start_row, table.start_row + table.header_rows - 1), None),
-                "#totals" => ((table.end_row, table.end_row), None),
-                _ => ((first_data, last_data), Some(inside.trim_start_matches('[').trim_end_matches(']'))),
+            let items: Vec<&str> = if inside.contains('[') {
+                inside.split(['[', ']']).map(str::trim).filter(|item| !item.is_empty() && *item != "," && *item != ":").collect()
+            } else if inside.is_empty() {
+                Vec::new()
+            } else {
+                vec![inside]
             };
-            match column {
-                None => Some(block(table.start_col, table.end_col, rows.0, rows.1)),
-                Some(wanted) => {
-                    let at = table.columns.iter().position(|held| held.eq_ignore_ascii_case(wanted))?;
-                    let col = table.start_col + at as u32;
-                    Some(block(col, col, rows.0, rows.1))
-                }
+            if items.iter().any(|item| item.starts_with('@') || item.eq_ignore_ascii_case("#This Row")) {
+                return None;
             }
+            let specials: Vec<String> = items.iter().filter(|item| item.starts_with('#')).map(|item| item.to_ascii_lowercase()).collect();
+            let has = |one: &str| specials.iter().any(|held| held == one);
+            let headers = (table.start_row, table.start_row + table.header_rows.max(1) - 1);
+            let rows = if has("#all") || (has("#headers") && has("#totals")) {
+                (table.start_row, table.end_row)
+            } else if has("#headers") && has("#data") {
+                (headers.0, last_data)
+            } else if has("#data") && has("#totals") {
+                (first_data, table.end_row)
+            } else if has("#headers") {
+                headers
+            } else if has("#totals") {
+                (table.end_row, table.end_row)
+            } else {
+                (first_data, last_data)
+            };
+            let wanted: Vec<u32> = items
+                .iter()
+                .filter(|item| !item.starts_with('#'))
+                .map(|item| table.columns.iter().position(|held| same_table_name(held, item)).map(|at| table.start_col + at as u32))
+                .collect::<Option<Vec<_>>>()?;
+            let (from_col, to_col) = match wanted.as_slice() {
+                [] => (table.start_col, table.end_col),
+                [one] => (*one, *one),
+                [first, .., last] => ((*first).min(*last), (*first).max(*last)),
+            };
+            if (from_col, rows.0) == (to_col, rows.1) {
+                return Some(format!("{qualifier}!${}${}", oxicells_calc::reference::col_to_letters(from_col), rows.0));
+            }
+            Some(block(from_col, to_col, rows.0, rows.1))
         };
-        let prefix = format!("{}[", table.name);
+        let own = table.name.clone();
         for held in &mut self.workbook.sheets {
             for row in &mut held.rows {
                 for cell in &mut row.cells {
                     let Some(formula) = cell.formula.as_mut() else {
                         continue;
                     };
-                    let mut out = String::new();
-                    let mut rest = formula.as_str();
-                    let mut changed = false;
-                    while let Some(at) = rest.to_ascii_lowercase().find(&prefix.to_ascii_lowercase()) {
-                        let open = at + prefix.len();
-                        // The reference ends at the bracket that closes the one it opened.
-                        let mut depth = 1;
-                        let mut end = None;
-                        for (offset, ch) in rest[open..].char_indices() {
-                            match ch {
-                                '[' => depth += 1,
-                                ']' => {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        end = Some(open + offset);
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
+                    let rewritten = oxicells_calc::map_table_references(formula, &|name, asked| {
+                        if !same_table_name(&own, name) {
+                            return None;
                         }
-                        let Some(end) = end else { break };
-                        match replace(&rest[open..end]) {
-                            Some(plain) => {
-                                out.push_str(&rest[..at]);
-                                out.push_str(&plain);
-                                changed = true;
-                            }
-                            None => out.push_str(&rest[..=end]),
-                        }
-                        rest = &rest[end + 1..];
-                    }
-                    if changed {
-                        out.push_str(rest);
-                        *formula = out;
+                        replace(asked.unwrap_or(""))
+                    });
+                    if rewritten != *formula {
+                        *formula = rewritten;
                     }
                 }
             }
