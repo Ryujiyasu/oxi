@@ -251,21 +251,40 @@ pub fn number_to_text(n: f64) -> String {
         return ExcelError::Num.as_str().to_string();
     }
 
-    let abs = n.abs();
-    if !(1e-4..1e15).contains(&abs) {
-        return scientific_to_text(n);
+    // Fifteen significant figures, written out where that takes twenty
+    // characters or fewer and in exponent form where it would take more.
+    // Measured through ="" & x: 1E+19 is 10000000000000000000 and 1E+20
+    // 1E+20; 123456789012345678 is 123456789012345000; 0.000000001 and
+    // -0.00001234567890123 are written out, 1/3*1E-5 is 3.33333333333333E-06.
+    let formatted = format!("{:.14e}", n.abs());
+    let (mantissa, exponent) = formatted.split_once('e').unwrap_or((&formatted, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let digits: String = mantissa.replace('.', "");
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let written = if exponent >= 0 {
+        let whole_len = exponent as usize + 1;
+        if digits.len() <= whole_len {
+            format!("{digits}{}", "0".repeat(whole_len - digits.len()))
+        } else {
+            format!("{}.{}", &digits[..whole_len], &digits[whole_len..])
+        }
+    } else {
+        format!("0.{}{digits}", "0".repeat((-exponent - 1) as usize))
+    };
+    let sign = if n < 0.0 { "-" } else { "" };
+    if written.len() <= 20 {
+        return format!("{sign}{written}");
     }
-
-    let exponent = abs.log10().floor() as i32;
-    let decimals = (15 - 1 - exponent).clamp(0, 17) as usize;
-    let rendered = format!("{:.*}", decimals, n);
-    trim_trailing_zeros(&rendered)
+    scientific_to_text(n)
 }
 
 fn scientific_to_text(n: f64) -> String {
     // Fifteen significant digits, as everywhere else: measured,
-    // TIMEVALUE("0:0:0.5")&"" is 5.78703703703704E-06.
-    let formatted = format!("{:.14E}", n);
+    // TIMEVALUE("0:0:0.5")&"" is 5.78703703703704E-06 -- fourteen where
+    // the exponent reaches 99: 1/3*1E100 is 3.3333333333333E+99.
+    let exponent = n.abs().log10().floor() as i32;
+    let formatted = if exponent.abs() >= 99 { format!("{:.13E}", n) } else { format!("{:.14E}", n) };
     let (mantissa, exponent) = match formatted.split_once('E') {
         Some(parts) => parts,
         None => return formatted,

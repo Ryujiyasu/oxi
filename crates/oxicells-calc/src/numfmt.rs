@@ -509,6 +509,22 @@ fn general(value: f64) -> String {
     let magnitude = value.abs();
     let sign = if value < 0.0 { "-" } else { "" };
     let whole_digits = if magnitude < 1.0 { 1 } else { magnitude.log10().floor() as i32 + 1 };
+    // A fraction written out must show as many figures as the exponent form
+    // would, or the exponent form is used: measured, 9.31322574615479E-10
+    // is 9.31323E-10 (not 0.000000001) and -1.234567890123E-05 is
+    // -1.23457E-05 (not -0.000012346), while 0.0000123 and -0.00001 stay.
+    if magnitude < 1.0 {
+        let leading_zeros = -(magnitude.log10().floor() as i32) - 1;
+        let shown = 9 - leading_zeros;
+        let needed = format!("{magnitude:.14e}")
+            .split('e')
+            .next()
+            .map_or(15, |mantissa| mantissa.replace('.', "").trim_end_matches('0').len() as i32)
+            .min(6);
+        if shown < needed {
+            return exponent_general(sign, magnitude);
+        }
+    }
     if whole_digits <= 11 {
         let decimals = (11 - whole_digits - 1).max(0);
         let rounded = round_half_away(magnitude, decimals);
@@ -523,8 +539,16 @@ fn general(value: f64) -> String {
             return format!("{sign}{written}");
         }
     }
+    exponent_general(sign, magnitude)
+}
+
+/// General's exponent form: five decimals at most, trailing zeros off.
+fn exponent_general(sign: &str, magnitude: f64) -> String {
     let exponent = magnitude.log10().floor() as i32;
-    let mut mantissa = round_half_away(magnitude / 10f64.powi(exponent), 5);
+    // One decimal fewer where the exponent reaches 99: measured,
+    // TEXT(1/3*1E100,"General") is 3.3333E+99 and 1/3*1E-100 3.3333E-101.
+    let places = if exponent.abs() >= 99 { 4 } else { 5 };
+    let mut mantissa = round_half_away(magnitude / 10f64.powi(exponent), places);
     let mut exponent = exponent;
     if mantissa >= 10.0 {
         mantissa /= 10.0;
