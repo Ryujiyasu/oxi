@@ -6552,9 +6552,14 @@ fn call_builtin(
             "ccur" | "cdec" if matches!(value, Value::Null) => Err(invalid_null(line)),
             // Text is rounded as the decimal it spells: measured,
             // `CCur("0.00005")` is 0 where `CCur(0.00005)` is 0.0001.
-            "ccur" if matches!(value, Value::String(_)) && matches!(value, Value::String(text) if crate::decimal::Dec::parse(text).is_some()) => {
-                let Value::String(written) = value else { unreachable!() };
-                let held = crate::decimal::Dec::parse(written).expect("just parsed").round(4);
+            // So is a Decimal, half to the even neighbour: measured,
+            // CCur(CDec("123456789012345.67895")) is ...45.679.
+            "ccur" if matches!(value, Value::Decimal(_)) || matches!(value, Value::String(text) if crate::decimal::Dec::parse(text).is_some()) => {
+                let held = match value {
+                    Value::Decimal(held) => held.round(4),
+                    Value::String(written) => crate::decimal::Dec::parse(written).expect("just parsed").round(4),
+                    _ => unreachable!(),
+                };
                 // Counted exactly, sign and all: measured,
                 // CCur("-922337203685477.5808") is the least Currency.
                 let overflow = || error(RuntimeErrorKind::Overflow, "overflow converting value to Currency", line);
@@ -6633,9 +6638,13 @@ fn call_builtin(
                 if let Value::LongLong(held) = value {
                     return Ok(Value::LongLong(*held));
                 }
-                // So is a Decimal, rounded as a Decimal rounds: measured,
-                // CLngLng(CDec("9223372036854775807")) is the largest.
-                if let Value::Decimal(held) = value {
+                // So is a whole Decimal; one with a fraction goes through a
+                // Double: measured, CLngLng(CDec("9223372036854775807")) is
+                // the largest, CLngLng(CDec("9007199254740993.4")) ...994.
+                if let Some(held) = match value {
+                    Value::Decimal(held) if held.magnitude % 10u128.pow(u32::from(held.scale)) == 0 => Some(held),
+                    _ => None,
+                } {
                     let whole = held.round(0);
                     let magnitude = i128::try_from(whole.magnitude).ok();
                     let signed = magnitude.map(|m| if whole.negative { -m } else { m });
@@ -7439,7 +7448,7 @@ fn call_text_conversion_builtin(
             // A number is written as its own type writes it: measured,
             // Str(CSng(0.3)) is " .3", where the Double under it has more.
             let rendered = match &args[0] {
-                Value::Single(_) | Value::Currency(_) | Value::Decimal(_) | Value::Int16(_) | Value::Integer(_) | Value::Byte(_) => {
+                Value::Single(_) | Value::Currency(_) | Value::Decimal(_) | Value::Int16(_) | Value::Integer(_) | Value::Byte(_) | Value::LongLong(_) => {
                     text(&args[0]).map_err(mismatch)?
                 }
                 _ => text(&numeric_literal(value)).map_err(mismatch)?,
