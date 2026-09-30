@@ -2547,6 +2547,46 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// The bare call a `VBA.`-qualified one stands for, when `VBA` is not a
+    /// variable of the program's own.
+    fn vba_qualified(&self, expr: &Expr, frame: &Frame) -> Option<Expr> {
+        const MODULES: [&str; 9] = [
+            "strings", "math", "conversion", "datetime", "interaction", "information", "financial", "filesystem", "globals",
+        ];
+        let is_library = |object: &Expr| -> bool {
+            let root = match object {
+                Expr::Ident(name, _) => Some(name),
+                Expr::Member { object, name, .. }
+                    if MODULES.iter().any(|module| name.eq_ignore_ascii_case(module)) =>
+                {
+                    match &**object {
+                        Expr::Ident(root, _) => Some(root),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            root.is_some_and(|root| root.eq_ignore_ascii_case("vba") && self.lookup_slot(frame, root).is_none())
+        };
+        let bare = |name: &str, suffix: Option<char>, span: crate::Span| match suffix {
+            Some(suffix) => Expr::TypedIdent { name: name.to_string(), suffix, span },
+            None => Expr::Ident(name.to_string(), span),
+        };
+        match expr {
+            Expr::Member { object, name, suffix, span } if is_library(object) => Some(bare(name, *suffix, *span)),
+            Expr::Index { target, args, force_by_value, span } => match &**target {
+                Expr::Member { object, name, suffix, span: at } if is_library(object) => Some(Expr::Index {
+                    target: Box::new(bare(name, *suffix, *at)),
+                    args: args.clone(),
+                    force_by_value: *force_by_value,
+                    span: *span,
+                }),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The module's `Type` declarations, by name. Returned owned because the
     /// caller goes on to use `&mut self` while building the fields.
     fn find_type(&self, name: &str) -> Option<TypeDef> {
@@ -3546,6 +3586,30 @@ impl<'a> Runtime<'a> {
     }
 
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        // A call made through the VBA library -- `VBA.Left(s, 1)`,
+        // `VBA.Strings.Left$(s, 1)`, `VBA.Now` -- is the same function called
+        // bare, except that VBA.Array always counts from 0: measured, under
+        // Option Base 1 it runs 0 To 1 where Array(7, 8) runs 1 To 2.
+        if let Some(bare) = self.vba_qualified(expr, frame) {
+            if let Expr::Index { target, args, .. } = &bare {
+                if matches!(&**target, Expr::Ident(name, _) if name.eq_ignore_ascii_case("array")) {
+                    let mut values = Vec::with_capacity(args.len());
+                    for argument in args {
+                        values.push(match &argument.value {
+                            Some(value) => self.eval_expr(value, frame)?,
+                            None => Value::Missing,
+                        });
+                    }
+                    return Ok(Value::Array(ArrayValue {
+                        dimensions: vec![ArrayDimension { lower_bound: 0, length: values.len() }],
+                        values,
+                        element_default: Box::new(Value::Empty),
+                        resizable: true,
+                    }));
+                }
+            }
+            return self.eval_expr(&bare, frame);
+        }
         if is_place_expression(expr) && self.record_rooted(frame, expr) {
             if let Some(field) =
                 self.with_record_place(expr, frame, expr.span().line, |place| place.clone())?
@@ -3922,9 +3986,11 @@ impl<'a> Runtime<'a> {
                                         Some(span.line),
                                     )
                                 }),
+                            // A plain value given subscripts is 13: measured,
+                            // j(1)(9) where j(1) holds 3.
                             _ => Err(error(
-                                RuntimeErrorKind::Unsupported,
-                                "call target is not executable yet",
+                                RuntimeErrorKind::TypeMismatch,
+                                "subscripts on a value that is not an array",
                                 Some(span.line),
                             )),
                         }
@@ -4294,6 +4360,16 @@ impl<'a> Runtime<'a> {
         } else {
             None
         };
+        // Array counts from the module's Option Base: measured, under Option
+        // Base 1 Array(10, 20, 30) runs 1 To 3 and Array() 1 To 0.
+        if name.eq_ignore_ascii_case("array") {
+            return Ok(Value::Array(ArrayValue {
+                dimensions: vec![ArrayDimension { lower_bound: self.option_base(), length: args.len() }],
+                values: args,
+                element_default: Box::new(Value::Empty),
+                resizable: true,
+            }));
+        }
         // A record's length is its layout's: Len the packed size a Put would
         // write, LenB the size it takes in memory with each field aligned.
         if let ([Value::Record(record)], true) = (args.as_slice(), matches!(name.to_ascii_lowercase().as_str(), "len" | "lenb")) {
@@ -18808,3 +18884,4 @@ fn longlong_exact(lhs: &Value, rhs: &Value) -> Option<(i64, i64)> {
     }
     Some((whole(lhs)?, whole(rhs)?))
 }
+
