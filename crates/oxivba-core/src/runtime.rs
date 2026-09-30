@@ -7347,7 +7347,14 @@ fn call_text_conversion_builtin(
                     line,
                 ));
             }
-            let rendered = text(&numeric_literal(value)).map_err(mismatch)?;
+            // A number is written as its own type writes it: measured,
+            // Str(CSng(0.3)) is " .3", where the Double under it has more.
+            let rendered = match &args[0] {
+                Value::Single(_) | Value::Currency(_) | Value::Decimal(_) | Value::Int16(_) | Value::Integer(_) | Value::Byte(_) => {
+                    text(&args[0]).map_err(mismatch)?
+                }
+                _ => text(&numeric_literal(value)).map_err(mismatch)?,
+            };
             // Str writes a fraction without its nought: measured,
             // `Str(0.1 + 0.2)` is " .3".
             let rendered = match rendered.strip_prefix("0.") {
