@@ -6588,6 +6588,17 @@ fn call_builtin(
                 if let Value::LongLong(held) = value {
                     return Ok(Value::LongLong(*held));
                 }
+                // So is a Decimal, rounded as a Decimal rounds: measured,
+                // CLngLng(CDec("9223372036854775807")) is the largest.
+                if let Value::Decimal(held) = value {
+                    let whole = held.round(0);
+                    let magnitude = i128::try_from(whole.magnitude).ok();
+                    let signed = magnitude.map(|m| if whole.negative { -m } else { m });
+                    return signed
+                        .and_then(|n| i64::try_from(n).ok())
+                        .map(Value::LongLong)
+                        .ok_or_else(|| error(RuntimeErrorKind::Overflow, format!("overflow converting value with {name}"), line));
+                }
                 let value = number(value).map_err(mismatch)?.round_ties_even();
                 if !value.is_finite()
                     || value < i64::MIN as f64
