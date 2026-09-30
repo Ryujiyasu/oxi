@@ -6526,6 +6526,12 @@ fn call_builtin(
                 let units = if held.negative { -units } else { units };
                 Ok(Value::Currency(i64::try_from(units).map_err(|_| overflow())?))
             }
+            // A LongLong is multiplied into units and wraps: measured,
+            // CCur of the largest LongLong less one is -2.
+            "ccur" if matches!(value, Value::LongLong(_)) => match value {
+                Value::LongLong(n) => Ok(Value::Currency(n.wrapping_mul(10_000))),
+                _ => unreachable!(),
+            },
             "ccur" => {
                 let value = number(value).map_err(mismatch)?;
                 const LIMIT: f64 = 922_337_203_685_477.6;
@@ -10853,6 +10859,11 @@ fn literal_value(literal: &Literal) -> Value {
             _ => Value::Double(*value),
         },
         Literal::LargeInteger { digits, suffix: '@' } => Value::Currency(digits.parse().unwrap_or(i64::MAX)),
+        // A `^` literal is a LongLong, however large.
+        Literal::LargeInteger { digits, suffix: '^' } => digits
+            .parse::<i64>()
+            .map(Value::LongLong)
+            .unwrap_or_else(|_| Value::Double(digits.parse().unwrap_or(f64::INFINITY))),
         Literal::LargeInteger { digits, .. } => digits
             .parse::<i64>()
             .map(Value::Integer)
@@ -18299,6 +18310,10 @@ fn currency_exact(lhs: &Value, rhs: &Value) -> Option<(i128, i128)> {
             Value::Integer(n) => Some(i128::from(*n) * 10_000),
             Value::Byte(n) => Some(i128::from(*n) * 10_000),
             Value::Boolean(state) => Some(if *state { -10_000 } else { 0 }),
+            // A LongLong becomes Currency by a wrapping multiply: measured,
+            // the largest LongLong + CCur(0) is -1 and the largest less one
+            // CCur'd is -2.
+            Value::LongLong(n) => Some(i128::from(n.wrapping_mul(10_000))),
             _ => None,
         }
     };
