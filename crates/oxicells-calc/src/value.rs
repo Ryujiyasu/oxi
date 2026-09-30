@@ -263,7 +263,9 @@ pub fn number_to_text(n: f64) -> String {
 }
 
 fn scientific_to_text(n: f64) -> String {
-    let formatted = format!("{:E}", n);
+    // Fifteen significant digits, as everywhere else: measured,
+    // TIMEVALUE("0:0:0.5")&"" is 5.78703703703704E-06.
+    let formatted = format!("{:.14E}", n);
     let (mantissa, exponent) = match formatted.split_once('E') {
         Some(parts) => parts,
         None => return formatted,

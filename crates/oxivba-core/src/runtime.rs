@@ -9335,8 +9335,12 @@ fn parse_time_text(source: &str) -> Result<f64, String> {
     // TimeValue writes its argument out and reads the writing, and `"0.5"` is
     // a time.
     let separator = if clock.contains(':') { ':' } else { '.' };
+    // One colon then one dot is hours, minutes and seconds: measured,
+    // CDate("10:30.5") is 10:30:05 and "1:2.5" 1:02:05, while "1:2:3.45" is
+    // no time.
+    let mixed = clock.matches(':').count() == 1 && clock.matches('.').count() == 1;
     let values = clock
-        .split(separator)
+        .split(|c: char| c == separator || (mixed && c == '.'))
         .map(|part| {
             part.parse::<u32>()
                 .map_err(|_| format!("invalid Time component: {part}"))

@@ -3457,9 +3457,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 // With a date in front the time is what is left of the
                 // whole once the day is taken off, rounding and all:
                 // measured, "2024/3/5 25:00" is 0.0416666666642413.
-                Some(serial) if serial >= 1.0 && s.split_whitespace().next().is_some_and(|first| !first.contains(':')) => {
-                    Ok(Value::Number(serial - serial.floor()))
-                }
+                // So is a time past a day: measured, "25:00:00.5" is
+                // 0.0416724537037036.
+                Some(serial) if serial >= 1.0 => Ok(Value::Number(serial - serial.floor())),
                 Some(serial) => Ok(Value::Number((serial * 86_400.0).rem_euclid(86_400.0) / 86_400.0)),
                 None => Err(ExcelError::Value),
             }
@@ -6939,7 +6939,9 @@ mod tests {
             ("1:00", 1.0 / 24.0),
             ("1:00 PM", 13.0 / 24.0),
             ("2024/1/1 6:00", 0.25),
-            ("25:00", 1.0 / 24.0),
+            // What is left of 25 hours once the day is taken off, rounding
+            // and all: measured, (TIMEVALUE("25:00")*24-1)*1E15 is 1.776.
+            ("25:00", 25.0 / 24.0 - 1.0),
             ("12:00 AM", 0.0),
             ("2024/1/1", 0.0),
             ("1:60", 2.0 / 24.0),

@@ -237,6 +237,20 @@ pub fn text_as_datetime(text: &str) -> Option<f64> {
 
 /// `12:30`, `12:30:45`, `1:00` with an afternoon flag beside it.
 fn clock(text: &str, afternoon: Option<bool>) -> Option<f64> {
+    // Two parts with a fraction are minutes and seconds: measured,
+    // TIMEVALUE("10:30.5") is 630.5 seconds and "59:59.9" just short of an hour.
+    if afternoon.is_none() {
+        if let Some((minutes, seconds)) = text.split_once(':') {
+            if !seconds.contains(':') && seconds.contains('.') {
+                let minutes: f64 = minutes.trim().parse().ok()?;
+                let seconds: f64 = seconds.trim().parse().ok()?;
+                if minutes.fract() != 0.0 || !(0.0..60.0).contains(&seconds) {
+                    return None;
+                }
+                return Some((minutes * 60.0 + seconds) / 86_400.0);
+            }
+        }
+    }
     let mut parts = text.split(':');
     let hours: f64 = parts.next()?.trim().parse().ok()?;
     let minutes: f64 = parts.next()?.trim().parse().ok()?;
