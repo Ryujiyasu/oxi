@@ -10882,13 +10882,14 @@ fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> R
             }
             return Ok(Value::Single(narrowed));
         }
+        // Rounded as CCur rounds, on the exact product: measured,
+        // `c = 0.12345` is 0.1235.
         "currency" => {
             let number = coerce_number(&value, declared, line)?;
-            let scaled = (number * 10_000.0).round_ties_even();
-            if !scaled.is_finite() || scaled.abs() > 9_223_372_036_854_775_000.0 {
+            if !number.is_finite() || number.abs() > 922_337_203_685_477.6 {
                 return Err(overflow(declared, line));
             }
-            return Ok(Value::Currency(scaled as i64));
+            return Ok(Value::Currency(currency_units(number)));
         }
         // A Date variable reads text the way CDate does: measured,
         // `dt = "2024/3/4"` is March 4th, and `dt = "abc"` is 13.
@@ -11595,6 +11596,15 @@ fn binary(
                 // A Single beside a Double is compared as Singles: measured,
                 // with s As Single = 0.1, `s = 0.1` is True and `s < 0.1`
                 // False.
+                // A Currency beside a Double is compared as Currencies:
+                // measured, c = 0.1235 against 0.12345 is equal, and
+                // c = 0.3333 against 1 / 3.
+                (Value::Currency(a), Value::Double(b)) if b.abs() <= 922_337_203_685_477.0 => {
+                    Some(a.cmp(&currency_units(*b)))
+                }
+                (Value::Double(a), Value::Currency(b)) if a.abs() <= 922_337_203_685_477.0 => {
+                    Some(currency_units(*a).cmp(b))
+                }
                 (Value::Single(a), Value::Double(b)) => a.partial_cmp(&(*b as f32)),
                 (Value::Double(a), Value::Single(b)) => (*a as f32).partial_cmp(b),
                 // So beside a Currency or a number written as text, while a
