@@ -405,8 +405,33 @@ static FONT_BOLD_ROW_PX: &[(&str, u16, u16, u16)] = &[
 
 /// The measured default row height for a font, in 96-dpi pixels.
 pub fn font_default_row_px(face: &str, size: f32) -> Option<u16> {
-    found(face, size).map(|(_, _, px, _)| *px)
+    found(face, size).map(|(_, _, px, _)| *px).or_else(|| {
+        // Past the sizes the full table was measured at, the row alone:
+        // the height depends on the em's whole pixels and nothing else.
+        (face == "游ゴシック").then(|| {
+            let em = em_pixels(size);
+            YU_GOTHIC_ROW_PX_BY_EM.iter().find(|(held, _)| *held == em).map(|(_, px)| *px)
+        })?
+    })
 }
+
+/// The row 游ゴシック asks for, in pixels, by its em in whole pixels at
+/// 96 dpi. Measured in Excel's VBA by autofitting a row holding one cell at
+/// every half point from 1 to 72: sizes landing on the same em ask the same
+/// row (17 and 17.5 points both 37 pixels), and below an em of 16 the
+/// sheet's own 25-pixel row is all that shows.
+const YU_GOTHIC_ROW_PX_BY_EM: &[(i32, u16)] = &[
+    (16, 26), (17, 27), (18, 30), (19, 32), (20, 33), (21, 34), (22, 36), (23, 37), (24, 40),
+    (25, 42), (26, 43), (27, 44), (28, 45), (29, 47), (30, 48), (31, 51), (32, 53), (33, 54),
+    (34, 55), (35, 57), (36, 58), (37, 59), (38, 60), (39, 62), (40, 65), (41, 66), (42, 68),
+    (43, 69), (44, 70), (45, 72), (46, 73), (47, 76), (48, 78), (49, 79), (50, 80), (51, 81),
+    (52, 83), (53, 86), (54, 87), (55, 89), (56, 90), (57, 91), (58, 93), (59, 96), (60, 97),
+    (61, 98), (62, 100), (63, 101), (64, 102), (65, 104), (66, 107), (67, 108), (68, 110),
+    (69, 111), (70, 112), (71, 113), (72, 117), (73, 118), (74, 119), (75, 121), (76, 122),
+    (77, 123), (78, 127), (79, 128), (80, 129), (81, 130), (82, 132), (83, 133), (84, 134),
+    (85, 138), (86, 139), (87, 140), (88, 142), (89, 143), (90, 144), (91, 148), (92, 149),
+    (93, 150), (94, 151), (95, 153), (96, 154),
+];
 
 /// The box a line of this font stands in, and how far down it the baseline
 /// sits.

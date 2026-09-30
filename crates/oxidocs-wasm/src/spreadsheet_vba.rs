@@ -20755,7 +20755,39 @@ fn general_plain(magnitude: f64, decimals: usize) -> String {
 /// A number in exponent form with up to `decimals` in the mantissa, trailing
 /// zeros dropped: 1.23E+08, 1E+11, 1.234E-07.
 fn general_exponent(magnitude: f64, decimals: usize) -> String {
-    let text = format!("{magnitude:.decimals$e}");
+    // The number is first taken to fifteen figures, and that decimal rounded
+    // half away from zero: measured, 2.5E-12 in a narrow column reads 3E-12,
+    // where the double under it sits a hair below the half.
+    let fifteen = format!("{magnitude:.14e}");
+    let (figures, power) = fifteen.split_once('e').unwrap_or((&fifteen, "0"));
+    let mut digits: Vec<u8> = figures.bytes().filter(u8::is_ascii_digit).map(|d| d - b'0').collect();
+    let mut power: i32 = power.parse().unwrap_or(0);
+    let keep = (decimals + 1).min(digits.len());
+    let up = digits.get(keep).is_some_and(|next| *next >= 5);
+    digits.truncate(keep);
+    if up {
+        let mut at = keep;
+        loop {
+            if at == 0 {
+                digits.insert(0, 1);
+                digits.truncate(keep);
+                power += 1;
+                break;
+            }
+            at -= 1;
+            if digits[at] == 9 {
+                digits[at] = 0;
+            } else {
+                digits[at] += 1;
+                break;
+            }
+        }
+    }
+    let mut text: String = digits.iter().map(|d| char::from(b'0' + d)).collect();
+    if text.len() > 1 {
+        text.insert(1, '.');
+    }
+    let text = format!("{text}e{power}");
     let (mantissa, power) = text.split_once('e').unwrap_or((&text, "0"));
     let mantissa = if mantissa.contains('.') {
         mantissa.trim_end_matches('0').trim_end_matches('.')
