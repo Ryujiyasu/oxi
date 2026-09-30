@@ -10856,6 +10856,7 @@ fn literal_value(literal: &Literal) -> Value {
             '&' => Value::Integer(*value as i64),
             '!' => Value::Single(*value as f32),
             '@' => Value::Currency((*value * 10_000.0).round_ties_even() as i64),
+            '^' => Value::LongLong(*value as i64),
             _ => Value::Double(*value),
         },
         Literal::LargeInteger { digits, suffix: '@' } => Value::Currency(digits.parse().unwrap_or(i64::MAX)),

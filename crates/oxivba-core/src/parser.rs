@@ -2595,6 +2595,12 @@ impl<'a> Parser<'a> {
                         suffix,
                     },
                     Some(suffix) => Literal::TypedNumber { value: n, suffix },
+                    // A number written with an exponent is a Double, and a
+                    // hex or octal one past four hex digits' worth a Long:
+                    // measured, TypeName(1E+3) and (1D+3) are Double and
+                    // TypeName(&HFFFFFFFF) is Long though it is -1.
+                    None if literal_is_double(source) => Literal::TypedNumber { value: n, suffix: '#' },
+                    None if radix_literal_is_long(source) => Literal::TypedNumber { value: n, suffix: '&' },
                     None => Literal::Number(n),
                 };
                 Some(Expr::Literal(literal, span))
@@ -3992,4 +3998,23 @@ fn exact_currency_units(source: &str) -> Option<String> {
     }
     let units = whole.parse::<i128>().ok()? * 10_000 + format!("{fraction:0<4}").parse::<i128>().ok()?;
     i64::try_from(units).ok().map(|units| units.to_string())
+}
+
+/// Whether a decimal literal carries an exponent (`1E+3`, `2D-1`).
+fn literal_is_double(source: &str) -> bool {
+    !source.starts_with('&') && source.bytes().any(|b| matches!(b, b'e' | b'E' | b'd' | b'D'))
+}
+
+/// Whether an `&H`/`&O` literal spells more than 0xFFFF, which makes it a
+/// Long whatever it comes to.
+fn radix_literal_is_long(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    let (digits, radix) = if let Some(rest) = lower.strip_prefix("&h") {
+        (rest, 16)
+    } else if let Some(rest) = lower.strip_prefix("&o") {
+        (rest, 8)
+    } else {
+        return false;
+    };
+    u64::from_str_radix(digits, radix).is_ok_and(|value| value > 0xFFFF)
 }
