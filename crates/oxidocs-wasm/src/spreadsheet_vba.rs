@@ -24833,24 +24833,38 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
                     let serial = excel_serial(*year, *month as u32, 1)?;
                     Some((serial, "mmm-yy"))
                 }
-                [(month, _), (day, _)] => {
-                    let serial = excel_serial(this_year, *month as u32, *day as u32)?;
-                    Some((serial, "m\"月\"d\"日\""))
-                }
+                // A day of this year where the second number can be one,
+                // else the month of a two-digit year: measured, `12/31` is
+                // this year's, `1/32` January 1932, `2/29` (2026) February
+                // 2029, `1/0` January 2000, and `1/100` stays text.
+                [(month, _), (day, digits)] => match excel_serial(this_year, *month as u32, *day as u32) {
+                    Some(serial) => Some((serial, "m\"月\"d\"日\"")),
+                    None if *digits <= 2 => {
+                        let serial = excel_serial(widened_year(*day, *digits), *month as u32, 1)?;
+                        Some((serial, "mmm-yy"))
+                    }
+                    None => None,
+                },
                 _ => None,
             };
         }
-        // `5-Jan`, `5-Jan-24`, `Feb-30`.
-        if separator == '-' {
+        // `5-Jan`, `5-Jan-24`, `Feb-30`, `Mar/24`.
+        if separator == '-' || separator == '/' {
             return match parts.as_slice() {
                 [first, second] => {
-                    // Day and month, or month and year.
+                    // Day and month, or month and day, or month and year.
                     if let (Some(day), Some(month)) = (digits_only(first), month_named(second)) {
                         let serial = excel_serial(this_year, month, day as u32)?;
                         return Some((serial, "d-mmm"));
                     }
+                    // Measured: `Mar-24` is the 24th of March this year, and
+                    // `Mar-32` March 1932.
                     let month = month_named(first)?;
-                    let year = widened_year(digits_only(second)?, second.len());
+                    let number = digits_only(second)?;
+                    if let Some(serial) = excel_serial(this_year, month, number as u32) {
+                        return Some((serial, "d-mmm"));
+                    }
+                    let year = widened_year(number, second.len());
                     let serial = excel_serial(year, month, 1)?;
                     Some((serial, "mmm-yy"))
                 }
