@@ -5338,8 +5338,11 @@ impl<'a> WorkbookHost<'a> {
                 }
                 if name.eq_ignore_ascii_case("totalscalculation") {
                     let calculation = sort_number(&value, "ListColumn.TotalsCalculation")?;
-                    if !(0..=8).contains(&calculation) {
-                        return Err("that is not a totals calculation".to_string());
+                    // 9 is xlTotalsCalculationCustom; past it is error 5:
+                    // measured, TotalsCalculation = 10 is 5, and 9 leaves the
+                    // formula =0 in the totals cell.
+                    if !(0..=9).contains(&calculation) {
+                        return Err(host_error(5, "that is not a totals calculation"));
                     }
                     if self.totals_rows(id) == 0 {
                         return Err("the table shows no totals row".to_string());
@@ -5362,6 +5365,7 @@ impl<'a> WorkbookHost<'a> {
                             at,
                             format!("SUBTOTAL({function},{table_name}[{column_name}])"),
                         )?,
+                        None if calculation == 9 => self.set_cell_formula(at, "0".to_string())?,
                         None => self.set_cell_value(at, CellValue::Empty)?,
                     }
                     return Ok(true);
@@ -11679,6 +11683,18 @@ impl<'a> WorkbookHost<'a> {
         Value::String(seen.unwrap_or_default())
     }
 
+    /// Whether a table's style sets the cell's row in bold: its header and
+    /// totals rows do. Measured, SUBTOTAL(101,..) of 10/3 in a totals row
+    /// reads 3.33333 where the same number in a plain cell reads 3.333333.
+    fn table_row_is_bold(&self, address: CellAddress) -> bool {
+        self.workbook.sheets[address.sheet].tables.iter().any(|table| {
+            table.style.is_some()
+                && (table.start_col..=table.end_col).contains(&address.column)
+                && ((table.header_rows > 0 && address.row == table.start_row)
+                    || (table.totals_rows > 0 && address.row == table.end_row))
+        })
+    }
+
     /// A cell's text as its column shows it. Measured against Excel over
     /// twenty numbers and eleven widths: the room is the column's pixels less
     /// five; General gives up decimals, then turns to an exponent, then to
@@ -11697,7 +11713,7 @@ impl<'a> WorkbookHost<'a> {
         let (normal_face, normal_size) = self.normal_font();
         let face = cell.style.font_name.clone().unwrap_or(normal_face);
         let size = cell.style.font_size.unwrap_or(normal_size);
-        let bold = cell.style.bold;
+        let bold = cell.style.bold || self.table_row_is_bold(address);
         // Bold wants two pixels more than its glyphs: measured, bold 1234
         // (36 px) shows in 38 pixels of room and not in 37, and bold
         // ¥281,292 (67 px) in 69 and not in 68.
