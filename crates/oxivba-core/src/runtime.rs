@@ -7876,6 +7876,15 @@ fn format_value(
         let seven: f64 = format!("{single:.6e}").parse().unwrap_or(f64::from(*single));
         return format_value(&Value::Double(seven), pattern, first_day, first_week, this_year);
     }
+    // Pictures that scale or take an exponent work on the Double.
+    let scales = pattern.contains(['%', 'e', 'E']) || pattern.contains(",.") || pattern.trim_end_matches(['"', ';']).ends_with(',');
+    if matches!(value, Value::Decimal(_) | Value::Currency(_)) && !value_is_zero(value) && !scales {
+        let figures = text(value)?.trim_start_matches('-').to_string();
+        EXACT_FIGURES.with(|held| *held.borrow_mut() = Some(figures));
+        let written = format_value(&Value::Double(number(value)?), pattern, first_day, first_week, this_year);
+        EXACT_FIGURES.with(|held| *held.borrow_mut() = None);
+        return written;
+    }
     // A picture of nothing but `<`, `>` and `!` is a text picture too, and a
     // number is written out for it: measured, `Format(True, ">")` is TRUE
     // and `Format(1E+15, "<")` 1e+15.
@@ -8335,15 +8344,48 @@ fn clock(parts: DateParts, seconds: bool) -> String {
 /// "0.00")` is 1.01 though the double sits below 1.005, `FormatNumber(0.5,
 /// 0)` is 1 and `FormatNumber(2.5, 0)` 3, and a number past fifteen digits
 /// is padded with noughts -- `123,456,789,012,346,000`.
+thread_local! {
+    /// The exact figures of a Decimal or Currency being written by a
+    /// picture, which a Double cannot carry.
+    static EXACT_FIGURES: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The significant digits of plain decimal text, and the power of ten of
+/// the first: "0.0333" is [3,3,3] at -2, "922337203685477.5807" 15 digits
+/// at 14.
+fn exact_figures(text: &str) -> Option<(Vec<u8>, i64)> {
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    let joined: Vec<u8> = whole.bytes().chain(fraction.bytes()).map(|b| b.wrapping_sub(b'0')).collect();
+    if joined.iter().any(|d| *d > 9) {
+        return None;
+    }
+    let first = joined.iter().position(|d| *d != 0)?;
+    let exponent = whole.len() as i64 - 1 - first as i64;
+    let mut digits = joined[first..].to_vec();
+    while digits.len() > 1 && digits.last() == Some(&0) {
+        digits.pop();
+    }
+    Some((digits, exponent))
+}
+
 fn decimal_fixed(value: f64, places: usize) -> String {
     let magnitude = value.abs();
     if magnitude == 0.0 || !magnitude.is_finite() {
         return format!("{:.*}", places, 0.0);
     }
-    let written = format!("{magnitude:.14e}");
-    let (mantissa, exponent) = written.split_once('e').unwrap_or((&written, "0"));
-    let exponent: i64 = exponent.parse().unwrap_or(0);
-    let mut digits: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).map(|b| b - b'0').collect();
+    // A Decimal or a Currency is written from its own figures: measured,
+    // Format(CDec(1) / 3, "0.0000000000000000") is 0.3333333333333333 and
+    // the largest Currency under "0.0000" 922337203685477.5807.
+    let exact = EXACT_FIGURES.with(|held| held.borrow().as_deref().and_then(exact_figures));
+    let (mut digits, exponent) = match exact {
+        Some(figures) => figures,
+        None => {
+            let written = format!("{magnitude:.14e}");
+            let (mantissa, exponent) = written.split_once('e').unwrap_or((&written, "0"));
+            let exponent: i64 = exponent.parse().unwrap_or(0);
+            (mantissa.bytes().filter(u8::is_ascii_digit).map(|b| b - b'0').collect(), exponent)
+        }
+    };
     // Digits before the point.
     let mut point = exponent + 1;
     let keep = point + places as i64;
@@ -11341,6 +11383,15 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
         UnaryOp::Neg if matches!(value, Value::Byte(_)) => {
             Ok(keep_rank(-number(&value)?, &Value::Int16(0))?)
         }
+        // A Currency is negated in its own units: measured, -c of the
+        // largest is -922337203685477.5807.
+        UnaryOp::Neg if matches!(value, Value::Currency(_)) => match value {
+            Value::Currency(units) => units
+                .checked_neg()
+                .map(Value::Currency)
+                .ok_or_else(|| "overflow negating Currency".to_string()),
+            _ => unreachable!(),
+        },
         UnaryOp::Neg => Ok(keep_rank(-number(&value)?, &value)?),
         UnaryOp::Not => match value {
             Value::Boolean(value) => Ok(Value::Boolean(!value)),
@@ -18137,3 +18188,10 @@ fn currency_text(units: i64) -> String {
 }
 
 
+
+fn value_is_zero(value: &Value) -> bool {
+    match value {
+        Value::Currency(units) => *units == 0,
+        other => number(other).is_ok_and(|n| n == 0.0),
+    }
+}
