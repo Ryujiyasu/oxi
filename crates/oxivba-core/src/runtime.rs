@@ -6572,6 +6572,16 @@ fn call_builtin(
                 Err(invalid_null(line))
             }
             "clnglng" | "clngptr" => {
+                // Whole-number text is read to its last digit: measured,
+                // CLngLng("9223372036854775807") is the largest LongLong.
+                if let Value::String(written) = value {
+                    if let Ok(exact) = written.trim().parse::<i64>() {
+                        return Ok(Value::LongLong(exact));
+                    }
+                }
+                if let Value::LongLong(held) = value {
+                    return Ok(Value::LongLong(*held));
+                }
                 let value = number(value).map_err(mismatch)?.round_ties_even();
                 if !value.is_finite()
                     || value < i64::MIN as f64
@@ -6606,6 +6616,9 @@ fn call_builtin(
             "fix" | "int" => match value {
                 Value::Null => Ok(Value::Null),
                 Value::Decimal(held) => Ok(Value::Decimal(held.whole(name == "int"))),
+                // A whole number is already whole, to its last digit:
+                // measured, Int of the largest LongLong is itself.
+                Value::LongLong(_) | Value::Integer(_) | Value::Int16(_) | Value::Byte(_) => Ok(value.clone()),
                 _ => {
                     // They keep the type, the way Abs and Round do. Asked of
                     // Excel, `Int(#1/2/2003#)` is a Date and says `1/2/2003`,
@@ -11386,6 +11399,11 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
         }
         // A Currency is negated in its own units: measured, -c of the
         // largest is -922337203685477.5807.
+        // So is a LongLong, to its last digit.
+        UnaryOp::Neg if matches!(value, Value::LongLong(_)) => match value {
+            Value::LongLong(n) => n.checked_neg().map(Value::LongLong).ok_or_else(|| "overflow negating LongLong".to_string()),
+            _ => unreachable!(),
+        },
         UnaryOp::Neg if matches!(value, Value::Currency(_)) => match value {
             Value::Currency(units) => units
                 .checked_neg()
@@ -11585,6 +11603,24 @@ fn binary(
         // own units, exactly: measured, the largest Currency less 0.0001@
         // is ...5806 and times CCur(1) itself, where a Double would have
         // overflowed.
+        // A LongLong beside a whole number is worked as whole numbers, to the
+        // last digit: measured, the largest LongLong less 1 is
+        // 9223372036854775806 and 3037000499^ squared 9223372030926249001.
+        Add | Sub | Mul | IntDiv | Mod if longlong_exact(&lhs, &rhs).is_some() => {
+            let (a, b) = longlong_exact(&lhs, &rhs).expect("just asked");
+            let overflow = || (RuntimeErrorKind::Overflow, "overflow".to_string());
+            if matches!(op, IntDiv | Mod) && b == 0 {
+                return Err((RuntimeErrorKind::DivisionByZero, "division by zero".to_string()));
+            }
+            let answer = match op {
+                Add => a.checked_add(b),
+                Sub => a.checked_sub(b),
+                Mul => a.checked_mul(b),
+                IntDiv => a.checked_div(b),
+                _ => a.checked_rem(b),
+            };
+            Ok(Value::LongLong(answer.ok_or_else(overflow)?))
+        }
         Add | Sub | Mul if currency_exact(&lhs, &rhs).is_some() => {
             let (a, b) = currency_exact(&lhs, &rhs).expect("just asked");
             let overflow = || (RuntimeErrorKind::Overflow, "overflow".to_string());
@@ -18237,4 +18273,22 @@ fn currency_exact(lhs: &Value, rhs: &Value) -> Option<(i128, i128)> {
         return None;
     }
     Some((units(lhs)?, units(rhs)?))
+}
+
+/// Both sides as LongLongs where one is a LongLong and the other a whole
+/// number (LongLong, Long, Integer, Byte, Boolean).
+fn longlong_exact(lhs: &Value, rhs: &Value) -> Option<(i64, i64)> {
+    let whole = |value: &Value| -> Option<i64> {
+        match value {
+            Value::LongLong(n) | Value::Integer(n) => Some(*n),
+            Value::Int16(n) => Some(i64::from(*n)),
+            Value::Byte(n) => Some(i64::from(*n)),
+            Value::Boolean(state) => Some(if *state { -1 } else { 0 }),
+            _ => None,
+        }
+    };
+    if !matches!(lhs, Value::LongLong(_)) && !matches!(rhs, Value::LongLong(_)) {
+        return None;
+    }
+    Some((whole(lhs)?, whole(rhs)?))
 }
