@@ -7866,6 +7866,13 @@ fn format_value(
     if pattern.is_empty() {
         return text(value);
     }
+    // A Single is written from its seven figures: measured,
+    // Format(CSng(2) / 3, "0.0000000000") is 0.6666667000 and
+    // Format(CSng(16777217), "0") 16777220.
+    if let Value::Single(single) = value {
+        let seven: f64 = format!("{single:.6e}").parse().unwrap_or(f64::from(*single));
+        return format_value(&Value::Double(seven), pattern, first_day, first_week, this_year);
+    }
     // A picture of nothing but `<`, `>` and `!` is a text picture too, and a
     // number is written out for it: measured, `Format(True, ">")` is TRUE
     // and `Format(1E+15, "<")` 1e+15.
@@ -11585,6 +11592,11 @@ fn binary(
                     Some(text_collate(a, b))
                 }
                 (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+                // A Single beside a Double is compared as Singles: measured,
+                // with s As Single = 0.1, `s = 0.1` is True and `s < 0.1`
+                // False.
+                (Value::Single(a), Value::Double(b)) => a.partial_cmp(&(*b as f32)),
+                (Value::Double(a), Value::Single(b)) => (*a as f32).partial_cmp(b),
                 // Empty takes the shape of whatever it is put beside. Against
                 // text it is a zero-length string, which is why
                 // `Range("A1").Value = ""` on a blank cell is True -- and why
