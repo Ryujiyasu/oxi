@@ -2578,7 +2578,18 @@ impl<'a> Parser<'a> {
                 }
                 let source = self.src.get(span.start..span.end).unwrap_or_default();
                 let exact_long_long = exact_longlong_value(source, suffix);
+                // A Currency literal is kept to its last ten-thousandth: a
+                // Double cannot hold 922337203685476.5807.
+                let exact_currency = if suffix == Some('@') && source.split('.').next().is_some_and(|whole| whole.len() > 11) {
+                    exact_currency_units(source)
+                } else {
+                    None
+                };
                 let literal = match suffix {
+                    Some('@') if exact_currency.is_some() => Literal::LargeInteger {
+                        digits: exact_currency.unwrap_or_default(),
+                        suffix: '@',
+                    },
                     Some(suffix) if exact_long_long.is_some() => Literal::LargeInteger {
                         digits: exact_long_long.unwrap_or_default(),
                         suffix,
@@ -3970,4 +3981,15 @@ mod tests {
         assert!(matches!(&p.body[4], Statement::Unknown { text, .. } if text.contains("Reset")));
         assert!(p.body.iter().any(|s| matches!(s, Statement::Assign { .. })));
     }
+}
+
+/// A Currency literal's units of a ten-thousandth, as text, where it is
+/// plain decimal of four places or fewer.
+fn exact_currency_units(source: &str) -> Option<String> {
+    let (whole, fraction) = source.split_once('.').unwrap_or((source, ""));
+    if whole.is_empty() || fraction.len() > 4 || !whole.bytes().all(|b| b.is_ascii_digit()) || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let units = whole.parse::<i128>().ok()? * 10_000 + format!("{fraction:0<4}").parse::<i128>().ok()?;
+    i64::try_from(units).ok().map(|units| units.to_string())
 }

@@ -920,6 +920,13 @@ fn render_literal(lit: &Literal, norm: Normalization, out: &mut String) {
         Literal::TypedNumber { value, suffix } => {
             let _ = write!(out, "{value}{suffix}");
         }
+        // A Currency literal is held in ten-thousandths; written back as the
+        // number it was.
+        Literal::LargeInteger { digits, suffix: '@' } => {
+            let units: i64 = digits.parse().unwrap_or_default();
+            let value = units as f64 / 10_000.0;
+            let _ = write!(out, "{value}@");
+        }
         Literal::LargeInteger { digits, suffix } => {
             let _ = write!(out, "{digits}{suffix}");
         }

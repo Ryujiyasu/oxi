@@ -10822,6 +10822,7 @@ fn literal_value(literal: &Literal) -> Value {
             '@' => Value::Currency((*value * 10_000.0).round_ties_even() as i64),
             _ => Value::Double(*value),
         },
+        Literal::LargeInteger { digits, suffix: '@' } => Value::Currency(digits.parse().unwrap_or(i64::MAX)),
         Literal::LargeInteger { digits, .. } => digits
             .parse::<i64>()
             .map(Value::Integer)
@@ -11579,6 +11580,29 @@ fn binary(
             (Value::String(_), Value::String(_) | Value::Empty) | (Value::Empty, Value::String(_))
         ) => {
             Ok(Value::String(format!("{}{}", text(&lhs).map_err(mismatch)?, text(&rhs).map_err(mismatch)?)))
+        }
+        // A Currency beside a Currency or a whole number is worked in its
+        // own units, exactly: measured, the largest Currency less 0.0001@
+        // is ...5806 and times CCur(1) itself, where a Double would have
+        // overflowed.
+        Add | Sub | Mul if currency_exact(&lhs, &rhs).is_some() => {
+            let (a, b) = currency_exact(&lhs, &rhs).expect("just asked");
+            let overflow = || (RuntimeErrorKind::Overflow, "overflow".to_string());
+            let units = match op {
+                Add => a.checked_add(b),
+                Sub => a.checked_sub(b),
+                _ => {
+                    // Ten-thousandths times ten-thousandths, back to units,
+                    // halves to even: measured, 0.0001@ * 0.5@ is 0.
+                    let product = a * b;
+                    let (quotient, remainder) = (product / 10_000, product % 10_000);
+                    let twice = remainder.abs() * 2;
+                    let bump = twice > 10_000 || (twice == 10_000 && quotient % 2 != 0);
+                    Some(if bump { quotient + product.signum() } else { quotient })
+                }
+            };
+            let units = units.ok_or_else(overflow)?;
+            Ok(Value::Currency(i64::try_from(units).map_err(|_| overflow())?))
         }
         Add | Sub | Mul | Div | IntDiv | Mod | Pow => {
             let (a, b) = numbers()?;
@@ -18194,4 +18218,23 @@ fn value_is_zero(value: &Value) -> bool {
         Value::Currency(units) => *units == 0,
         other => number(other).is_ok_and(|n| n == 0.0),
     }
+}
+
+/// Both sides of `+`, `-` or `*` as Currency units (i128) where one is a
+/// Currency and the other a Currency or a whole number.
+fn currency_exact(lhs: &Value, rhs: &Value) -> Option<(i128, i128)> {
+    let units = |value: &Value| -> Option<i128> {
+        match value {
+            Value::Currency(units) => Some(i128::from(*units)),
+            Value::Int16(n) => Some(i128::from(*n) * 10_000),
+            Value::Integer(n) => Some(i128::from(*n) * 10_000),
+            Value::Byte(n) => Some(i128::from(*n) * 10_000),
+            Value::Boolean(state) => Some(if *state { -10_000 } else { 0 }),
+            _ => None,
+        }
+    };
+    if !matches!(lhs, Value::Currency(_)) && !matches!(rhs, Value::Currency(_)) {
+        return None;
+    }
+    Some((units(lhs)?, units(rhs)?))
 }
