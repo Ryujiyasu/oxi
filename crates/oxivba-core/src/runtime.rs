@@ -9201,7 +9201,10 @@ fn parse_date_part(source: &str, this_year: i64) -> Result<f64, String> {
         } else if first > 12 {
             (this_year, second, first)
         } else {
-            (this_year, first, second)
+            // A second number that is no day of that month this year is the
+            // year: measured, "2/30" is February 2030 and "1/0" January 2000.
+            return strict_date_serial(this_year, first, second, source)
+                .or_else(|_| strict_date_serial(second, first, 1, source));
         };
         return strict_date_serial(year, month, day, source);
     }
@@ -9253,7 +9256,8 @@ fn strict_date_serial(year: i64, month: i64, day: i64, source: &str) -> Result<f
 /// is a year when it is too big to be a day, and the day is 1 when the year
 /// took its place.
 fn parse_named_date_text(source: &str, this_year: i64) -> Option<Result<f64, String>> {
-    let normalized = source.replace([',', '-'], " ");
+    // Measured: "Mar/24" reads as "Mar-24" does.
+    let normalized = source.replace([',', '-', '/'], " ");
     let pieces = normalized.split_whitespace().collect::<Vec<_>>();
     if pieces.len() == 2 {
         let (month, other) = match (month_number(pieces[0]), month_number(pieces[1])) {

@@ -265,6 +265,50 @@ fn clock(text: &str, afternoon: Option<bool>) -> Option<f64> {
     Some((hours * 3600.0 + minutes * 60.0 + seconds) / 86_400.0)
 }
 
+thread_local! {
+    static THIS_YEAR: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+/// The year a date written without one falls in; the workbook says, from
+/// its clock, each time it works itself out.
+pub fn set_this_year(year: i64) {
+    THIS_YEAR.with(|held| held.set(year));
+}
+
+/// A two-digit year as text means it: 0-29 this century, 30-99 the last.
+fn widened_year(year: i64) -> i64 {
+    if year < 30 { year + 2000 } else { year + 1900 }
+}
+
+/// A date of two parts: a month and a day of this year where the second can
+/// be one, else a month and a two-digit year. Measured through DATEVALUE:
+/// "12/31", "3-24", "Mar-24", "Mar/24", "Mar 24" and "24-Mar" are days of
+/// this year; "1/32" is January 1932, "2/30" February 1930, "1/0" January
+/// 2000, "Mar-32" March 1932; "1/100" is no date.
+fn calendar_of_two(fields: &[&str]) -> Option<i64> {
+    let this_year = THIS_YEAR.with(|held| held.get());
+    if this_year == 0 {
+        return None;
+    }
+    let valid = |month: i64, day: i64| (1..=12).contains(&month) && day >= 1 && day <= days_in_month(this_year, month);
+    let (month, number, digits, day_only) = match (month_named(fields[0]), month_named(fields[1])) {
+        (Some(month), None) => (month, whole(fields[1])?, fields[1].len(), false),
+        (None, Some(month)) => (month, whole(fields[0])?, fields[0].len(), true),
+        (None, None) => (whole(fields[0])?, whole(fields[1])?, fields[1].len(), false),
+        _ => return None,
+    };
+    if !(1..=12).contains(&month) || number < 0 {
+        return None;
+    }
+    if valid(month, number) {
+        return serial_from_date(this_year, month, number).ok();
+    }
+    if day_only || digits > 2 {
+        return None;
+    }
+    serial_from_date(widened_year(number), month, 1).ok()
+}
+
 /// The day a date names, however it is spelled out.
 fn calendar(said: &[&str]) -> Option<i64> {
     let joined = said.join(" ");
@@ -272,6 +316,9 @@ fn calendar(said: &[&str]) -> Option<i64> {
         .split(|held: char| held == '/' || held == '-' || held == ',' || held.is_whitespace())
         .filter(|held| !held.is_empty())
         .collect();
+    if fields.len() == 2 {
+        return calendar_of_two(&fields);
+    }
     if fields.len() != 3 {
         return None;
     }

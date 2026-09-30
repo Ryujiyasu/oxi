@@ -699,6 +699,9 @@ impl Workbook {
                 self.now = moment;
             }
         }
+        if let Ok(today) = crate::datetime::date_from_serial(self.now.floor() as i64) {
+            crate::datetime::set_this_year(today.year);
+        }
         let keys = self.formula_keys();
         // Where the formulas are, sheet by sheet, ordered by column and then
         // row. A range can ask this directly for the formulas it covers; the
