@@ -8248,8 +8248,9 @@ fn call_financial_builtin(
         _ => unreachable!(),
     }
     .map_err(|message| invalid_procedure_call(message, line))?;
+    // A negative nought is kept: measured, Pmt(-1, 10, 100) is -0.
     if result.is_finite() {
-        Ok(Value::Double(if result == 0.0 { 0.0 } else { result }))
+        Ok(Value::Double(result))
     } else {
         Err(error(
             RuntimeErrorKind::Overflow,
@@ -8428,7 +8429,9 @@ fn financial_npv(rate: f64, values: &[f64]) -> Result<f64, String> {
 }
 
 fn annuity_factor(rate: f64, periods: f64) -> Result<f64, String> {
-    if rate <= -1.0 {
+    // A rate of -1 itself leaves a factor of nought: measured, Pmt(-1, 10,
+    // 100) is -0.
+    if rate < -1.0 {
         return Err("interest rate must be greater than -1".to_string());
     }
     let factor = (1.0 + rate).powf(periods);
@@ -8446,8 +8449,10 @@ fn financial_fv(
     present: f64,
     kind: f64,
 ) -> Result<f64, String> {
+    // Worked as -pv - pmt * nper, so a nought comes out plain: measured,
+    // FV(0, 10, -100, 1000) is 0 where PV(0, 10, 0, 0) is -0.
     if rate == 0.0 {
-        return Ok(-(present + payment * periods));
+        return Ok(-present - payment * periods);
     }
     let factor = annuity_factor(rate, periods)?;
     Ok(-(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate))
@@ -8542,7 +8547,9 @@ fn financial_rate(
         return Err("invalid Rate arguments".to_string());
     }
     let mut rate = guess;
-    for _ in 0..20 {
+    // Room to walk in from the guess on a long annuity: measured,
+    // Rate(360, -1073.64, 200000) finds 4.16664453634554E-03 from 0.1.
+    for _ in 0..200 {
         let value = financial_equation(rate, periods, payment, present, future, kind)?;
         let step = (rate.abs() * 1e-6).max(1e-7);
         let lower = (rate - step).max(-0.999_999_999);
@@ -8638,6 +8645,8 @@ fn call_text_conversion_builtin(
                 Value::Single(_) | Value::Currency(_) | Value::Decimal(_) | Value::Int16(_) | Value::Integer(_) | Value::Byte(_) | Value::LongLong(_) => {
                     text(&args[0]).map_err(mismatch)?
                 }
+                // Measured: Str(-0#) is -0.
+                _ if value == 0.0 && value.is_sign_negative() => "-0".to_string(),
                 _ => text(&numeric_literal(value)).map_err(mismatch)?,
             };
             // Str writes a fraction without its nought: measured,
@@ -13883,8 +13892,10 @@ pub fn vba_number_text(value: f64) -> String {
 /// `CStr(CSng(12345678))` is 1.234568E+07 and `CStr(CSng(0.00000012))`
 /// 1.2E-07, where `CStr(CSng(0.0000001))` is 0.0000001.
 fn number_text_in(value: f64, places: usize) -> String {
+    // A negative nought keeps its sign: measured, CStr(CSng(0) * -1) and
+    // Str(-0#) are -0.
     if value == 0.0 {
-        return "0".to_string();
+        return if value.is_sign_negative() { "-0" } else { "0" }.to_string();
     }
     if !value.is_finite() {
         // VBA holds neither, so nothing was measured. Rust's spelling keeps it

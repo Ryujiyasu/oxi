@@ -2882,8 +2882,8 @@ mod tests {
                 lhs,
                 rhs,
                 ..
-            } if matches!(*lhs, Expr::Literal(Literal::Number(0.5), _))
-                && matches!(*rhs, Expr::Literal(Literal::Number(1.0), _))
+            } if matches!(*lhs, Expr::Literal(Literal::TypedNumber { value: 0.5, suffix: '#' }, _))
+                && matches!(*rhs, Expr::Literal(Literal::TypedNumber { value: 1.0, suffix: '#' }, _))
         ));
     }
 
@@ -4006,8 +4006,11 @@ fn exact_currency_units(source: &str) -> Option<String> {
 }
 
 /// Whether a decimal literal carries an exponent (`1E+3`, `2D-1`).
+/// A literal with an exponent or a point is a Double whatever it comes to:
+/// measured, TypeName(0.0), (1.0), (1.) and (100000.0) are all Double, and
+/// Int(-0.0) is -0.
 fn literal_is_double(source: &str) -> bool {
-    !source.starts_with('&') && source.bytes().any(|b| matches!(b, b'e' | b'E' | b'd' | b'D'))
+    !source.starts_with('&') && source.bytes().any(|b| matches!(b, b'e' | b'E' | b'd' | b'D' | b'.'))
 }
 
 /// Whether an `&H`/`&O` literal spells more than 0xFFFF, which makes it a
