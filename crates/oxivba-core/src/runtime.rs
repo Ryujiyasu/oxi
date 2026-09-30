@@ -6510,12 +6510,15 @@ fn call_builtin(
             "ccur" if matches!(value, Value::String(_)) && matches!(value, Value::String(text) if crate::decimal::Dec::parse(text).is_some()) => {
                 let Value::String(written) = value else { unreachable!() };
                 let held = crate::decimal::Dec::parse(written).expect("just parsed").round(4);
-                let units = held.magnitude as f64 * 10f64.powi(4 - held.scale as i32);
-                if units > 9.223_372_036_854_775_807e18 {
-                    return Err(error(RuntimeErrorKind::Overflow, "overflow converting value to Currency", line));
-                }
-                let units = units as i64;
-                Ok(Value::Currency(if held.negative { -units } else { units }))
+                // Counted exactly, sign and all: measured,
+                // CCur("-922337203685477.5808") is the least Currency.
+                let overflow = || error(RuntimeErrorKind::Overflow, "overflow converting value to Currency", line);
+                let units = i128::try_from(held.magnitude)
+                    .ok()
+                    .and_then(|magnitude| magnitude.checked_mul(10i128.pow(4u32.saturating_sub(held.scale as u32))))
+                    .ok_or_else(overflow)?;
+                let units = if held.negative { -units } else { units };
+                Ok(Value::Currency(i64::try_from(units).map_err(|_| overflow())?))
             }
             "ccur" => {
                 let value = number(value).map_err(mismatch)?;
@@ -9706,6 +9709,14 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// doubles sit a hair above and below the half -- while `CCur(0.00025)` is
 /// 0.0003.
 fn currency_units(value: f64) -> i64 {
+    // Past 2^53 / 10000 the product is no longer exact; the whole part and
+    // the fraction are counted apart: measured, CCur(922337203685477#)
+    // reads 922337203685477, not 922337203685476.9664.
+    if value.abs() >= 9.0e11 {
+        let whole = value.trunc();
+        let fraction = currency_units(value - whole);
+        return (whole as i128 * 10_000 + i128::from(fraction)).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+    }
     let product = value * 10_000.0;
     let error = value.mul_add(10_000.0, -product);
     let floor = product.floor();
@@ -12227,7 +12238,9 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Double(value) if *value == 0.0 && value.is_sign_negative() => "-0".to_string(),
         Value::Double(value) => vba_number_text(*value),
         Value::LongLong(value) => value.to_string(),
-        Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
+        // Every figure a Currency holds, as it holds them: measured,
+        // the largest reads 922337203685477.5807, not 922337203685478.
+        Value::Currency(value) => currency_text(*value),
         Value::Decimal(value) => value.to_string(),
         Value::Date(value) => vba_date_text(*value),
         // The ONE string on this whole surface that follows the Office UI
@@ -18099,3 +18112,18 @@ mod tests {
         );
     }
 }
+
+/// A Currency's units of a ten-thousandth, written out exactly with its
+/// trailing noughts off.
+fn currency_text(units: i64) -> String {
+    let sign = if units < 0 { "-" } else { "" };
+    let magnitude = units.unsigned_abs();
+    let (whole, fraction) = (magnitude / 10_000, magnitude % 10_000);
+    if fraction == 0 {
+        return format!("{sign}{whole}");
+    }
+    let fraction = format!("{fraction:04}");
+    format!("{sign}{whole}.{}", fraction.trim_end_matches('0'))
+}
+
+
