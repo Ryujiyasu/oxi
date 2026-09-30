@@ -6223,6 +6223,12 @@ fn call_builtin(
             if matches!(args[0], Value::Null) {
                 return Ok(Value::Null);
             }
+            // A LongLong keeps every bit: measured, Hex of the largest less
+            // one is 7FFFFFFFFFFFFFFE.
+            if let Value::LongLong(held) = args[0] {
+                let bits = held as u64;
+                return Ok(Value::String(if name == "hex" { format!("{bits:X}") } else { format!("{bits:o}") }));
+            }
             let value = number(&args[0])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
                 .round_ties_even();
@@ -7891,7 +7897,7 @@ fn format_value(
     }
     // Pictures that scale or take an exponent work on the Double.
     let scales = pattern.contains(['%', 'e', 'E']) || pattern.contains(",.") || pattern.trim_end_matches(['"', ';']).ends_with(',');
-    if matches!(value, Value::Decimal(_) | Value::Currency(_)) && !value_is_zero(value) && !scales {
+    if matches!(value, Value::Decimal(_) | Value::Currency(_) | Value::LongLong(_)) && !value_is_zero(value) && !scales {
         let figures = text(value)?.trim_start_matches('-').to_string();
         EXACT_FIGURES.with(|held| *held.borrow_mut() = Some(figures));
         let written = format_value(&Value::Double(number(value)?), pattern, first_day, first_week, this_year);
@@ -10936,6 +10942,16 @@ fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> R
             return Ok(Value::Byte(if state { 255 } else { 0 }));
         }
     }
+    // A whole number goes into a LongLong as it is, every digit kept:
+    // measured, p = m - 1 with m the largest reads ...806.
+    if matches!(lower.as_str(), "longlong" | "longptr") {
+        match &value {
+            Value::LongLong(n) | Value::Integer(n) => return Ok(Value::LongLong(*n)),
+            Value::Int16(n) => return Ok(Value::LongLong(i64::from(*n))),
+            Value::Byte(n) => return Ok(Value::LongLong(i64::from(*n))),
+            _ => {}
+        }
+    }
     let (low, high) = match lower.as_str() {
         "byte" => (0.0, 255.0),
         "integer" => (-32_768.0, 32_767.0),
@@ -11725,6 +11741,12 @@ fn binary(
                     Some(text_collate(a, b))
                 }
                 (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+                // Two LongLongs, or one beside a whole number, compare as whole
+                // numbers: measured, the largest is greater than one less.
+                (left, right) if longlong_exact(left, right).is_some() => {
+                    let (a, b) = longlong_exact(left, right).expect("just asked");
+                    Some(a.cmp(&b))
+                }
                 // A Single beside a Double is compared as Singles: measured,
                 // with s As Single = 0.1, `s = 0.1` is True and `s < 0.1`
                 // False.
