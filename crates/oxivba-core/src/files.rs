@@ -20,6 +20,10 @@ pub enum OpenMode {
     Input,
     Output,
     Append,
+    /// `For Binary`: bytes read and written at a position.
+    Binary,
+    /// `For Random Len = n`: records of n bytes.
+    Random(usize),
 }
 
 /// One open file.
@@ -122,7 +126,7 @@ impl Files {
             OpenMode::Output => {
                 self.contents.insert(name.clone(), (path.trim().to_string(), Vec::new()));
             }
-            OpenMode::Append => {
+            OpenMode::Append | OpenMode::Binary | OpenMode::Random(_) => {
                 self.contents.entry(name.clone()).or_insert_with(|| (path.trim().to_string(), Vec::new()));
             }
             OpenMode::Input => {}
@@ -186,10 +190,92 @@ impl Files {
         Ok(handle.position >= length)
     }
 
-    /// `Loc` of a sequential file: the bytes read so far over 128.
+    /// `Loc`: for a binary file the last byte read or written, for a
+    /// random one the last record, and for a sequential one the bytes read
+    /// so far over 128.
     pub fn location(&self, number: i64) -> Result<i64, FileError> {
         let handle = self.handle(number)?;
-        Ok((handle.position as i64 + 127) / 128)
+        Ok(match handle.mode {
+            OpenMode::Binary => handle.position as i64,
+            OpenMode::Random(length) => (handle.position / length.max(1)) as i64,
+            _ => (handle.position as i64 + 127) / 128,
+        })
+    }
+
+    /// `Seek(n)`: where the next read or write goes, from 1 -- a byte, or a
+    /// record in a random file.
+    pub fn next_position(&self, number: i64) -> Result<i64, FileError> {
+        let handle = self.handle(number)?;
+        Ok(match handle.mode {
+            OpenMode::Random(length) => (handle.position / length.max(1)) as i64 + 1,
+            _ => handle.position as i64 + 1,
+        })
+    }
+
+    /// `Seek #n, position`, and the position a `Get` or `Put` names.
+    pub fn move_to(&mut self, number: i64, position: i64) -> Result<(), FileError> {
+        let handle = self.open.get_mut(&number).ok_or(FileError::BadNumber)?;
+        if position < 1 {
+            return Err(FileError::BadNumber);
+        }
+        handle.position = match handle.mode {
+            OpenMode::Random(length) => (position as usize - 1) * length,
+            _ => position as usize - 1,
+        };
+        Ok(())
+    }
+
+    /// The record length of a random file, or None.
+    pub fn record_length(&self, number: i64) -> Result<Option<usize>, FileError> {
+        Ok(match self.handle(number)?.mode {
+            OpenMode::Random(length) => Some(length),
+            _ => None,
+        })
+    }
+
+    /// `Put`: bytes at the current position, the file growing (with
+    /// noughts across any gap) to take them.
+    pub fn put(&mut self, number: i64, bytes: &[u8]) -> Result<(), FileError> {
+        let handle = self.open.get_mut(&number).ok_or(FileError::BadNumber)?;
+        if !matches!(handle.mode, OpenMode::Binary | OpenMode::Random(_)) {
+            return Err(FileError::BadNumber);
+        }
+        let file = self.contents.get_mut(&handle.path).ok_or(FileError::BadNumber)?;
+        let end = handle.position + bytes.len();
+        if file.1.len() < end {
+            file.1.resize(end, 0);
+        }
+        file.1[handle.position..end].copy_from_slice(bytes);
+        handle.position = end;
+        Ok(())
+    }
+
+    /// After a whole `Get` or `Put` in a random file, the next record: one
+    /// read or written short still takes its whole length.
+    pub fn finish_record(&mut self, number: i64) {
+        if let Some(handle) = self.open.get_mut(&number) {
+            if let OpenMode::Random(length) = handle.mode {
+                let length = length.max(1);
+                handle.position = handle.position.div_ceil(length) * length;
+            }
+        }
+    }
+
+    /// `Get`: so many bytes from the current position, noughts past the end.
+    pub fn get(&mut self, number: i64, count: usize) -> Result<Vec<u8>, FileError> {
+        let handle = self.open.get_mut(&number).ok_or(FileError::BadNumber)?;
+        if !matches!(handle.mode, OpenMode::Binary | OpenMode::Random(_)) {
+            return Err(FileError::BadNumber);
+        }
+        let file = self.contents.get(&handle.path).map(|file| file.1.as_slice()).unwrap_or(&[]);
+        let mut read = vec![0u8; count];
+        for (index, slot) in read.iter_mut().enumerate() {
+            if let Some(byte) = file.get(handle.position + index) {
+                *slot = *byte;
+            }
+        }
+        handle.position += count;
+        Ok(read)
     }
 
     fn reading(&mut self, number: i64) -> Result<(&[u8], &mut usize), FileError> {

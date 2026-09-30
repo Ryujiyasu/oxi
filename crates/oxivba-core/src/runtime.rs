@@ -16,7 +16,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
+use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
     Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
     OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ReDimItem, ResumeTarget, SelectCaseStmt,
@@ -1785,6 +1785,16 @@ impl<'a> Runtime<'a> {
                 self.exec_file_system(action, frame)?;
                 Ok(Flow::Continue)
             }
+            Statement::FileTransfer(transfer) => {
+                self.exec_file_transfer(transfer, frame)?;
+                Ok(Flow::Continue)
+            }
+            Statement::FileSeek(FileSeekStmt { file_number, position, span }) => {
+                let number = self.file_number(file_number, frame, span.line)?;
+                let position = self.file_number(position, frame, span.line)?;
+                self.files.move_to(number, position).map_err(|failure| file_failure(failure, span.line))?;
+                Ok(Flow::Continue)
+            }
             Statement::Unknown { text, span } => Err(error(
                 RuntimeErrorKind::Unsupported,
                 format!("cannot execute unparsed VBA: {text}"),
@@ -1823,12 +1833,14 @@ impl<'a> Runtime<'a> {
             FileMode::Input => OpenMode::Input,
             FileMode::Output => OpenMode::Output,
             FileMode::Append => OpenMode::Append,
+            FileMode::Binary => OpenMode::Binary,
             _ => {
-                return Err(error(
-                    RuntimeErrorKind::Unsupported,
-                    "Binary and Random files are not kept yet",
-                    Some(line),
-                ))
+                // A random file's records are 128 bytes unless Len says.
+                let length = match &open.record_len {
+                    Some(expr) => self.file_number(expr, frame, line)?.max(1) as usize,
+                    None => 128,
+                };
+                OpenMode::Random(length)
             }
         };
         self.files.open(&path, mode, number).map_err(|failure| file_failure(failure, line))
@@ -1976,6 +1988,173 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// `Put` and `Get`: a value's bytes as VBA lays them in a file.
+    /// Measured in a binary file: an Integer 258 is 02 01, a Long -2 FE FF
+    /// FF FF, a Double 1.5 its eight bytes, a String "ab" 61 62 and a
+    /// String * 4 "xy" 78 79 20 20, a Variant holding the Long 7 03 00 07 00
+    /// 00 00 (its VarType first), True FF FF; a record its fields packed.
+    fn exec_file_transfer(&mut self, transfer: &FileTransferStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
+        let line = transfer.span.line;
+        let number = self.file_number(&transfer.file_number, frame, line)?;
+        if let Some(record) = &transfer.record_number {
+            let position = self.file_number(record, frame, line)?;
+            self.files.move_to(number, position).map_err(|failure| file_failure(failure, line))?;
+        }
+        let random = self.files.record_length(number).map_err(|failure| file_failure(failure, line))?.is_some();
+        let (variant, fixed) = match &transfer.value {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                (self.is_variant_variable(frame, name) && self.declared_type(frame, name).is_none_or(|t| t.eq_ignore_ascii_case("variant")), self.fixed_string_width(frame, name).is_some())
+            }
+            _ => (false, false),
+        };
+        let current = self.eval_expr(&transfer.value, frame)?;
+        match transfer.kind {
+            FileTransferKind::Put => {
+                let mut bytes = Vec::new();
+                self.value_bytes(&current, variant, fixed, random, &mut bytes, 0);
+                self.files.put(number, &bytes).map_err(|failure| file_failure(failure, line))?;
+                self.files.finish_record(number);
+                Ok(())
+            }
+            FileTransferKind::Get => {
+                let read = self.value_from_file(&current, variant, fixed, random, number, 0).map_err(|failure| file_failure(failure, line))?;
+                self.files.finish_record(number);
+                self.assign(&transfer.value, read, frame, line)
+            }
+        }
+    }
+
+    fn value_bytes(&self, value: &Value, variant: bool, fixed: bool, random: bool, out: &mut Vec<u8>, depth: usize) {
+        if variant && !matches!(value, Value::Array(_) | Value::Record(_)) {
+            out.extend_from_slice(&(value_var_type(value) as u16).to_le_bytes());
+            if let Value::String(held) = value {
+                let bytes = ansi_bytes(held);
+                out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+                out.extend_from_slice(&bytes);
+                return;
+            }
+        }
+        match value {
+            Value::Byte(n) => out.push(*n),
+            Value::Int16(n) => out.extend_from_slice(&n.to_le_bytes()),
+            Value::Boolean(state) => out.extend_from_slice(&(if *state { -1i16 } else { 0 }).to_le_bytes()),
+            Value::Integer(n) => out.extend_from_slice(&(*n as i32).to_le_bytes()),
+            Value::LongLong(n) | Value::Currency(n) => out.extend_from_slice(&n.to_le_bytes()),
+            Value::Single(n) => out.extend_from_slice(&n.to_le_bytes()),
+            Value::Double(n) | Value::Date(n) => out.extend_from_slice(&n.to_le_bytes()),
+            Value::String(held) => {
+                let bytes = ansi_bytes(held);
+                if random && !fixed {
+                    out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+                }
+                out.extend_from_slice(&bytes);
+            }
+            Value::Array(array) => {
+                for one in &array.values {
+                    self.value_bytes(one, false, false, random, out, depth);
+                }
+            }
+            Value::Record(record) if depth < 16 => {
+                let Some(definition) = self.find_type(&record.type_name) else { return };
+                for (declared, (_, field)) in definition.fields.iter().zip(&record.fields) {
+                    let is_fixed = declared.type_name.fixed_length.is_some();
+                    let is_variant = declared.array_bounds.is_none()
+                        && matches!(declared.type_name.name.to_ascii_lowercase().as_str(), "variant" | "");
+                    // A variable-length String inside a record carries its
+                    // length in front, as it does in a random file.
+                    self.value_bytes(field, is_variant, is_fixed, true, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn value_from_file(&mut self, current: &Value, variant: bool, fixed: bool, random: bool, number: i64, depth: usize) -> Result<Value, crate::files::FileError> {
+        let mut take = |files: &mut crate::files::Files, count: usize| files.get(number, count);
+        if variant && !matches!(current, Value::Array(_) | Value::Record(_)) {
+            let head = take(&mut self.files, 2)?;
+            let kind = u16::from_le_bytes([head[0], head[1]]);
+            let template = match kind {
+                2 => Value::Int16(0),
+                3 => Value::Integer(0),
+                4 => Value::Single(0.0),
+                5 => Value::Double(0.0),
+                6 => Value::Currency(0),
+                7 => Value::Date(0.0),
+                8 => {
+                    let size = take(&mut self.files, 2)?;
+                    let size = u16::from_le_bytes([size[0], size[1]]) as usize;
+                    return Ok(Value::String(ansi_text(&take(&mut self.files, size)?)));
+                }
+                11 => Value::Boolean(false),
+                17 => Value::Byte(0),
+                20 => Value::LongLong(0),
+                _ => return Ok(Value::Empty),
+            };
+            return self.value_from_file(&template, false, false, random, number, depth);
+        }
+        Ok(match current {
+            Value::Byte(_) => Value::Byte(take(&mut self.files, 1)?[0]),
+            Value::Int16(_) => {
+                let raw = take(&mut self.files, 2)?;
+                Value::Int16(i16::from_le_bytes([raw[0], raw[1]]))
+            }
+            Value::Boolean(_) => {
+                let raw = take(&mut self.files, 2)?;
+                Value::Boolean(i16::from_le_bytes([raw[0], raw[1]]) != 0)
+            }
+            Value::Integer(_) => {
+                let raw = take(&mut self.files, 4)?;
+                Value::Integer(i64::from(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])))
+            }
+            Value::LongLong(_) | Value::Currency(_) => {
+                let raw = take(&mut self.files, 8)?;
+                let n = i64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                if matches!(current, Value::Currency(_)) { Value::Currency(n) } else { Value::LongLong(n) }
+            }
+            Value::Single(_) => {
+                let raw = take(&mut self.files, 4)?;
+                Value::Single(f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+            }
+            Value::Double(_) | Value::Date(_) => {
+                let raw = take(&mut self.files, 8)?;
+                let n = f64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                if matches!(current, Value::Date(_)) { Value::Date(n) } else { Value::Double(n) }
+            }
+            Value::String(held) => {
+                let count = if random && !fixed {
+                    let size = take(&mut self.files, 2)?;
+                    u16::from_le_bytes([size[0], size[1]]) as usize
+                } else {
+                    held.chars().count()
+                };
+                Value::String(ansi_text(&take(&mut self.files, count)?))
+            }
+            Value::Array(array) => {
+                let mut array = array.clone();
+                for index in 0..array.values.len() {
+                    let one = array.values[index].clone();
+                    array.values[index] = self.value_from_file(&one, false, false, random, number, depth)?;
+                }
+                Value::Array(array)
+            }
+            Value::Record(record) if depth < 16 => {
+                let mut record = record.clone();
+                if let Some(definition) = self.find_type(&record.type_name) {
+                    for (declared, (_, field)) in definition.fields.iter().zip(record.fields.iter_mut()) {
+                        let is_fixed = declared.type_name.fixed_length.is_some();
+                        let is_variant = declared.array_bounds.is_none()
+                            && matches!(declared.type_name.name.to_ascii_lowercase().as_str(), "variant" | "");
+                        let now = field.clone();
+                        *field = self.value_from_file(&now, is_variant, is_fixed, true, number, depth + 1)?;
+                    }
+                }
+                Value::Record(record)
+            }
+            other => other.clone(),
+        })
+    }
+
     /// The file functions: FreeFile, EOF, LOF, Loc, FileLen and Dir.
     fn file_function(&mut self, name: &str, args: &[Value], line: u32) -> Option<Result<Value, RuntimeError>> {
         let number_of = |value: &Value| number(value).map(|held| held.round_ties_even() as i64);
@@ -1995,6 +2174,10 @@ impl<'a> Runtime<'a> {
                 .map_err(mismatch)
                 .and_then(|file| self.files.length_of_open(file).map_err(failure))
                 .map(|length| Value::Integer(length as i64)),
+            ("seek", [file]) => number_of(file)
+                .map_err(mismatch)
+                .and_then(|file| self.files.next_position(file).map_err(failure))
+                .map(Value::Integer),
             ("loc", [file]) => number_of(file)
                 .map_err(mismatch)
                 .and_then(|file| self.files.location(file).map_err(failure))
@@ -6437,6 +6620,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "chrb"
             | "chrb$"
             | "freefile"
+            | "seek"
             | "eof"
             | "lof"
             | "loc"
@@ -19333,3 +19517,14 @@ fn read_input_field(field: &str) -> Value {
     }
 }
 
+
+
+/// Text as a file holds it: a byte a character, the ANSI way, `?` for what
+/// has no byte.
+fn ansi_bytes(text: &str) -> Vec<u8> {
+    text.chars().map(|one| u8::try_from(u32::from(one)).unwrap_or(b'?')).collect()
+}
+
+fn ansi_text(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| char::from(*byte)).collect()
+}
