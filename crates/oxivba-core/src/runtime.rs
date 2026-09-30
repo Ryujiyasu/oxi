@@ -6732,7 +6732,7 @@ fn call_builtin(
             },
             "lcase" => match value {
                 Value::Null => Ok(Value::Null),
-                _ => Ok(Value::String(text(value).map_err(mismatch)?.to_lowercase())),
+                _ => Ok(Value::String(crate::case_table::lower(&text(value).map_err(mismatch)?))),
             },
             "len" => match value {
                 // Asked of Excel: `Len(Null)` is Null, where `Len(Empty)` is
@@ -6803,7 +6803,7 @@ fn call_builtin(
             },
             "ucase" => match value {
                 Value::Null => Ok(Value::Null),
-                _ => Ok(Value::String(text(value).map_err(mismatch)?.to_uppercase())),
+                _ => Ok(Value::String(crate::case_table::upper(&text(value).map_err(mismatch)?))),
             },
             _ => unreachable!(),
         }
@@ -7553,8 +7553,8 @@ fn call_text_conversion_builtin(
             }
             value = match conversion & 3 {
                 0 => value,
-                1 => value.to_uppercase(),
-                2 => value.to_lowercase(),
+                1 => crate::case_table::upper(&value),
+                2 => crate::case_table::lower(&value),
                 3 => proper_case(&value),
                 _ => unreachable!(),
             };
@@ -7640,9 +7640,9 @@ fn proper_case(value: &str) -> String {
     for character in value.chars() {
         if !matches!(character, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\0') {
             if at_word_start {
-                result.extend(character.to_uppercase());
+                result.push_str(&crate::case_table::upper(character.encode_utf8(&mut [0; 4])));
             } else {
-                result.extend(character.to_lowercase());
+                result.push_str(&crate::case_table::lower(character.encode_utf8(&mut [0; 4])));
             }
             at_word_start = false;
         } else {
@@ -7954,6 +7954,11 @@ fn format_value(
     // `Format(Empty, ...)` are both `text:@`.
     if matches!(value, Value::Null | Value::Empty) {
         let sections = picture_sections(pattern);
+        // A text picture's second section is for no text at all: measured,
+        // Format(Null, "@;Nul") is Nul.
+        if sections.len() > 1 && is_string_picture(pattern) {
+            return Ok(string_picture("", &sections[1]));
+        }
         if sections.len() > 3 {
             return Ok(picture_literal(&sections[3]));
         }
@@ -7984,7 +7989,15 @@ fn format_value(
     // number is written out for it: measured, `Format(True, ">")` is TRUE
     // and `Format(1E+15, "<")` 1e+15.
     if is_string_picture(pattern) || pattern.chars().all(|ch| matches!(ch, '<' | '>' | '!')) {
-        return Ok(string_picture(&text(value)?, pattern));
+        // Its first section is for text, the second for the empty string:
+        // measured, Format("", "@@@;Empty") is Empty, Format("x", ...) x.
+        let written = text(value)?;
+        let sections = picture_sections(pattern);
+        if sections.len() > 1 {
+            let section = if written.is_empty() { &sections[1] } else { &sections[0] };
+            return Ok(string_picture(&written, section));
+        }
+        return Ok(string_picture(&written, pattern));
     }
     let lower = pattern.to_ascii_lowercase();
     let named_date = matches!(
@@ -8021,8 +8034,8 @@ fn format_value(
     }
     if let Value::String(held) = value {
         match pattern {
-            "<" => return Ok(held.to_lowercase()),
-            ">" => return Ok(held.to_uppercase()),
+            "<" => return Ok(crate::case_table::lower(&held)),
+            ">" => return Ok(crate::case_table::upper(&held)),
             // Text that is no number is left as it is: measured,
             // `Format("abc", "0.00")` is abc.
             _ if number(value).is_err() => return Ok(held.clone()),
@@ -8138,9 +8151,9 @@ fn string_picture(value: &str, pattern: &str) -> String {
         }
     }
     let text = if upper {
-        value.to_uppercase()
+        crate::case_table::upper(value)
     } else if lower {
-        value.to_lowercase()
+        crate::case_table::lower(value)
     } else {
         value.to_string()
     };
