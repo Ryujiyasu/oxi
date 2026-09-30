@@ -4672,7 +4672,7 @@ impl<'a> Runtime<'a> {
                         entry
                             .key
                             .as_ref()
-                            .is_some_and(|existing| existing.eq_ignore_ascii_case(key))
+                            .is_some_and(|existing| collection_keys_equal(existing, key))
                     })
                 }) {
                     return Err(raised_error(
@@ -5441,10 +5441,22 @@ fn dictionary_position(dictionary: &DictionaryObject, key: &Value) -> Option<usi
         .position(|entry| dictionary_keys_equal(&entry.key, key, dictionary.compare_text))
 }
 
+/// Two Collection keys the same: they are compared as StrComp compares
+/// text, width, kana and ligatures set aside -- measured, "SS" after ChrW(&HDF),
+/// "a" after ChrW(&HFF41) and ChrW(&H3042) after ChrW(&H30A2) are 457, while
+/// Georgian capital and small letters and the dotless i stay apart.
+fn collection_keys_equal(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right) || text_collate(left, right).is_eq()
+}
+
 fn dictionary_keys_equal(left: &Value, right: &Value, text_compare: bool) -> bool {
     match (left, right) {
+        // A text-compared Dictionary folds as a search does, by the case
+        // table with ß, æ and œ spelled out: measured, "SS" finds ChrW(&HDF)
+        // and "AE" ChrW(&HE6), while ChrW(&H3A3) misses ChrW(&H3C2), "k"
+        // the Kelvin sign and "a" the wide ChrW(&HFF41).
         (Value::String(left), Value::String(right)) if text_compare => {
-            left.to_lowercase() == right.to_lowercase()
+            collation_spelling(left, false) == collation_spelling(right, false)
         }
         (Value::String(left), Value::String(right)) => left == right,
         (Value::Boolean(left), Value::Boolean(right)) => left == right,
@@ -5519,7 +5531,7 @@ fn collection_index(
                 entry
                     .key
                     .as_ref()
-                    .is_some_and(|existing| existing.eq_ignore_ascii_case(key))
+                    .is_some_and(|existing| collection_keys_equal(existing, key))
             })
             .ok_or_else(|| collection_subscript_error(5, line));
     }
