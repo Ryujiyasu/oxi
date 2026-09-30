@@ -2507,8 +2507,14 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let mut out = String::with_capacity(source.len());
             let mut starting = true;
             for character in source.chars() {
+                // A capital of two letters keeps the letter, as in UPPER:
+                // measured, PROPER("ß ǆ ς") is "ß Ǆ Σ".
                 if starting {
-                    out.extend(character.to_uppercase());
+                    let mut upper = character.to_uppercase();
+                    out.push(match (upper.next(), upper.next()) {
+                        (Some(single), None) => single,
+                        _ => character,
+                    });
                 } else {
                     out.extend(character.to_lowercase());
                 }

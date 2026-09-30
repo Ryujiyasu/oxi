@@ -7687,7 +7687,23 @@ fn text_collate(left: &str, right: &str) -> std::cmp::Ordering {
 /// case and ligatures only, not width or kana: measured, InStr(1, "アイウ",
 /// "い", 1) and InStr(1, "ABC", "ｂ", 1) are 0 where StrComp calls them equal.
 fn collation_spelling(value: &str, fold_width_and_kana: bool) -> String {
-    let key = if fold_width_and_kana { strcomp_text_key(value) } else { value.to_lowercase() };
+    // A search folds by the case table and spells out only ß, æ and œ:
+    // measured with ChrW, InStr(1, "œuf", "OE", 1) is 1 where InStr(1,
+    // ChrW(&HFB01) & "le", "fi", 1), InStr(1, "x²", "2", 1) and InStr(1,
+    // ChrW(&H3A3), ChrW(&H3C2), 1) are 0.
+    if !fold_width_and_kana {
+        let mut out = String::with_capacity(value.len());
+        for character in crate::case_table::lower(value).chars() {
+            match character {
+                'ß' => out.push_str("ss"),
+                'æ' => out.push_str("ae"),
+                'œ' => out.push_str("oe"),
+                other => out.push(other),
+            }
+        }
+        return out;
+    }
+    let key = strcomp_text_key(value);
     let mut out = String::with_capacity(value.len());
     for character in key.chars() {
         match character {
@@ -7727,7 +7743,7 @@ fn strcomp_text_key(value: &str) -> String {
             _ => character,
         })
         .collect();
-    convert_kana_script(&latin, true).to_lowercase()
+    crate::case_table::compare_fold(&convert_kana_script(&latin, true))
 }
 
 fn convert_kana_script(value: &str, katakana: bool) -> String {
@@ -10761,8 +10777,8 @@ fn utf16_equal(left: &[u16], right: &[u16], text_compare: bool) -> bool {
         return true;
     }
     text_compare
-        && String::from_utf16_lossy(left).to_lowercase()
-            == String::from_utf16_lossy(right).to_lowercase()
+        && crate::case_table::lower(&String::from_utf16_lossy(left))
+            == crate::case_table::lower(&String::from_utf16_lossy(right))
 }
 
 fn utf16_find(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<usize> {

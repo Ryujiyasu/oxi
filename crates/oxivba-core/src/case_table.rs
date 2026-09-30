@@ -97,6 +97,41 @@ fn map(text: &str, unit: fn(u16) -> u16) -> String {
     String::from_utf16_lossy(&units)
 }
 
+/// Letters a text comparison (StrComp, Option Compare Text) folds together
+/// beyond the case table: measured over every letter Unicode and the table
+/// case differently, these 62 compare equal to the letter they fold to --
+/// the titlecase digraphs, the final sigma, the Kelvin, Angstrom and Ohm
+/// signs, the capital sharp s -- while the rest (the dotless i, the long s,
+/// Georgian Mtavruli, Cherokee small letters, ...) stay apart.
+const COMPARE_EXTRA: &[(u16, u16)] = &[
+    (0x01C5, 0x01C6), (0x01C8, 0x01C9), (0x01CB, 0x01CC), (0x01F2, 0x01F3), (0x03C2, 0x03C3),
+    (0x03F5, 0x03B5), (0x0524, 0x0525), (0x0526, 0x0527), (0x0528, 0x0529), (0x052A, 0x052B),
+    (0x052C, 0x052D), (0x052E, 0x052F), (0x10C7, 0x2D27), (0x10CD, 0x2D2D), (0x13F5, 0x13FD),
+    (0x1CBD, 0x10FD), (0x1CBE, 0x10FE), (0x1CBF, 0x10FF), (0x1E9E, 0x00DF), (0x1FBE, 0x03B9),
+    (0x2126, 0x03C9), (0x212A, 0x006B), (0x212B, 0x00E5), (0x2C2F, 0x2C5F), (0x2C70, 0x0252),
+    (0x2C7E, 0x023F), (0x2C7F, 0x0240), (0x2CEB, 0x2CEC), (0x2CED, 0x2CEE), (0x2CF2, 0x2CF3),
+    (0xA660, 0xA661), (0xA698, 0xA699), (0xA69A, 0xA69B), (0xA78D, 0x0265), (0xA790, 0xA791),
+    (0xA792, 0xA793), (0xA796, 0xA797), (0xA798, 0xA799), (0xA79A, 0xA79B), (0xA79C, 0xA79D),
+    (0xA79E, 0xA79F), (0xA7A0, 0xA7A1), (0xA7A2, 0xA7A3), (0xA7A4, 0xA7A5), (0xA7A6, 0xA7A7),
+    (0xA7A8, 0xA7A9), (0xA7B3, 0xAB53), (0xA7B4, 0xA7B5), (0xA7B6, 0xA7B7), (0xA7B8, 0xA7B9),
+    (0xA7BA, 0xA7BB), (0xA7BC, 0xA7BD), (0xA7BE, 0xA7BF), (0xA7C0, 0xA7C1), (0xA7C2, 0xA7C3),
+    (0xA7C4, 0xA794), (0xA7C7, 0xA7C8), (0xA7C9, 0xA7CA), (0xA7D0, 0xA7D1), (0xA7D6, 0xA7D7),
+    (0xA7D8, 0xA7D9), (0xA7F5, 0xA7F6),
+];
+
+/// One UTF-16 unit as a text comparison reads it.
+pub fn compare_unit(unit: u16) -> u16 {
+    match COMPARE_EXTRA.binary_search_by_key(&unit, |&(from, _)| from) {
+        Ok(at) => COMPARE_EXTRA[at].1,
+        Err(_) => lower_unit(unit),
+    }
+}
+
+/// Text as a text comparison reads it, one unit for one unit.
+pub fn compare_fold(text: &str) -> String {
+    map(text, compare_unit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +141,11 @@ mod tests {
         assert_eq!(upper("stra\u{df}e \u{e9}\u{ff}"), "STRA\u{df}E \u{c9}\u{178}");
         assert_eq!(lower("\u{130}\u{1e9e}ABC"), "\u{130}\u{1e9e}abc");
         assert_eq!(upper("\u{3c2}\u{3c3}\u{10d0}\u{24d0}\u{ff41}"), "\u{3c2}\u{3a3}\u{10d0}\u{24b6}\u{ff21}");
+    }
+
+    #[test]
+    fn comparison_folds_a_few_more() {
+        assert_eq!(compare_fold("\u{3c2}\u{3a3}\u{1c5}\u{212a}"), "\u{3c3}\u{3c3}\u{1c6}k");
+        assert_eq!(compare_fold("\u{131}\u{17f}\u{1c90}"), "\u{131}\u{17f}\u{1c90}");
     }
 }
