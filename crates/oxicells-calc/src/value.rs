@@ -351,17 +351,38 @@ struct CollationUnit {
     base: char,
     accented: char,
     kind: u8,
+    /// The kind with width set aside: a full-width letter, a half-width
+    /// kana and a ringed digit are their plain selves here.
+    widthless: u8,
     passed: bool,
+}
+
+/// Two values the same when width is set aside as well as case: UNIQUE,
+/// XMATCH and XLOOKUP ask this. Measured: UNIQUE merges "a", "A" and "ａ",
+/// "ア" and "ｱ", "①" and "1", "ß" and "ss", while "あ", "ァ", "é", "a-b" and
+/// "Ⅰ" each stand apart; XMATCH("ａ",{"a","ａ"}) is 1.
+pub fn same_ignoring_width(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Text(x), Value::Text(y)) => {
+            let (left, right) = (collation_units(x), collation_units(y));
+            let key = |units: &[CollationUnit]| -> Vec<(char, char, u8, bool)> {
+                units.iter().map(|unit| (unit.base, unit.accented, unit.widthless, unit.passed)).collect()
+            };
+            key(&left) == key(&right)
+        }
+        (Value::Error(x), Value::Error(y)) => x == y,
+        _ => compare(a, b) == Ok(Ordering::Equal),
+    }
 }
 
 fn collation_units(text: &str) -> Vec<CollationUnit> {
     let mut units = Vec::with_capacity(text.len());
     for character in text.chars().flat_map(char::to_lowercase) {
         let push = |units: &mut Vec<CollationUnit>, base: char, accented: char, kind: u8| {
-            units.push(CollationUnit { base, accented, kind, passed: false });
+            units.push(CollationUnit { base, accented, kind, widthless: kind, passed: false });
         };
         match character {
-            '-' | '\'' => units.push(CollationUnit { base: character, accented: character, kind: 1, passed: true }),
+            '-' | '\'' => units.push(CollationUnit { base: character, accented: character, kind: 1, widthless: 1, passed: true }),
             'ß' => {
                 push(&mut units, 's', 's', 1);
                 push(&mut units, 's', 's', 1);
@@ -386,11 +407,27 @@ fn collation_units(text: &str) -> Vec<CollationUnit> {
             '\u{FF01}'..='\u{FF5E}' => {
                 let narrow = char::from_u32(character as u32 - 0xFEE0).unwrap_or(character);
                 push(&mut units, narrow, narrow, 0);
+                if let Some(last) = units.last_mut() {
+                    last.widthless = 1;
+                }
+            }
+            // A ringed digit is its digit, drawn differently.
+            '\u{2460}'..='\u{2468}' => {
+                let digit = char::from_u32(character as u32 - 0x2460 + u32::from(b'1')).unwrap_or(character);
+                push(&mut units, digit, digit, 4);
+                if let Some(last) = units.last_mut() {
+                    last.widthless = 1;
+                }
             }
             _ => {
                 let (katakana, kind) = kana_collation(character);
                 let base = accent_base(katakana);
                 push(&mut units, base, katakana, kind);
+                if kind == 2 {
+                    if let Some(last) = units.last_mut() {
+                        last.widthless = 1;
+                    }
+                }
             }
         }
     }

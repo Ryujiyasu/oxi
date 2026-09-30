@@ -22158,7 +22158,9 @@ fn sort_rank(value: &Value) -> u8 {
 /// does the case decide — lower before upper, at the first letter where they
 /// differ. That gives `b A a B` → `a A b B` and `aB Ab ab AB` → `ab aB Ab AB`.
 fn compare_text_by_case(left: &str, right: &str) -> Ordering {
-    let folded = left.to_lowercase().cmp(&right.to_lowercase());
+    // The order without case first; case only settles a tie. Measured:
+    // with MatchCase, ab still comes before a-b.
+    let folded = excel_text_order(left, right);
     if folded != Ordering::Equal {
         return folded;
     }
@@ -22225,6 +22227,22 @@ fn collation_weight(c: char, voicing_mark: Option<char>) -> Option<((u8, u32), u
     }
     if c.is_ascii_alphabetic() {
         return Some(((2, c.to_ascii_lowercase() as u32), 0, 0));
+    }
+    // An accented Latin letter sorts with its letter, after it: measured,
+    // e, é, f.
+    let bare = match c.to_lowercase().next().unwrap_or(c) {
+        'à'..='å' => Some('a'),
+        'ç' => Some('c'),
+        'è'..='ë' => Some('e'),
+        'ì'..='ï' => Some('i'),
+        'ñ' => Some('n'),
+        'ò'..='ö' | 'ø' => Some('o'),
+        'ù'..='ü' => Some('u'),
+        'ý' | 'ÿ' => Some('y'),
+        _ => None,
+    };
+    if let Some(bare) = bare {
+        return Some(((2, bare as u32), 1, 0));
     }
     // Kana sort by their unvoiced hiragana, voicing next, and katakana
     // before hiragana after that.

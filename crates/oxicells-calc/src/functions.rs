@@ -2731,7 +2731,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let found = match match_mode {
                 0 => order
                     .into_iter()
-                    .find(|&i| compare(&hay[i], &key) == Ok(Ordering::Equal)),
+                    .find(|&i| !hay[i].is_blank() && crate::value::same_ignoring_width(&hay[i], &key)),
                 2 => {
                     let pattern = text(&args[0])?;
                     order.into_iter().find(|&i| match &hay[i] {
@@ -5236,7 +5236,7 @@ fn same_row(a: &[Value], b: &[Value]) -> bool {
             // Comparing two errors is not a comparison, but two of the SAME
             // error are plainly the same value, and UNIQUE has to see that.
             (Value::Error(why), Value::Error(also)) => why == also,
-            _ => matches!(compare(one, other), Ok(Ordering::Equal)),
+            _ => crate::value::same_ignoring_width(one, other),
         })
 }
 
