@@ -987,6 +987,82 @@ pub fn canonical_tables(
     Ok(output)
 }
 
+/// A formula with a table column's new name where it named the old one:
+/// in every reference to the table `table`, and, when the formula stands
+/// inside that table (`inside`), in its references that give no table name.
+/// Measured through VBA: renaming the column Amt to Amount, by
+/// `ListColumns(1).Name` or by typing over its heading, turns `=[@Amt]+1`
+/// into `=[@Amount]+1` and `=SUM(Tbl[Qty])` follows Qty's heading too.
+pub fn rename_table_column(input: &str, table: &str, inside: bool, old: &str, new: &str) -> String {
+    let Ok(tokens) = tokenize_spanned(input) else {
+        return input.to_string();
+    };
+    let table_key = crate::case_fold::table_key(table);
+    let old_key = crate::case_fold::table_key(old);
+    let bare_ok = !new.is_empty() && new.chars().all(|one| one.is_alphanumeric() || matches!(one, '_' | '.'));
+    let mut output = String::with_capacity(input.len());
+    let mut from = 0;
+    for (token, start) in &tokens {
+        let Token::Table { name, asked } = token else { continue };
+        let ours = if name.is_empty() { inside } else { crate::case_fold::table_key(name) == table_key };
+        if !ours {
+            continue;
+        }
+        let length = name.len() + asked.len() + 2;
+        let written = &input[*start..];
+        if !written.starts_with(name.as_str()) || written.len() < length || !written[..length].ends_with(']') {
+            continue;
+        }
+        let swap = |text: &str, bracketed: bool| -> Option<String> {
+            let trimmed = text.trim();
+            if trimmed.starts_with('#') || crate::case_fold::table_key(trimmed) != old_key {
+                return None;
+            }
+            Some(if bracketed || bare_ok { new.to_string() } else { format!("[{new}]") })
+        };
+        let changed = if !asked.contains('[') {
+            match asked.strip_prefix('@') {
+                Some(rest) => swap(rest, false).map(|column| format!("@{column}")),
+                None => swap(asked, false),
+            }
+        } else {
+            let mut out = String::with_capacity(asked.len());
+            let mut rest = asked.as_str();
+            let mut any = false;
+            while let Some(open) = rest.find('[') {
+                out.push_str(&rest[..open]);
+                let after = &rest[open + 1..];
+                let Some(close) = after.find(']') else {
+                    out.push_str(&rest[open..]);
+                    rest = "";
+                    break;
+                };
+                out.push('[');
+                match swap(&after[..close], true) {
+                    Some(column) => {
+                        any = true;
+                        out.push_str(&column);
+                    }
+                    None => out.push_str(&after[..close]),
+                }
+                out.push(']');
+                rest = &after[close + 1..];
+            }
+            out.push_str(rest);
+            any.then_some(out)
+        };
+        let Some(asked) = changed else { continue };
+        output.push_str(&input[from..*start]);
+        output.push_str(name);
+        output.push('[');
+        output.push_str(&asked);
+        output.push(']');
+        from = start + length;
+    }
+    output.push_str(&input[from..]);
+    output
+}
+
 /// The inside of a table reference's brackets with each column spelt as its
 /// heading is and each special item as Excel writes it.
 fn respell_specifier(asked: &str, headings: &[String]) -> Result<String, String> {

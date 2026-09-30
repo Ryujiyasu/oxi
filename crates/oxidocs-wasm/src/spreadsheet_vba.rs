@@ -5145,7 +5145,8 @@ impl<'a> WorkbookHost<'a> {
                     .iter()
                     .find(|table| same_table_name(&table.name, named))
                     .map(|table| table.name.clone())
-                    .ok_or_else(|| format!("the sheet has no table {named:?}"))?,
+                    // Measured: ListObjects("nosuch") is error 9.
+                    .ok_or_else(|| host_error(9, format!("the sheet has no table {named:?}")))?,
                 value => {
                     let index = positive_index(value, "ListObjects index")? as usize;
                     self.workbook.sheets[sheet]
@@ -5290,7 +5291,9 @@ impl<'a> WorkbookHost<'a> {
                     let Value::String(new_name) = &value else {
                         return Err("a column's name is text".to_string());
                     };
+                    let old_name = self.workbook.sheets[sheet].tables[index].columns[slot].clone();
                     self.workbook.sheets[sheet].tables[index].columns[slot] = new_name.clone();
+                    self.follow_column_rename(sheet, index, &old_name, new_name);
                     if let Some(extra) = self.table_extra.get_mut(&id) {
                         if slot < extra.auto_named.len() {
                             extra.auto_named[slot] = false;
@@ -12974,6 +12977,29 @@ impl<'a> WorkbookHost<'a> {
     /// typing `Qty` over the header of a table whose second column is
     /// already `Qty` keeps the typed cell as it is and renames the OTHER
     /// column `Qty2`.
+    /// Every formula naming a table's column by its old name takes the new.
+    fn follow_column_rename(&mut self, sheet: usize, index: usize, old: &str, new: &str) {
+        if old == new || old.is_empty() {
+            return;
+        }
+        let table = &self.workbook.sheets[sheet].tables[index];
+        let (name, rows, columns) = (table.name.clone(), table.start_row..=table.end_row, table.start_col..=table.end_col);
+        for (at, held) in self.workbook.sheets.iter_mut().enumerate() {
+            for row in &mut held.rows {
+                let row_number = row.index;
+                for cell in &mut row.cells {
+                    if let Some(formula) = cell.formula.as_mut() {
+                        let inside = at == sheet && rows.contains(&row_number) && columns.contains(&cell.col);
+                        let renamed = oxicells_calc::rename_table_column(formula, &name, inside, old, new);
+                        if renamed != *formula {
+                            *formula = renamed;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn rename_table_column_from_cell(&mut self, at: CellAddress) -> Result<(), String> {
         let Some((sheet, index)) = self.table_holding(at) else {
             return Ok(());
@@ -13004,10 +13030,14 @@ impl<'a> WorkbookHost<'a> {
         }
         let table_name = table.name.clone();
         let table = &mut self.workbook.sheets[sheet].tables[index];
-        table.columns[slot] = typed;
+        table.columns[slot] = typed.clone();
         for (other, fresh) in &renamed {
             table.columns[*other] = fresh.clone();
         }
+        for (other, fresh) in &renamed {
+            self.follow_column_rename(sheet, index, &columns[*other], fresh);
+        }
+        self.follow_column_rename(sheet, index, &columns[slot], &typed);
         let id = self.table_handle(sheet, &table_name);
         if let Some(extra) = self.table_extra.get_mut(&id) {
             if slot < extra.auto_named.len() {
@@ -25477,6 +25507,45 @@ fn text_a_cell_keeps(written: &str) -> &str {
     }
 }
 
+/// A formula narrowed for entry with its table references put back as they
+/// were written: a table's name and what its brackets hold are matched with
+/// width kept. Measured, "=SUM(TB" & ChrW(&HFF21) & "[Qty])" reaches a table
+/// named "Tb" & ChrW(&HFF41) while "=SUM(" & ChrW(&HFF54) & ChrW(&HFF42) &
+/// ChrW(&HFF41) & "[Amt])" is 1004, though ChrW(&HFF33) & ChrW(&HFF35) &
+/// ChrW(&HFF2D) is read as SUM.
+fn keep_table_references_wide(written: &str, narrowed: &str) -> String {
+    let original: Vec<char> = written.chars().collect();
+    let mut out: Vec<char> = narrowed.chars().collect();
+    if original.len() != out.len() {
+        return narrowed.to_string();
+    }
+    let mut quoted = false;
+    let mut depth = 0usize;
+    let mut index = 0;
+    while index < out.len() {
+        let one = out[index];
+        if one == '"' && depth == 0 {
+            quoted = !quoted;
+        } else if !quoted && one == '[' {
+            if depth == 0 {
+                // The table's name, if one stands straight before it.
+                let mut back = index;
+                while back > 0 && (out[back - 1].is_alphanumeric() || matches!(out[back - 1], '_' | '.')) {
+                    back -= 1;
+                    out[back] = original[back];
+                }
+            }
+            depth += 1;
+        } else if !quoted && one == ']' && depth > 0 {
+            depth -= 1;
+        } else if depth > 0 {
+            out[index] = original[index];
+        }
+        index += 1;
+    }
+    out.into_iter().collect()
+}
+
 /// Read an assigned value the way Excel reads it, whichever door it came
 /// through.
 ///
@@ -25510,6 +25579,7 @@ fn cell_input(value: Value, this_year: i64) -> Result<CellInput, String> {
                     if quoted { one } else { narrow }
                 })
                 .collect();
+            let narrowed = if formula { keep_table_references_wide(written, &narrowed) } else { narrowed };
             if narrowed.starts_with('=') && narrowed.len() > 1 && !formula_is_malformed(&narrowed[1..]) {
                 return Ok(CellInput::Formula(narrowed));
             }
