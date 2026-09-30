@@ -6389,9 +6389,16 @@ fn call_builtin(
             "abs" => match value {
                 Value::Null => Ok(Value::Null),
                 Value::Decimal(held) => Ok(Value::Decimal(held.abs())),
+                // Abs keeps the type. Measured: Abs(CInt(-32768)) is 6, yet
+                // the most negative Long comes back as itself, -2147483648.
+                Value::Integer(value) if *value == i64::from(i32::MIN) => Ok(Value::Integer(*value)),
                 Value::Integer(value) => value
                     .checked_abs()
                     .map(Value::Integer)
+                    .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Abs", line)),
+                Value::Int16(value) => value
+                    .checked_abs()
+                    .map(Value::Int16)
                     .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Abs", line)),
                 _ => {
                     let answer = number(value).map_err(mismatch)?.abs();
