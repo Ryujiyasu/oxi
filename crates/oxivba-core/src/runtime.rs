@@ -7782,9 +7782,12 @@ fn call_builtin(
                     }
                 }
             }
-            "cdbl" => Ok(Value::Double(
-                number(value).map_err(|message| coercion_error(value, message, line))?,
-            )),
+            // Text past a Double's range is an overflow: measured, CDbl("1E400")
+            // is 6.
+            "cdbl" => match number(value).map_err(|message| coercion_error(value, message, line))? {
+                held if held.is_finite() => Ok(Value::Double(held)),
+                _ => Err(error(RuntimeErrorKind::Overflow, "overflow converting to Double", line)),
+            },
             // Hex text of four digits or fewer is an Integer's bits:
             // measured, CInt("&HFFFF") -1 and CInt("&H8000") -32768, while
             // CInt("&H10000") overflows.
@@ -13045,6 +13048,9 @@ fn binary(
                     let single = matches!(lhs, Value::Single(_)) || matches!(rhs, Value::Single(_));
                     if single && narrow(&lhs) && narrow(&rhs) {
                         NumRank::Single.hold(a / b, None)?
+                    } else if !(a / b).is_finite() {
+                        // Measured: 1E+308 / 0.1 is error 6.
+                        return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
                     } else {
                         Value::Double(a / b)
                     }
@@ -13590,6 +13596,11 @@ fn arithmetic_result(
     rhs: &Value,
     op: BinaryOp,
 ) -> Result<Value, (RuntimeErrorKind, String)> {
+    // A Double past its range is an overflow, not an infinity: measured,
+    // 1E+308 * 10 is error 6.
+    if !answer.is_finite() {
+        return Err((RuntimeErrorKind::Overflow, "overflow".to_string()));
+    }
     let dates = (
         matches!(lhs, Value::Date(_)),
         matches!(rhs, Value::Date(_)),
