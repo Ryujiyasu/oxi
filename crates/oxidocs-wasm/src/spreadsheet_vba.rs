@@ -24707,12 +24707,25 @@ fn written_time(text: &str) -> Option<(f64, &'static str)> {
     if parts.len() < 2 || parts.len() > 3 {
         return None;
     }
+    // Two parts whose second has a fraction are minutes and seconds:
+    // measured, "10:30.5" is 630.5 seconds and "1:2.5" 62.5, shown mm:ss.0.
+    if parts.len() == 2 && meridiem.is_none() {
+        if let Some((whole, fraction)) = parts[1].split_once('.') {
+            let (minutes, seconds) = (digits_only(parts[0])?, digits_only(whole)?);
+            digits_only(fraction)?;
+            let fraction: f64 = format!("0.{fraction}").parse().ok()?;
+            if seconds > 59 {
+                return None;
+            }
+            return Some(((minutes as f64 * 60.0 + seconds as f64 + fraction) / 86_400.0, "mm:ss.0"));
+        }
+    }
     let hour = digits_only(parts[0])?;
     let minute = digits_only(parts[1])?;
     // Seconds may carry a fraction: measured, "12:00:00.5" is half a second
-    // past noon, shown mm:ss.0.
+    // past noon and "12:00:00.5 PM" the same, shown mm:ss.0.
     let (seconds_text, tenths) = match parts.get(2).and_then(|part| part.split_once('.')) {
-        Some((whole, fraction)) if meridiem.is_none() => (Some(whole), Some(fraction)),
+        Some((whole, fraction)) => (Some(whole), Some(fraction)),
         _ => (parts.get(2).copied(), None),
     };
     let second = match seconds_text {
