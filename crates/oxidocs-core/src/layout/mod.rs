@@ -30067,6 +30067,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     };
                     cursor.set(target_tw as f32 / 20.0);
+                    // S1619 (2026-10-01, default ON, opt-out OXI_S1619_DISABLE): the
+                    // mid-cell line lands ON the exact ideal stream, not on it rounded
+                    // to 10tw. policies__1f014c0f p22 (linesAndChars 416): Word's line
+                    // tops minus the exact stream 241.6 + 20.8k are 4.46-4.54 on all
+                    // nine body lines (constant within the PDF's 0.12 quantum), where
+                    // Oxi stepped 20.9/20.5/21.0; and the double-spaced heading after
+                    // line (7) starts at the exact 428.8 in Word, while Oxi carried the
+                    // rounded 429.0 into it -- +0.2 for the rest of the page, which
+                    // pushed «※帳票は» (bottom slack 18.00 against the 18.15 centred
+                    // box) to p23. `_pb_gridbottom_lac_gen.py` (the slice from the
+                    // page's heading on, so no rounded predecessor) flips exactly
+                    // where Oxi's centred box does.
+                    if !cell_aligned
+                        && std::env::var("OXI_S1319_DISABLE").is_err()
+                        && std::env::var_os("OXI_S1619_DISABLE").is_none()
+                        && cursor.lm2_ideal_y > 0.0
+                    {
+                        cursor.set(cursor.lm2_ideal_y / 20.0);
+                    }
                     if cell_aligned && std::env::var("OXI_S1319_DISABLE").is_err() {
                         // S1319: the cell-aligned target is exact from the margin;
                         // hand the unrounded stream to the next mid-cell line.
