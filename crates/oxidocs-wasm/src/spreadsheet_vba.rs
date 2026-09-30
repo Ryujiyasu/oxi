@@ -13003,6 +13003,18 @@ impl<'a> WorkbookHost<'a> {
         for address in header_writes {
             self.rename_table_column_from_cell(address)?;
         }
+        // A wrapping cell given a value refits its row: measured, "one" &
+        // vbLf & "two" takes the row to 37.5, and a long text into a cell
+        // already set to wrap to 75, while a row pinned at 30 stays 30.
+        let wraps = self.workbook.sheets[range.sheet].rows.iter().any(|row| {
+            (range.start_row..=range.end_row).contains(&row.index)
+                && row.cells.iter().any(|cell| {
+                    cell.style.wrap_text && (range.start_column..=range.end_column).contains(&cell.col)
+                })
+        });
+        if wraps {
+            self.refit_rows(range)?;
+        }
         // With calculation manual a formula is still worked out as it is
         // written, from the cells as they stand, and then left: measured,
         // `=B1*100` written over B1 of 1 reads 100, and still 100 once B1
