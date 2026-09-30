@@ -6432,7 +6432,7 @@ impl<'a> WorkbookHost<'a> {
                             .workbook
                             .sheets
                             .iter()
-                            .position(|held| held.name.eq_ignore_ascii_case(named))
+                            .position(|held| same_sheet_name(&held.name, named))
                         {
                             Some(sheet) => (sheet, rest.to_string()),
                             None => return Vec::new(),
@@ -9084,7 +9084,7 @@ impl<'a> WorkbookHost<'a> {
                 .workbook
                 .sheets
                 .iter()
-                .any(|sheet| sheet.name.eq_ignore_ascii_case(&candidate))
+                .any(|sheet| sheet_names_clash(&sheet.name, &candidate))
             {
                 return candidate;
             }
@@ -9147,7 +9147,7 @@ impl<'a> WorkbookHost<'a> {
                         .workbook
                         .sheets
                         .iter()
-                        .position(|sheet| sheet.name.eq_ignore_ascii_case(scope))
+                        .position(|sheet| same_sheet_name(&sheet.name, scope))
                         .unwrap_or(usize::MAX - 1);
                     (leaf.to_string(), index)
                 }
@@ -9225,7 +9225,7 @@ impl<'a> WorkbookHost<'a> {
                     .workbook
                     .sheets
                     .iter()
-                    .any(|sheet| sheet.name.eq_ignore_ascii_case(candidate))
+                    .any(|sheet| sheet_names_clash(&sheet.name, candidate))
             })
             .expect("a workbook cannot hold every possible sheet name")
     }
@@ -9403,7 +9403,7 @@ impl<'a> WorkbookHost<'a> {
             .sheets
             .iter()
             .enumerate()
-            .any(|(index, held)| index != sheet && held.name.eq_ignore_ascii_case(name))
+            .any(|(index, held)| index != sheet && sheet_names_clash(&held.name, name))
         {
             return Err(format!("another worksheet is already called {name}"));
         }
@@ -9473,7 +9473,7 @@ impl<'a> WorkbookHost<'a> {
                 .workbook
                 .sheets
                 .iter()
-                .position(|sheet| sheet.name.eq_ignore_ascii_case(name))
+                .position(|sheet| same_sheet_name(&sheet.name, name))
                 // Measured: `Worksheets("zz")` and `Worksheets(99)` are 9.
                 .ok_or_else(|| host_error(9, format!("worksheet not found: {name}"))),
             value if any_number(value).is_some() => self.worksheet_from_number(any_number(value).unwrap_or_default()),
@@ -9747,7 +9747,7 @@ impl<'a> WorkbookHost<'a> {
                         .workbook
                         .sheets
                         .iter()
-                        .any(|held| held.name.eq_ignore_ascii_case(bare))
+                        .any(|held| same_sheet_name(&held.name, bare))
                     {
                         return Err(format!("{bare:?} is not a worksheet in this workbook"));
                     }
@@ -9931,7 +9931,7 @@ impl<'a> WorkbookHost<'a> {
             .workbook
             .sheets
             .iter()
-            .position(|candidate| candidate.name.eq_ignore_ascii_case(&named_sheet))
+            .position(|candidate| same_sheet_name(&candidate.name, &named_sheet))
             .ok_or_else(|| {
                 format!("the name {held:?} points at a worksheet this workbook does not have: {named_sheet}")
             })?;
@@ -10016,7 +10016,7 @@ impl<'a> WorkbookHost<'a> {
                     .workbook
                     .sheets
                     .iter()
-                    .position(|candidate| candidate.name.eq_ignore_ascii_case(&sheet_name))
+                    .position(|candidate| same_sheet_name(&candidate.name, &sheet_name))
                     .ok_or_else(|| format!("worksheet not found: {sheet_name}"))?;
                 (sheet, reference.trim())
             }
@@ -12545,7 +12545,7 @@ impl<'a> WorkbookHost<'a> {
                     .workbook
                     .sheets
                     .iter()
-                    .position(|held| held.name.eq_ignore_ascii_case(name))?,
+                    .position(|held| same_sheet_name(&held.name, name))?,
             };
             let at = CellAddress {
                 sheet: on,
@@ -13071,7 +13071,7 @@ impl<'a> WorkbookHost<'a> {
             self.workbook
                 .sheets
                 .iter()
-                .find(|sheet| sheet.name.eq_ignore_ascii_case(asked))
+                .find(|sheet| same_sheet_name(&sheet.name, asked))
                 .map(|sheet| sheet.name.clone())
         };
         let name_case = |asked: &str| {
@@ -15812,7 +15812,7 @@ impl<'a> WorkbookHost<'a> {
                 resizable: true,
             }),
             UserArg::Cells { sheet, range, .. } => {
-                let Some(at) = self.workbook.sheets.iter().position(|held| held.name.eq_ignore_ascii_case(sheet)) else {
+                let Some(at) = self.workbook.sheets.iter().position(|held| same_sheet_name(&held.name, sheet)) else {
                     return Value::Error(2023);
                 };
                 self.object(HostObject::Range(CellRange {
@@ -16636,7 +16636,7 @@ impl Host for WorkbookHost<'_> {
             };
             self.user_functions.borrow_mut().asked.insert(call.number, (call.key.clone(), call.once));
             if let Some((sheet, column, row)) = &call.caller {
-                if let Some(at) = self.workbook.sheets.iter().position(|held| held.name.eq_ignore_ascii_case(sheet)) {
+                if let Some(at) = self.workbook.sheets.iter().position(|held| same_sheet_name(&held.name, sheet)) {
                     self.user_functions
                         .borrow_mut()
                         .callers
@@ -22613,6 +22613,41 @@ fn find_value_text(value: &Value) -> String {
 /// half-width `ｱｲ` lands on `アイ`. What does NOT fold is a narrow kana with
 /// its voice mark beside it: `ｶ` + `ﾞ` stays two characters and never meets
 /// the single `ガ`.
+/// A sheet name as Excel reads it when one is asked for: case set aside by
+/// its own table and the ligatures spelled out. Measured, Worksheets("NSS")
+/// finds a sheet named "nß", "NFI" one named "n" & ChrW(&HFB01) and
+/// ChrW(&H3A3) one named with the final sigma, while Georgian capitals, the
+/// dotless i, wide letters and half-width kana are not found.
+fn sheet_name_key(name: &str, widthless: bool) -> String {
+    let mut key = String::with_capacity(name.len());
+    for one in name.chars() {
+        let one = if widthless { one_width(one) } else { one };
+        match oxicells_calc::case_fold::fold(one) {
+            '\u{df}' => key.push_str("ss"),
+            '\u{e6}' => key.push_str("ae"),
+            '\u{153}' => key.push_str("oe"),
+            '\u{fb01}' => key.push_str("fi"),
+            '\u{fb02}' => key.push_str("fl"),
+            '\u{133}' => key.push_str("ij"),
+            other => key.push(other),
+        }
+    }
+    key
+}
+
+/// Whether a sheet named `held` answers to `asked`.
+fn same_sheet_name(held: &str, asked: &str) -> bool {
+    held.eq_ignore_ascii_case(asked) || sheet_name_key(held, false) == sheet_name_key(asked, false)
+}
+
+/// Whether two sheet names may not stand side by side. Wider than a lookup:
+/// measured, renaming a sheet "Na" beside one named "n" & ChrW(&HFF41), or
+/// "N" & ChrW(&HFF71) beside "n" & ChrW(&H30A2), is 1004, though neither is
+/// found by the other's name.
+fn sheet_names_clash(held: &str, asked: &str) -> bool {
+    held.eq_ignore_ascii_case(asked) || sheet_name_key(held, true) == sheet_name_key(asked, true)
+}
+
 fn compared(one: char, match_case: bool, match_byte: bool) -> char {
     let one = if match_byte { one } else { one_width(one) };
     // Case is set aside by Excel's own table: measured, Find("σ") lands on
