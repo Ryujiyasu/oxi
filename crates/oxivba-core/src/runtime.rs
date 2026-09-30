@@ -2553,20 +2553,33 @@ impl<'a> Runtime<'a> {
         const MODULES: [&str; 9] = [
             "strings", "math", "conversion", "datetime", "interaction", "information", "financial", "filesystem", "globals",
         ];
+        // A qualifier is the VBA or Excel library, one of the library's
+        // modules (`Strings.Left`), or an enumeration's name
+        // (`ColorConstants.vbRed`, `Excel.XlDirection.xlDown`) -- measured,
+        // each reads as the name it qualifies -- and never a variable of the
+        // program's own.
+        let names_a_library = |name: &str| {
+            name.eq_ignore_ascii_case("vba")
+                || name.eq_ignore_ascii_case("excel")
+                || MODULES.iter().any(|module| name.eq_ignore_ascii_case(module))
+                || name.eq_ignore_ascii_case("constants")
+                || name.to_ascii_lowercase().ends_with("constants")
+                || (name.len() > 2 && (name[..2].eq_ignore_ascii_case("vb") || name[..2].eq_ignore_ascii_case("xl"))
+                    && name.chars().nth(2).is_some_and(char::is_uppercase))
+        };
         let is_library = |object: &Expr| -> bool {
-            let root = match object {
-                Expr::Ident(name, _) => Some(name),
-                Expr::Member { object, name, .. }
-                    if MODULES.iter().any(|module| name.eq_ignore_ascii_case(module)) =>
-                {
-                    match &**object {
-                        Expr::Ident(root, _) => Some(root),
-                        _ => None,
+            let mut current = object;
+            loop {
+                match current {
+                    Expr::Ident(root, _) => {
+                        return names_a_library(root)
+                            && self.lookup_slot(frame, root).is_none()
+                            && !self.module.items.iter().any(|item| matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(root)));
                     }
+                    Expr::Member { object, name, .. } if names_a_library(name) => current = object,
+                    _ => return false,
                 }
-                _ => None,
-            };
-            root.is_some_and(|root| root.eq_ignore_ascii_case("vba") && self.lookup_slot(frame, root).is_none())
+            }
         };
         let bare = |name: &str, suffix: Option<char>, span: crate::Span| match suffix {
             Some(suffix) => Expr::TypedIdent { name: name.to_string(), suffix, span },
