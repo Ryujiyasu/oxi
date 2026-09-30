@@ -7271,8 +7271,10 @@ fn call_builtin(
                     line,
                 ));
             }
+            // A Null condition picks the false part: measured, IIf(Null, 1, 2)
+            // is 2.
             return match &args[0] {
-                Value::Null => Ok(Value::Null),
+                Value::Null => Ok(args[2].clone()),
                 condition => Ok(
                     if truthy(condition)
                         .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
@@ -8014,6 +8016,8 @@ fn call_format_builtin(
             }
             let pattern = match args.get(1) {
                 None | Some(Value::Missing) => "".to_string(),
+                // Measured: Format(1, Null) is 94.
+                Some(Value::Null) => return Err(invalid_null(line)),
                 Some(value) => text(value).map_err(mismatch)?,
             };
             let first_day = first_day_of_week(args.get(2), line)?;
@@ -8707,7 +8711,10 @@ fn call_text_conversion_builtin(
             if matches!(args[0], Value::Null) {
                 return Ok(Value::Null);
             }
+            // vbUnicode and vbFromUnicode stand alone: measured, 65, 96, 99
+            // and 129 are all 5.
             if !(0..=255).contains(&conversion)
+                || (conversion & 192 != 0 && conversion & 63 != 0)
                 || conversion & 4 != 0 && conversion & 8 != 0
                 || conversion & 16 != 0 && conversion & 32 != 0
                 || conversion & 64 != 0 && conversion & 128 != 0
