@@ -1204,10 +1204,19 @@ impl<'a> Runtime<'a> {
             }
         }
         if !matches!(procedure.kind, ProcKind::Sub) {
-            frame.values.insert(
-                frame.procedure_name.clone(),
-                Rc::new(RefCell::new(default_return_value(procedure))),
-            );
+            // A function of a user-defined type starts as a fresh record, so
+            // `MakePt.x = a` fills in what it returns: measured, a function
+            // setting .x, .y and .tag on its own name hands all three back.
+            let starting = match procedure.return_type.as_ref() {
+                Some(return_type) => {
+                    match self.new_record(&return_type.name, &mut frame, procedure.span.line, 0)? {
+                        Some(record) => record,
+                        None => default_return_value(procedure),
+                    }
+                }
+                None => default_return_value(procedure),
+            };
+            frame.values.insert(frame.procedure_name.clone(), Rc::new(RefCell::new(starting)));
             if procedure
                 .return_type
                 .as_ref()
