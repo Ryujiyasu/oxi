@@ -1851,6 +1851,27 @@ impl<'a> Runtime<'a> {
     ) -> Result<(), RuntimeError> {
         let current = match self.eval_expr(&statement.target, frame)? {
             Value::String(value) => value,
+            // LSet of one record over another copies its bytes as they lie in
+            // memory: measured, a Byte of 1 and an Integer of 258 LSet over
+            // a Long read back 16908289 (&H01020001), the pad between them 0.
+            Value::Record(mut into) if matches!(statement.kind, crate::ast::AlignmentKind::Left) => {
+                let Value::Record(from) = self.eval_expr(&statement.value, frame)? else {
+                    return Err(error(
+                        RuntimeErrorKind::TypeMismatch,
+                        "LSet of a record takes a record",
+                        Some(statement.span.line),
+                    ));
+                };
+                let mut target_bytes = Vec::new();
+                self.record_bytes(&into, &mut target_bytes, 0);
+                let mut source_bytes = Vec::new();
+                self.record_bytes(&from, &mut source_bytes, 0);
+                let count = source_bytes.len().min(target_bytes.len());
+                target_bytes[..count].copy_from_slice(&source_bytes[..count]);
+                let mut at = 0;
+                self.record_from_bytes(&mut into, &target_bytes, &mut at, 0);
+                return self.assign(&statement.target, Value::Record(into), frame, statement.span.line);
+            }
             _ => {
                 return Err(error(
                     RuntimeErrorKind::TypeMismatch,
@@ -2282,7 +2303,11 @@ impl<'a> Runtime<'a> {
                     Some(line),
                 )
             })?;
-        Ok(Value::String(" ".repeat(length)))
+        // An untouched fixed-length string holds NULs, not spaces: measured,
+        // AscW of its first character is 0 in a local, a record field, an
+        // array element and a module variable alike, where a value given to
+        // it is padded with spaces.
+        Ok(Value::String("\0".repeat(length)))
     }
 
     /// Builds a fresh value for a `Type ... End Type` declared in this module,
@@ -2326,6 +2351,191 @@ impl<'a> Runtime<'a> {
             type_name: definition.name,
             fields,
         })))
+    }
+
+    /// How one field of a record lies: (packed length, in-memory length,
+    /// alignment). Measured in 64-bit Excel over eleven types: a String, an
+    /// Object and a dynamic array are an 8-byte pointer in both lengths, a
+    /// Variant 24, a fixed-length String of n n packed and 2n in memory
+    /// aligned to 1, and every number its own size, aligned to it.
+    fn field_layout(&self, declared: &crate::ast::VarItem, value: &Value, depth: usize) -> (u64, u64, u64) {
+        if let Some(bounds) = &declared.array_bounds {
+            if bounds.is_empty() {
+                return (8, 8, 8);
+            }
+            let Value::Array(array) = value else { return (8, 8, 8) };
+            let element = crate::ast::VarItem { array_bounds: None, ..declared.clone() };
+            let (packed, memory, align) = array
+                .values
+                .first()
+                .map(|first| self.field_layout(&element, first, depth))
+                .unwrap_or((0, 0, 1));
+            let count = array.values.len() as u64;
+            return (packed * count, memory * count, align);
+        }
+        if declared.type_name.fixed_length.is_some() {
+            let length = match value {
+                Value::String(held) => held.encode_utf16().count() as u64,
+                _ => 0,
+            };
+            return (length, length * 2, 1);
+        }
+        if let Value::Record(record) = value {
+            let (packed, align, memory) = self.record_layout(record, depth + 1);
+            return (packed, memory, align);
+        }
+        match declared.type_name.name.to_ascii_lowercase().as_str() {
+            "byte" => (1, 1, 1),
+            "boolean" | "integer" => (2, 2, 2),
+            "long" | "single" => (4, 4, 4),
+            "longlong" | "longptr" | "double" | "currency" | "date" | "string" | "object" => (8, 8, 8),
+            "variant" | "" => (24, 24, 8),
+            _ => (8, 8, 8),
+        }
+    }
+
+    /// A record's (packed length, alignment, in-memory length).
+    fn record_layout(&self, record: &RecordValue, depth: usize) -> (u64, u64, u64) {
+        let Some(definition) = self.find_type(&record.type_name).filter(|_| depth < 16) else {
+            return (0, 1, 0);
+        };
+        let (mut packed, mut offset, mut widest) = (0u64, 0u64, 1u64);
+        for (declared, (_, value)) in definition.fields.iter().zip(&record.fields) {
+            let (field_packed, field_memory, align) = self.field_layout(declared, value, depth);
+            packed += field_packed;
+            offset = offset.div_ceil(align) * align + field_memory;
+            widest = widest.max(align);
+        }
+        (packed, widest, offset.div_ceil(widest) * widest)
+    }
+
+    /// A record as its bytes lie in memory, little-endian, the pads and any
+    /// pointer or Variant as noughts.
+    fn record_bytes(&self, record: &RecordValue, out: &mut Vec<u8>, depth: usize) {
+        let start = out.len();
+        let Some(definition) = self.find_type(&record.type_name).filter(|_| depth < 16) else { return };
+        let (_, widest, memory) = self.record_layout(record, depth);
+        for (declared, (_, value)) in definition.fields.iter().zip(&record.fields) {
+            let (_, _, align) = self.field_layout(declared, value, depth);
+            while (out.len() - start) as u64 % align != 0 {
+                out.push(0);
+            }
+            self.field_bytes(declared, value, out, depth);
+        }
+        let _ = widest;
+        while ((out.len() - start) as u64) < memory {
+            out.push(0);
+        }
+    }
+
+    fn field_bytes(&self, declared: &crate::ast::VarItem, value: &Value, out: &mut Vec<u8>, depth: usize) {
+        if let (Some(bounds), Value::Array(array)) = (&declared.array_bounds, value) {
+            if !bounds.is_empty() {
+                let element = crate::ast::VarItem { array_bounds: None, ..declared.clone() };
+                for one in &array.values {
+                    self.field_bytes(&element, one, out, depth);
+                }
+                return;
+            }
+        }
+        let (_, memory, _) = self.field_layout(declared, value, depth);
+        match value {
+            Value::Record(inner) => self.record_bytes(inner, out, depth + 1),
+            Value::String(held) if declared.type_name.fixed_length.is_some() => {
+                for unit in held.encode_utf16() {
+                    out.extend_from_slice(&unit.to_le_bytes());
+                }
+            }
+            Value::Byte(n) => out.push(*n),
+            Value::Int16(n) => out.extend_from_slice(&n.to_le_bytes()),
+            Value::Boolean(state) => out.extend_from_slice(&(if *state { -1i16 } else { 0 }).to_le_bytes()),
+            Value::Integer(n) if memory == 4 => out.extend_from_slice(&(*n as i32).to_le_bytes()),
+            Value::Integer(n) | Value::LongLong(n) | Value::Currency(n) => out.extend_from_slice(&n.to_le_bytes()),
+            Value::Single(n) => out.extend_from_slice(&n.to_le_bytes()),
+            Value::Double(n) | Value::Date(n) => out.extend_from_slice(&n.to_le_bytes()),
+            _ => out.extend(std::iter::repeat_n(0u8, memory as usize)),
+        }
+    }
+
+    /// Read a record's fields back from bytes laid out as `record_bytes`
+    /// lays them. A pointer or a Variant keeps what it held.
+    fn record_from_bytes(&self, record: &mut RecordValue, bytes: &[u8], at: &mut usize, depth: usize) {
+        let start = *at;
+        let Some(definition) = self.find_type(&record.type_name).filter(|_| depth < 16) else { return };
+        let (_, _, memory) = self.record_layout(record, depth);
+        for (declared, (_, value)) in definition.fields.iter().zip(record.fields.iter_mut()) {
+            let (_, _, align) = self.field_layout(declared, value, depth);
+            while (*at - start) as u64 % align != 0 {
+                *at += 1;
+            }
+            self.field_from_bytes(declared, value, bytes, at, depth);
+        }
+        *at = start + memory as usize;
+    }
+
+    fn field_from_bytes(&self, declared: &crate::ast::VarItem, value: &mut Value, bytes: &[u8], at: &mut usize, depth: usize) {
+        if let (Some(bounds), Value::Array(array)) = (&declared.array_bounds, &mut *value) {
+            if !bounds.is_empty() {
+                let element = crate::ast::VarItem { array_bounds: None, ..declared.clone() };
+                for one in array.values.iter_mut() {
+                    self.field_from_bytes(&element, one, bytes, at, depth);
+                }
+                return;
+            }
+        }
+        let (_, memory, _) = self.field_layout(declared, value, depth);
+        let take = |at: &mut usize, count: usize| -> Option<Vec<u8>> {
+            let slice = bytes.get(*at..*at + count)?.to_vec();
+            *at += count;
+            Some(slice)
+        };
+        let fixed = declared.type_name.fixed_length.is_some();
+        match value {
+            Value::Record(inner) => self.record_from_bytes(inner, bytes, at, depth + 1),
+            Value::String(held) if fixed => {
+                let units = held.encode_utf16().count();
+                if let Some(raw) = take(at, units * 2) {
+                    let read: Vec<u16> = raw.chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+                    *held = String::from_utf16_lossy(&read);
+                }
+            }
+            Value::Byte(n) => {
+                if let Some(raw) = take(at, 1) {
+                    *n = raw[0];
+                }
+            }
+            Value::Int16(n) => {
+                if let Some(raw) = take(at, 2) {
+                    *n = i16::from_le_bytes([raw[0], raw[1]]);
+                }
+            }
+            Value::Boolean(state) => {
+                if let Some(raw) = take(at, 2) {
+                    *state = i16::from_le_bytes([raw[0], raw[1]]) != 0;
+                }
+            }
+            Value::Integer(n) if memory == 4 => {
+                if let Some(raw) = take(at, 4) {
+                    *n = i64::from(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]));
+                }
+            }
+            Value::Integer(n) | Value::LongLong(n) | Value::Currency(n) => {
+                if let Some(raw) = take(at, 8) {
+                    *n = i64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                }
+            }
+            Value::Single(n) => {
+                if let Some(raw) = take(at, 4) {
+                    *n = f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+                }
+            }
+            Value::Double(n) | Value::Date(n) => {
+                if let Some(raw) = take(at, 8) {
+                    *n = f64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                }
+            }
+            _ => *at += memory as usize,
+        }
     }
 
     /// The module's `Type` declarations, by name. Returned owned because the
@@ -4075,6 +4285,13 @@ impl<'a> Runtime<'a> {
         } else {
             None
         };
+        // A record's length is its layout's: Len the packed size a Put would
+        // write, LenB the size it takes in memory with each field aligned.
+        if let ([Value::Record(record)], true) = (args.as_slice(), matches!(name.to_ascii_lowercase().as_str(), "len" | "lenb")) {
+            let (packed, _, memory) = self.record_layout(record, 0);
+            let length = if name.eq_ignore_ascii_case("len") { packed } else { memory };
+            return Ok(Value::Integer(length as i64));
+        }
         if let Some(result) = call_builtin(
             name,
             read_args.as_deref().unwrap_or(&args),
@@ -17035,7 +17252,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(value, Value::String("0|0|1|2|[   ]|True|10".to_string()));
+        // An erased fixed-length String is NULs again: measured, AscW of
+        // its first character is 0.
+        assert_eq!(value, Value::String("0|0|1|2|[\0\0\0]|True|10".to_string()));
     }
 
     #[test]
