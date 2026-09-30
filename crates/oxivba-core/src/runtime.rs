@@ -1159,12 +1159,21 @@ impl<'a> Runtime<'a> {
             body: &procedure.body,
         };
         for (param, argument) in procedure.params.iter().zip(args) {
+            // A value that is no variable of the caller's goes by reference
+            // to a temporary of the parameter's type: measured, `b:="q"` to
+            // `Optional b As Long` is 13.
+            let temporary = matches!(argument, BoundArgument::Value(ref value) if !matches!(value, Value::Object(_) | Value::Nothing | Value::Array(_)))
+                && param.mode == ParamMode::ByRef
+                && matches!(
+                    param.type_name.name.to_ascii_lowercase().as_str(),
+                    "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string"
+                );
             let value = match argument {
                 BoundArgument::Value(value) => Rc::new(RefCell::new(value)),
                 BoundArgument::Reference(value) => value,
             };
             let narrowed = !param.is_array
-                && param.mode == ParamMode::ByVal
+                && (param.mode == ParamMode::ByVal || temporary)
                 && !param.type_name.is_new;
             if narrowed {
                 let taken = value.borrow().clone();
@@ -3763,6 +3772,8 @@ impl<'a> Runtime<'a> {
         let mut copybacks = Vec::<(ValueSlot, Vec<i64>, ValueSlot)>::new();
         let mut fixed_string_copybacks = Vec::<(ValueSlot, usize, ValueSlot)>::new();
         let mut record_copybacks = Vec::<(Expr, ValueSlot)>::new();
+        let mut param_array_backs = Vec::<(usize, ValueSlot)>::new();
+        let mut param_array_held: Option<ValueSlot> = None;
         for (parameter_index, parameter) in procedure.params.iter().enumerate() {
             if parameter.mode == ParamMode::ParamArray {
                 let mut values = Vec::with_capacity(param_array_args.len());
@@ -3772,9 +3783,18 @@ impl<'a> Runtime<'a> {
                         Some(expression) => self.eval_expr(expression, frame)?,
                         None => Value::Missing,
                     };
+                    // Each element stands for the variable it was given as:
+                    // measured, `xs(0) = xs(0) + 100` changes the caller's n.
+                    if let Some(name) = argument.value.as_ref().and_then(expr_name) {
+                        if !force_by_value && !argument.force_by_value && !self.is_constant(frame, name) {
+                            if let Some(slot) = self.lookup_slot(frame, name) {
+                                param_array_backs.push((values.len(), slot));
+                            }
+                        }
+                    }
                     values.push(value);
                 }
-                bound.push(BoundArgument::Value(Value::Array(ArrayValue {
+                let held = Rc::new(RefCell::new(Value::Array(ArrayValue {
                     dimensions: vec![ArrayDimension {
                         lower_bound: 0,
                         length: values.len(),
@@ -3783,6 +3803,8 @@ impl<'a> Runtime<'a> {
                     element_default: Box::new(default_value(&parameter.type_name)),
                     resizable: false,
                 })));
+                param_array_held = Some(held.clone());
+                bound.push(BoundArgument::Reference(held));
                 continue;
             }
             let Some(argument_index) = assigned[parameter_index] else {
@@ -3868,6 +3890,15 @@ impl<'a> Runtime<'a> {
         for (place, value) in record_copybacks {
             let value = value.borrow().clone();
             self.assign(&place, value, frame, line.unwrap_or(0))?;
+        }
+        if let Some(held) = param_array_held {
+            if let Value::Array(array) = &*held.borrow() {
+                for (index, slot) in param_array_backs {
+                    if let Some(value) = array.values.get(index) {
+                        *slot.borrow_mut() = value.clone();
+                    }
+                }
+            }
         }
         for (target, width, value) in fixed_string_copybacks {
             *target.borrow_mut() = coerce_string_width(value.borrow().clone(), width, line)?;
