@@ -310,6 +310,17 @@ impl Files {
         Ok(line)
     }
 
+    /// `Input(n, #f)`: the next n characters, line breaks and all.
+    pub fn read_characters(&mut self, number: i64, count: usize) -> Result<String, FileError> {
+        let (bytes, position) = self.reading(number)?;
+        if *position + count > bytes.len() {
+            return Err(FileError::PastEnd);
+        }
+        let read = String::from_utf8_lossy(&bytes[*position..*position + count]).into_owned();
+        *position += count;
+        Ok(read)
+    }
+
     /// `Input #`: the next field as written, and whether it was quoted.
     pub fn read_field(&mut self, number: i64) -> Result<(String, bool), FileError> {
         let (bytes, position) = self.reading(number)?;

@@ -1785,6 +1785,13 @@ impl<'a> Runtime<'a> {
                 self.exec_file_system(action, frame)?;
                 Ok(Flow::Continue)
             }
+            // Measured: `Width #1, 5` and then a ten-letter Print leaves the
+            // line whole.
+            Statement::FileWidth { file_number, span, .. } => {
+                let number = self.file_number(file_number, frame, span.line)?;
+                self.files.handle(number).map_err(|failure| file_failure(failure, span.line))?;
+                Ok(Flow::Continue)
+            }
             Statement::FileTransfer(transfer) => {
                 self.exec_file_transfer(transfer, frame)?;
                 Ok(Flow::Continue)
@@ -2174,6 +2181,11 @@ impl<'a> Runtime<'a> {
                 .map_err(mismatch)
                 .and_then(|file| self.files.length_of_open(file).map_err(failure))
                 .map(|length| Value::Integer(length as i64)),
+            ("input" | "input$", [count, file]) => number_of(count)
+                .and_then(|count| number_of(file).map(|file| (count, file)))
+                .map_err(mismatch)
+                .and_then(|(count, file)| self.files.read_characters(file, count.max(0) as usize).map_err(failure))
+                .map(Value::String),
             ("seek", [file]) => number_of(file)
                 .map_err(mismatch)
                 .and_then(|file| self.files.next_position(file).map_err(failure))
@@ -6620,6 +6632,8 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "chrb"
             | "chrb$"
             | "freefile"
+            | "input"
+            | "input$"
             | "seek"
             | "eof"
             | "lof"
@@ -19447,7 +19461,10 @@ fn print_field(value: &Value) -> Result<String, String> {
     Ok(match value {
         Value::Empty => String::new(),
         Value::Null => "Null".to_string(),
-        Value::Boolean(_) | Value::String(_) | Value::Date(_) => text(value)?,
+        Value::Boolean(_) | Value::String(_) => text(value)?,
+        // A date keeps a space after it, as a number does, though none in
+        // front: measured, "1/2/2003 10:30:00 AM ".
+        Value::Date(_) => format!("{} ", text(value)?),
         Value::Error(code) => format!("Error {code}"),
         _ => {
             let written = text(value)?;
@@ -19474,15 +19491,24 @@ fn write_field(value: &Value) -> Result<String, String> {
             let fraction = serial - day;
             let seconds = (fraction * 86_400.0).round() as i64;
             let time = format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60);
-            if day == 0.0 && fraction != 0.0 {
-                format!("#{time}#")
-            } else if fraction == 0.0 {
+            // A time alone is written on its day, 1899-12-30: measured,
+            // #10:30:00 AM# writes #1899-12-30 10:30:00#.
+            if fraction == 0.0 {
                 format!("#{:04}-{:02}-{:02}#", parts.year, parts.month, parts.day)
             } else {
                 format!("#{:04}-{:02}-{:02} {time}#", parts.year, parts.month, parts.day)
             }
         }
-        _ => text(value)?,
+        // A number drops the nought in front of its point, the way Str does:
+        // measured, CSng(0.1) writes .1.
+        _ => {
+            let written = text(value)?;
+            match (written.strip_prefix("0."), written.strip_prefix("-0.")) {
+                (Some(rest), _) => format!(".{rest}"),
+                (_, Some(rest)) => format!("-.{rest}"),
+                _ => written,
+            }
+        }
     })
 }
 
