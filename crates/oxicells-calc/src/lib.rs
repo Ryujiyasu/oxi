@@ -42,6 +42,7 @@
 //! ```
 
 pub mod ast;
+mod case_fold;
 pub mod datetime;
 mod distributions;
 mod functions_more;

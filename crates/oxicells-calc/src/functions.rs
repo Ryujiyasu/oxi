@@ -110,8 +110,8 @@ impl Arg {
 /// text instead means `VLOOKUP(D1 & "*", ...)` — the ordinary way to look
 /// something up by its beginning — finds nothing at all.
 pub(crate) fn wildcard_match(text: &str, pattern: &str) -> bool {
-    let text: Vec<char> = text.to_lowercase().chars().collect();
-    let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
+    let text: Vec<char> = crate::case_fold::fold_text(text).chars().collect();
+    let pattern: Vec<char> = crate::case_fold::fold_text(pattern).chars().collect();
     // Walked rather than recursed, remembering the last `*` so a dead end can
     // be backed out of: `a*b` against `aXbY` has to try the second `b` too.
     let (mut at, mut against) = (0usize, 0usize);
@@ -191,7 +191,7 @@ fn answers_to(candidate: &Value, key: &Value) -> bool {
         // An exact lookup asks for the same letters, case aside -- not the
         // collation's likeness: measured, MATCH("ss",{..."ß","ss"},0) finds
         // "ss", and MATCH("ｱ",{"ア",...,"ｱ"},0) the half-width one.
-        return held.to_lowercase() == pattern.to_lowercase();
+        return crate::case_fold::fold_text(held) == crate::case_fold::fold_text(pattern);
     }
     compare(candidate, key) == Ok(Ordering::Equal)
 }
@@ -1439,7 +1439,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if instance == 0 || (!unnamed_on_empty && instance.unsigned_abs() as usize > hay.chars().count()) {
                 return Err(ExcelError::Value);
             }
-            let fold = |t: &str| if ignore_case { t.to_lowercase() } else { t.to_string() };
+            let fold = |t: &str| if ignore_case { crate::case_fold::fold_text(t) } else { t.to_string() };
             let folded = fold(&hay);
             // Case folding that changes a length would put the cuts in the
             // wrong place; such text is matched as written.
@@ -1654,7 +1654,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let needle = text(&args[0])?;
             let haystack = text(&args[1])?;
             let (needle, haystack) = if name == "SEARCH" {
-                (needle.to_lowercase(), haystack.to_lowercase())
+                (crate::case_fold::fold_text(&needle), crate::case_fold::fold_text(&haystack))
             } else {
                 (needle, haystack)
             };

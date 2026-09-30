@@ -422,7 +422,7 @@ pub fn same_ignoring_width(a: &Value, b: &Value) -> bool {
 
 fn collation_units(text: &str) -> Vec<CollationUnit> {
     let mut units = Vec::with_capacity(text.len());
-    for character in text.chars().flat_map(char::to_lowercase) {
+    for character in text.chars().map(crate::case_fold::fold) {
         let push = |units: &mut Vec<CollationUnit>, base: char, accented: char, kind: u8| {
             units.push(CollationUnit { base, accented, kind, widthless: kind, passed: false });
         };
