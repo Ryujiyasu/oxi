@@ -4046,7 +4046,23 @@ impl<'a> Runtime<'a> {
             && args.iter().any(|value| matches!(value, Value::Object(_)))
         {
             let mut read = Vec::with_capacity(args.len());
+            // A Collection or Dictionary read for its value asks its default
+            // Item with no index: measured, Len and CStr of either are 450,
+            // while VarType answers 9 and IsNumeric False.
+            let asks_about = matches!(
+                name.to_ascii_lowercase().as_str(),
+                "vartype" | "isnumeric" | "isempty" | "isnull" | "isdate" | "iserror" | "isarray"
+            );
             for value in &args {
+                if let Value::Object(object) = value {
+                    if !asks_about && matches!(object.kind.as_str(), "Collection" | "Dictionary") {
+                        return Err(error(
+                            RuntimeErrorKind::ArgumentCount,
+                            "a Collection's or Dictionary's default member Item wants an index",
+                            line,
+                        ));
+                    }
+                }
                 read.push(self.read_argument(value, line.unwrap_or(0))?);
             }
             Some(read)
@@ -4720,8 +4736,8 @@ impl<'a> Runtime<'a> {
                 entries.remove(index);
                 Ok(Value::Empty)
             }
-            InternalObject::Collection(_) => Err(error(
-                RuntimeErrorKind::Unsupported,
+            // Measured: `c.Bogus` on a Collection is 438.
+            InternalObject::Collection(_) => Err(no_such_member(
                 format!("Collection method is not available: {name}"),
                 Some(line),
             )),
