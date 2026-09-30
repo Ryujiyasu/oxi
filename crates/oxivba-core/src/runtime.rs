@@ -5862,12 +5862,11 @@ fn call_builtin(
             let right = text(&args[1])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
             let text_compare = compare_mode(args.get(2), option_compare_text, line, false)?;
-            let (left, right) = if text_compare {
-                (strcomp_text_key(&left), strcomp_text_key(&right))
+            let ordering = if text_compare {
+                text_collate(&left, &right)
             } else {
-                (left, right)
+                left.encode_utf16().cmp(right.encode_utf16())
             };
-            let ordering = left.encode_utf16().cmp(right.encode_utf16());
             // An Integer, not a Long: measured, `TypeName(StrComp("a", "b"))`.
             return Ok(Value::Int16(match ordering {
                 std::cmp::Ordering::Less => -1,
@@ -7507,6 +7506,62 @@ fn proper_case(value: &str) -> String {
 /// "い", vbTextCompare)` is 0 and `InStr(1, "ABC", "ｂ", vbTextCompare)` is 0.
 /// Kana go to full-width katakana and Latin back to ASCII, so Latin still
 /// sorts before kana.
+/// Two strings ordered the way a text comparison orders them: the text key,
+/// with ligatures spelled out and digits that are written small or ringed
+/// read as digits, and the hyphen and apostrophe passed over -- where that
+/// is all two strings differ in, the one holding more of them is the
+/// greater. Measured: StrComp("straße","STRASSE",1), ("æ","ae",1),
+/// ("①","1",1) and ("²","2",1) are 0; ("ß","st",1) is -1; ("a-b","ab",1),
+/// ("co-op","coop",1) and ("-","",1) are 1.
+fn text_collate(left: &str, right: &str) -> std::cmp::Ordering {
+    let (left, right) = (collation_spelling(left, true), collation_spelling(right, true));
+    let passed = |character: &char| matches!(character, '-' | '\'');
+    let primary = |value: &str| value.chars().filter(|character| !passed(character)).collect::<String>();
+    primary(&left)
+        .encode_utf16()
+        .cmp(primary(&right).encode_utf16())
+        .then_with(|| {
+            let count = |value: &str| value.chars().filter(passed).count();
+            count(&left).cmp(&count(&right))
+        })
+        .then_with(|| left.encode_utf16().cmp(right.encode_utf16()))
+}
+
+/// The text key with ligatures written out and small or ringed digits read
+/// as the digits they are. A search (InStr, Replace, Split, Filter) folds
+/// case and ligatures only, not width or kana: measured, InStr(1, "アイウ",
+/// "い", 1) and InStr(1, "ABC", "ｂ", 1) are 0 where StrComp calls them equal.
+fn collation_spelling(value: &str, fold_width_and_kana: bool) -> String {
+    let key = if fold_width_and_kana { strcomp_text_key(value) } else { value.to_lowercase() };
+    let mut out = String::with_capacity(value.len());
+    for character in key.chars() {
+        match character {
+            'ß' => out.push_str("ss"),
+            'æ' => out.push_str("ae"),
+            'œ' => out.push_str("oe"),
+            '\u{FB01}' => out.push_str("fi"),
+            '\u{FB02}' => out.push_str("fl"),
+            '\u{0133}' => out.push_str("ij"),
+            '\u{01C6}' => out.push_str("d\u{017E}"),
+            '¹' => out.push('1'),
+            '²' => out.push('2'),
+            '³' => out.push('3'),
+            '\u{2070}' => out.push('0'),
+            '\u{2074}'..='\u{2079}' => {
+                out.push(char::from_u32(character as u32 - 0x2074 + u32::from(b'4')).unwrap_or(character))
+            }
+            // Measured: "Ⅰ" is less than "H" and "i" alike, and equal
+            // only to itself in either case.
+            '\u{2170}'..='\u{217F}' => out.push(char::from_u32(character as u32 - 0x2170 + 1).unwrap_or(character)),
+            '\u{2460}'..='\u{2468}' => {
+                out.push(char::from_u32(character as u32 - 0x2460 + u32::from(b'1')).unwrap_or(character))
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 fn strcomp_text_key(value: &str) -> String {
     let widened = convert_width_unicode(value, true);
     let latin: String = widened
@@ -10478,16 +10533,54 @@ fn utf16_equal(left: &[u16], right: &[u16], text_compare: bool) -> bool {
 }
 
 fn utf16_find(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<usize> {
+    utf16_find_span(source, needle, start, text_compare).map(|(found, _)| found)
+}
+
+/// Where the needle is found from `start` on, and where the match ends. A
+/// text comparison matches by what the text spells, so the two may differ
+/// in length: measured, InStr(1, "straße", "SS", 1) is 5 and
+/// Replace("aßb", "ss", "-", , , 1) is "a-b".
+fn utf16_find_span(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<(usize, usize)> {
     if start > source.len() {
         return None;
     }
     if needle.is_empty() {
-        return Some(start);
+        return Some((start, start));
     }
-    source[start..]
-        .windows(needle.len())
-        .position(|window| utf16_equal(window, needle, text_compare))
-        .map(|offset| start + offset)
+    if !text_compare {
+        return source[start..]
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .map(|offset| (start + offset, start + offset + needle.len()));
+    }
+    let wanted = collation_spelling(&String::from_utf16_lossy(needle), false);
+    (start..source.len()).find_map(|at| text_match_at(source, at, &wanted).map(|end| (at, end)))
+}
+
+/// The end of a text match of `wanted` (already spelled) beginning at `at`.
+fn text_match_at(source: &[u16], at: usize, wanted: &str) -> Option<usize> {
+    let mut spelled = String::new();
+    let mut end = at;
+    while end < source.len() {
+        // One character, with a half-width sound mark after a kana kept
+        // with it, and a surrogate pair kept whole.
+        let mut next = end + 1;
+        if (0xD800..0xDC00).contains(&source[end]) && next < source.len() {
+            next += 1;
+        }
+        if next < source.len() && matches!(source[next], 0xFF9E | 0xFF9F) {
+            next += 1;
+        }
+        spelled.push_str(&collation_spelling(&String::from_utf16_lossy(&source[end..next]), false));
+        end = next;
+        if spelled == wanted {
+            return Some(end);
+        }
+        if !wanted.starts_with(spelled.as_str()) {
+            return None;
+        }
+    }
+    None
 }
 
 fn utf16_rfind(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<usize> {
@@ -10498,6 +10591,12 @@ fn utf16_rfind(source: &[u16], needle: &[u16], start: usize, text_compare: bool)
         return None;
     }
     let last_start = start.saturating_sub(1).min(source.len() - needle.len());
+    if text_compare {
+        let wanted = collation_spelling(&String::from_utf16_lossy(needle), false);
+        return (0..=start.saturating_sub(1).min(source.len() - 1))
+            .rev()
+            .find(|offset| text_match_at(source, *offset, &wanted).is_some());
+    }
     (0..=last_start).rev().find(|offset| {
         utf16_equal(
             &source[*offset..*offset + needle.len()],
@@ -10528,12 +10627,12 @@ fn utf16_replace(
     let mut cursor = start;
     let mut replaced = 0;
     while replaced < count {
-        let Some(found) = utf16_find(&source, &needle, cursor, text_compare) else {
+        let Some((found, end)) = utf16_find_span(&source, &needle, cursor, text_compare) else {
             break;
         };
         result.extend_from_slice(&source[cursor..found]);
         result.extend_from_slice(&replacement);
-        cursor = found + needle.len();
+        cursor = end;
         replaced += 1;
     }
     result.extend_from_slice(&source[cursor..]);
@@ -10552,11 +10651,11 @@ fn utf16_split(source: &str, delimiter: &str, limit: usize, text_compare: bool) 
     let mut values = Vec::new();
     let mut cursor = 0;
     while values.len().saturating_add(1) < limit {
-        let Some(found) = utf16_find(&source, &delimiter, cursor, text_compare) else {
+        let Some((found, end)) = utf16_find_span(&source, &delimiter, cursor, text_compare) else {
             break;
         };
         values.push(String::from_utf16_lossy(&source[cursor..found]));
-        cursor = found + delimiter.len();
+        cursor = end;
     }
     values.push(String::from_utf16_lossy(&source[cursor..]));
     values
@@ -11412,7 +11511,7 @@ fn binary(
                 // Under Option Compare Text the comparison is StrComp's text
                 // one: measured, `"a" = "A"` is True there.
                 (Value::String(a), Value::String(b)) if option_compare_text => {
-                    Some(strcomp_text_key(a).encode_utf16().cmp(strcomp_text_key(b).encode_utf16()))
+                    Some(text_collate(a, b))
                 }
                 (Value::String(a), Value::String(b)) => a.partial_cmp(b),
                 // Empty takes the shape of whatever it is put beside. Against
