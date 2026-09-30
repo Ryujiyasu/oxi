@@ -12045,6 +12045,11 @@ impl<'a> WorkbookHost<'a> {
             .ok_or_else(|| "Range.FindNext requires a preceding Range.Find call".to_string())?;
         let after = match args.first() {
             Some(Value::Object(object)) => Value::Object(object.clone()),
+            // Measured: FindNext(f) with f Nothing -- a Find that found
+            // nothing -- is error 5.
+            Some(Value::Nothing) => {
+                return Err(host_error(5, "Range.FindNext was given Nothing to start after"));
+            }
             Some(_) => {
                 return Err(
                     "Range.FindNext and FindPrevious After must be a single cell".to_string(),
@@ -12073,6 +12078,25 @@ impl<'a> WorkbookHost<'a> {
                 .and_then(|cell| cell.formula.as_deref())
             {
                 return format!("={formula}");
+            }
+            // A date is looked for as the formula bar writes it: measured,
+            // "2024" and "3/5" find 2024/3/5 and "45356" does not.
+            if let Value::Date(serial) = self.cell_value_as_shown(address) {
+                let picture = if serial.fract() == 0.0 { "m/d/yyyy" } else { "m/d/yyyy h:mm:ss AM/PM" };
+                return oxicells_core::format_number(serial, picture);
+            }
+        } else {
+            // Values are looked for as the cells show them: measured,
+            // "1,234.5" finds 1234.5 shown #,##0.0 and "1234.5" does not.
+            let one = CellRange {
+                sheet: address.sheet,
+                start_row: address.row,
+                end_row: address.row,
+                start_column: address.column,
+                end_column: address.column,
+            };
+            if let Value::String(shown) = self.range_text(one) {
+                return shown;
             }
         }
         find_value_text(&self.cell_value(address))
@@ -22518,7 +22542,12 @@ fn find_value_text(value: &Value) -> String {
         Value::Single(value) => (*value as f64).to_string(),
         Value::Currency(value) => (*value as f64 / 10_000.0).to_string(),
         Value::Decimal(value) => value.to_f64().to_string(),
-        Value::Date(value) => value.to_string(),
+        // A date is sought as it is written: measured,
+        // Find(DateSerial(2024, 3, 5)) lands on the date.
+        Value::Date(value) => oxicells_core::format_number(
+            *value,
+            if value.fract() == 0.0 { "m/d/yyyy" } else { "m/d/yyyy h:mm:ss AM/PM" },
+        ),
         Value::Double(value) => value.to_string(),
         // The word itself is what a cell holding an error shows and what a
         // search reads: asked of Excel, `.Text` of a cell holding #DIV/0! is
