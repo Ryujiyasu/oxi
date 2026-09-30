@@ -1036,6 +1036,8 @@ struct Link {
     address: String,
     sub_address: String,
     screen_tip: String,
+    /// The TextToDisplay it was added with, if any: its Name.
+    shown: Option<String>,
 }
 
 /// An address the way Excel keeps it: a web address whose host is followed
@@ -3737,6 +3739,7 @@ impl<'a> WorkbookHost<'a> {
         let empty = self
             .cell_here(corner.sheet, corner.row, corner.column)
             .is_none_or(|cell| matches!(cell.value, CellValue::Empty) && cell.formula.is_none());
+        let given_text = shown.clone();
         let text = match shown {
             Some(text) => Some(text),
             None if empty => Some(if address.is_empty() {
@@ -3757,6 +3760,7 @@ impl<'a> WorkbookHost<'a> {
                 link.address = address;
                 link.sub_address = sub_address;
                 link.screen_tip = screen_tip;
+                link.shown = given_text;
                 link.id
             }
             None => {
@@ -3768,6 +3772,7 @@ impl<'a> WorkbookHost<'a> {
                     address,
                     sub_address,
                     screen_tip,
+                    shown: given_text,
                 });
                 id
             }
@@ -3807,8 +3812,17 @@ impl<'a> WorkbookHost<'a> {
             row: self.links[index].anchor.start_row,
             column: self.links[index].anchor.start_column,
         };
-        let answer = if name.eq_ignore_ascii_case("address") || name.eq_ignore_ascii_case("name")
-        {
+        // Name is the text it was added to show, else its address, else
+        // where in the book it goes: measured, "Shown", the address, and
+        // "Sheet1!C3" -- never what the cell happened to hold.
+        let answer = if name.eq_ignore_ascii_case("name") {
+            let link = &self.links[index];
+            Value::String(match &link.shown {
+                Some(text) => text.clone(),
+                None if !link.address.is_empty() => link.address.clone(),
+                None => link.sub_address.clone(),
+            })
+        } else if name.eq_ignore_ascii_case("address") {
             Value::String(self.links[index].address.clone())
         } else if name.eq_ignore_ascii_case("subaddress") {
             Value::String(self.links[index].sub_address.clone())
@@ -17403,6 +17417,13 @@ impl Host for WorkbookHost<'_> {
                         [wanted] => self.hyperlink_item(scope, wanted).map(Some),
                         _ => Err("Hyperlinks expects zero or one argument".to_string()),
                     };
+                }
+                // The links go and the cells keep what they hold and wear:
+                // measured, "go" stays in A2 after ClearHyperlinks.
+                if name.eq_ignore_ascii_case("clearhyperlinks") {
+                    let ids = self.links_in(HyperlinkScope::Range(range));
+                    self.delete_links(&ids, true)?;
+                    return Ok(Some(Value::Empty));
                 }
                 // Answers True, as `Clear` does.
                 if name.eq_ignore_ascii_case("clearcomments") {
