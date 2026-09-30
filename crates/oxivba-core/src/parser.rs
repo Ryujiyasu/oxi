@@ -2404,6 +2404,11 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
+        // `Not` where an operand is expected -- after `&`, say -- takes what
+        // follows at its own level: measured, "x" & Not CByte(1) is "x254".
+        if self.at_kw("not") {
+            return self.parse_not();
+        }
         self.parse_power()
     }
 

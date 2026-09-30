@@ -3269,6 +3269,15 @@ impl<'a> Runtime<'a> {
             Expr::Binary { op: BinaryOp::Concat, lhs, rhs, .. } => {
                 self.statically_typed(lhs, frame) && self.statically_typed(rhs, frame)
             }
+            // Arithmetic on typed operands is typed too, and overflows rather
+            // than climbing: measured, n * n * 2 over a LongLong n is 6, and
+            // Abs(CLng(-2147483647) - 1) stays the Long -2147483648.
+            Expr::Binary { op, lhs, rhs, .. }
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::IntDiv | BinaryOp::Mod | BinaryOp::Pow) =>
+            {
+                self.statically_typed(lhs, frame) && self.statically_typed(rhs, frame)
+            }
+            Expr::Unary { operand, .. } => self.statically_typed(operand, frame),
             Expr::Ident(name, _) => {
                 // Timer is a Single, not a Variant: measured, `Timer >= "0"`
                 // compares as numbers.
@@ -3681,8 +3690,25 @@ impl<'a> Runtime<'a> {
             }
             Expr::New { type_name, span } => self.new_object(type_name, span.line),
             Expr::Unary { op, operand, span } => {
+                let typed = self.statically_typed(operand, frame);
                 let value = self.eval_expr(operand, frame)?;
                 let value = self.scalar_operand(value, span.line)?;
+                // A Variant that overflows moves up a type instead: measured,
+                // -v of a Variant Integer -32768 is the Long 32768 and of a
+                // Variant Long's least a Double.
+                if !typed {
+                    let mut current = value.clone();
+                    while let Err(message) = unary(*op, current.clone()) {
+                        if !message.to_ascii_lowercase().contains("overflow") {
+                            break;
+                        }
+                        let Some(wider) = widened_operand(&current, variant_rank(&current) + 1) else { break };
+                        current = wider;
+                        if let Ok(answer) = unary(*op, current.clone()) {
+                            return Ok(answer);
+                        }
+                    }
+                }
                 // An overflow is an overflow: measured, -CInt(-32768) is 6.
                 unary(*op, value).map_err(|message| {
                     let kind = if message.to_ascii_lowercase().contains("overflow") {
@@ -3709,8 +3735,29 @@ impl<'a> Runtime<'a> {
                 if let Some(answer) = variant_comparison(*op, &lhs, &rhs, typed, self.option_compare_text()) {
                     return answer.map_err(|(kind, message)| error(kind, message, Some(span.line)));
                 }
-                binary(*op, lhs, rhs, self.option_compare_text())
-                    .map_err(|(kind, message)| error(kind, message, Some(span.line)))
+                let compare_text = self.option_compare_text();
+                match binary(*op, lhs.clone(), rhs.clone(), compare_text) {
+                    // With a Variant on either side an overflow moves the
+                    // answer up a type -- Byte to Integer to Long to Double,
+                    // LongLong to Double -- where two typed operands raise 6:
+                    // measured, Variant 200 * 200 is the Long 40000, a
+                    // Variant Long 2000000000 * 2 the Double 4000000000, and
+                    // Variant Bytes 100 - 200 the Integer -100.
+                    Err((RuntimeErrorKind::Overflow, message)) if !(typed.0 && typed.1) => {
+                        let mut rank = variant_rank(&lhs).max(variant_rank(&rhs));
+                        loop {
+                            rank += 1;
+                            let (Some(left), Some(right)) = (widened_operand(&lhs, rank), widened_operand(&rhs, rank)) else {
+                                return Err(error(RuntimeErrorKind::Overflow, message, Some(span.line)));
+                            };
+                            match binary(*op, left, right, compare_text) {
+                                Err((RuntimeErrorKind::Overflow, _)) if rank < 5 => continue,
+                                result => return result.map_err(|(kind, message)| error(kind, message, Some(span.line))),
+                            }
+                        }
+                    }
+                    result => result.map_err(|(kind, message)| error(kind, message, Some(span.line))),
+                }
             }
             Expr::TypeOf {
                 operand,
@@ -3895,6 +3942,20 @@ impl<'a> Runtime<'a> {
                 if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
                     if let Some(size) = self.storage_size_asked_of(name, args, frame) {
                         return Ok(Value::Integer(size));
+                    }
+                    // Abs of a Variant at its type's least moves up a type:
+                    // measured, a Variant Integer -32768 gives the Long 32768
+                    // and a Variant Long's least the Double 2147483648.
+                    if name.eq_ignore_ascii_case("abs") && self.lookup_slot(frame, name).is_none() {
+                        if let [Argument { value: Some(operand), name: None, .. }] = args.as_slice() {
+                            if !self.statically_typed(operand, frame) {
+                                match self.eval_expr(operand, frame)? {
+                                    Value::Int16(i16::MIN) => return Ok(Value::Integer(32_768)),
+                                    Value::Integer(n) if n == i64::from(i32::MIN) => return Ok(Value::Double(2_147_483_648.0)),
+                                    other => return self.call_named(name, vec![other], &[None], Some(span.line), frame),
+                                }
+                            }
+                        }
                     }
                 }
                 let mut values = Vec::with_capacity(args.len());
@@ -18900,3 +18961,44 @@ fn longlong_exact(lhs: &Value, rhs: &Value) -> Option<(i64, i64)> {
     Some((whole(lhs)?, whole(rhs)?))
 }
 
+
+
+/// Where a Variant's number stands on the ladder an overflow climbs:
+/// 1 Byte, 2 Integer (and Boolean), 3 Long, 4 LongLong, 5 Double (and
+/// Single); 0 for anything that does not climb (Currency, Decimal, Date,
+/// text).
+fn variant_rank(value: &Value) -> u8 {
+    match value {
+        Value::Byte(_) => 1,
+        Value::Int16(_) | Value::Boolean(_) | Value::Empty => 2,
+        Value::Integer(_) => 3,
+        Value::LongLong(_) => 4,
+        Value::Single(_) | Value::Double(_) => 5,
+        _ => 0,
+    }
+}
+
+/// A Variant's number made at least the given rank, Long and LongLong both
+/// stepping straight to Double; None for what cannot climb.
+fn widened_operand(value: &Value, rank: u8) -> Option<Value> {
+    let own = variant_rank(value);
+    if own == 0 {
+        return None;
+    }
+    if own >= rank {
+        return Some(value.clone());
+    }
+    let whole = match value {
+        Value::Byte(n) => i64::from(*n),
+        Value::Int16(n) => i64::from(*n),
+        Value::Boolean(state) => if *state { -1 } else { 0 },
+        Value::Empty => 0,
+        Value::Integer(n) | Value::LongLong(n) => *n,
+        _ => return None,
+    };
+    Some(match rank {
+        2 => Value::Int16(whole as i16),
+        3 if own < 3 => Value::Integer(whole),
+        _ => Value::Double(whole as f64),
+    })
+}
