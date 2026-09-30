@@ -3385,8 +3385,14 @@ impl<'a> Runtime<'a> {
             Expr::Unary { op, operand, span } => {
                 let value = self.eval_expr(operand, frame)?;
                 let value = self.scalar_operand(value, span.line)?;
+                // An overflow is an overflow: measured, -CInt(-32768) is 6.
                 unary(*op, value).map_err(|message| {
-                    error(RuntimeErrorKind::TypeMismatch, message, Some(span.line))
+                    let kind = if message.to_ascii_lowercase().contains("overflow") {
+                        RuntimeErrorKind::Overflow
+                    } else {
+                        RuntimeErrorKind::TypeMismatch
+                    };
+                    error(kind, message, Some(span.line))
                 })
             }
             Expr::Binary { op, lhs, rhs, span } => {
