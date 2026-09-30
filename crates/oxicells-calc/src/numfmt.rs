@@ -1551,3 +1551,35 @@ mod format_codes_from_the_wild {
         assert_eq!(format_number(-1.5, r#"\(0.0\);"（▲"0.0\)"#), "（▲1.5)");
     }
 }
+
+/// How many percent signs each section of a format holds, quoted text,
+/// escaped characters and bracketed parts aside.
+pub fn sections_with_percents(format: &str) -> impl Iterator<Item = usize> {
+    let mut counts = vec![0usize];
+    let mut chars = format.chars();
+    while let Some(character) = chars.next() {
+        match character {
+            '"' => {
+                for inner in chars.by_ref() {
+                    if inner == '"' {
+                        break;
+                    }
+                }
+            }
+            '\\' => {
+                chars.next();
+            }
+            '[' => {
+                for inner in chars.by_ref() {
+                    if inner == ']' {
+                        break;
+                    }
+                }
+            }
+            ';' => counts.push(0),
+            '%' => *counts.last_mut().expect("one section at least") += 1,
+            _ => {}
+        }
+    }
+    counts.into_iter()
+}

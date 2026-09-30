@@ -8449,9 +8449,9 @@ fn number_picture(value: f64, picture: &str) -> String {
 fn section_magnitude(value: f64, section: &str) -> (f64, Vec<Token>) {
     let (tokens, thousands) = scaling_commas(picture_tokens(section));
     let mut magnitude = value.abs() / 1000_f64.powi(thousands);
-    if tokens.iter().any(|t| matches!(t, Token::Percent)) {
-        magnitude *= 100.0;
-    }
+    // Each % scales again: measured, Format(0.123, "0.0%%") is 1230.0%%.
+    let percents = tokens.iter().filter(|t| matches!(t, Token::Percent)).count();
+    magnitude *= 100_f64.powi(percents as i32);
     (magnitude, tokens)
 }
 

@@ -11057,6 +11057,11 @@ impl<'a> WorkbookHost<'a> {
             let Value::String(format) = format else {
                 return Err("WorksheetFunction.Text expects a format as text".to_string());
             };
+            // Measured: a section with two percent signs is #VALUE!, which
+            // WorksheetFunction raises as 1004.
+            if oxicells_calc::numfmt::sections_with_percents(format).any(|count| count > 1) {
+                return Ok(Some(Value::Error(2015)));
+            }
             return Ok(Some(Value::String(shown_text(
                 &self.criteria_value(value)?,
                 Some(format),

@@ -2259,6 +2259,12 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "TEXT" => {
             expect(args, 2)?;
             let format = text(&args[1])?;
+            // A section with two percent signs is refused: measured,
+            // TEXT(0.123,"0.0%%") and TEXT(0.123,"0%%") are #VALUE!, while
+            // "0%0" and "%0" are fine.
+            if crate::numfmt::sections_with_percents(&format).any(|count| count > 1) {
+                return Err(ExcelError::Value);
+            }
             match args[0].scalar() {
                 // A date picture has no way to write a number off the
                 // calendar: measured, TEXT(-0.5,"h:m:s") and
