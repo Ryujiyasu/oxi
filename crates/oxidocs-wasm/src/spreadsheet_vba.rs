@@ -12162,9 +12162,9 @@ impl<'a> WorkbookHost<'a> {
                 .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
                 .and_then(|cell| cell.formula.as_deref())
                 .map(|formula| format!("={formula}"));
-            let candidate = formula
-                .clone()
-                .unwrap_or_else(|| find_value_text(&self.cell_value(address)));
+            // What is replaced in is what the formula bar holds: measured, a
+            // date's "2024" becomes "2025" and the cell stays a date.
+            let candidate = formula.clone().unwrap_or_else(|| self.find_cell_text(address, -4123));
             let Some(replaced) = replace_matching_text(
                 &candidate,
                 &needle,
@@ -12175,16 +12175,14 @@ impl<'a> WorkbookHost<'a> {
             ) else {
                 continue;
             };
-            if formula.is_some() {
-                if replaced.starts_with('=') {
-                    self.set_cell_formula(address, replaced)?;
-                } else {
-                    self.set_cell_value(address, CellValue::String(replaced))?;
-                }
-            } else if look_at == 1 {
-                self.set_cell_value(address, to_cell_value(replacement.clone())?)?;
-            } else {
-                self.set_cell_value(address, CellValue::String(replaced))?;
+            // The result goes in as if typed: measured, 123 with 1 made 9 is
+            // the number 923, and a result that is no formula (`=1+`) leaves
+            // the cell as it was.
+            let Value::Object(cell) = self.object(HostObject::Range(CellRange::single(address))) else {
+                continue;
+            };
+            if self.set(&cell, "Formula", Value::String(replaced)).is_err() {
+                continue;
             }
         }
         Ok(Value::Boolean(true))
