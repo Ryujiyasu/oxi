@@ -203,13 +203,37 @@ fn parse_numeric_text(s: &str) -> Option<f64> {
         .chars()
         .filter(|held| !matches!(held, '$' | '\u{a5}' | '\u{20ac}' | '\u{a3}' | '\u{ffe5}' | ','))
         .collect();
-    if plain != t {
+    if plain != t && thousands_well_placed(t) {
         if let Ok(n) = plain.trim().parse::<f64>() {
             return Some(n);
         }
     }
+    // Digits and commas that fail as thousands are no date either: measured,
+    // VALUE("1,23,456") is #VALUE!.
+    if t.contains(',') && t.chars().all(|held| held.is_ascii_digit() || matches!(held, ',' | '.' | '+' | '-' | ' ')) {
+        return None;
+    }
     // A date or a time is a number too — `="2004-08-15"+1` is the next day.
     crate::datetime::text_as_datetime(t)
+}
+
+/// Whether the text's thousands separators stand where thousands are: every
+/// group after a comma carries three digits or more before any point, and
+/// none is empty. Measured: VALUE of "1,234", "1,2345" and "12,345,678"
+/// reads, of "1,2", "12,34", "1,234,5", "1,23,456" and ",123" is #VALUE!.
+fn thousands_well_placed(text: &str) -> bool {
+    let digits: String = text
+        .chars()
+        .filter(|held| !matches!(held, '$' | '\u{a5}' | '\u{20ac}' | '\u{a3}' | '\u{ffe5}' | '+' | '-' | ' '))
+        .collect();
+    if !digits.contains(',') {
+        return true;
+    }
+    let groups: Vec<&str> = digits.split(',').collect();
+    groups.iter().enumerate().all(|(at, group)| {
+        let whole = group.split('.').next().unwrap_or(group);
+        !whole.is_empty() && (at == 0 || whole.len() >= 3) && (at + 1 == groups.len() || !group.contains('.'))
+    })
 }
 
 /// Render a number the way Excel's General format does.

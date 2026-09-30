@@ -1536,10 +1536,24 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "TRIM" => {
             // Excel's TRIM also collapses runs of interior spaces to one.
             let s = text(one_arg(args)?)?;
-            let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            // Only the plain space: measured, CHAR(160) stays.
+            let collapsed = s.split(' ').filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ");
             Ok(Value::Text(collapsed))
         }
-        "UPPER" => Ok(Value::Text(text(one_arg(args)?)?.to_uppercase())),
+        // A letter whose capital is two letters keeps itself: measured,
+        // UPPER("ß") is ß.
+        "UPPER" => Ok(Value::Text(
+            text(one_arg(args)?)?
+                .chars()
+                .map(|one| {
+                    let mut upper = one.to_uppercase();
+                    match (upper.next(), upper.next()) {
+                        (Some(single), None) => single,
+                        _ => one,
+                    }
+                })
+                .collect(),
+        )),
         "LOWER" => Ok(Value::Text(text(one_arg(args)?)?.to_lowercase())),
         "CONCATENATE" | "CONCAT" => {
             let mut out = String::new();
@@ -1588,7 +1602,12 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if n < 0.0 {
                 return Err(ExcelError::Value);
             }
-            Ok(Value::Text(text(&args[0])?.repeat(n as usize)))
+            // No longer than a cell holds: measured, REPT("a",32768) is #VALUE!.
+            let unit = text(&args[0])?;
+            if unit.encode_utf16().count() * (n as usize) > 32_767 {
+                return Err(ExcelError::Value);
+            }
+            Ok(Value::Text(unit.repeat(n as usize)))
         }
         "SUBSTITUTE" => {
             if args.len() < 3 {
