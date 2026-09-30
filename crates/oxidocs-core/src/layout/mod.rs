@@ -15303,6 +15303,57 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     let s970_elem_start = elements.len();
                     elements.extend(table_elements);
+                    let mut s1615_extra: f32 = 0.0;
+                    // S1615 (2026-09-30, default ON, opt-out OXI_S1615_DISABLE): a
+                    // floating table anchored to text with a tblpYSpec (top / center /
+                    // bottom -- not a numeric tblpY) sits after the whole preceding
+                    // paragraph, and that paragraph's LAST line is set again BELOW the
+                    // table; the flow resumes after it. `_pb_ftbl_yspec_min_gen.py`
+                    // (self-authored, Calibri 11): inline / tblpY=0 note 89.25, table
+                    // 108, After 160.5; YSpec bottom/top/center note 160.5 (below the
+                    // table), table 107.25, After 177.75 (+1 line); a two-line note stays
+                    // at 89.25 with the table after both lines and After +1 line; an
+                    // empty note behaves as the one-line one. `_pb_ftbl_ybottom_gen.py`
+                    // (blind-G JA forms__02157d72): the ※ note 447.75 below the 緊急連絡先
+                    // table, next paragraph +12.75 against the inline arm.
+                    if std::env::var_os("OXI_S1615_DISABLE").is_none()
+                        && pages.len() == s970_pages_before_tbl
+                        && block_idx > 0
+                        && matches!(page.blocks.get(block_idx - 1), Some(Block::Paragraph(_)))
+                        && table.style.position.as_ref().map_or(false, |p| {
+                            p.v_anchor.as_deref() == Some("text") && p.y_spec.is_some()
+                        })
+                    {
+                        let prev = block_idx - 1;
+                        let last_top = elements[..s970_elem_start]
+                            .iter()
+                            .filter(|e| e.paragraph_index == Some(prev)
+                                && matches!(e.content, LayoutContent::Text { .. }))
+                            .map(|e| e.y)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        if last_top.is_finite() {
+                            let line_h = elements[..s970_elem_start]
+                                .iter()
+                                .filter(|e| e.paragraph_index == Some(prev)
+                                    && matches!(e.content, LayoutContent::Text { .. })
+                                    && (e.y - last_top).abs() < 0.5)
+                                .map(|e| e.height)
+                                .fold(0.0f32, f32::max);
+                            let dy = cursor.cursor_y - last_top;
+                            if dy > 0.0 && line_h > 0.0 {
+                                for e in elements[..s970_elem_start].iter_mut() {
+                                    if e.paragraph_index == Some(prev) && e.y >= last_top - 0.5 {
+                                        e.y += dy;
+                                    }
+                                }
+                                if std::env::var_os("OXI_DBG_S1615").is_some() {
+                                    eprintln!("[S1615] para {} last line {:.2} -> {:.2} (+{:.2})",
+                                        prev, last_top, last_top + dy, line_h);
+                                }
+                                s1615_extra = line_h;
+                            }
+                        }
+                    }
                     // S970 v2: remember this table's element range when it is a
                     // candidate. `pages.len() == pages_before_tbl` is the actual
                     // one-page predicate — a table that spanned pages pushed at
@@ -15930,6 +15981,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 cursor.set(saved_cursor_y);
                             }
                         }
+                    }
+                    // S1615: the preceding paragraph's last line now sits below the
+                    // table, so the flow resumes one line further down.
+                    if s1615_extra > 0.0 {
+                        cursor.advance(s1615_extra);
                     } else {
                         let pages_added = pages.len() - pages_before;
                         if pages_added > 0 {
