@@ -6631,7 +6631,7 @@ fn call_builtin(
             return Ok(match name.as_str() {
                 "isarray" => Value::Boolean(matches!(value, Value::Array(_))),
                 "isempty" => Value::Boolean(matches!(value, Value::Empty)),
-                "iserror" => Value::Boolean(matches!(value, Value::Error(_))),
+                "iserror" => Value::Boolean(matches!(value, Value::Error(_) | Value::Missing)),
                 "isnull" => Value::Boolean(matches!(value, Value::Null)),
                 "isnumeric" => Value::Boolean(reads_as_a_number(value)),
                 "isobject" => Value::Boolean(matches!(value, Value::Object(_) | Value::Nothing)),
@@ -6926,6 +6926,9 @@ fn call_builtin(
                     Ok(Value::Single(value as f32))
                 }
             }
+            // A missing Optional is written as the error it stands for:
+            // measured, CStr of one is "Error 448".
+            "cstr" if matches!(value, Value::Missing) => Ok(Value::String("Error 448".to_string())),
             "cstr" => match value {
                 Value::Null => Err(invalid_null(line)),
                 _ => Ok(Value::String(text(value).map_err(mismatch)?)),
@@ -11447,7 +11450,9 @@ fn default_return_value(procedure: &Procedure) -> Value {
 fn value_type_name(value: &Value) -> String {
     match value {
         Value::Empty => "Empty".to_string(),
-        Value::Missing => "Missing".to_string(),
+        // A missing Optional is the Error value 448000: measured, TypeName
+        // "Error" and VarType 10.
+        Value::Missing => "Error".to_string(),
         Value::Nothing => "Nothing".to_string(),
         Value::Null => "Null".to_string(),
         Value::Boolean(_) => "Boolean".to_string(),
@@ -11499,7 +11504,7 @@ fn value_var_type(value: &Value) -> i64 {
                     element => value_var_type(element),
                 }
         }
-        Value::Missing => 12,
+        Value::Missing => 10,
         // vbUserDefinedType. Unmeasurable for the same reason as above.
         Value::Record(_) => 36,
     }
@@ -11843,7 +11848,15 @@ fn binary(
     // `If c.Value = CVErr(xlErrNA)` depends on it. Measured: `CVErr(2007) =
     // CVErr(2007)` is True and `CVErr(2007) < CVErr(2042)` is True, while an
     // error against anything else, `2007` and Empty included, is 13.
-    if let (Value::Error(left), Value::Error(right)) = (&lhs, &rhs) {
+    // A missing Optional is an error value too, DISP_E_PARAMNOTFOUND:
+    // measured, `m = m` is True and `m = CVErr(448)` False.
+    let as_error = |value: &Value| match value {
+        Value::Error(code) => Some(*code),
+        Value::Missing => Some(0x8002_0004_i64),
+        _ => None,
+    };
+    if let (Some(left), Some(right)) = (as_error(&lhs), as_error(&rhs)) {
+        let (left, right) = (&left, &right);
         let answer = match op {
             Eq => Some(left == right),
             Ne => Some(left != right),
