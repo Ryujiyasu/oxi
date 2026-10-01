@@ -2766,6 +2766,9 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("subtotal") {
             self.pass_over_for_subtotal(given, &mut asked);
         }
+        if name.eq_ignore_ascii_case("aggregate") {
+            self.pass_over_for_aggregate(given, &mut asked);
+        }
         // The engine's own dispatch is written in capitals, as the parser
         // hands names to it; a macro writes `Substitute` and would find
         // nothing at all.
@@ -2835,6 +2838,51 @@ impl<'a> WorkbookHost<'a> {
     /// row from function 101 up, and cells that are SUBTOTALs themselves.
     /// Measured: `WorksheetFunction.Subtotal(9, C2:C11)` under a filter adds
     /// only the rows showing.
+    /// AGGREGATE's option says what it passes over: hidden rows for 1, 3, 5
+    /// and 7, the SUBTOTALs and AGGREGATEs nested in its range for 0 to 3
+    /// (errors the engine passes over itself). Measured, with row 2 hidden:
+    /// `Aggregate(9, 3, A1:A9)` is 26 where `Aggregate(9, 6, A1:A9)` is 29.
+    fn pass_over_for_aggregate(&self, given: &[Value], asked: &mut [oxicells_calc::functions::Arg]) {
+        use oxicells_calc::functions::Arg;
+        let option = given.get(1).and_then(any_number).unwrap_or(0.0) as i64;
+        let skip_hidden = matches!(option, 1 | 3 | 5 | 7);
+        let skip_nested = (0..=3).contains(&option);
+        if !skip_hidden && !skip_nested {
+            return;
+        }
+        for (value, arg) in given.iter().zip(asked.iter_mut()).skip(2) {
+            let (Value::Object(object), Arg::Range(block)) = (value, arg) else {
+                continue;
+            };
+            let Some(range) = self.range(object) else {
+                continue;
+            };
+            let Ok(range) = self.cut_to_contents(range) else {
+                continue;
+            };
+            let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
+                continue;
+            };
+            let width = block.width.max(1);
+            for (at, cell) in block.cells.iter_mut().enumerate() {
+                let row = range.start_row + (at / width) as u32;
+                let column = range.start_column + (at % width) as u32;
+                let held = sheet.rows.iter().find(|held| held.index == row);
+                let hidden = held.is_some_and(|held| held.hidden);
+                let nested = held
+                    .and_then(|held| held.cells.iter().find(|cell| cell.col == column))
+                    .and_then(|cell| cell.formula.as_deref())
+                    .is_some_and(|formula| {
+                        let formula = formula.trim_start_matches('=').trim_start().to_ascii_uppercase();
+                        formula.starts_with("SUBTOTAL(") || formula.starts_with("AGGREGATE(")
+                    });
+                if (nested && skip_nested) || (hidden && skip_hidden) {
+                    *cell = oxicells_calc::Value::Blank;
+                }
+            }
+        }
+    }
+
     fn pass_over_for_subtotal(&self, given: &[Value], asked: &mut [oxicells_calc::functions::Arg]) {
         use oxicells_calc::functions::Arg;
         let by_hand = given.first().and_then(any_number).is_some_and(|kind| kind >= 100.0);
@@ -11659,6 +11707,16 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Value::Integer(count as i64 + cut_blanks as i64));
         }
 
+        // The functions made to look at an error take one in a range as it
+        // is: measured, with #DIV/0! in A9, `IsError(A9)` is True,
+        // `IfError(A9, 7)` 7, `IsErr` True, `IsNumber` False and
+        // `Aggregate(9, 6, A1:A9)` the sum of the rest.
+        if ["aggregate", "iserror", "iserr", "isna", "iferror", "ifna", "isnumber", "istext", "isnontext", "islogical"]
+            .iter()
+            .any(|tolerant| name.eq_ignore_ascii_case(tolerant))
+        {
+            return self.worksheet_function_from_engine(name, args);
+        }
         // Everything past here adds the numbers up rather than counting them,
         // and those all pass an error on: Sum, Average, Min, Max, Product,
         // Median, Large, Small and StDev were each asked, and each raised.
@@ -26409,6 +26467,9 @@ fn vba_has_its_own(name: &str) -> bool {
         // all: measured, `Application.AverageA(1, 2)` and `MaxA`, `MinA`,
         // `StDevA`, `StDevPA`, `VarA`, `VarPA` are each 438.
         "AVERAGEA", "MAXA", "MINA", "STDEVA", "STDEVPA", "VARA", "VARPA",
+        // and ERROR.TYPE, which VBA asks of an error with CVErr's number:
+        // measured, `WorksheetFunction.Error_Type` is 438.
+        "ERROR.TYPE", "ERROR_TYPE",
     ];
     ABSENT
         .iter()
