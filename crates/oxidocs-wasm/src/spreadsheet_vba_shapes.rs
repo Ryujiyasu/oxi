@@ -187,6 +187,8 @@ pub(super) enum DrawingPart {
     /// xlCategory 1 or xlValue 2.
     Axis(u64, i64),
     AxisTitle(u64, i64),
+    /// One point of a series: the series' number and the point's, from 1.
+    Point(u64, usize, usize),
     ChartArea(u64),
     PlotArea(u64),
     Adjustments(u64),
@@ -219,6 +221,7 @@ impl DrawingPart {
             DrawingPart::Series(..) => "Series",
             DrawingPart::SeriesFormat(..) => "ChartFormat",
             DrawingPart::Points(..) => "Points",
+            DrawingPart::Point(..) => "Point",
             DrawingPart::DataLabels(..) => "DataLabels",
             DrawingPart::ChartTitle(_) => "ChartTitle",
             DrawingPart::Legend(_) => "Legend",

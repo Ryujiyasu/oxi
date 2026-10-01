@@ -628,6 +628,24 @@ impl<'a> WorkbookHost<'a> {
                     _ => None,
                 })
             }
+            // A column series' point, measured: S1P2 by name, no explosion,
+            // label or shadow, marker 5 and none, the series its Parent;
+            // SecondaryPlot 1004 outside a pie of pie.
+            DrawingPart::Point(id, number, at) => {
+                let series = self.series(id, number)?.clone();
+                Ok(match lower.as_str() {
+                    "name" => Some(Value::String(format!("S{number}P{at}"))),
+                    "explosion" => Some(Value::Integer(0)),
+                    "hasdatalabel" => Some(Value::Boolean(series.has_labels)),
+                    "invertifnegative" | "shadow" => Some(Value::Boolean(false)),
+                    "markersize" => Some(Value::Integer(5)),
+                    "markerstyle" => Some(Value::Integer(-4142)),
+                    "picturetype" => Some(Value::Integer(1)),
+                    "parent" => Some(self.part(DrawingPart::Series(id, number))),
+                    "secondaryplot" => return Err(host_error(1004, "the point is in no pie of pie")),
+                    _ => None,
+                })
+            }
             DrawingPart::Points(id, number) => Ok(match lower.as_str() {
                 "count" => Some(Value::Integer(self.series(id, number)?.values.len() as i64)),
                 _ => None,
@@ -637,6 +655,17 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     "count" => Some(Value::Integer(if series.has_labels { series.values.len() as i64 } else { 0 })),
                     "showvalue" => Some(Value::Boolean(series.has_labels)),
+                    // Measured on a column series' labels: 文字列 S1, General
+                    // linked to the source, outside the end, the series their
+                    // Parent, and nothing shown but the value.
+                    "name" => Some(Value::String(format!("文字列 S{number}"))),
+                    "numberformat" => Some(Value::String("General".to_string())),
+                    "numberformatlinked" => Some(Value::Boolean(true)),
+                    "position" => Some(Value::Integer(2)),
+                    "parent" => Some(self.part(DrawingPart::Series(id, number))),
+                    "showbubblesize" | "showcategoryname" | "showlegendkey" | "showpercentage" | "showseriesname" => {
+                        Some(Value::Boolean(false))
+                    }
                     _ => None,
                 })
             }
@@ -653,6 +682,16 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     "text" | "caption" => Some(Value::String(shown)),
                     "characters" => Some(self.part(DrawingPart::ChartTitle(id))),
+                    // Measured: タイトル, centred both ways, horizontal, in the
+                    // layout at its automatic place, no shadow.
+                    "name" => Some(Value::String("タイトル".to_string())),
+                    "horizontalalignment" | "verticalalignment" => Some(Value::Integer(-4108)),
+                    "orientation" => Some(Value::Integer(-4128)),
+                    "readingorder" => Some(Value::Integer(-5002)),
+                    "position" => Some(Value::Integer(-4105)),
+                    "includeinlayout" => Some(Value::Boolean(true)),
+                    "shadow" => Some(Value::Boolean(false)),
+                    "parent" => Some(self.part(DrawingPart::Chart(id))),
                     _ => None,
                 })
             }
@@ -760,6 +799,10 @@ impl<'a> WorkbookHost<'a> {
                     "format" | "fill" | "interior" | "forecolor" => Some(self.part(DrawingPart::PlotArea(id))),
                     "rgb" | "color" => Some(Value::Integer(WHITE)),
                     "insideleft" => Some(Value::Double(16.8025196850394)),
+                    // Measured: プロット, at its automatic place.
+                    "name" => Some(Value::String("プロット".to_string())),
+                    "position" => Some(Value::Integer(-4105)),
+                    "parent" => Some(self.part(DrawingPart::Chart(id))),
                     "insidetop" => Some(Value::Double(7.2)),
                     "insidewidth" => Some(Value::Double((shape.width - 40.0).max(0.0))),
                     "insideheight" => Some(Value::Double((shape.height - 40.0).max(0.0))),
@@ -1464,7 +1507,7 @@ impl<'a> WorkbookHost<'a> {
                 }
                 Ok(any)
             }
-            DrawingPart::Shapes(_) | DrawingPart::ChartObjects(_) | DrawingPart::SeriesCollection(_) | DrawingPart::Points(..) | DrawingPart::Axes(_) => Ok(false),
+            DrawingPart::Shapes(_) | DrawingPart::ChartObjects(_) | DrawingPart::SeriesCollection(_) | DrawingPart::Points(..) | DrawingPart::Point(..) | DrawingPart::Axes(_) => Ok(false),
         }
     }
 
@@ -1746,7 +1789,14 @@ impl<'a> WorkbookHost<'a> {
                 }
                 "points" => match args.first() {
                     None | Some(Value::Missing) => Ok(Some(self.part(DrawingPart::Points(id, number)))),
-                    Some(_) => Ok(Some(self.part(DrawingPart::Points(id, number)))),
+                    Some(wanted) => {
+                        let count = self.series(id, number)?.values.len();
+                        let at = any_whole_number(wanted).unwrap_or(0);
+                        if at < 1 || at as usize > count {
+                            return Err(host_error(1004, "there is no such point"));
+                        }
+                        Ok(Some(self.part(DrawingPart::Point(id, number, at as usize))))
+                    }
                 },
                 "datalabels" => Ok(Some(self.part(DrawingPart::DataLabels(id, number)))),
                 "applydatalabels" => {
