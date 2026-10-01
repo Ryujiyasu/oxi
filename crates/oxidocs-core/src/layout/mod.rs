@@ -29517,6 +29517,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // Used below to position the ruby annotation above the base.
                 let base_el_x = el.x;
                 let base_el_y = el.y;
+                let base_el_tyo = el.text_y_off;
                 elements.push(el);
 
                 // Round 7: emit ruby annotation glyph element above the
@@ -29628,7 +29629,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let frag_metrics =
                                 self.metrics_for_text(&frag.text, &frag.style, &para.style);
                             let base_ascent = frag_metrics.word_ascent_pt(base_pt);
-                            let ruby_y = base_el_y + base_ascent - hps_raise_pt - ruby_ascent;
+                            // S1632 (2026-10-02, default ON, opt-out OXI_S1632_DISABLE):
+                            // the annotation's BASELINE sits exactly hpsRaise above the
+                            // base glyph's rendered baseline. `_pb_bodyruby_gen.py`: Word's
+                            // ruby-to-base baseline gap is 9.96 / 15.0 / 18.0 / 28.94 /
+                            // 39.98 for raise 10 / 15 / 18 / 29 / 40; the word-ascent
+                            // estimate below put Oxi's 0.7-1.0pt higher at 10.5-14pt and
+                            // 1.2pt lower at 30pt. The renderer draws a glyph top at
+                            // y + text_y_off - 1 and its baseline win_ascent below that.
+                            let ruby_y = if std::env::var_os("OXI_S1632_DISABLE").is_none() {
+                                base_el_y + base_el_tyo + frag_metrics.win_ascent * base_pt
+                                    - hps_raise_pt - ruby_metrics.win_ascent * hps_pt
+                            } else {
+                                base_el_y + base_ascent - hps_raise_pt - ruby_ascent
+                            };
                             let ruby_color = self
                                 .resolve_color(&ruby_run_style, &para.style)
                                 .map(|s| s.to_string());
@@ -30446,6 +30460,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         cursor.advance((augmented_snapped - base_snapped).max(0.0));
                     } else {
                         cursor.advance(ruby_para_expansion_pt);
+                        // S1631 (2026-10-02, default ON, opt-out OXI_S1631_DISABLE):
+                        // off a typed grid the ruby line's extra height sits ABOVE
+                        // the base (the annotation's room), not below it.
+                        // `_pb_bodyruby_gen.py` (09422f63 host, snapToGrid 0, MS
+                        // Mincho): Word's base sits lower than Oxi's by 4.68 / 9.60 /
+                        // 11.39 for expansions 4.75 / 9.75 / 11.25 (10.5pt raise
+                        // 10 / 15, 14pt raise 18) while the NEXT line already agrees
+                        // within 0.3; the ruby moves with its base. educational__
+                        // 09422f63's title «花粉注意報» (30pt, raise 29) drew its base
+                        // 14.5pt high with the annotation outside the line.
+                        if std::env::var_os("OXI_S1631_DISABLE").is_none() {
+                            for el in elements[flow_elements_start..].iter_mut() {
+                                el.y += ruby_para_expansion_pt;
+                            }
+                        }
                     }
                 }
                 // Only advance cumul index when cumulative round is active.
