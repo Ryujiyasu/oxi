@@ -23461,14 +23461,17 @@ fn sort_number(value: &Value, label: &str) -> Result<i64, String> {
     }
 }
 
-/// Excel's sort order: numbers first, then text, then Booleans, with blanks
-/// last however the sort runs. Text ignores case.
+/// Excel's sort order: numbers first, then text, then Booleans, then errors
+/// (all alike), with blanks last however the sort runs. Text ignores case.
+/// Measured: #N/A sorts after TRUE ascending and first descending, the
+/// blank below it both ways.
 fn sort_rank(value: &Value) -> u8 {
     match value {
         value if any_number(value).is_some() => 0,
         Value::String(_) => 1,
         Value::Boolean(_) => 2,
-        _ => 3,
+        Value::Error(_) => 3,
+        _ => 4,
     }
 }
 
@@ -23652,7 +23655,7 @@ fn sort_compare_cased(
     match_case: bool,
 ) -> Ordering {
     let (left_rank, right_rank) = (sort_rank(left), sort_rank(right));
-    if left_rank == 3 || right_rank == 3 {
+    if left_rank == 4 || right_rank == 4 {
         // A blank sinks to the bottom whichever way the rest is going.
         return left_rank.cmp(&right_rank);
     }
