@@ -1909,6 +1909,8 @@ struct WorkbookHost<'a> {
     /// The cells whose whole writing is raised or lowered ("superscript" or
     /// "subscript") where no run of their own says so.
     raised: std::collections::HashMap<CellAddress, &'static str>,
+    /// Whether `Workbook.Protect` has guarded the book's structure.
+    book_protected: bool,
     /// The theme font a macro gave a cell (xlThemeFontMajor 1, Minor 2).
     theme_fonts: std::collections::HashMap<CellAddress, i64>,
     /// The formats given to whole sheets, columns and rows, for the cells
@@ -2048,6 +2050,7 @@ impl<'a> WorkbookHost<'a> {
             hatchings: std::collections::HashMap::new(),
             indented: std::collections::HashSet::new(),
             raised: std::collections::HashMap::new(),
+            book_protected: false,
             theme_fonts: std::collections::HashMap::new(),
             templates: std::collections::HashMap::new(),
             table_counter,
@@ -17479,6 +17482,18 @@ impl Host for WorkbookHost<'_> {
                         }
                         self.protected[sheet] = None;
                     }
+                    // A function to Excel: measured, CallByName of it is True
+                    // where Protect, a Sub, is Empty.
+                    return Ok(Some(Value::Boolean(true)));
+                }
+                // The tracer arrows and validation circles are drawn on the
+                // screen, not kept here, and no page break is set by hand:
+                // measured, ClearArrows answers True and ClearCircles,
+                // CircleInvalid and ResetAllPageBreaks (Subs) Empty.
+                if name.eq_ignore_ascii_case("cleararrows") {
+                    return Ok(Some(Value::Boolean(true)));
+                }
+                if ["clearcircles", "circleinvalid", "resetallpagebreaks"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
                     return Ok(Some(Value::Empty));
                 }
                 // Selecting a sheet is activating it, and it answers True:
@@ -17596,6 +17611,25 @@ impl Host for WorkbookHost<'_> {
                 && name.eq_ignore_ascii_case("names")
             {
                 return self.names_object_or_item(args).map(Some);
+            }
+            // The book's own methods: measured through CallByName, Activate
+            // and Unprotect answer True, Protect and RefreshAll (Subs) Empty,
+            // and ProtectStructure follows Protect and Unprotect.
+            if self.is_workbook(receiver) {
+                if name.eq_ignore_ascii_case("activate") || name.eq_ignore_ascii_case("unprotect") {
+                    if name.eq_ignore_ascii_case("unprotect") {
+                        self.book_protected = false;
+                    }
+                    return Ok(Some(Value::Boolean(true)));
+                }
+                if name.eq_ignore_ascii_case("protect") {
+                    self.book_protected = true;
+                    return Ok(Some(Value::Empty));
+                }
+                if name.eq_ignore_ascii_case("refreshall") {
+                    self.recalculate();
+                    return Ok(Some(Value::Empty));
+                }
             }
             if let Some(at) = self.comment_cell(receiver) {
                 return self.comment_member(at, name, args);
@@ -17733,9 +17767,26 @@ impl Host for WorkbookHost<'_> {
             if self.is_application(receiver) && name.eq_ignore_ascii_case("activechart") {
                 return self.active_chart_object().map(Some);
             }
+            // Calculate is a function to Excel and the full forms Subs:
+            // measured through CallByName, True and Empty.
             if self.is_application(receiver) && name.eq_ignore_ascii_case("calculate") {
                 self.recalculate();
+                return Ok(Some(Value::Boolean(true)));
+            }
+            if self.is_application(receiver)
+                && (name.eq_ignore_ascii_case("calculatefull") || name.eq_ignore_ascii_case("calculatefullrebuild"))
+            {
+                self.recalculate();
                 return Ok(Some(Value::Empty));
+            }
+            // Nothing is ever being worked out in the background here, and
+            // there is no last action to repeat: measured, CheckAbort Empty
+            // and Repeat True.
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("checkabort") {
+                return Ok(Some(Value::Empty));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("repeat") {
+                return Ok(Some(Value::Boolean(true)));
             }
             // Measured: `Application.Wait` comes back True once the moment
             // has passed; nothing here can hold the page, so it comes back
@@ -17755,8 +17806,9 @@ impl Host for WorkbookHost<'_> {
                 }
                 return Ok(Some(Value::Error(2023)));
             }
+            // Measured through CallByName: Null.
             if self.is_application(receiver) && name.eq_ignore_ascii_case("volatile") {
-                return Ok(Some(Value::Empty));
+                return Ok(Some(Value::Null));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("international") {
                 let [asked] = args else {
@@ -19614,7 +19666,7 @@ impl Host for WorkbookHost<'_> {
                 "passwordencryptionalgorithm" => Value::String(String::new()),
                 "personalviewlistsettings" => Value::Boolean(true),
                 "personalviewprintsettings" => Value::Boolean(true),
-                "protectstructure" => Value::Boolean(false),
+                "protectstructure" => Value::Boolean(self.book_protected),
                 "protectwindows" => Value::Boolean(false),
                 "readonlyrecommended" => Value::Boolean(false),
                 "removepersonalinformation" => Value::Boolean(false),
