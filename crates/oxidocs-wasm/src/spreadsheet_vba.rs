@@ -22401,6 +22401,11 @@ fn format_debug_value(value: &Value) -> String {
         Value::Integer(value) => value.to_string(),
         Value::Decimal(value) => value.to_string(),
         Value::LongLong(value) => value.to_string(),
+        // A Single says only the seven digits it holds, as CStr does: 7.2,
+        // not the 7.19999980926514 its widening to a Double would say.
+        Value::Single(value) if value.is_finite() && *value != 0.0 => {
+            vba_number_text(format!("{:.6e}", value).parse().unwrap_or(*value as f64))
+        }
         Value::Single(value) => vba_number_text(*value as f64),
         Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
         Value::Date(value) => vba_date_text(*value),

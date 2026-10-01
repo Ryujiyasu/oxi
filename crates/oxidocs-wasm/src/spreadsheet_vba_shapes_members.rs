@@ -431,14 +431,31 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     "forecolor" => Some(self.part(DrawingPart::FillColor(id))),
                     "visible" => Some(mso(shape.fill_visible)),
-                    "transparency" => Some(Value::Double(shape.transparency)),
+                    "transparency" => Some(Value::Single(shape.transparency as f32)),
+                    // A solid fill, measured: Type msoFillSolid, the gradient,
+                    // pattern and texture kinds mixed (-2), no gradient
+                    // variant, not turning with the shape; the angle is 440
+                    // and the texture's own settings 5 (its name 70).
+                    "type" => Some(Value::Integer(1)),
+                    "gradientcolortype" | "gradientstyle" | "pattern" | "presetgradienttype" | "presettexture" | "texturetype" => {
+                        Some(Value::Integer(-2))
+                    }
+                    "gradientvariant" | "rotatewithobject" => Some(Value::Integer(0)),
+                    "gradientangle" => return Err(host_error(440, "a solid fill has no gradient angle")),
+                    "texturename" => return Err(host_error(70, "a solid fill has no texture")),
+                    "texturealignment" | "texturehorizontalscale" | "textureoffsetx" | "textureoffsety" | "texturetile" | "textureverticalscale" => {
+                        return Err(host_error(5, "a solid fill has no texture"))
+                    }
+                    "parent" => Some(self.part(DrawingPart::Shape(id))),
                     _ => None,
                 })
             }
             DrawingPart::FillColor(id) => {
                 let shape = self.shape(id)?;
                 Ok(match lower.as_str() {
-                    "rgb" => Some(Value::Integer(shape.fill)),
+                    // RGB is the default member: measured, a ForeColor read as
+                    // a value is its colour.
+                    "rgb" | "value" => Some(Value::Integer(shape.fill)),
                     "objectthemecolor" => Some(Value::Integer(shape.fill_theme.map_or(0, |theme| theme as i64))),
                     _ => None,
                 })
@@ -448,17 +465,27 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     "forecolor" => Some(self.part(DrawingPart::LineColor(id))),
                     "visible" => Some(mso(shape.line_visible)),
-                    "weight" => Some(Value::Double(shape.line_weight)),
+                    "weight" => Some(Value::Single(shape.line_weight as f32)),
                     "dashstyle" => Some(Value::Integer(shape.dash)),
                     "endarrowheadstyle" => Some(Value::Integer(shape.arrow_end)),
                     "beginarrowheadstyle" => Some(Value::Integer(1)),
+                    // Measured on a shape's outline: medium arrowheads, a
+                    // single line, no inset pen, pattern mixed, opaque.
+                    "beginarrowheadlength" | "beginarrowheadwidth" | "endarrowheadlength" | "endarrowheadwidth" => {
+                        Some(Value::Integer(2))
+                    }
+                    "style" => Some(Value::Integer(1)),
+                    "insetpen" => Some(Value::Integer(0)),
+                    "pattern" => Some(Value::Integer(-2)),
+                    "transparency" => Some(Value::Single(0.0)),
+                    "parent" => Some(self.part(DrawingPart::Shape(id))),
                     _ => None,
                 })
             }
             DrawingPart::LineColor(id) => {
                 let shape = self.shape(id)?;
                 Ok(match lower.as_str() {
-                    "rgb" => Some(Value::Integer(shape.line)),
+                    "rgb" | "value" => Some(Value::Integer(shape.line)),
                     "objectthemecolor" => Some(Value::Integer(shape.line_theme.map_or(0, |theme| theme as i64))),
                     _ => None,
                 })
@@ -469,12 +496,21 @@ impl<'a> WorkbookHost<'a> {
                     "characters" => Some(self.part(DrawingPart::Characters(id, 1, None))),
                     "horizontalalignment" => Some(Value::Integer(shape.h_align)),
                     "verticalalignment" => Some(Value::Integer(shape.v_align)),
+                    // Measured on a rectangle: AutoSize and AutoMargins are
+                    // 1004 (a text box's are not measured and keep theirs).
+                    "autosize" | "automargins" if matches!(shape.kind, ShapeKind::Auto(_)) => {
+                        return Err(host_error(1004, "Unable to get the AutoSize property"))
+                    }
                     "autosize" => Some(Value::Boolean(shape.auto_size)),
-                    "marginleft" => Some(Value::Double(shape.margins.0)),
-                    "margintop" => Some(Value::Double(shape.margins.1)),
-                    "marginright" => Some(Value::Double(shape.margins.2)),
-                    "marginbottom" => Some(Value::Double(shape.margins.3)),
+                    "marginleft" => Some(Value::Single(shape.margins.0 as f32)),
+                    "margintop" => Some(Value::Single(shape.margins.1 as f32)),
+                    "marginright" => Some(Value::Single(shape.margins.2 as f32)),
+                    "marginbottom" => Some(Value::Single(shape.margins.3 as f32)),
                     "parent" => Some(self.part(DrawingPart::Shape(id))),
+                    // Measured: horizontal text overflowing both ways,
+                    // reading order mixed.
+                    "horizontaloverflow" | "verticaloverflow" | "orientation" => Some(Value::Integer(1)),
+                    "readingorder" => Some(Value::Integer(-2)),
                     _ => None,
                 })
             }
@@ -491,10 +527,16 @@ impl<'a> WorkbookHost<'a> {
                     })),
                     "wordwrap" => Some(mso(true)),
                     "autosize" => Some(Value::Integer(i64::from(shape.auto_size))),
-                    "marginleft" => Some(Value::Double(shape.margins.0)),
-                    "margintop" => Some(Value::Double(shape.margins.1)),
-                    "marginright" => Some(Value::Double(shape.margins.2)),
-                    "marginbottom" => Some(Value::Double(shape.margins.3)),
+                    "marginleft" => Some(Value::Single(shape.margins.0 as f32)),
+                    "margintop" => Some(Value::Single(shape.margins.1 as f32)),
+                    "marginright" => Some(Value::Single(shape.margins.2 as f32)),
+                    "marginbottom" => Some(Value::Single(shape.margins.3 as f32)),
+                    // Measured: anchored left, horizontal, turning with the
+                    // shape, no path or warp, WordArt mixed.
+                    "horizontalanchor" | "orientation" => Some(Value::Integer(1)),
+                    "notextrotation" | "pathformat" | "warpformat" => Some(Value::Integer(0)),
+                    "wordartformat" => Some(Value::Integer(-2)),
+                    "parent" => Some(self.part(DrawingPart::Shape(id))),
                     _ => None,
                 })
             }
