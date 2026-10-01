@@ -45,11 +45,13 @@ CORPUS = {
     },
     "dev": {
         "pdf": lambda doc: DEV / "pdf" / f"{doc}.pdf",
-        "png": lambda doc: DEV / "oxi_png" / "head" / doc,
+        "png": lambda doc: DEV / "oxi_png" / DEV_TAG / doc,
         "out": DEV_OUT,
     },
 }
 WHICH = "blind"
+# Which `pptx_ssim_floor.py --tag` render the dev ranking reads.
+DEV_TAG = "head"
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -113,11 +115,12 @@ def masked_mean(smap: np.ndarray, keep: np.ndarray | None) -> float:
     return float(m[k].mean())
 
 
-def _set_which(which: str) -> None:
+def _set_which(which: str, tag: str = "head") -> None:
     # Each worker is its own process, so the corpus choice has to be handed
     # over rather than inherited.
-    global WHICH
+    global WHICH, DEV_TAG
     WHICH = which
+    DEV_TAG = tag
 
 
 def score_deck(doc: str) -> list[dict]:
@@ -170,11 +173,14 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--jobs", type=int, default=0)
     ap.add_argument("--decks", default="", help="comma-separated ids, else all")
+    ap.add_argument("--tag", default="head",
+                    help="dev only: the pptx_ssim_floor.py render tag to rank")
     ap.add_argument("--dev", action="store_true",
                     help="rank the dev 40 instead of the blind 50")
     args = ap.parse_args()
-    global WHICH
+    global WHICH, DEV_TAG
     WHICH = "dev" if args.dev else "blind"
+    DEV_TAG = args.tag
     if args.dev:
         docs = sorted(p.stem for p in (DEV / "pdf").glob("*.pdf"))
         if args.decks:
@@ -189,7 +195,7 @@ def main() -> None:
     jobs = args.jobs or max(1, (os.cpu_count() or 4) - 1)
     rows: list[dict] = []
     with ProcessPoolExecutor(max_workers=jobs, initializer=_set_which,
-                             initargs=(WHICH,)) as pool:
+                             initargs=(WHICH, DEV_TAG)) as pool:
         for got in pool.map(score_deck, docs):
             rows.extend(got)
             if got:

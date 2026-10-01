@@ -2263,6 +2263,12 @@ fn imgrot_on() -> bool {
     std::env::var("OXI_IMGROT_DISABLE").is_err()
 }
 
+/// A flipped picture's fillRect destination mirrors about the shape's centre
+/// unless this is set.
+fn flipfill_on() -> bool {
+    std::env::var("OXI_FLIPFILL_DISABLE").is_err()
+}
+
 /// Feeds one embedded font part to `TTLoadEmbeddedFont`'s pull-style reader.
 #[cfg(windows)]
 struct FontStream {
@@ -11925,11 +11931,62 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     && (sh.flip_h || sh.flip_v || sh.rotation != 0.0)
                                     && (sh.rot_with_shape || sh.flip_h || sh.flip_v);
                                 let angle = if sh.rot_with_shape { sh.rotation as f64 } else { 0.0 };
+                                // A flip mirrors the whole SHAPE about its
+                                // centre, so the destination rectangle --
+                                // which `a:fillRect` (or a srcRect reaching
+                                // outside the image) may push off-centre --
+                                // mirrors with it, not only the pixels inside
+                                // it. d55 s6's robot (`flipH`, `r="-4954"`)
+                                // overhangs its box on the LEFT in
+                                // PowerPoint's export, by the 37.6pt the
+                                // unflipped rect overhangs on the right; d52
+                                // s4's portrait (`l=-60.2%`, `r=-74.8%`) sits
+                                // the 81pt their difference predicts.
+                                //
+                                // The shift is taken from the EXACT rectangle
+                                // and added to the snapped one: mirroring the
+                                // snapped box itself (floor left, ceil right)
+                                // moved every symmetric flipped picture by a
+                                // fraction of a pixel. A symmetric rect gives
+                                // exactly zero here.
+                                let (flip_dx, flip_dy) = if flipfill_on() && turns {
+                                    let span = |lo: f64, hi: f64, n: f64| {
+                                        // fraction of the rect the clipped
+                                        // source occupies (S-SRCCLIP)
+                                        let (f0, f1) = (n * lo, n * (1.0 - hi));
+                                        if srcclip_on() && f1 > f0 {
+                                            ((f0.max(0.0) - f0) / (f1 - f0), (f1.min(n) - f0) / (f1 - f0))
+                                        } else {
+                                            (0.0, 1.0)
+                                        }
+                                    };
+                                    let mirror = |pos: f32, len: f32, lo: f64, hi: f64, u: (f64, f64)| {
+                                        let (p, l) = (pos as f64 * scale, len as f64 * scale);
+                                        let e0 = p + l * lo;
+                                        let w = l * (1.0 - lo - hi);
+                                        let (a, b) = (e0 + w * u.0, e0 + w * u.1);
+                                        (2.0 * p + l) - a - b
+                                    };
+                                    (
+                                        if sh.flip_h {
+                                            mirror(sh.x, sh.width, dl, dr, span(sl, sr, iw as f64))
+                                        } else {
+                                            0.0
+                                        },
+                                        if sh.flip_v {
+                                            mirror(sh.y, sh.height, dt, db, span(st, sb, ih as f64))
+                                        } else {
+                                            0.0
+                                        },
+                                    )
+                                } else {
+                                    (0.0, 0.0)
+                                };
                                 let turned = if turns {
                                     transform_picture(
                                         &rgba,
                                         (sx0, sy0, sw, shh),
-                                        (dx as f64, dy as f64, dw as f64, dh as f64),
+                                        (dx as f64 + flip_dx, dy as f64 + flip_dy, dw as f64, dh as f64),
                                         (
                                             (sh.x + sh.width / 2.0) as f64 * scale,
                                             (sh.y + sh.height / 2.0) as f64 * scale,
