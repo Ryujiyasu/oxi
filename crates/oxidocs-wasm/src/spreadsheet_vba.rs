@@ -2107,7 +2107,10 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::RangeCollection(_, RangeAxis::Rows) => "Range",
                 HostObject::RangeCollection(_, RangeAxis::Columns) => "Range",
                 HostObject::Worksheet(_) => "Worksheet",
-                HostObject::Worksheets => "Worksheets",
+                // The collection Worksheets hands back is Sheets to TypeName:
+                // measured, of Worksheets, ActiveWorkbook.Worksheets and
+                // Application.Worksheets alike.
+                HostObject::Worksheets => "Sheets",
                 HostObject::Blocks(_) => "Range",
                 HostObject::Areas(_) => "Areas",
                 HostObject::BlocksStyle(_, StyleFace::Font) => "Font",
@@ -17212,6 +17215,15 @@ impl Host for WorkbookHost<'_> {
             if self.gone(receiver) {
                 return Err(host_error(424, "the object's worksheet has been deleted"));
             }
+            // What the Application answers of the active sheet and window is
+            // what the same name answers unqualified: measured,
+            // Application.Cells(2, 3) is $C$2 and Application.ActiveWindow a
+            // Window.
+            if self.is_application(receiver)
+                && ["activewindow", "cells", "rows", "columns"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted))
+            {
+                return self.call(None, name, args);
+            }
             if let Some(object @ (HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..))) =
                 self.objects.get(receiver.handle as usize).copied()
             {
@@ -17290,8 +17302,14 @@ impl Host for WorkbookHost<'_> {
             if self.is_application(receiver) && name.eq_ignore_ascii_case("operatingsystem") {
                 return Ok(Some(Value::String("Windows (64-bit) NT 10.00".to_string())));
             }
+            // The window's title: measured, "Book1 - Excel" on a new book.
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("caption") {
+                let book = self.file_name.clone().unwrap_or_else(|| "Book1".to_string());
+                return Ok(Some(Value::String(format!("{book} - Excel"))));
+            }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
-                return Ok(Some(Value::Integer(20326)));
+                // A Double, as Excel hands it: measured, TypeName(Build).
+                return Ok(Some(Value::Double(20326.0)));
             }
             // The two rulers page setup is measured with: measured,
             // `InchesToPoints(1)` is 72 and `CentimetersToPoints(2)` is
@@ -19183,6 +19201,30 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("chartobjects") {
                 return Ok(Some(self.object(HostObject::Drawing(shapes::DrawingPart::ChartObjects(sheet)))));
+            }
+            // A protected sheet guards its scenarios too, and an unprotected
+            // one does not: measured, False and then True after Protect.
+            if name.eq_ignore_ascii_case("protectscenarios") {
+                return Ok(Some(Value::Boolean(self.protected.get(sheet).and_then(Option::as_ref).is_some())));
+            }
+            // What a sheet made here answers of the rest: measured, no
+            // circular reference, xlSum (-4157) for consolidation, left to
+            // right, and the protected-sheet switches off but conditional
+            // formats worked out.
+            if name.eq_ignore_ascii_case("circularreference") {
+                return Ok(Some(Value::Nothing));
+            }
+            if name.eq_ignore_ascii_case("consolidationfunction") {
+                return Ok(Some(Value::Integer(-4157)));
+            }
+            if ["displayrighttoleft", "enableautofilter", "enableoutlining", "enablepivottable"]
+                .iter()
+                .any(|wanted| name.eq_ignore_ascii_case(wanted))
+            {
+                return Ok(Some(Value::Boolean(false)));
+            }
+            if name.eq_ignore_ascii_case("enableformatconditionscalculation") {
+                return Ok(Some(Value::Boolean(true)));
             }
             // What the sheet was protected with. `ProtectContents` is False
             // for a sheet protected with `Contents:=False`, and
@@ -26566,12 +26608,76 @@ const APPLICATION_SETTINGS: &[(&str, fn() -> Value, bool)] = &[
     ("usesystemseparators", || Value::Boolean(true), true),
     ("enablecancelkey", || Value::Integer(1), true),
     ("maxchange", || Value::Double(0.001), true),
-    ("maxiterations", || Value::Integer(100), true),
+    ("maxiterations", || Value::Double(100.0), true),
     ("iteration", || Value::Boolean(false), true),
     ("calculationstate", || Value::Integer(0), false),
     ("calculatebeforesave", || Value::Boolean(true), true),
     ("pathseparator", || Value::String("\\".to_string()), false),
     ("username", || Value::String("User".to_string()), true),
+    // Measured on a fresh Excel 16.0 (Visible and UserControl as an
+    // interactive one has them; automation reports both False).
+    ("alertbeforeoverwriting", || Value::Boolean(true), true),
+    ("asktoupdatelinks", || Value::Boolean(false), true),
+    ("autoformatasyoutypereplacehyperlinks", || Value::Boolean(true), true),
+    ("automationsecurity", || Value::Integer(1), true),
+    ("autopercententry", || Value::Boolean(true), true),
+    ("calculationinterruptkey", || Value::Integer(2), true),
+    ("calculationversion", || Value::Integer(191_029), false),
+    ("canplaysounds", || Value::Boolean(true), false),
+    ("canrecordsounds", || Value::Boolean(true), false),
+    ("celldraganddrop", || Value::Boolean(true), true),
+    ("commandunderlines", || Value::Integer(1), true),
+    ("constrainnumeric", || Value::Boolean(false), true),
+    ("controlcharacters", || Value::Double(0.0), true),
+    ("copyobjectswithcells", || Value::Boolean(true), true),
+    ("cursormovement", || Value::Double(1.0), true),
+    ("dataentrymode", || Value::Integer(-4146), true),
+    ("defaultsaveformat", || Value::Integer(51), true),
+    ("defaultsheetdirection", || Value::Integer(-5003), true),
+    ("displayclipboardwindow", || Value::Boolean(false), true),
+    ("displaycommentindicator", || Value::Integer(-1), true),
+    ("displayfullscreen", || Value::Boolean(false), true),
+    ("displayfunctiontooltips", || Value::Boolean(true), true),
+    ("displayinsertoptions", || Value::Boolean(true), true),
+    ("displaynoteindicator", || Value::Boolean(true), true),
+    ("displaypasteoptions", || Value::Boolean(true), true),
+    ("displayrecentfiles", || Value::Boolean(true), true),
+    ("displayscrollbars", || Value::Boolean(true), true),
+    ("editdirectlyincell", || Value::Boolean(true), true),
+    ("enableanimations", || Value::Boolean(true), true),
+    ("enableautocomplete", || Value::Boolean(true), true),
+    ("enablelargeoperationalert", || Value::Boolean(true), true),
+    ("enablesound", || Value::Boolean(true), true),
+    ("extendlist", || Value::Boolean(true), true),
+    ("filevalidation", || Value::Integer(0), true),
+    ("fixeddecimal", || Value::Boolean(false), true),
+    ("fixeddecimalplaces", || Value::Integer(2), true),
+    ("formulabarheight", || Value::Integer(1), true),
+    ("ignoreremoterequests", || Value::Boolean(false), true),
+    ("largeoperationcellthousandcount", || Value::Integer(33_554), true),
+    ("mouseavailable", || Value::Boolean(true), false),
+    ("moveafterreturn", || Value::Boolean(true), true),
+    ("moveafterreturndirection", || Value::Integer(-4121), true),
+    ("pivottableselection", || Value::Boolean(false), true),
+    ("printcommunication", || Value::Boolean(true), true),
+    ("promptforsummaryinfo", || Value::Boolean(false), true),
+    ("ready", || Value::Boolean(true), false),
+    ("recordrelative", || Value::Boolean(false), true),
+    ("rollzoom", || Value::Boolean(false), true),
+    ("sheetsinnewworkbook", || Value::Double(1.0), true),
+    ("showcharttipnames", || Value::Boolean(true), true),
+    ("showcharttipvalues", || Value::Boolean(true), true),
+    ("showdevtools", || Value::Boolean(false), true),
+    ("showmenufloaties", || Value::Boolean(true), true),
+    ("showselectionfloaties", || Value::Boolean(true), true),
+    ("showstartupdialog", || Value::Boolean(false), true),
+    ("showtooltips", || Value::Boolean(true), true),
+    ("transitionmenukey", || Value::String("/".to_string()), true),
+    ("transitionmenukeyaction", || Value::Double(1.0), true),
+    ("usercontrol", || Value::Boolean(true), true),
+    ("visible", || Value::Boolean(true), true),
+    ("warnonfunctionnameconflict", || Value::Boolean(true), true),
+    ("clusterconnector", || Value::String(String::new()), true),
 ];
 
 fn vba_has_its_own(name: &str) -> bool {
