@@ -3301,7 +3301,53 @@ impl<'a> WorkbookHost<'a> {
         // block first so a block's removal cannot move one still to come:
         // measured, `Range("A1:B2,D4").ClearContents` empties both and
         // `Range("A1:A2,C1:C2").Delete xlUp` removes both.
-        if ["clearcontents", "clear", "clearformats", "clearcomments", "clearnotes", "delete", "insert"]
+        // Each block answers for itself and the answers are put together:
+        // measured, HasFormula of "A1,D4" (a value and a formula) is Null,
+        // of "D4,D4" True; SpecialCells over A1:B2,D4:E5 is each block's
+        // cells in block order, "B1,A2,E4,D5" for the blanks.
+        if name.eq_ignore_ascii_case("hasformula") && args.is_empty() {
+            let mut shared: Option<Value> = None;
+            for block in &areas {
+                let one = self.range_has_formula(*block)?;
+                match &shared {
+                    None => shared = Some(one),
+                    Some(held) if *held != one => return Ok(Some(Value::Null)),
+                    Some(_) => {}
+                }
+            }
+            return Ok(shared);
+        }
+        if name.eq_ignore_ascii_case("specialcells") {
+            if args.is_empty() || matches!(args.first(), Some(Value::Missing)) {
+                return Err(host_error(449, "Argument not optional"));
+            }
+            let mut found = Vec::new();
+            let mut last_error = None;
+            for block in &areas {
+                match self.special_cells(*block, args) {
+                    Ok(Value::Object(object)) => match self.blocks(&object) {
+                        Some(blocks) => found.extend_from_slice(blocks),
+                        None => found.extend(self.range(&object)),
+                    },
+                    Ok(_) => {}
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            if found.is_empty() {
+                return Err(last_error.unwrap_or_else(|| host_error(1004, "No cells were found.")));
+            }
+            if found.len() == 1 {
+                return Ok(Some(self.object(HostObject::Range(found[0]))));
+            }
+            return self.written_blocks_object(found).map(Some);
+        }
+        // Measured: Sort over two blocks is 1004.
+        if name.eq_ignore_ascii_case("sort") {
+            return Err(host_error(1004, "The command cannot be used on multiple selections."));
+        }
+        // Merge, UnMerge and AutoFit go block by block: measured,
+        // "A20:B20,A22:B22" merged is two merged blocks.
+        if ["clearcontents", "clear", "clearformats", "clearcomments", "clearnotes", "delete", "insert", "merge", "unmerge", "autofit"]
             .iter()
             .any(|verb| name.eq_ignore_ascii_case(verb))
         {

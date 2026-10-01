@@ -1292,6 +1292,19 @@ impl<'a> Runtime<'a> {
             {
                 frame.variants.insert(frame.procedure_name.clone());
             }
+            // A plain typed result narrows when it is assigned, as a typed
+            // local does, so the procedure's own error handling sees the
+            // failure: measured, `F = r.Text` (Null) under On Error Resume
+            // Next in a String function is 94 inside F, not in its caller.
+            if let Some(return_type) = procedure.return_type.as_ref().filter(|t| !t.is_array) {
+                const SCALARS: [&str; 11] = [
+                    "string", "long", "integer", "double", "single", "boolean", "byte", "currency", "date",
+                    "longlong", "longptr",
+                ];
+                if SCALARS.iter().any(|scalar| return_type.name.eq_ignore_ascii_case(scalar)) {
+                    frame.declared.insert(frame.procedure_name.clone(), return_type.name.clone());
+                }
+            }
         }
         self.declare_procedure_locals(&procedure.body, &mut frame)?;
 
