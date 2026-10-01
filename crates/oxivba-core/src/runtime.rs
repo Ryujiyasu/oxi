@@ -14483,6 +14483,51 @@ End Sub
         assert_eq!(answer.unwrap(), Value::String("zII#IITT".to_string()));
     }
 
+    /// No VBA function brings the runtime down, however odd what it is
+    /// handed: each is called with nothing and with one to four of the same
+    /// odd value, under On Error Resume Next, and must answer or raise.
+    #[test]
+    fn no_builtin_panics_on_odd_arguments() {
+        const NAMES: &[&str] = &["abs", "array", "asc", "ascb", "ascw", "atn", "callbyname", "cbool", "cbyte", "ccur", "cdate", "cdbl", "cdec", "choose", "chr", "chr$", "chrb", "chrb$", "chrw", "cint", "clng", "clnglng", "clngptr", "cos", "csng", "cstr", "cvar", "cvdate", "cverr", "date", "date$", "dateadd", "datediff", "datepart", "dateserial", "datevalue", "day", "ddb", "environ", "environ$", "error", "error$", "exp", "filter", "fix", "format", "format$", "formatcurrency", "formatdatetime", "formatnumber", "formatpercent", "freefile", "fv", "hex", "hex$", "hour", "iif", "instr", "instrb", "instrrev", "int", "ipmt", "irr", "isarray", "isdate", "isempty", "iserror", "ismissing", "isnull", "isnumeric", "isobject", "join", "lbound", "lcase", "lcase$", "left", "left$", "leftb", "len", "lenb", "log", "ltrim", "mid", "mid$", "midb", "minute", "mirr", "month", "monthname", "now", "nper", "npv", "objptr", "oct", "oct$", "partition", "pmt", "ppmt", "pv", "qbcolor", "rate", "replace", "rgb", "right", "right$", "rightb", "rnd", "round", "rtrim", "second", "sgn", "sin", "sln", "space", "space$", "split", "sqr", "str", "str$", "strcomp", "strconv", "string", "string$", "strptr", "strreverse", "switch", "syd", "tan", "time", "time$", "timer", "timeserial", "timevalue", "trim", "trim$", "typename", "ubound", "ucase", "ucase$", "val", "varptr", "vartype", "weekday", "weekdayname", "year"];
+        const KINDS: &[&str] = &[
+            "\"\"", "\"abc\"", "Empty", "Null", "True", "-1", "0", "0.5", "1E+300", "-1E+300",
+            "1E+10", "2147483648#", "1000000000", "-2147483648#", "32768", "-32769", "#12/31/9999 11:59:59 PM#", "CDec(\"79228162514264337593543950335\")", "\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"", "Array()", "Array(1, \"x\")", "CVErr(5)", "#1/1/100#", "Nothing",
+        ];
+        let mut fell: Vec<String> = Vec::new();
+        for name in NAMES {
+            for kind in KINDS {
+                let mut body = String::from("Public Function Probe() As Variant
+On Error Resume Next
+Dim x As Variant
+");
+                for count in 0..=4 {
+                    let args = vec![*kind; count].join(", ");
+                    if count == 0 {
+                        body.push_str(&format!("x = {name}()
+"));
+                    } else {
+                        body.push_str(&format!("x = {name}({args})
+"));
+                    }
+                }
+                body.push_str("End Function
+");
+                let Ok(module) = parse_module(&body) else {
+                    continue;
+                };
+                let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut runtime = Runtime::new(&module);
+                    runtime.max_steps = 200_000;
+                    let _ = runtime.call("Probe", vec![]);
+                }));
+                if caught.is_err() {
+                    fell.push(format!("{name}({kind})"));
+                }
+            }
+        }
+        assert!(fell.is_empty(), "panicked ({}): {}", fell.len(), fell.join(" "));
+    }
+
     fn run(source: &str, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         let module = parse_module(source).unwrap();
         execute(&module, name, args)
