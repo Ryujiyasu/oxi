@@ -20039,7 +20039,15 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("consolidationfunction") {
                 return Ok(Some(Value::Integer(-4157)));
             }
-            if ["displayrighttoleft", "enableautofilter", "enableoutlining", "enablepivottable"]
+            // Measured on a fresh sheet: no consolidation sources (Empty), no
+            // printed comment pages, and the Lotus transition switches off.
+            if name.eq_ignore_ascii_case("consolidationsources") {
+                return Ok(Some(Value::Empty));
+            }
+            if name.eq_ignore_ascii_case("printedcommentpages") {
+                return Ok(Some(Value::Integer(0)));
+            }
+            if ["displayrighttoleft", "enableautofilter", "enableoutlining", "enablepivottable", "transitionexpeval", "transitionformentry"]
                 .iter()
                 .any(|wanted| name.eq_ignore_ascii_case(wanted))
             {
