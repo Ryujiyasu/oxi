@@ -3531,6 +3531,24 @@ impl<'a> WorkbookHost<'a> {
         value: Value,
     ) -> Result<bool, String> {
         let areas = self.blocks[handle].clone();
+        // One name for all the blocks: measured, naming A1:B2,D4:E5 Twin
+        // gives =Sheet1!$A$1:$B$2,Sheet1!$D$4:$E$5.
+        if face.is_none() && name.eq_ignore_ascii_case("name") {
+            let Value::String(called) = &value else {
+                return Err("a range is given a name as a String".to_string());
+            };
+            check_name(called)?;
+            let parts: Vec<String> = areas
+                .iter()
+                .map(|block| self.address_of(*block).trim_start_matches('=').to_string())
+                .collect();
+            let stands_for = parts.join(",");
+            match self.name_at(called) {
+                Some(at) => self.workbook.defined_names[at] = (called.clone(), stands_for),
+                None => self.workbook.defined_names.push((called.clone(), stands_for)),
+            }
+            return Ok(true);
+        }
         let mut answered = false;
         for block in areas {
             let one = match face {
@@ -9866,8 +9884,11 @@ impl<'a> WorkbookHost<'a> {
                 // Not written as a reference, so it is meant as a name. Excel
                 // will not let a name look like `A1`, so nothing is ambiguous.
                 Err(unreadable) => {
-                    let named = self.named_range(sheet, reference, reach, unreadable)?;
-                    return Ok(self.object(HostObject::Range(named)));
+                    let named = self.named_areas(sheet, reference, reach, unreadable)?;
+                    if let [one] = named.as_slice() {
+                        return Ok(self.object(HostObject::Range(*one)));
+                    }
+                    return self.written_blocks_object(named);
                 }
             },
             // Either corner may itself be a block: measured,
@@ -10203,13 +10224,16 @@ impl<'a> WorkbookHost<'a> {
             ));
         }
         if name.eq_ignore_ascii_case("referstorange") {
-            let range = self.named_range(
+            let areas = self.named_areas(
                 0,
                 held,
                 NameReach::Workbook,
                 format!("the name {held:?} stands for no cells"),
             )?;
-            return Ok(self.object(HostObject::Range(range)));
+            if let [one] = areas.as_slice() {
+                return Ok(self.object(HostObject::Range(*one)));
+            }
+            return self.written_blocks_object(areas);
         }
         if name.eq_ignore_ascii_case("delete") {
             if !args.is_empty() {
@@ -10372,11 +10396,11 @@ impl<'a> WorkbookHost<'a> {
                 // `Data!Blk` reaches a workbook name too: measured, B2:C3 for
                 // a book-level Blk on Data.
                 if word.contains('!') {
-                    if let Ok(block) = self.named_range(target, word, reach, String::new()) {
-                        return Ok(Operand::Block(block));
+                    if let Ok(areas) = self.named_areas(target, word, reach, String::new()) {
+                        return Ok(Operand::Areas(areas));
                     }
                 }
-                return self.named_range(target, local, reach, format!("{local:?} is no reference")).map(Operand::Block);
+                return self.named_areas(target, local, reach, format!("{local:?} is no reference")).map(Operand::Areas);
             }
             if !bare.is_empty() && (bare.bytes().all(|b| b.is_ascii_digit()) || bare.bytes().all(|b| b.is_ascii_alphabetic())) {
                 if let Ok((column, row)) = parse_a1_reference(local) {
@@ -10388,7 +10412,7 @@ impl<'a> WorkbookHost<'a> {
                 return Ok(Operand::Block(CellRange::single(CellAddress { sheet: target, row, column })));
             }
             let name = if word.contains('!') { word.to_string() } else { local.to_string() };
-            self.named_range(target, &name, reach, format!("{local:?} is no reference")).map(Operand::Block)
+            self.named_areas(target, &name, reach, format!("{local:?} is no reference")).map(Operand::Areas)
         };
         fn union(
             reader: &mut Reader,
@@ -10442,6 +10466,7 @@ impl<'a> WorkbookHost<'a> {
                     Some(Operand::Areas(areas)) => Ok(areas),
                     Some(Operand::Part(_, _, written)) => match word(reader, &format!("\u{1}{written}"))? {
                         Operand::Block(block) => Ok(vec![block]),
+                        Operand::Areas(areas) => Ok(areas),
                         _ => Err(failed()),
                     },
                     None => Err(failed()),
@@ -10466,6 +10491,7 @@ impl<'a> WorkbookHost<'a> {
                     Operand::Areas(areas) if areas.len() == 1 => areas[0],
                     Operand::Part(_, _, written) => match word(reader, &format!("\u{1}{written}"))? {
                         Operand::Block(block) => block,
+                        Operand::Areas(areas) if areas.len() == 1 => areas[0],
                         _ => return Err(failed()),
                     },
                     _ => return Err(failed()),
@@ -10509,6 +10535,8 @@ impl<'a> WorkbookHost<'a> {
         Ok(areas)
     }
 
+    /// The one block a name stands for; a name of several blocks is refused
+    /// here, where a caller can hold only one.
     fn named_range(
         &self,
         sheet: usize,
@@ -10516,6 +10544,23 @@ impl<'a> WorkbookHost<'a> {
         reach: NameReach,
         unreadable: String,
     ) -> Result<CellRange, String> {
+        let areas = self.named_areas(sheet, name, reach, unreadable)?;
+        match areas.as_slice() {
+            [one] => Ok(*one),
+            _ => Err(format!("the name {name:?} stands for more than one block of cells")),
+        }
+    }
+
+    /// The blocks a name stands for: one, or several where its reference is
+    /// a list. Measured: naming A1:B2,D4 Twin, `Range("Twin")` is that
+    /// two-block range.
+    fn named_areas(
+        &self,
+        sheet: usize,
+        name: &str,
+        reach: NameReach,
+        unreadable: String,
+    ) -> Result<Vec<CellRange>, String> {
         // Through `name_at`, which also finds a SHEET-SCOPED name asked for
         // without its sheet: `Range("loc")` has to reach `Sheet1!loc`. Reading
         // the list directly here found only the exact spelling, so a scoped
@@ -10543,14 +10588,11 @@ impl<'a> WorkbookHost<'a> {
                 format!("{unreadable}, and the workbook has no name {name:?} either"),
             ));
         };
+        let whole = refers_to.trim();
+        let whole = whole.strip_prefix('=').unwrap_or(whole).trim();
+        let mut areas = Vec::new();
+        for refers_to in whole.split(',') {
         let refers_to = refers_to.trim();
-        let refers_to = refers_to.strip_prefix('=').unwrap_or(refers_to).trim();
-        if refers_to.contains(',') {
-            return Err(format!(
-                "the name {held:?} stands for more than one block of cells, \
-                 which this build cannot hold in one Range"
-            ));
-        }
         let (named_sheet, reference) = split_sheet_reference(refers_to);
         let Some(named_sheet) = named_sheet else {
             return Err(format!(
@@ -10577,13 +10619,15 @@ impl<'a> WorkbookHost<'a> {
         })?;
         let (start_column, start_row) = start;
         let (end_column, end_row) = end;
-        Ok(CellRange {
+        areas.push(CellRange {
             sheet: target,
             start_row: start_row.min(end_row),
             start_column: start_column.min(end_column),
             end_row: start_row.max(end_row),
             end_column: start_column.max(end_column),
-        })
+        });
+        }
+        Ok(areas)
     }
 
     fn evaluate_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
@@ -37157,7 +37201,8 @@ End Sub
     fn vba_says_why_a_name_is_not_a_range() {
         for (call, expected) in [
             ("ActiveSheet.Range(\"Away\")", "answers only for its own names"),
-            ("Range(\"Scattered\")", "more than one block of cells"),
+            // A name of several blocks is now that many-block range, as in
+            // Excel (r231), so "Scattered" is no longer refused.
             ("Range(\"Number\")", "which worksheet it means"),
             ("Range(\"WholeColumn\")", "not a block of cells"),
             ("Range(\"NoSuchName\")", "no name \"NoSuchName\""),

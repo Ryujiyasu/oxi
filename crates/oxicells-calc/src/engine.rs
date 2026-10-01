@@ -76,6 +76,25 @@ fn outside_brackets(asked: &str) -> Vec<String> {
     parts
 }
 
+/// Whether a formula body has a comma outside every bracket and quote: the
+/// list of blocks a name can stand for.
+fn has_top_level_comma(body: &str) -> bool {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    for ch in body.chars() {
+        match (quote, ch) {
+            (Some(open), c) if c == open => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, '(' | '{' | '[') => depth += 1,
+            (None, ')' | '}' | ']') => depth = depth.saturating_sub(1),
+            (None, ',') if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// How much of a workbook a recalculation covers.
 enum Extent<'a> {
     /// Every formula there is.
@@ -447,7 +466,17 @@ impl Workbook {
     }
 
     pub fn define_name(&mut self, name: &str, formula: &str) -> Result<(), CalcError> {
-        let expr = parse(formula)?;
+        // A name may stand for several blocks written as a list,
+        // `=Sheet1!$C$1,Sheet1!$C$3:$C$4`, which a formula would have to
+        // bracket to read as the union it is: measured, SUM of such a name
+        // adds both blocks.
+        let body = formula.trim();
+        let body = body.strip_prefix('=').unwrap_or(body);
+        let expr = if has_top_level_comma(body) {
+            parse(&format!("=({body})"))?
+        } else {
+            parse(formula)?
+        };
         self.names.insert(crate::case_fold::name_key(name), expr);
         Ok(())
     }
@@ -1736,6 +1765,17 @@ impl Workbook {
                     let a = match a {
                         Expr::Function { name: sheets, args: parts } if sheets == "_SHEETS" => {
                             expanded = self.across_sheets(parts);
+                            &expanded
+                        }
+                        // A name standing for several blocks is those blocks:
+                        // measured, SUM of a name for A1:B2,D4 adds both.
+                        Expr::Name(label)
+                            if matches!(
+                                self.name_bound(label, sheet),
+                                Some(Expr::Function { name: union, .. }) if union == "_UNION"
+                            ) =>
+                        {
+                            expanded = self.name_bound(label, sheet).cloned().unwrap_or_else(|| a.clone());
                             &expanded
                         }
                         _ => a,
@@ -4559,4 +4599,20 @@ fn split_format_sections(format: &str) -> Vec<String> {
         }
     }
     sections
+}
+
+#[cfg(test)]
+mod name_union {
+    use super::*;
+
+    /// A name may stand for a list of blocks, and SUM of it adds them all.
+    #[test]
+    fn a_name_of_several_blocks_sums_them_all() {
+        let mut wb = Workbook::new();
+        wb.add_sheet("Sheet1");
+        wb.set_value("Sheet1", "A1", Value::Number(4.0)).unwrap();
+        wb.set_value("Sheet1", "D4", Value::Number(4.0)).unwrap();
+        wb.define_name("Twin", "Sheet1!$A$1:$B$2,Sheet1!$D$4").unwrap();
+        assert_eq!(wb.evaluate("Sheet1", "=SUM(Twin)").unwrap(), Value::Number(8.0));
+    }
 }
