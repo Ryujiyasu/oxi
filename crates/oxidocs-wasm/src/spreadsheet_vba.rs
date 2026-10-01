@@ -3400,6 +3400,7 @@ impl<'a> WorkbookHost<'a> {
             || name.eq_ignore_ascii_case("value2")
             || name.eq_ignore_ascii_case("formula")
             || name.eq_ignore_ascii_case("formula2")
+            || name.eq_ignore_ascii_case("formular1c1")
         {
             let first = self.object(HostObject::Range(areas[0]));
             let Value::Object(first) = first else {
@@ -3409,6 +3410,47 @@ impl<'a> WorkbookHost<'a> {
         }
         if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("numberformat") {
             return self.get_from_every_block(handle, None, name);
+        }
+        // How the cells are dressed is asked of every block: measured, with
+        // D4 alone wrapped, centred, unlocked and indented, WrapText,
+        // HorizontalAlignment, Locked and IndentLevel of A1:B2,D4:E5 are Null.
+        const DRESS: [&str; 12] = [
+            "wraptext", "horizontalalignment", "verticalalignment", "locked", "indentlevel", "mergecells",
+            "orientation", "shrinktofit", "formulahidden", "addindent", "readingorder", "prefixcharacter",
+        ];
+        if args.is_empty() && DRESS.iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+            return self.get_from_every_block(handle, None, name);
+        }
+        // Where it sits and what it leads to is the first block's: measured,
+        // ColumnWidth, RowHeight, Width and Top of D4:E5,A1:B2 are D4:E5's,
+        // and of A1:B2,D4:E5 A1:B2's (Width 108, Height 37.5).
+        const FIRST: [&str; 26] = [
+            "width", "height", "left", "top", "columnwidth", "rowheight", "hasarray", "next", "previous",
+            "dependents", "precedents", "directdependents", "directprecedents", "currentregion", "end",
+            "usestandardheight", "usestandardwidth", "allowedit", "name", "summary",
+            "showdetail", "outlinelevel", "pagebreak", "hidden", "listobject", "style",
+        ];
+        // Measured: MergeArea, Errors, QueryTable and ID of a many-block
+        // range are 1004.
+        if ["mergearea", "errors", "querytable", "id"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+            return Err(host_error(1004, "Application-defined or object-defined error"));
+        }
+        if FIRST.iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+            // ColumnWidth and RowHeight are the first CELL's: measured,
+            // D4:E5,A1:B2 with D 20 wide and E 8.38 answers 20, not Null.
+            let first = if name.eq_ignore_ascii_case("columnwidth") || name.eq_ignore_ascii_case("rowheight") {
+                CellRange::single(areas[0].first())
+            } else {
+                areas[0]
+            };
+            let receiver = self.object(HostObject::Range(first));
+            let Value::Object(receiver) = receiver else { return Ok(None) };
+            if args.is_empty() {
+                if let Some(answer) = self.get(&receiver, name)? {
+                    return Ok(Some(answer));
+                }
+            }
+            return self.call(Some(&receiver), name, args);
         }
         // A dress worn by every block, not by the first alone: asked of Excel,
         // colouring `Union(A1:A2, C1:C2)` colours C2 as well as A1.
