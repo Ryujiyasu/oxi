@@ -742,11 +742,24 @@ impl<'a> WorkbookHost<'a> {
         let shape = self.shape(id)?.clone();
         Ok(match lower {
             "name" => Some(Value::String(shape.name)),
-            "left" => Some(Value::Double(shape.left)),
-            "top" => Some(Value::Double(shape.top)),
-            "width" => Some(Value::Double(shape.width)),
-            "height" => Some(Value::Double(shape.height)),
-            "rotation" => Some(Value::Double(shape.rotation)),
+            // Singles, as Excel hands them: measured, TypeName of a shape's
+            // Left, Top, Width, Height and Rotation is Single.
+            "left" => Some(Value::Single(shape.left as f32)),
+            "top" => Some(Value::Single(shape.top as f32)),
+            "width" => Some(Value::Single(shape.width as f32)),
+            "height" => Some(Value::Single(shape.height as f32)),
+            "rotation" => Some(Value::Single(shape.rotation as f32)),
+            // The plain answers of a shape on its own: measured on an oval,
+            // BackgroundStyle 0, BlackWhiteMode 1 (automatic), Child and
+            // HasSmartArt msoFalse, Locked True, Title "", and GroupItems
+            // and ParentGroup 1004 outside a group.
+            "backgroundstyle" => Some(Value::Integer(0)),
+            "blackwhitemode" => Some(Value::Integer(1)),
+            "child" | "hassmartart" => Some(mso(false)),
+            "locked" => Some(Value::Boolean(true)),
+            "title" => Some(Value::String(String::new())),
+            "groupitems" | "parentgroup" => return Err(host_error(1004, "the shape is in no group")),
+            "application" => Some(Value::String("Microsoft Excel".to_string())),
             "visible" => Some(mso(shape.visible)),
             "placement" => Some(Value::Integer(shape.placement)),
             "onaction" => Some(Value::String(shape.on_action)),
