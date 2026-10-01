@@ -9013,14 +9013,48 @@ fn text_collate(left: &str, right: &str) -> std::cmp::Ordering {
     let (left, right) = (collation_spelling(left, true), collation_spelling(right, true));
     let passed = |character: &char| matches!(character, '-' | '\'');
     let primary = |value: &str| value.chars().filter(|character| !passed(character)).collect::<String>();
-    primary(&left)
+    // A letter with an accent sorts with its own letter, the accent only
+    // breaking a tie: measured, StrComp("é", "f", 1) and ("ée", "ef") are -1
+    // while StrComp("é", "e", 1) is 1, and ø, å, ü, ñ, ç, ÿ go the same way.
+    let base = |value: &str| value.chars().filter(|character| !passed(character)).map(latin_base_letter).collect::<String>();
+    base(&left)
         .encode_utf16()
-        .cmp(primary(&right).encode_utf16())
+        .cmp(base(&right).encode_utf16())
+        .then_with(|| primary(&left).encode_utf16().cmp(primary(&right).encode_utf16()))
         .then_with(|| {
             let count = |value: &str| value.chars().filter(passed).count();
             count(&left).cmp(&count(&right))
         })
         .then_with(|| left.encode_utf16().cmp(right.encode_utf16()))
+}
+
+/// The plain letter an accented Latin letter is sorted with (Latin-1 and
+/// Latin Extended-A); any other character is itself. The text has been
+/// folded already, so the plain letter is the small one: measured, a capital
+/// dotted İ sorts just after i and I alike.
+fn latin_base_letter(character: char) -> char {
+    match character as u32 {
+        0xC0..=0xC5 | 0xE0..=0xE5 | 0x100..=0x105 => 'a',
+        0xC7 | 0xE7 | 0x106..=0x10D => 'c',
+        0xD0 | 0xF0 | 0x10E..=0x111 => 'd',
+        0xC8..=0xCB | 0xE8..=0xEB | 0x112..=0x11B => 'e',
+        0x11C..=0x123 => 'g',
+        0x124..=0x127 => 'h',
+        0xCC..=0xCF | 0xEC..=0xEF | 0x128..=0x130 => 'i',
+        0x134..=0x135 => 'j',
+        0x136..=0x138 => 'k',
+        0x139..=0x142 => 'l',
+        0xD1 | 0xF1 | 0x143..=0x14B => 'n',
+        0xD2..=0xD6 | 0xD8 | 0xF2..=0xF6 | 0xF8 | 0x14C..=0x151 => 'o',
+        0x154..=0x159 => 'r',
+        0x15A..=0x161 | 0x17F => 's',
+        0x162..=0x167 => 't',
+        0xD9..=0xDC | 0xF9..=0xFC | 0x168..=0x173 => 'u',
+        0x174..=0x175 => 'w',
+        0xDD | 0xFD | 0xFF | 0x176..=0x178 => 'y',
+        0x179..=0x17E => 'z',
+        _ => character,
+    }
 }
 
 /// The text key with ligatures written out and small or ringed digits read
