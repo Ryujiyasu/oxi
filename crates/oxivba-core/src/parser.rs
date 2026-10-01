@@ -59,11 +59,10 @@ pub fn parse_project(source: &str) -> Result<(Module, Vec<(String, Module)>), Le
         block.text.push_str(line);
     }
     let mut standard = String::new();
-    let mut classes = Vec::new();
+    let mut class_sources = Vec::new();
     for block in blocks {
         if block.class {
-            let name = block.named.clone().unwrap_or_default();
-            classes.push((name, parse_module(&block.text)?));
+            class_sources.push((block.named.clone().unwrap_or_default(), block.text));
         } else {
             standard.push_str(&block.text);
             if !standard.ends_with('\n') {
@@ -71,10 +70,39 @@ pub fn parse_project(source: &str) -> Result<(Module, Vec<(String, Module)>), Le
             }
         }
     }
-    Ok((parse_module(&standard)?, classes))
+    // An Enum is a type every module may declare with, so each module is read
+    // knowing all of them: a class's `As Fruit` is a Long like the standard
+    // module's own.
+    let mut enums = Vec::new();
+    let mut read = |source: &str| -> Result<Module, LexError> {
+        let module = parse_module(source)?;
+        for item in &module.items {
+            if let ModuleItem::Enum(found) = item {
+                enums.push(found.name.to_ascii_lowercase());
+            }
+        }
+        Ok(module)
+    };
+    let mut main = read(&standard)?;
+    let mut classes = Vec::new();
+    for (name, text) in &class_sources {
+        classes.push((name.clone(), read(text)?));
+    }
+    if !enums.is_empty() {
+        main = parse_module_knowing(&standard, &enums)?;
+        for ((_, module), (_, text)) in classes.iter_mut().zip(&class_sources) {
+            *module = parse_module_knowing(text, &enums)?;
+        }
+    }
+    Ok((main, classes))
 }
 
 pub fn parse_module(source: &str) -> Result<Module, LexError> {
+    parse_module_knowing(source, &[])
+}
+
+/// A module read knowing the Enums other modules declare.
+fn parse_module_knowing(source: &str, enums: &[String]) -> Result<Module, LexError> {
     // A form's designer block carries a `{GUID}` the lexer has no token for,
     // and a class's `BEGIN ... END` block is not VBA either. Blank the region
     // out -- same length, same newlines, so every span still points into
@@ -109,7 +137,7 @@ pub fn parse_module(source: &str) -> Result<Module, LexError> {
         pos: 0,
         terminated: true,
         pending_next_counters: Vec::new(),
-        enum_names: Vec::new(),
+        enum_names: enums.to_vec(),
     };
     let mut module = parser.parse_module();
     if let Some((text, span)) = header {
