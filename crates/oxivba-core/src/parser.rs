@@ -1105,7 +1105,8 @@ impl<'a> Parser<'a> {
                 let target = if self.eat_kw("next") {
                     ResumeTarget::Next
                 } else if let Some(label) = self.parse_label_ref() {
-                    ResumeTarget::Label(label)
+                    // `Resume 0` is plain Resume, as `GoTo 0` is no label.
+                    if label == "0" { ResumeTarget::Same } else { ResumeTarget::Label(label) }
                 } else {
                     ResumeTarget::Same
                 };

@@ -1475,6 +1475,20 @@ impl<'a> Runtime<'a> {
                     other => other,
                 };
             }
+            // A GoSub runs its lines where it stands and comes back to the
+            // statement after it, inside whatever block that is: measured,
+            // GoSub in a For loop's body runs on all three passes.
+            if let Flow::GoSub(label) = &flow {
+                let label = label.clone();
+                let line = line_of(statement);
+                match self.run_gosub(&label, line, frame)? {
+                    None => {
+                        at += 1;
+                        continue;
+                    }
+                    Some(other) => flow = other,
+                }
+            }
             // A GoTo to a label in this same block -- inside a loop, say --
             // goes on from there; one to anywhere else is passed out.
             if let Flow::Jump(label) = &flow {
@@ -1494,6 +1508,23 @@ impl<'a> Runtime<'a> {
             at += 1;
         }
         Ok(Flow::Continue)
+    }
+
+    /// The lines of a GoSub, from its label in the procedure's body, up to
+    /// the Return that ends them (None) or whatever else they end with.
+    fn run_gosub(&mut self, label: &str, line: Option<u32>, frame: &mut Frame) -> Result<Option<Flow>, RuntimeError> {
+        let body = frame.body;
+        let labels = statement_labels(body);
+        let mut pc = label_destination(&labels, label, line)?;
+        while pc < body.len() {
+            match self.exec_body(&body[pc..=pc], frame)? {
+                Flow::Continue => pc += 1,
+                Flow::Return => return Ok(None),
+                Flow::Jump(label) => pc = label_destination(&labels, &label, line_of(&body[pc]))?,
+                other => return Ok(Some(other)),
+            }
+        }
+        Ok(Some(Flow::Exit(ExitKind::Sub)))
     }
 
     fn handle_runtime_error(
@@ -1739,6 +1770,10 @@ impl<'a> Runtime<'a> {
             }
             Statement::OnBranch(branch) => {
                 let selector = self.array_index(&branch.selector, frame, branch.span.line)?;
+                // Below 0 or past 255 is error 5: measured, On -1 GoTo.
+                if !(0..=255).contains(&selector) {
+                    return Err(invalid_procedure_call("On...GoTo takes 0 to 255".to_string(), Some(branch.span.line)));
+                }
                 if selector < 1 || selector as usize > branch.labels.len() {
                     return Ok(Flow::Continue);
                 }
@@ -12872,6 +12907,15 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
             // Nothing to turn over: asked of Excel, `Not Null` is Null, where
             // `Not 5` is -6.
             Value::Null => Ok(Value::Null),
+            // An array turns over its descriptor's address, which is 0 while
+            // nothing is allocated: measured, `(Not Not a) = 0` is True after
+            // `Erase a`. An allocated one has some address that is not 0.
+            Value::Array(array) => {
+                // A pointer, so a LongLong on 64-bit Office: measured,
+                // TypeName(Not a) is LongLong.
+                let address: i64 = if array.dimensions.is_empty() { 0 } else { 0x0010_0000 };
+                Ok(Value::LongLong(!address))
+            }
             // Anything else is made whole first and answers in the type
             // `logical_answer` picks: measured, `Not CByte(1)` is Byte 254,
             // `Not 1.5` Long -3 and `Not "3"` Long -4.
