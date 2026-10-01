@@ -6526,6 +6526,26 @@ impl<'a> WorkbookHost<'a> {
                 if name.eq_ignore_ascii_case("parent") {
                     return Ok(Some(self.object(HostObject::Range(range))));
                 }
+                // What no condition can change is the range's own: measured
+                // on a plain cell, alignment, indent, protection, merging,
+                // number format and rotation read as the cell's, and Style
+                // as the style's NAME (the range itself answers a Style).
+                const OWN: [&str; 14] = [
+                    "addindent", "formulahidden", "horizontalalignment", "indentlevel", "locked", "mergecells",
+                    "numberformat", "numberformatlocal", "orientation", "readingorder", "shrinktofit",
+                    "verticalalignment", "wraptext", "style",
+                ];
+                if OWN.iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+                    let cell = self.object(HostObject::Range(range));
+                    let Value::Object(cell) = cell else { return Ok(None) };
+                    let answer = self.get(&cell, name)?;
+                    if name.eq_ignore_ascii_case("style") {
+                        if let Some(Value::Object(style)) = &answer {
+                            return self.get(style, "Name");
+                        }
+                    }
+                    return Ok(answer);
+                }
                 Ok(None)
             }
             Some(face) => {
@@ -19932,8 +19952,15 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("invertifnegative") {
                 return Err(host_error(1004, "Unable to get the InvertIfNegative property of the Interior class"));
             }
+            // Measured: xlNone on a bare cell, 0 under a plain fill.
             if name.eq_ignore_ascii_case("patternthemecolor") {
-                return Ok(Some(Value::Integer(-4142)));
+                return self
+                    .uniform_marked(range, |style, marks| marks.hatching.is_none() && style.bg_color.is_none())
+                    .map(|bare| Some(match bare {
+                        Some(true) => Value::Integer(-4142),
+                        Some(false) => Value::Integer(0),
+                        None => Value::Null,
+                    }));
             }
             // The shade on the pattern is kept nowhere here; Excel answers 0.
             if name.eq_ignore_ascii_case("patterntintandshade") {
