@@ -42719,9 +42719,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // type) Word draws the top rule at the cursor too (p3 71.04, Oxi 71.10)
         // but the first row grows by the width (next rule 91.46 = Bug A's 91.48),
         // so there the cursor keeps Bug A's advance.
+        // S1620 (2026-10-01, default ON, opt-out OXI_S1620_DISABLE): a CJK document
+        // without a typed grid takes S1618 too. JA forms__000af17f (docGrid with no
+        // type): Word's top rule 208.46 against Oxi's cursor 208.18 (+0.28, the rule's
+        // top edge on the cursor) and the next rules 226.70 / 262.22 / 311.69 against
+        // Oxi without Bug A 226.69 / 262.19 / 311.64 -- the first row does NOT grow
+        // there, unlike the Latin no-type table in reports__0013bcb8.
+        let s1620_cjk = std::env::var_os("OXI_S1620_DISABLE").is_none()
+            && self.doc_body_has_real_cjk
+            && (grid_pitch.is_none() || page.doc_grid_no_type);
         let s1618_on = std::env::var_os("OXI_S1618_DISABLE").is_none()
-            && grid_pitch.is_some()
-            && !page.doc_grid_no_type;
+            && ((grid_pitch.is_some() && !page.doc_grid_no_type) || s1620_cjk);
         let bug_a_enabled = if std::env::var("OXI_BUG_A_REVERT").is_ok() || s1618_on {
             false
         } else {
