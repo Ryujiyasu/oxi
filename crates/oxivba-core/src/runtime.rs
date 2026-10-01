@@ -1083,8 +1083,13 @@ impl<'a> Runtime<'a> {
                 return Ok(());
             }
             for (handle, class) in due {
-                if let Some(InternalObject::Instance(instance)) = self.internal_objects.get_mut(&handle) {
-                    instance.terminated = true;
+                // A Class_Terminate run before this one may already have
+                // collected it -- its own return collects what is due -- and
+                // then it is not to be terminated twice, nor looked for in
+                // the standard module once it is gone.
+                match self.internal_objects.get_mut(&handle) {
+                    Some(InternalObject::Instance(instance)) if !instance.terminated => instance.terminated = true,
+                    _ => continue,
                 }
                 let has_terminate = self
                     .classes
@@ -2780,6 +2785,12 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<Value, RuntimeError> {
+        // `As New` makes its object when the variable is first used, not at
+        // the Dim: measured, a class's Class_Initialize logs after a line
+        // written before the first `h.Count`.
+        if variable.type_name.is_new && variable.array_bounds.is_none() {
+            return Ok(Value::Nothing);
+        }
         if variable.type_name.is_new {
             return self.new_object(&variable.type_name.name, line);
         }
@@ -14377,6 +14388,37 @@ mod tests {
             }
             Ok(false)
         }
+    }
+
+    /// Two instances let go together are each terminated once: the first
+    /// one's Class_Terminate collects the second on its own return, and the
+    /// loop that started it must not then go looking for the second's
+    /// Class_Terminate in the standard module. Measured in Excel: the
+    /// function's answer stands and both terminate after it.
+    #[test]
+    fn two_instances_let_go_together_terminate_once_each() {
+        let source = "Public Log As String
+Function Inner() As String
+Dim g As Grid, h As Grid
+Set g = New Grid
+Set h = New Grid
+Inner = \"z\" & Log
+End Function
+Function Main() As String
+Main = Inner() & \"#\" & Log
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = \"Grid\"
+Private Sub Class_Initialize()
+Log = Log & \"I\"
+End Sub
+Private Sub Class_Terminate()
+Log = Log & \"T\"
+End Sub
+";
+        let (module, classes) = crate::parser::parse_project(source).unwrap();
+        let answer = Runtime::new(&module).with_classes(&classes).call("Main", vec![]);
+        assert_eq!(answer.unwrap(), Value::String("zII#IITT".to_string()));
     }
 
     fn run(source: &str, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
