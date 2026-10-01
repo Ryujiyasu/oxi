@@ -18851,6 +18851,14 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(range) = self.range_font(receiver) {
+            // Its Range is its Parent, and Background is Null to a cell's
+            // font: measured, Range("A1:B2").Font.Parent.Address $A$1:$B$2.
+            if name.eq_ignore_ascii_case("parent") {
+                return Ok(Some(self.object(HostObject::Range(range))));
+            }
+            if name.eq_ignore_ascii_case("background") {
+                return Ok(Some(Value::Null));
+            }
             // None (0) until a macro names one: measured, a fresh cell, one
             // holding a value and one given a face all read 0, and one given
             // xlThemeFontMinor reads 2 until a face is named again.
@@ -19007,6 +19015,22 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(range) = self.range_interior(receiver) {
+            // Its Range is its Parent; no gradient is set, a negative bar's
+            // inversion is a data bar's alone, and an untouched pattern has
+            // no theme colour: measured, Parent.Address $A$1, Gradient
+            // Nothing, InvertIfNegative 1004, PatternThemeColor -4142.
+            if name.eq_ignore_ascii_case("parent") {
+                return Ok(Some(self.object(HostObject::Range(range))));
+            }
+            if name.eq_ignore_ascii_case("gradient") {
+                return Ok(Some(Value::Nothing));
+            }
+            if name.eq_ignore_ascii_case("invertifnegative") {
+                return Err(host_error(1004, "Unable to get the InvertIfNegative property of the Interior class"));
+            }
+            if name.eq_ignore_ascii_case("patternthemecolor") {
+                return Ok(Some(Value::Integer(-4142)));
+            }
             // The shade on the pattern is kept nowhere here; Excel answers 0.
             if name.eq_ignore_ascii_case("patterntintandshade") {
                 return Ok(Some(Value::Double(0.0)));
@@ -19397,7 +19421,11 @@ impl Host for WorkbookHost<'_> {
             // without a separator after it, and the two joined. A workbook
             // open in a browser is the first of those with a name of its own:
             // there is a file behind it, but no folder anyone can name.
-            if name.eq_ignore_ascii_case("name") || name.eq_ignore_ascii_case("fullname") {
+            // No chart sheet is active in a book of worksheets: measured.
+            if name.eq_ignore_ascii_case("activechart") {
+                return Ok(Some(Value::Nothing));
+            }
+            if name.eq_ignore_ascii_case("name") || name.eq_ignore_ascii_case("fullname") || name.eq_ignore_ascii_case("fullnameurlencoded") {
                 return Ok(Some(Value::String(
                     self.file_name.clone().unwrap_or_else(|| "Book1".to_string()),
                 )));
@@ -19418,8 +19446,60 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("date1904") || name.eq_ignore_ascii_case("precisionasdisplayed") {
                 return Ok(Some(Value::Boolean(false)));
             }
+            // A Double, as Excel hands it: measured, TypeName(FileFormat).
             if name.eq_ignore_ascii_case("fileformat") {
-                return Ok(Some(Value::Integer(51)));
+                return Ok(Some(Value::Double(51.0)));
+            }
+            // What a new macro-enabled book answers of the rest: measured on
+            // Excel 16.0 (CodeName ThisWorkbook, xlDisplayShapes -4104, a
+            // password shown as eight stars).
+            let plain = match name.to_ascii_lowercase().as_str() {
+                "accuracyversion" => Value::Integer(0),
+                "autosaveon" => Value::Boolean(false),
+                "autoupdatefrequency" => Value::Integer(0),
+                "calculationversion" => Value::Integer(191_029),
+                "casesensitive" => Value::Boolean(false),
+                "changehistoryduration" => Value::Integer(0),
+                "checkcompatibility" => Value::Boolean(false),
+                "codename" => Value::String("ThisWorkbook".to_string()),
+                "comments" => Value::String(String::new()),
+                "conflictresolution" => Value::Integer(1),
+                "displaydrawingobjects" => Value::Integer(-4104),
+                "displayinkcomments" => Value::Boolean(true),
+                "donotpromptforconvert" => Value::Boolean(false),
+                "enableautorecover" => Value::Boolean(true),
+                "encryptionprovider" => Value::String(String::new()),
+                "final" => Value::Boolean(false),
+                "forcefullcalculation" => Value::Boolean(false),
+                "haspassword" => Value::Boolean(false),
+                "hasvbproject" => Value::Boolean(true),
+                "highlightchangesonscreen" => Value::Boolean(false),
+                "inactivelistbordervisible" => Value::Boolean(true),
+                "isaddin" => Value::Boolean(false),
+                "isinplace" => Value::Boolean(false),
+                "keepchangehistory" => Value::Boolean(true),
+                "keywords" => Value::String(String::new()),
+                "listchangesonnewsheet" => Value::Boolean(false),
+                "multiuserediting" => Value::Boolean(false),
+                "password" => Value::String("********".to_string()),
+                "passwordencryptionalgorithm" => Value::String(String::new()),
+                "personalviewlistsettings" => Value::Boolean(true),
+                "personalviewprintsettings" => Value::Boolean(true),
+                "protectstructure" => Value::Boolean(false),
+                "protectwindows" => Value::Boolean(false),
+                "readonlyrecommended" => Value::Boolean(false),
+                "removepersonalinformation" => Value::Boolean(false),
+                "savelinkvalues" => Value::Boolean(true),
+                "showconflicthistory" => Value::Boolean(false),
+                "subject" => Value::String(String::new()),
+                "title" => Value::String(String::new()),
+                "updateremotereferences" => Value::Boolean(true),
+                "vbasigned" => Value::Boolean(false),
+                "writereserved" => Value::Boolean(false),
+                _ => Value::Missing,
+            };
+            if !matches!(plain, Value::Missing) {
+                return Ok(Some(plain));
             }
             // Measured: a fresh workbook is not Saved; saying it is makes it
             // so until the next cell is written.
