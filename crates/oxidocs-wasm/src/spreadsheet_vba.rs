@@ -20579,12 +20579,14 @@ impl Host for WorkbookHost<'_> {
                 value if any_number(value).is_some() => any_number(value).unwrap_or_default().trunc() as i64,
                 _ => return Err("Range.VerticalAlignment must be a number".to_string()),
             };
+            // So are their places in Excel's own list, 1 to 5: measured, 1
+            // reads back -4160 and 5 -4117, while 0 and 6 are 1004.
             let named = match asked {
-                -4160 => "top",
-                -4108 => "center",
-                -4107 => "bottom",
-                -4130 => "justify",
-                -4117 => "distributed",
+                -4160 | 1 => "top",
+                -4108 | 2 => "center",
+                -4107 | 3 => "bottom",
+                -4130 | 4 => "justify",
+                -4117 | 5 => "distributed",
                 _ => {
                     return Err(format!("Range.VerticalAlignment cannot be set to {asked}"))
                 }
@@ -20656,6 +20658,11 @@ impl Host for WorkbookHost<'_> {
                 return Err("Range.Orientation takes a direction by number".to_string());
             };
             let asked = asked as i64;
+            // An indented cell keeps level: measured, IndentLevel 2 and then
+            // Orientation 90 reads back -4128.
+            if matches!(self.uniform_style(range, |style| style.indent), Ok(Some(indent)) if indent > 0) {
+                return Ok(true);
+            }
             // 255 is how the FILE spells stacked, and Excel takes it as well
             // as its own name for it: setting 255 and reading the property
             // back answers -4166. A turn is -90 to 90; 91, 180 and -91 are
@@ -20737,7 +20744,17 @@ impl Host for WorkbookHost<'_> {
                 {
                     style.horizontal_align = Some("left".to_string());
                 }
+                // ...and lays turned text flat again: measured, Orientation
+                // 45 and then IndentLevel 1 reads back -4128.
+                if indent > 0 {
+                    style.stacked_text = false;
+                }
             })?;
+            if indent > 0 {
+                for at in self.touched(range) {
+                    self.rotations.remove(&at);
+                }
+            }
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("numberformat") || name.eq_ignore_ascii_case("numberformatlocal")
@@ -23456,15 +23473,17 @@ fn horizontal_alignment(value: &Value) -> Result<Option<String>, String> {
             return Err("Range.HorizontalAlignment must be an Excel alignment constant".to_string())
         }
     };
+    // Each also by its place in Excel's own list, 1 to 8: measured, 2 reads
+    // back -4131, 3 -4108, 6 -4130 and 8 -4117, while 0 and 9 are 1004.
     match value {
         1 => Ok(None),
-        -4131 => Ok(Some("left".to_string())),
-        -4108 => Ok(Some("center".to_string())),
-        -4152 => Ok(Some("right".to_string())),
+        -4131 | 2 => Ok(Some("left".to_string())),
+        -4108 | 3 => Ok(Some("center".to_string())),
+        -4152 | 4 => Ok(Some("right".to_string())),
         5 => Ok(Some("fill".to_string())),
-        -4130 => Ok(Some("justify".to_string())),
+        -4130 | 6 => Ok(Some("justify".to_string())),
         7 => Ok(Some("centerContinuous".to_string())),
-        -4117 => Ok(Some("distributed".to_string())),
+        -4117 | 8 => Ok(Some("distributed".to_string())),
         _ => Err(format!(
             "unsupported Range.HorizontalAlignment constant: {value}"
         )),
