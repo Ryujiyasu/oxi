@@ -11221,10 +11221,29 @@ impl<'a> WorkbookHost<'a> {
             if oxicells_calc::numfmt::sections_with_percents(format).any(|count| count > 1) {
                 return Ok(Some(Value::Error(2015)));
             }
-            return Ok(Some(Value::String(shown_text(
-                &self.criteria_value(value)?,
-                Some(format),
-            ))));
+            // An error is not written out but passed on: measured,
+            // `Text(A7, "0")` over a #DIV/0! raises 1004.
+            let value = self.criteria_value(value)?;
+            if let Value::Error(_) = value {
+                return Ok(Some(value));
+            }
+            return Ok(Some(Value::String(shown_text(&value, Some(format)))));
+        }
+        // These read only the numbers, but an error among them is their
+        // answer: measured, `Large(A1:A7, 1)` and `Rank(8, A1:A7)` over a
+        // #DIV/0! raise 1004.
+        if ["large", "small", "rank", "rank_eq", "rank_avg", "median", "stdev", "stdev_p", "stdevp", "var", "var_p", "varp"]
+            .iter()
+            .any(|one| name.eq_ignore_ascii_case(one))
+        {
+            for value in args {
+                let mut held = Vec::new();
+                if self.append_worksheet_function_values(value, &mut held).is_ok() {
+                    if let Some(error) = held.into_iter().find(|held| matches!(held, Value::Error(_))) {
+                        return Ok(Some(error));
+                    }
+                }
+            }
         }
         // The ranking family, which reads only the numbers: asked of Excel,
         // text, blanks and Booleans in the block are passed over, so
@@ -11711,9 +11730,16 @@ impl<'a> WorkbookHost<'a> {
         // is: measured, with #DIV/0! in A9, `IsError(A9)` is True,
         // `IfError(A9, 7)` 7, `IsErr` True, `IsNumber` False and
         // `Aggregate(9, 6, A1:A9)` the sum of the rest.
-        if ["aggregate", "iserror", "iserr", "isna", "iferror", "ifna", "isnumber", "istext", "isnontext", "islogical"]
-            .iter()
-            .any(|tolerant| name.eq_ignore_ascii_case(tolerant))
+        // So do the ones that answer with a block, the error standing in it
+        // as one of its values: measured, `UBound(Unique(A1:A7))` and
+        // `UBound(Sort(A1:A7))` over a #DIV/0! are 7.
+        if [
+            "aggregate", "iserror", "iserr", "isna", "iferror", "ifna", "isnumber", "istext", "isnontext", "islogical",
+            "unique", "sort", "sortby", "filter", "take", "drop", "tocol", "torow", "vstack", "hstack",
+            "choosecols", "chooserows", "wraprows", "wrapcols", "expand",
+        ]
+        .iter()
+        .any(|tolerant| name.eq_ignore_ascii_case(tolerant))
         {
             return self.worksheet_function_from_engine(name, args);
         }
