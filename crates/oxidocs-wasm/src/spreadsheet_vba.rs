@@ -6291,10 +6291,26 @@ impl<'a> WorkbookHost<'a> {
                 Some(formula) => Value::String(formula.clone()),
                 None => return Err("this condition has no Formula2".to_string()),
             }
-        } else if name.eq_ignore_ascii_case("text") {
-            Value::String(condition.text.clone().unwrap_or_default())
-        } else if name.eq_ignore_ascii_case("textoperator") {
-            Value::Integer(condition.text_operator.unwrap_or(0))
+        } else if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("textoperator") {
+            // Only a text rule has these: measured, both are 1004 on a
+            // cell-value rule.
+            if condition.text.is_none() && condition.text_operator.is_none() {
+                return Err(host_error(1004, "this kind of condition has no text"));
+            }
+            if name.eq_ignore_ascii_case("text") {
+                Value::String(condition.text.clone().unwrap_or_default())
+            } else {
+                Value::Integer(condition.text_operator.unwrap_or(0))
+            }
+        } else if name.eq_ignore_ascii_case("dateoperator") || name.eq_ignore_ascii_case("scopetype") {
+            // Measured on a cell-value rule: both are error 5 -- a date rule's
+            // period and a PivotTable's scope are not this rule's.
+            return Err(host_error(5, "this kind of condition has no such setting"));
+        } else if name.eq_ignore_ascii_case("ptcondition") {
+            Value::Boolean(false)
+        } else if name.eq_ignore_ascii_case("numberformat") {
+            // Measured: Empty while the rule sets no number format.
+            Value::Empty
         } else if name.eq_ignore_ascii_case("rank") {
             Value::Integer(condition.rank)
         } else if name.eq_ignore_ascii_case("dupeunique") {
