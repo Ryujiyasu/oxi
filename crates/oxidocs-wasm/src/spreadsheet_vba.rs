@@ -19285,10 +19285,17 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("patterncolorindex") {
                 // Measured: xlNone on a bare cell, xlAutomatic on a fresh
-                // gray50, and 3 once the pattern is painted red.
+                // gray50 and on a plain coloured fill, and 3 once the pattern
+                // is painted red. A bare cell among others counts as
+                // automatic: bare with solid or a fresh gray50 answers -4105,
+                // bare with a red hatching Null; only all-bare is xlNone.
+                let bare = self.uniform_marked(range, |style, marks| marks.hatching.is_none() && style.bg_color.is_none())?;
+                if bare == Some(true) {
+                    return Ok(Some(Value::Integer(COLOUR_NONE)));
+                }
                 return self
                     .uniform_marked(range, |_, marks| match marks.hatching {
-                        None => COLOUR_NONE,
+                        None => COLOUR_AUTOMATIC,
                         Some(Hatching { colour: None, .. }) => COLOUR_AUTOMATIC,
                         Some(Hatching { colour: Some(colour), .. }) => nearest_palette_index(colour),
                     })
@@ -19298,14 +19305,18 @@ impl Host for WorkbookHost<'_> {
                 // A fill with no colour of its own is xlNone -- unless a
                 // pattern (a solid one included) sits on the cell, when the
                 // colour is xlAutomatic: measured on `Pattern = xlSolid` and
-                // `Pattern = xlGray50` over bare cells.
+                // `Pattern = xlGray50` over bare cells. As with
+                // PatternColorIndex, a bare cell among others counts as
+                // automatic: measured, bare with an xlAutomatic fill answers
+                // -4105, and only all-bare is xlNone.
+                let bare = self.uniform_marked(range, |style, marks| marks.hatching.is_none() && style.bg_color.is_none())?;
+                if bare == Some(true) {
+                    return Ok(Some(Value::Integer(COLOUR_NONE)));
+                }
                 return self
-                    .uniform_marked(range, |style, marks| {
-                        match colour_to_packed(style.bg_color.as_deref()) {
-                            Some(packed) => nearest_palette_index(packed),
-                            None if marks.hatching.is_some() => COLOUR_AUTOMATIC,
-                            None => COLOUR_NONE,
-                        }
+                    .uniform_marked(range, |style, _| match colour_to_packed(style.bg_color.as_deref()) {
+                        Some(packed) => nearest_palette_index(packed),
+                        None => COLOUR_AUTOMATIC,
                     })
                     .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
             }
@@ -21063,6 +21074,18 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("colorindex") {
+                // xlAutomatic is a solid fill of the automatic colour:
+                // measured, Color 16777215, ColorIndex -4105, Pattern xlSolid
+                // and PatternColorIndex -4105 after.
+                if any_whole_number(&value) == Some(COLOUR_AUTOMATIC) {
+                    Self::sized(range)?;
+                    self.forget_theme_paint(range, Paint::Interior);
+                    self.set_range_style(range, |_, style| style.bg_color = None)?;
+                    for at in self.touched(range) {
+                        self.hatchings.insert(at, Hatching { kind: 1, colour: None });
+                    }
+                    return Ok(true);
+                }
                 let colour = palette_choice(&value, COLOUR_NONE, "Interior.ColorIndex")?;
                 self.forget_theme_paint(range, Paint::Interior);
                 self.set_range_style(range, |_, style| style.bg_color = colour.clone())?;
