@@ -1799,7 +1799,7 @@ struct FieldTest {
 
 #[derive(Clone)]
 struct FindState {
-    range: CellRange,
+    areas: Vec<CellRange>,
     args: Vec<Value>,
     last_found: Option<CellAddress>,
 }
@@ -3340,6 +3340,15 @@ impl<'a> WorkbookHost<'a> {
                 return Ok(Some(self.object(HostObject::Range(found[0]))));
             }
             return self.written_blocks_object(found).map(Some);
+        }
+        if name.eq_ignore_ascii_case("find") {
+            return self.find_in_areas(areas, args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("findnext") {
+            return self.find_again(args, 1).map(Some);
+        }
+        if name.eq_ignore_ascii_case("findprevious") {
+            return self.find_again(args, 2).map(Some);
         }
         // Measured: Sort over two blocks is 1004.
         if name.eq_ignore_ascii_case("sort") {
@@ -9052,12 +9061,12 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         if let Some(find) = self.last_find.as_mut() {
-            match range(find.range) {
-                Some(held) => {
-                    find.range = held;
-                    find.last_found = find.last_found.and_then(address);
-                }
-                None => self.last_find = None,
+            let held: Vec<CellRange> = find.areas.iter().filter_map(|area| range(*area)).collect();
+            if held.is_empty() {
+                self.last_find = None;
+            } else {
+                find.areas = held;
+                find.last_found = find.last_found.and_then(address);
             }
         }
         for blocks in &mut self.blocks {
@@ -12610,6 +12619,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn find_in_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        self.find_in_areas(vec![range], args)
+    }
+
+    /// Find over one block or several. Several are walked as one run of
+    /// cells, block after block in the order they were named, each in the
+    /// search order: measured over A1:B2,D4:E5, Find after A1 is A2, after
+    /// B2 D4, after E5 round to A1, and backward from A1 E5.
+    fn find_in_areas(&mut self, areas: Vec<CellRange>, args: &[Value]) -> Result<Value, String> {
         // LookIn:=xlValues reads what the formulas answer now: measured,
         // `=A3*10` written a moment before is found as 80.
         self.settle_book();
@@ -12622,12 +12639,14 @@ impl<'a> WorkbookHost<'a> {
         // write this, `Cells.Find(...)`, works at all. The written cells are
         // as far as it can matter, and walking the sheet's full million would
         // spend the execution budget on empty ground.
-        let range = if range.is_single() {
-            self.used_range(range.sheet)?
-        } else {
-            range
+        let areas = match areas.as_slice() {
+            [one] if one.is_single() => vec![self.used_range(one.sheet)?],
+            _ => areas,
         };
-        Self::sized(range)?;
+        for area in &areas {
+            Self::sized(*area)?;
+        }
+        let range = areas[0];
         let what = args
             .first()
             .filter(|value| !matches!(value, Value::Missing))
@@ -12670,10 +12689,14 @@ impl<'a> WorkbookHost<'a> {
                 (address.column, address.row)
             }
         };
-        let inside = |address: &CellAddress| {
-            (range.start_row..=range.end_row).contains(&address.row)
-                && (range.start_column..=range.end_column).contains(&address.column)
+        let area_of = |address: &CellAddress| {
+            areas.iter().position(|area| {
+                area.sheet == address.sheet
+                    && (area.start_row..=area.end_row).contains(&address.row)
+                    && (area.start_column..=area.end_column).contains(&address.column)
+            })
         };
+        let inside = |address: &CellAddress| area_of(address).is_some();
         let after = match args.get(1) {
             None | Some(Value::Missing) => range.first(),
             Some(Value::Object(object)) => {
@@ -12693,37 +12716,41 @@ impl<'a> WorkbookHost<'a> {
         // a whole sheet -- `Cells.Find("b")` -- looks where the sheet is used
         // rather than at seventeen billion addresses.
         let needle_text = find_value_text(what);
-        let searched = if needle_text.is_empty() {
-            Self::range_cell_count(range)?;
-            Some(range)
-        } else {
-            let used = self.used_range(range.sheet)?;
-            let start_row = range.start_row.max(used.start_row);
-            let end_row = range.end_row.min(used.end_row);
-            let start_column = range.start_column.max(used.start_column);
-            let end_column = range.end_column.min(used.end_column);
-            (start_row <= end_row && start_column <= end_column).then_some(CellRange {
-                sheet: range.sheet,
-                start_row,
-                end_row,
-                start_column,
-                end_column,
-            })
-        };
-        let mut candidates: Vec<CellAddress> =
-            searched.map(|searched| searched.addresses().collect()).unwrap_or_default();
-        candidates.sort_by_key(|address| key(address));
-        let pivot = key(&after);
+        let used = self.used_range(range.sheet)?;
+        let mut candidates: Vec<((usize, (u32, u32)), CellAddress)> = Vec::new();
+        for (index, area) in areas.iter().enumerate() {
+            let searched = if needle_text.is_empty() {
+                Self::range_cell_count(*area)?;
+                Some(*area)
+            } else {
+                let start_row = area.start_row.max(used.start_row);
+                let end_row = area.end_row.min(used.end_row);
+                let start_column = area.start_column.max(used.start_column);
+                let end_column = area.end_column.min(used.end_column);
+                (start_row <= end_row && start_column <= end_column).then_some(CellRange {
+                    sheet: area.sheet,
+                    start_row,
+                    end_row,
+                    start_column,
+                    end_column,
+                })
+            };
+            if let Some(searched) = searched {
+                candidates.extend(searched.addresses().map(|address| ((index, key(&address)), address)));
+            }
+        }
+        candidates.sort_by_key(|(order, _)| *order);
+        let pivot = (area_of(&after).unwrap_or(0), key(&after));
         // Onward from the cell after `After`, round to `After` itself last;
         // or backward from the cell before it, round to it last.
         let addresses: Vec<CellAddress> = if search_direction == 1 {
             let (upto, beyond): (Vec<_>, Vec<_>) =
-                candidates.into_iter().partition(|address| key(address) <= pivot);
-            beyond.into_iter().chain(upto).collect()
+                candidates.into_iter().partition(|(order, _)| *order <= pivot);
+            beyond.into_iter().chain(upto).map(|(_, address)| address).collect()
         } else {
             let (before, from): (Vec<_>, Vec<_>) =
-                candidates.into_iter().partition(|address| key(address) < pivot);
-            before.into_iter().rev().chain(from.into_iter().rev()).collect()
+                candidates.into_iter().partition(|(order, _)| *order < pivot);
+            before.into_iter().rev().chain(from.into_iter().rev()).map(|(_, address)| address).collect()
         };
         let needle = find_value_text(what);
         let found = addresses.into_iter().find(|address| {
@@ -12740,7 +12767,7 @@ impl<'a> WorkbookHost<'a> {
             .map(|address| self.object(HostObject::Range(CellRange::single(address))))
             .unwrap_or(Value::Nothing);
         self.last_find = Some(FindState {
-            range,
+            areas,
             args: args.to_vec(),
             last_found: found,
         });
@@ -12776,7 +12803,7 @@ impl<'a> WorkbookHost<'a> {
         find_args.resize(6, Value::Missing);
         find_args[1] = after;
         find_args[5] = Value::Integer(search_direction);
-        self.find_in_range(state.range, &find_args)
+        self.find_in_areas(state.areas, &find_args)
     }
 
     fn find_cell_text(&self, address: CellAddress, look_in: i64) -> String {
