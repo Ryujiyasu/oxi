@@ -33,8 +33,20 @@ def truth_for(did):
         for c in cands:
             f = d / f"{c}.json"
             if f.exists():
+                if c != stem and not _truth_is_for(f, stem):
+                    continue
                 return f
     return None
+
+
+def _truth_is_for(f, stem):
+    """A truncated-name hit must be the same document: `pixel.json` is
+    `pixel_test_underline`'s truth, not every `pixel_test_*`'s."""
+    try:
+        fn = json.load(open(f, encoding="utf-8")).get("filename") or ""
+    except Exception:
+        return False
+    return os.path.splitext(fn)[0] == stem or fn[:12] == stem[:12]
 
 
 def measure(exe, path):

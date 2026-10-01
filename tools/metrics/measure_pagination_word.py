@@ -34,9 +34,19 @@ OUT_DIR = os.path.join(REPO_ROOT, "pipeline_data", "pagination_word")
 
 
 def doc_id_from_filename(fname: str) -> str:
-    """Match cascade tools' convention: first underscore-separated token."""
+    """Match cascade tools' convention: first underscore-separated token.
+
+    Only for the `<12-hex hash>_<title>` corpus names. Any other stem keeps its
+    full basename: the twelve `pixel_test_*` docs all truncated to `pixel`, each
+    overwrote `pixel.json`, and eleven of them were then judged against
+    `pixel_test_underline`'s truth (one "Hello" line -- most passed by luck,
+    `pixel_test_sentence` scored 0.0).
+    """
     base = os.path.splitext(fname)[0]
-    return base.split("_")[0]
+    head = base.split("_")[0]
+    if len(head) == 12 and all(c in "0123456789abcdef" for c in head.lower()):
+        return head
+    return base
 
 
 
