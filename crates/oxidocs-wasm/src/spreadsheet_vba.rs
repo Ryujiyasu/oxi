@@ -19073,6 +19073,14 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("windowstate") {
                 return Ok(Some(Value::Integer(-4137)));
             }
+            // The face and size a new book is given, which a book made here
+            // shares with its Normal style: measured, 游ゴシック and 11.
+            if name.eq_ignore_ascii_case("standardfont") {
+                return Ok(Some(Value::String(self.normal_font().0)));
+            }
+            if name.eq_ignore_ascii_case("standardfontsize") {
+                return Ok(Some(Value::Double(f64::from(self.normal_font().1))));
+            }
             if name.eq_ignore_ascii_case("cutcopymode") {
                 // xlCut is 2 and xlCopy 1 -- measured, a Cut answers 2 and a
                 // Copy 1 -- and nothing held answers 0, which is False, and
@@ -19164,6 +19172,11 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Boolean(self.saved && !self.wrote)));
             }
             if name.eq_ignore_ascii_case("readonly") {
+                return Ok(Some(Value::Boolean(false)));
+            }
+            // A book made here counts from 1900 and keeps full precision:
+            // measured, Date1904 and PrecisionAsDisplayed both False.
+            if name.eq_ignore_ascii_case("date1904") || name.eq_ignore_ascii_case("precisionasdisplayed") {
                 return Ok(Some(Value::Boolean(false)));
             }
             if name.eq_ignore_ascii_case("fileformat") {
@@ -19262,6 +19275,10 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("displaypagebreaks") {
                 return Ok(Some(Value::Boolean(false)));
+            }
+            // xlNoRestrictions: measured 0 on an unprotected sheet.
+            if name.eq_ignore_ascii_case("enableselection") {
+                return Ok(Some(Value::Integer(0)));
             }
             if name.eq_ignore_ascii_case("autofiltermode") {
                 return Ok(Some(Value::Boolean(self.auto_filter.as_ref().is_some_and(|filter| filter.range.sheet == sheet))));
