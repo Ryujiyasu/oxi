@@ -759,7 +759,9 @@ impl<'a> WorkbookHost<'a> {
                 self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1),
             )),
             // msoAutoShape 1, msoChart 3, msoLine 9, msoPicture 13, msoTextBox 17.
+            "connector" => Some(mso(matches!(shape.kind, ShapeKind::Line) || shape.connector != 0)),
             "type" => Some(Value::Integer(match shape.kind {
+                _ if shape.connector != 0 => 1,
                 ShapeKind::Auto(_) => 1,
                 ShapeKind::TextBox => 17,
                 ShapeKind::Line => 9,
@@ -1378,9 +1380,31 @@ impl<'a> WorkbookHost<'a> {
                 "addshape" => self.add_shape(sheet, args).map(Some),
                 "addtextbox" => self.add_textbox(sheet, args).map(Some),
                 "addlabel" => self.add_textbox(sheet, args).map(Some),
-                "addline" | "addconnector" => {
-                    let args: Vec<Value> = if lower == "addconnector" { args.iter().skip(1).cloned().collect() } else { args.to_vec() };
-                    self.add_line(sheet, &args).map(Some)
+                "addline" => self.add_line(sheet, args).map(Some),
+                // Measured: AddConnector names its shape by the connector's
+                // type -- "Straight Arrow Connector", "Elbow Connector",
+                // "Curved Connector" -- and it is an AutoShape (Type 1), where
+                // AddLine's is "Straight Connector" and a line (9). Both
+                // answer Connector True.
+                "addconnector" => {
+                    let kind = args.first().and_then(any_whole_number).unwrap_or(1);
+                    let base = match kind {
+                        1 => "Straight Arrow Connector",
+                        2 => "Elbow Connector",
+                        3 => "Curved Connector",
+                        _ => return Err(host_error(5, "that is not a connector type")),
+                    };
+                    let rest: Vec<Value> = args.iter().skip(1).cloned().collect();
+                    let shape = self.add_line(sheet, &rest)?;
+                    if let Value::Object(object) = &shape {
+                        if let Some(DrawingPart::Shape(id)) = self.drawing_part(object) {
+                            let number = self.shape_mut(id)?.name.rsplit(' ').next().unwrap_or("1").to_string();
+                            let record = self.shape_mut(id)?;
+                            record.connector = kind;
+                            record.name = format!("{base} {number}");
+                        }
+                    }
+                    Ok(Some(shape))
                 }
                 "addchart2" | "addchart" => {
                     // AddChart2 Style, XlChartType, Left, Top, Width, Height;

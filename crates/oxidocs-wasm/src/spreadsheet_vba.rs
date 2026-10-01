@@ -25486,6 +25486,10 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlltr" => -5003,
         // The mso* a recorder writes for shapes, by their Office numbers.
         "msoshaperectangle" => 1,
+        "msoconnectorstraight" => 1,
+        "msoconnectorelbow" => 2,
+        "msoconnectorcurve" => 3,
+        "msoconnectortypemixed" => -2,
         "msoshapeparallelogram" => 2,
         "msoshapetrapezoid" => 3,
         "msoshapediamond" => 4,

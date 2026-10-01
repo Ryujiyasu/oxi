@@ -102,6 +102,9 @@ pub(super) struct ShapeRecord {
     pub on_action: String,
     pub alt_text: String,
     pub lock_aspect: bool,
+    /// The msoConnectorType a connector was added as (1 straight, 2 elbow,
+    /// 3 curve), 0 for anything else -- AddLine's line included.
+    pub connector: i64,
     /// How many paragraphs the text was written as.
     pub paragraph_count: usize,
     /// The drawing the file held, when this record stands for one, so the
@@ -883,6 +886,7 @@ impl ShapeRecord {
             lock_aspect: false,
             paragraph_count: 1,
             original: None,
+            connector: 0,
         };
         record.kind = kind;
         if let ShapeKind::Auto(kind) = record.kind {
