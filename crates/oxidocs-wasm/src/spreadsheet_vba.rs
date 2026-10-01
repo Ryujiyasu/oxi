@@ -9729,54 +9729,21 @@ impl<'a> WorkbookHost<'a> {
         args: &[Value],
         reach: NameReach,
     ) -> Result<Value, String> {
+        // Anything more than one block or one name is a reference
+        // expression: `:` spans, a space intersects, `,` joins, brackets
+        // group, and a sheet or a name may stand anywhere a block does.
+        // Measured: "A1:B2:C3" A1:C3, "Blk C3:D9" C3, "Blk,A1" two areas,
+        // "A1:Blk" A1:C3, "(A1:B2)" A1:B2, "Data!A1:B2" A1:B2, and
+        // "A1:B2,C3 D3" 1004 (C3 and D3 do not meet).
         if let [Value::String(reference)] = args {
-            // Blocks named together, which Excel writes with commas between
-            // them: `Range("A1:A2,C1:C2")` is one range of two areas.
-            if reference.contains(',') {
-                let mut given = Vec::new();
-                for part in reference.split(',') {
-                    if let Some(band) = parse_band_reference(part.trim()) {
-                        given.push(CellRange {
-                            sheet,
-                            start_row: band.0,
-                            start_column: band.1,
-                            end_row: band.2,
-                            end_column: band.3,
-                        });
-                        continue;
-                    }
-                    let (start, end) = parse_range_reference(part.trim())?;
-                    given.push(CellRange {
-                        sheet,
-                        start_row: start.1.min(end.1),
-                        start_column: start.0.min(end.0),
-                        end_row: start.1.max(end.1),
-                        end_column: start.0.max(end.0),
-                    });
+            let plain = parse_band_reference(reference).is_some() || parse_range_reference(reference).is_ok();
+            let operators = reference.trim().contains(|c: char| matches!(c, ',' | ' ' | '(' | ')' | '!' | ':'));
+            if !plain && operators {
+                let areas = self.reference_areas(sheet, reference, reach)?;
+                if areas.len() == 1 {
+                    return Ok(self.object(HostObject::Range(areas[0])));
                 }
-                return self.written_blocks_object(given);
-            }
-        }
-        // A space between blocks is Excel's intersection: measured,
-        // `Range("A1:B2 B2:C3")` is B2. Blocks that do not meet are 1004.
-        if let [Value::String(reference)] = args {
-            let parts: Vec<&str> = reference.split_whitespace().collect();
-            if parts.len() > 1 {
-                let mut shared = text_block(sheet, parts[0])?;
-                for part in &parts[1..] {
-                    let other = text_block(sheet, part)?;
-                    shared = CellRange {
-                        sheet,
-                        start_row: shared.start_row.max(other.start_row),
-                        start_column: shared.start_column.max(other.start_column),
-                        end_row: shared.end_row.min(other.end_row),
-                        end_column: shared.end_column.min(other.end_column),
-                    };
-                    if shared.start_row > shared.end_row || shared.start_column > shared.end_column {
-                        return Err(host_error(1004, "the blocks named do not meet"));
-                    }
-                }
-                return Ok(self.object(HostObject::Range(shared)));
+                return self.written_blocks_object(areas);
             }
         }
         if let [Value::String(reference)] = args {
@@ -10161,6 +10128,284 @@ impl<'a> WorkbookHost<'a> {
     /// `Evaluate` look through the whole workbook. A name standing for
     /// something that is not one block of cells, such as two scattered blocks
     /// or a plain number, is not a Range and raises too.
+    /// The areas a reference expression written in a string names.
+    fn reference_areas(&self, sheet: usize, text: &str, reach: NameReach) -> Result<Vec<CellRange>, String> {
+        let failed = || {
+            host_error(
+                1004,
+                match reach {
+                    NameReach::Workbook => "Method 'Range' of object '_Global' failed",
+                    NameReach::ThisSheet => "Method 'Range' of object '_Worksheet' failed",
+                },
+            )
+        };
+        // Tokens: '(' ')' ',' ':' ' ' (an intersection, kept only between
+        // two operands) and words.
+        let mut tokens: Vec<String> = Vec::new();
+        let chars: Vec<char> = text.chars().collect();
+        let mut at = 0;
+        while at < chars.len() {
+            let c = chars[at];
+            if c.is_whitespace() {
+                while at < chars.len() && chars[at].is_whitespace() {
+                    at += 1;
+                }
+                tokens.push(" ".to_string());
+                continue;
+            }
+            if matches!(c, '(' | ')' | ',' | ':') {
+                tokens.push(c.to_string());
+                at += 1;
+                continue;
+            }
+            let mut word = String::new();
+            while at < chars.len() {
+                let c = chars[at];
+                if c == '\'' {
+                    // A quoted sheet name, '' standing for one quote.
+                    word.push(c);
+                    at += 1;
+                    while at < chars.len() {
+                        word.push(chars[at]);
+                        at += 1;
+                        if chars[at - 1] == '\'' {
+                            if at < chars.len() && chars[at] == '\'' {
+                                word.push('\'');
+                                at += 1;
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                if c.is_whitespace() || matches!(c, '(' | ')' | ',' | ':') {
+                    break;
+                }
+                word.push(c);
+                at += 1;
+            }
+            tokens.push(word);
+        }
+        // A space only intersects between the end of one operand and the
+        // start of the next.
+        let mut kept: Vec<String> = Vec::new();
+        for (index, token) in tokens.iter().enumerate() {
+            if token == " " {
+                let before = kept.last().map(String::as_str);
+                let after = tokens.get(index + 1).map(String::as_str);
+                let ends = before.is_some_and(|t| !matches!(t, "(" | "," | ":" | " "));
+                let starts = after.is_some_and(|t| !matches!(t, ")" | "," | ":" | " "));
+                if !(ends && starts) {
+                    continue;
+                }
+            }
+            kept.push(token.clone());
+        }
+
+        enum Operand {
+            Block(CellRange),
+            Areas(Vec<CellRange>),
+            /// Bare letters or digits: one end of a band, or else a name
+            /// (the word as written).
+            Part(usize, String, String),
+        }
+        struct Reader<'a> {
+            tokens: &'a [String],
+            at: usize,
+        }
+        impl Reader<'_> {
+            fn peek(&self) -> Option<&str> {
+                self.tokens.get(self.at).map(String::as_str)
+            }
+        }
+        fn meet(one: CellRange, other: CellRange) -> Option<CellRange> {
+            let shared = CellRange {
+                sheet: one.sheet,
+                start_row: one.start_row.max(other.start_row),
+                start_column: one.start_column.max(other.start_column),
+                end_row: one.end_row.min(other.end_row),
+                end_column: one.end_column.min(other.end_column),
+            };
+            (one.sheet == other.sheet && shared.start_row <= shared.end_row && shared.start_column <= shared.end_column)
+                .then_some(shared)
+        }
+        fn span(one: CellRange, other: CellRange) -> CellRange {
+            CellRange {
+                sheet: one.sheet,
+                start_row: one.start_row.min(other.start_row),
+                start_column: one.start_column.min(other.start_column),
+                end_row: one.end_row.max(other.end_row),
+                end_column: one.end_column.max(other.end_column),
+            }
+        }
+        let word = |reader: &Reader, word: &str| -> Result<Operand, String> {
+            let _ = reader;
+            // A part that turned out not to be a band end: look it up as a name.
+            let (as_name, word) = match word.strip_prefix('\u{1}') {
+                Some(rest) => (true, rest),
+                None => (false, word),
+            };
+            let (target, local) = match word.rfind('!') {
+                Some(cut) => {
+                    let named = word[..cut].trim();
+                    let named = named
+                        .strip_prefix('\'')
+                        .and_then(|inner| inner.strip_suffix('\''))
+                        .map(|inner| inner.replace("''", "'"))
+                        .unwrap_or_else(|| named.to_string());
+                    let found = self
+                        .workbook
+                        .sheets
+                        .iter()
+                        .position(|held| same_sheet_name(&held.name, &named))
+                        .ok_or_else(failed)?;
+                    (found, &word[cut + 1..])
+                }
+                None => (sheet, word),
+            };
+            let bare = local.replace('$', "");
+            if as_name {
+                // `Data!Blk` reaches a workbook name too: measured, B2:C3 for
+                // a book-level Blk on Data.
+                if word.contains('!') {
+                    if let Ok(block) = self.named_range(target, word, reach, String::new()) {
+                        return Ok(Operand::Block(block));
+                    }
+                }
+                return self.named_range(target, local, reach, format!("{local:?} is no reference")).map(Operand::Block);
+            }
+            if !bare.is_empty() && (bare.bytes().all(|b| b.is_ascii_digit()) || bare.bytes().all(|b| b.is_ascii_alphabetic())) {
+                if let Ok((column, row)) = parse_a1_reference(local) {
+                    return Ok(Operand::Block(CellRange::single(CellAddress { sheet: target, row, column })));
+                }
+                return Ok(Operand::Part(target, local.to_string(), word.to_string()));
+            }
+            if let Ok((column, row)) = parse_a1_reference(local) {
+                return Ok(Operand::Block(CellRange::single(CellAddress { sheet: target, row, column })));
+            }
+            let name = if word.contains('!') { word.to_string() } else { local.to_string() };
+            self.named_range(target, &name, reach, format!("{local:?} is no reference")).map(Operand::Block)
+        };
+        fn union(
+            reader: &mut Reader,
+            word: &dyn Fn(&Reader, &str) -> Result<Operand, String>,
+            failed: &dyn Fn() -> String,
+        ) -> Result<Vec<CellRange>, String> {
+            let mut areas = intersection(reader, word, failed)?;
+            while reader.peek() == Some(",") {
+                reader.at += 1;
+                areas.extend(intersection(reader, word, failed)?);
+            }
+            Ok(areas)
+        }
+        fn intersection(
+            reader: &mut Reader,
+            word: &dyn Fn(&Reader, &str) -> Result<Operand, String>,
+            failed: &dyn Fn() -> String,
+        ) -> Result<Vec<CellRange>, String> {
+            let mut areas = spanned(reader, word, failed)?;
+            while reader.peek() == Some(" ") {
+                reader.at += 1;
+                let others = spanned(reader, word, failed)?;
+                let mut met = Vec::new();
+                for one in &areas {
+                    for other in &others {
+                        if let Some(shared) = meet(*one, *other) {
+                            met.push(shared);
+                        }
+                    }
+                }
+                if met.is_empty() {
+                    return Err(failed());
+                }
+                areas = met;
+            }
+            Ok(areas)
+        }
+        fn spanned(
+            reader: &mut Reader,
+            word: &dyn Fn(&Reader, &str) -> Result<Operand, String>,
+            failed: &dyn Fn() -> String,
+        ) -> Result<Vec<CellRange>, String> {
+            let mut operands = vec![primary(reader, word, failed)?];
+            while reader.peek() == Some(":") {
+                reader.at += 1;
+                operands.push(primary(reader, word, failed)?);
+            }
+            if operands.len() == 1 {
+                return match operands.pop() {
+                    Some(Operand::Block(block)) => Ok(vec![block]),
+                    Some(Operand::Areas(areas)) => Ok(areas),
+                    Some(Operand::Part(_, _, written)) => match word(reader, &format!("\u{1}{written}"))? {
+                        Operand::Block(block) => Ok(vec![block]),
+                        _ => Err(failed()),
+                    },
+                    None => Err(failed()),
+                };
+            }
+            // A band, `A:B` or `2:4`: two bare parts of one kind.
+            if let [Operand::Part(target, left, _), Operand::Part(_, right, _)] = operands.as_slice() {
+                if let Some(band) = parse_band_reference(&format!("{left}:{right}")) {
+                    return Ok(vec![CellRange {
+                        sheet: *target,
+                        start_row: band.0,
+                        start_column: band.1,
+                        end_row: band.2,
+                        end_column: band.3,
+                    }]);
+                }
+            }
+            let mut whole: Option<CellRange> = None;
+            for operand in operands {
+                let block = match operand {
+                    Operand::Block(block) => block,
+                    Operand::Areas(areas) if areas.len() == 1 => areas[0],
+                    Operand::Part(_, _, written) => match word(reader, &format!("\u{1}{written}"))? {
+                        Operand::Block(block) => block,
+                        _ => return Err(failed()),
+                    },
+                    _ => return Err(failed()),
+                };
+                whole = Some(match whole {
+                    None => block,
+                    Some(held) if held.sheet == block.sheet => span(held, block),
+                    Some(_) => return Err(failed()),
+                });
+            }
+            whole.map(|block| vec![block]).ok_or_else(failed)
+        }
+        fn primary(
+            reader: &mut Reader,
+            word: &dyn Fn(&Reader, &str) -> Result<Operand, String>,
+            failed: &dyn Fn() -> String,
+        ) -> Result<Operand, String> {
+            match reader.peek() {
+                Some("(") => {
+                    reader.at += 1;
+                    let areas = union(reader, word, failed)?;
+                    if reader.peek() != Some(")") {
+                        return Err(failed());
+                    }
+                    reader.at += 1;
+                    Ok(Operand::Areas(areas))
+                }
+                Some(token) if !matches!(token, ")" | "," | ":" | " ") => {
+                    let token = token.to_string();
+                    reader.at += 1;
+                    word(reader, &token)
+                }
+                _ => Err(failed()),
+            }
+        }
+        let mut reader = Reader { tokens: &kept, at: 0 };
+        let areas = union(&mut reader, &word, &failed)?;
+        if reader.at != kept.len() || areas.is_empty() {
+            return Err(failed());
+        }
+        Ok(areas)
+    }
+
     fn named_range(
         &self,
         sheet: usize,
