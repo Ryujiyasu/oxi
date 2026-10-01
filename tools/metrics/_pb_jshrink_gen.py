@@ -67,6 +67,10 @@ CFGS = [
     ("tnr10w", "Times New Roman", 20, "mnopqrstuv"),
     ("tnr12", "Times New Roman", 24, "mnopq"),
     ("cal11", "Calibri", 22, "mnopq"),
+    # optional 5th element: w:w character scale in percent (reports__0013bcb8:
+    # Book Antiqua 8pt at w=105 kept a line Word wraps)
+    ("ba8", "Book Antiqua", 16, "mnopq"),
+    ("ba8w105", "Book Antiqua", 16, "mnopq", 105),
 ]
 
 PAGE_W_TW = 11906          # A4 portrait
@@ -75,8 +79,9 @@ WIDE_PAGE_TW = 31000       # for the natural-width docs
 
 
 def _rpr(cfg):
-    _, font, sz, _ = cfg
-    return (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:cs="{font}"/>'
+    font, sz = cfg[1], cfg[2]
+    scale = f'<w:w w:val="{cfg[4]}"/>' if len(cfg) > 4 else ""
+    return (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:cs="{font}"/>{scale}'
             f'<w:sz w:val="{sz}"/><w:szCs w:val="{sz}"/>')
 
 

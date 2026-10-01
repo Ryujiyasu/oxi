@@ -1203,6 +1203,13 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                pi + 1, page.width, page.height).unwrap();
         let mut first = true;
         for el in &page.elements {
+            // OXI_DUMP_CS=1: also emit each text element's character_spacing
+            // (off by default so dumps of different versions stay comparable).
+            let cs_json = match &el.content {
+                LayoutContent::Text { character_spacing, .. } if std::env::var_os("OXI_DUMP_CS").is_some() =>
+                    format!(", \"cs\": {:.3}", character_spacing),
+                _ => String::new(),
+            };
             let (kind, text_json, font_size, vert) = match &el.content {
                 LayoutContent::Text { text, font_size, is_vertical, .. } => {
                     let mut esc = String::with_capacity(text.len());
@@ -1264,8 +1271,8 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                     serde_json::to_string(text).unwrap(), el.source_char_len.unwrap_or(0))
             }).unwrap_or_default();
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}{}{}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json, path_json).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}{}{}{}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json, path_json, cs_json).unwrap();
         }
         out.push_str("\n    ]}");
     }

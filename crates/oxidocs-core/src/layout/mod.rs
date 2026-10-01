@@ -5488,40 +5488,69 @@ impl LayoutEngine {
         if std::env::var("OXI_S1314_DISABLE").is_ok() {
             return;
         }
-        for run in runs.iter_mut() {
-            let Some(ruby_ir) = run.ruby.as_ref() else { continue };
-            let n = run.text.chars().count();
+        // S1627 (2026-10-01, default ON, opt-out OXI_S1627_DISABLE): a ruby
+        // whose base was split into several runs (a fitText group splits per
+        // character; a base whose characters carry different w:spacing parses
+        // as several runs) is ONE field: its base width is the whole group's,
+        // INCLUDING the character spacing already on it (fitText's). forms__
+        // 01c5a769 «氏名» (fitText 972 = 48.6pt, ruby «ふりがな» 8pt = 32pt): each
+        // one-character half looked 14 < 32 wide and took +18pt, so 氏 advanced
+        // 38.6 where Word gives 19.0 (the fit width already exceeds the ruby).
+        let s1627 = std::env::var_os("OXI_S1627_DISABLE").is_none();
+        let mut k = 0;
+        while k < runs.len() {
+            let Some(ruby_ir) = runs[k].ruby.clone() else { k += 1; continue };
+            let mut end = k + 1;
+            if s1627 {
+                while end < runs.len()
+                    && runs[end].ruby.as_ref().map_or(false, |r| r.text == ruby_ir.text && r.base == ruby_ir.base)
+                {
+                    end += 1;
+                }
+            }
+            let n: usize = runs[k..end].iter().map(|r| r.text.chars().count()).sum();
             if n == 0 {
+                k = end;
                 continue;
             }
-            run.style.ruby_field = true;
-            let base_pt = self.resolve_font_size(&run.style, para_style);
+            for r in &mut runs[k..end] {
+                r.style.ruby_field = true;
+            }
+            // Idempotent: the pre-pass may visit a paragraph more than once.
+            if runs[k..end].iter().any(|r| r.style.ruby_spread) {
+                k = end;
+                continue;
+            }
+            let base_pt = self.resolve_font_size(&runs[k].style, para_style);
             let hps_pt = ruby_ir.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(base_pt / 2.0);
-            let ruby_metrics = self.metrics_for_text(&ruby_ir.text, &run.style, para_style);
-            let base_metrics = self.metrics_for_text(&run.text, &run.style, para_style);
+            let ruby_metrics = self.metrics_for_text(&ruby_ir.text, &runs[k].style, para_style);
             let ruby_w: f32 = ruby_ir
                 .text
                 .chars()
                 .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_metrics))
                 .sum();
-            let base_w: f32 = run
-                .text
-                .chars()
-                .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, base_metrics))
-                .sum();
-            if std::env::var("OXI_DBG_RUBYSPREAD").is_ok() {
-                eprintln!("[RUBYSPREAD] base={:?} ruby={:?} n={} base_pt={:.2} hps={:.2} base_w={:.2} ruby_w={:.2} already={} cs={:?}",
-                    run.text, ruby_ir.text, n, base_pt, hps_pt, base_w, ruby_w, run.style.ruby_spread, run.style.character_spacing);
+            let mut base_w = 0.0_f32;
+            for r in &runs[k..end] {
+                let m = self.metrics_for_text(&r.text, &r.style, para_style);
+                let fs = self.resolve_font_size(&r.style, para_style);
+                let chars = r.text.chars().count() as f32;
+                base_w += r.text.chars().map(|c| self.registry.char_width_pt_with_fallback(c, fs, m)).sum::<f32>();
+                if s1627 {
+                    base_w += r.style.character_spacing.unwrap_or(0.0) * chars;
+                }
             }
-            // Idempotent: the pre-pass may visit a paragraph more than once.
-            if run.style.ruby_spread {
-                continue;
+            if std::env::var("OXI_DBG_RUBYSPREAD").is_ok() {
+                eprintln!("[RUBYSPREAD] runs={} n={} base_pt={:.2} hps={:.2} base_w={:.2} ruby_w={:.2}",
+                    end - k, n, base_pt, hps_pt, base_w, ruby_w);
             }
             if ruby_w > base_w + 0.05 {
                 let extra = (ruby_w - base_w) / n as f32;
-                run.style.character_spacing = Some(run.style.character_spacing.unwrap_or(0.0) + extra);
-                run.style.ruby_spread = true;
+                for r in &mut runs[k..end] {
+                    r.style.character_spacing = Some(r.style.character_spacing.unwrap_or(0.0) + extra);
+                    r.style.ruby_spread = true;
+                }
             }
+            k = end;
         }
     }
 
@@ -29499,7 +29528,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // Currently implements `Center` only — other rubyAlign
                 // modes default to center; per-mode positioning is a
                 // Round 7.5 follow-up.
-                if frag.char_offset == 0 {
+                // S1628 (2026-10-01, default ON, opt-out OXI_S1628_DISABLE): a ruby
+                // whose base spans several runs (educational__09422f63's title:
+                // «注意» and «報» carry different w:spacing under one fitText) is
+                // ONE annotation, emitted at the group's first run and spread over
+                // the WHOLE group's advance including its character spacing. The
+                // per-run emission drew «ちゅういほう» twice, and a base width
+                // without the fitText spacing squeezed «かふん» over the first
+                // glyph where Word spreads it 47.5pt apart (distributeSpace over
+                // 142.5pt: (142.5 - 45) / 3 = 32.5 + 15).
+                let s1628 = std::env::var_os("OXI_S1628_DISABLE").is_none();
+                let s1628_same = |a: &crate::ir::Ruby, b: &crate::ir::Ruby| a.text == b.text && a.base == b.base;
+                let s1628_continuation = s1628
+                    && frag.run_index > 0
+                    && match (para.runs.get(frag.run_index - 1).and_then(|r| r.ruby.as_ref()),
+                              para.runs.get(frag.run_index).and_then(|r| r.ruby.as_ref())) {
+                        (Some(prev), Some(cur)) => s1628_same(prev, cur),
+                        _ => false,
+                    };
+                if frag.char_offset == 0 && !s1628_continuation {
                     if let Some(run) = para.runs.get(frag.run_index) {
                         if let Some(ref ruby_ir) = run.ruby {
                             let base_pt = frag.style.font_size.unwrap_or(para_font_size);
@@ -29545,7 +29592,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 })
                                 .sum();
                             // S1314: a spread base is as wide as its ruby field.
-                            let base_w = if frag.style.ruby_spread {
+                            let base_w = if s1628 {
+                                // S1628: every run of the group, each with its own
+                                // character spacing (fitText or explicit).
+                                let mut w = 0.0_f32;
+                                let mut gi = frag.run_index;
+                                while let Some(gr) = para.runs.get(gi) {
+                                    match gr.ruby.as_ref() {
+                                        Some(r) if gi == frag.run_index || s1628_same(r, ruby_ir) => {}
+                                        _ => break,
+                                    }
+                                    let gm = self.metrics_for_text(gr.text.as_str(), &gr.style, &para.style);
+                                    let gfs = gr.style.font_size.unwrap_or(base_pt);
+                                    let n = gr.text.chars().count() as f32;
+                                    w += gr.text.chars()
+                                        .map(|c| self.registry.char_width_pt_with_fallback(c, gfs, gm))
+                                        .sum::<f32>()
+                                        + gr.style.character_spacing.unwrap_or(0.0) * n;
+                                    gi += 1;
+                                }
+                                w
+                            } else if frag.style.ruby_spread {
                                 base_w
                                     + frag.style.character_spacing.unwrap_or(0.0)
                                         * run.text.chars().count() as f32
@@ -31529,6 +31596,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && !s1018_decimal_paren_list
                 && std::env::var("OXI_S953_DISABLE").is_err());
         let s809_hang = s953_hang;
+        // S1630 (2026-10-01, OPT-IN OXI_S1630=1 -- held, see the end): in the
+        // compat-15 justified arm only the '.' hangs; S953 measured a period
+        // (Arial-12 «notes.») and took the comma along unmeasured.
+        // `_pb_jline_slice_gen.py` (reports__0013bcb8's own justified line, Book
+        // Antiqua 8pt, ending «…semper vel,»): Word keeps the line down to
+        // 218.95pt at w:w 105 and 208.70pt at 100%, i.e. the plain S825/S1475
+        // shrink with the comma COUNTED (excess 4.88 / 4.48 against the 4.73 /
+        // 4.50 allowance). With the comma hanging Oxi kept «vel,» on a 218.25pt
+        // column where Word wraps it, which put the right column two lines of
+        // text ahead and lifted the p2 table 20pt. (The same line ending in '.'
+        // does not hang either -- the period's own discriminator is open; it
+        // keeps S953's behaviour here.)
+        // HELD: legal__0027c9c1 (Arial 11, «…October 11,») needs the old
+        // behaviour -- Word shrinks that line 7.6pt where the S825/S1475
+        // allowance gives 6.42, and its comma and period variants also flip at
+        // the same width. The comma hang was standing in for an allowance law
+        // that is still wrong for some lines; that law is the real fix.
+        let s1630_no_comma = std::env::var("OXI_S1630").as_deref() == Ok("1") && !s809_legacy;
         // S799 cap: the no-kern justified shrink is SMALLER than KERNBREAK's 0.25
         // (a blanket 0.25 over-fits — framework {−1:20}→{−1:31}); sweep knob.
         // S1475: the last-word ceiling applies to the S825 (compat-15 explicit)
@@ -35442,7 +35527,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     word_natural_width += char_width + yakumono_saved;
                     if s809_hang {
                         // S1262: the closing quotes hang too.
-                        word_trail_hang_w = if matches!(ch, '.' | ',')
+                        word_trail_hang_w = if ch == '.'
+                            || (ch == ',' && !s1630_no_comma)
                             || (s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
                         {
                             char_width
@@ -37363,7 +37449,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     word_natural_width += char_width + yakumono_saved;
                     if s809_hang {
                         // S1262: the closing quotes hang too.
-                        word_trail_hang_w = if matches!(ch, '.' | ',')
+                        word_trail_hang_w = if ch == '.'
+                            || (ch == ',' && !s1630_no_comma)
                             || (s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
                         {
                             char_width
@@ -50050,8 +50137,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     _text,
                                                     fs,
                                                     _,
-                                                    _,
-                                                    _,
+                                                    s1629_bold,
+                                                    s1629_italic,
                                                     _,
                                                     _,
                                                     _,
@@ -50065,7 +50152,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     _, // S1312 ruby flag
                                                     _source_style,
                                                 )| {
+                                                    // S1629 (2026-10-01, OPT-IN OXI_S1629=1 -- held:
+                                                    // reports__0013bcb8 PASS->FAIL, see below): a cell line is sized by
+                                                    // the run's own FACE -- bold/italic -- like the
+                                                    // body (metrics_for_text). reports__0013bcb8's
+                                                    // bold Book Antiqua 8pt header row: Word pitches
+                                                    // its lines 9.72 (the bold face's hhea box 9.645,
+                                                    // taller than its win box 9.51) against 9.96 for
+                                                    // the regular rows (win 9.94); Oxi sized both at
+                                                    // the regular 9.94, the row 0.44 too tall.
+                                                    // HELD because the same document's body lines
+                                                    // carry more text than Word's (its right column
+                                                    // starts two lines of text early on p2), and the
+                                                    // too-tall header row was what pushed its table
+                                                    // across the p2/p3 break the way Word's is.
                                                     let metrics = match font_family.as_deref() {
+                                                        Some(ff) if std::env::var("OXI_S1629").as_deref() == Ok("1") =>
+                                                            self.registry.get_with_style(ff, *s1629_bold, *s1629_italic),
                                                         Some(ff) => self.registry.get(ff),
                                                         None => self.registry.default_metrics(),
                                                     };
@@ -59588,8 +59691,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && std::env::var("OXI_S654_DISABLE").is_err();
                 if typed_grid {
                     let pitch = grid_pitch.unwrap();
-                    let augmented_snapped =
-                        ((max_line_height + ruby_exp - 0.5) / pitch).ceil() * pitch; // S752 tolerance
+                    // S1624e (2026-10-01, opt-out OXI_S1624_DISABLE): the estimate
+                    // half of S1624 -- in a cell the ruby goes into the line's grid
+                    // cells first, so the line is the NATURAL height plus the
+                    // expansion rounded up to whole cells, not the snapped line plus
+                    // it. Without it the estimate kept forms__01c5a769's «ふりがな／氏名»
+                    // row at 54 for vAlign centring (its «性別» cell sat 9pt low).
+                    let s1624e = in_cell
+                        && eff_lr != Some("exact")
+                        && std::env::var_os("OXI_S1624_DISABLE").is_none();
+                    let augmented_snapped = if s1624e {
+                        let nat = para.runs.iter()
+                            .filter(|r| !r.text.trim().is_empty())
+                            .map(|r| {
+                                let fs = self.resolve_font_size(&r.style, &para.style);
+                                let m = self.metrics_for_text(&r.text, &r.style, &para.style);
+                                self.line_height_inner(fs, eff_ls, eff_lr, m, para.style.snap_to_grid, None, true)
+                            })
+                            .fold(0.0_f32, f32::max);
+                        (((nat + ruby_exp) / pitch - 1e-3).ceil().max(1.0) * pitch).max(max_line_height)
+                    } else {
+                        ((max_line_height + ruby_exp - 0.5) / pitch).ceil() * pitch // S752 tolerance
+                    };
                     // S1312: one augmented line per ruby-bearing line.
                     let s1312_k = if std::env::var("OXI_S1312_DISABLE").is_err() { s1312_ruby_lines.max(1) } else { 1 };
                     height += (augmented_snapped - max_line_height).max(0.0) * s1312_k as f32;
