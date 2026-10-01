@@ -5932,11 +5932,12 @@ impl<'a> Runtime<'a> {
                 let key_value = args
                     .get(1)
                     .filter(|value| !matches!(value, Value::Missing | Value::Empty));
+                // A key is text and nothing else: measured, `c.Add 1, 5` is
+                // error 13 rather than the key "5".
                 let key = key_value
-                    .map(|value| {
-                        text(value).map_err(|message| {
-                            error(RuntimeErrorKind::TypeMismatch, message, Some(line))
-                        })
+                    .map(|value| match value {
+                        Value::String(key) => Ok(key.clone()),
+                        _ => Err(error(RuntimeErrorKind::TypeMismatch, "a Collection key must be a String", Some(line))),
                     })
                     .transpose()?;
                 if key.as_ref().is_some_and(|key| {
@@ -6746,6 +6747,11 @@ fn dictionary_keys_equal(left: &Value, right: &Value, text_compare: bool) -> boo
         }
         (Value::String(left), Value::String(right)) => left == right,
         (Value::Boolean(left), Value::Boolean(right)) => left == right,
+        // True is the key -1 and False 0: measured, `d(True) = "bool"` is
+        // then read back by `d(-1)`.
+        (Value::Boolean(flag), other) | (other, Value::Boolean(flag)) if dictionary_number(other).is_some() => {
+            dictionary_number(other) == Some(if *flag { -1.0 } else { 0.0 })
+        }
         // A number is its value whatever its type: measured, a key added as
         // the literal 1 (an Integer) is found again by `d(1)`.
         (left, right) if dictionary_number(left).is_some() && dictionary_number(right).is_some() => {
@@ -6758,6 +6764,8 @@ fn dictionary_keys_equal(left: &Value, right: &Value, text_compare: bool) -> boo
         // `Exists(Null)` answers True while Empty and "" stay apart.
         (Value::Null, Value::Null) => true,
         (Value::Empty, Value::String(text)) | (Value::String(text), Value::Empty) => text.is_empty(),
+        // ...and the number 0 as well: measured, `Exists(0)` finds it too.
+        (Value::Empty, other) | (other, Value::Empty) if dictionary_number(other).is_some() => dictionary_number(other) == Some(0.0),
         _ => false,
     }
 }
