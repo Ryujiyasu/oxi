@@ -681,10 +681,10 @@ impl<'a> WorkbookHost<'a> {
                         }
                         Some(self.part(DrawingPart::AxisTitle(id, which)))
                     }
-                    "minimumscale" => Some(Value::Double(axis.min.unwrap_or(0.0))),
-                    "maximumscale" => Some(Value::Double(axis.max.unwrap_or(0.0))),
-                    "minimumscaleisauto" => Some(Value::Boolean(axis.min.is_none())),
-                    "maximumscaleisauto" => Some(Value::Boolean(axis.max.is_none())),
+                    "minimumscale" if which != 1 => Some(Value::Double(axis.min.unwrap_or(0.0))),
+                    "maximumscale" if which != 1 => Some(Value::Double(axis.max.unwrap_or(0.0))),
+                    "minimumscaleisauto" if which != 1 => Some(Value::Boolean(axis.min.is_none())),
+                    "maximumscaleisauto" if which != 1 => Some(Value::Boolean(axis.max.is_none())),
                     "categorynames" if which == 1 => Some(Self::variant_row(
                         chart.series.first().map(|s| s.xs.iter().map(|x| Value::String(x.clone())).collect()).unwrap_or_default(),
                     )),
@@ -705,6 +705,24 @@ impl<'a> WorkbookHost<'a> {
                     "ticklabelposition" if which == 2 => Some(Value::Integer(4)),
                     "axisbetweencategories" | "categorytype" if which == 2 => {
                         return Err(host_error(440, "a value axis has no categories"))
+                    }
+                    // The category axis, measured: primary, crossing
+                    // automatically, between categories, an automatic
+                    // category type, outside major ticks, labels next to the
+                    // axis, no gridlines; the scale members are 440.
+                    "axisgroup" if which == 1 => Some(Value::Integer(1)),
+                    "axisbetweencategories" if which == 1 => Some(Value::Boolean(true)),
+                    "categorytype" | "crosses" if which == 1 => Some(Value::Integer(-4105)),
+                    "crossesat" if which == 1 => Some(Value::Double(0.0)),
+                    "hasmajorgridlines" | "hasminorgridlines" | "reverseplotorder" if which == 1 => Some(Value::Boolean(false)),
+                    "majortickmark" if which == 1 => Some(Value::Integer(3)),
+                    "minortickmark" if which == 1 => Some(Value::Integer(-4142)),
+                    "ticklabelposition" if which == 1 => Some(Value::Integer(4)),
+                    "displayunit" | "hasdisplayunitlabel" | "maximumscaleisauto" | "minimumscale" | "minimumscaleisauto"
+                    | "maximumscale" | "scaletype"
+                        if which == 1 =>
+                    {
+                        return Err(host_error(440, "a category axis has no scale"))
                     }
                     _ => None,
                 })
