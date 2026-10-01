@@ -203,7 +203,10 @@ fn palette_choice(value: &Value, clears: i64, what: &str) -> Result<Option<Strin
         value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => return Err(format!("{what} takes one of the 56 colours by number")),
     };
-    if asked == clears {
+    // Nought is the same as the clearing constant, and past the palette is
+    // out of range: measured, Interior.ColorIndex = 0 reads back -4142, and
+    // = 57 or Tab.ColorIndex = 99 is error 9.
+    if asked == clears || asked == 0 {
         return Ok(None);
     }
     if (1..=56).contains(&asked) {
@@ -211,7 +214,7 @@ fn palette_choice(value: &Value, clears: i64, what: &str) -> Result<Option<Strin
             COLOUR_PALETTE[(asked - 1) as usize],
         )));
     }
-    Err(format!("unsupported {what}: {asked}"))
+    Err(host_error(9, format!("{what} has no colour {asked}")))
 }
 
 /// A colour packed the way VBA writes it, as the IR spells it: six hex digits
@@ -1695,6 +1698,7 @@ struct CellMarks {
     hatching: Option<Hatching>,
     indented: bool,
     raised: Option<&'static str>,
+    automatic_font: bool,
 }
 
 /// The functions `Range.Subtotal` totals with: the xlConsolidationFunction
@@ -1906,6 +1910,10 @@ struct WorkbookHost<'a> {
     hatchings: std::collections::HashMap<CellAddress, Hatching>,
     /// The cells whose indent grows with their rotation (`AddIndent`).
     indented: std::collections::HashSet<CellAddress>,
+    /// The cells whose font was put on the automatic colour (`Font.Color =
+    /// -1`, `Font.ColorIndex = xlAutomatic` or 0). It draws as black, but
+    /// Excel tells it apart: ColorIndex -4105 rather than 1.
+    automatic_fonts: std::collections::HashSet<CellAddress>,
     /// The cells whose whole writing is raised or lowered ("superscript" or
     /// "subscript") where no run of their own says so.
     raised: std::collections::HashMap<CellAddress, &'static str>,
@@ -2049,6 +2057,7 @@ impl<'a> WorkbookHost<'a> {
             underlines: std::collections::HashMap::new(),
             hatchings: std::collections::HashMap::new(),
             indented: std::collections::HashSet::new(),
+            automatic_fonts: std::collections::HashSet::new(),
             raised: std::collections::HashMap::new(),
             book_protected: false,
             theme_fonts: std::collections::HashMap::new(),
@@ -7620,6 +7629,7 @@ impl<'a> WorkbookHost<'a> {
             hatching: self.hatchings.get(&at).copied(),
             indented: self.indented.contains(&at),
             raised: self.raised.get(&at).copied(),
+            automatic_font: self.automatic_fonts.contains(&at),
         }
     }
 
@@ -7631,6 +7641,7 @@ impl<'a> WorkbookHost<'a> {
             hatching: self.hatchings.remove(&at),
             indented: self.indented.remove(&at),
             raised: self.raised.remove(&at),
+            automatic_font: self.automatic_fonts.remove(&at),
         }
     }
 
@@ -7664,6 +7675,11 @@ impl<'a> WorkbookHost<'a> {
             self.indented.insert(at);
         } else {
             self.indented.remove(&at);
+        }
+        if marks.automatic_font {
+            self.automatic_fonts.insert(at);
+        } else {
+            self.automatic_fonts.remove(&at);
         }
         match marks.raised {
             Some(which) => {
@@ -7880,6 +7896,16 @@ impl<'a> WorkbookHost<'a> {
     /// gives way to the colour, a hatching stays over it -- measured,
     /// `Color = 65280` over gray50 leaves the pattern gray50 -- and taking
     /// the colour away takes any pattern with it.
+    fn mark_automatic_font(&mut self, range: CellRange, automatic: bool) {
+        for at in self.touched(range) {
+            if automatic {
+                self.automatic_fonts.insert(at);
+            } else {
+                self.automatic_fonts.remove(&at);
+            }
+        }
+    }
+
     fn fill_coloured(&mut self, range: CellRange, coloured: bool) {
         for at in self.touched(range) {
             match self.hatchings.get(&at) {
@@ -8926,6 +8952,10 @@ impl<'a> WorkbookHost<'a> {
             .into_iter()
             .filter_map(address)
             .collect();
+        self.automatic_fonts = std::mem::take(&mut self.automatic_fonts)
+            .into_iter()
+            .filter_map(address)
+            .collect();
         self.templates = std::mem::take(&mut self.templates)
             .into_iter()
             .filter_map(|(scope, style)| {
@@ -9528,6 +9558,7 @@ impl<'a> WorkbookHost<'a> {
             .chain(self.underlines.keys())
             .chain(self.hatchings.keys())
             .chain(self.indented.iter())
+            .chain(self.automatic_fonts.iter())
             .filter(|at| at.sheet == from)
             .copied()
             .collect();
@@ -13903,6 +13934,7 @@ impl<'a> WorkbookHost<'a> {
             self.underlines.retain(|held, _| outside(held));
             self.hatchings.retain(|held, _| outside(held));
             self.indented.retain(outside);
+            self.automatic_fonts.retain(outside);
         }
         let sheet = self
             .workbook
@@ -14309,6 +14341,7 @@ impl<'a> WorkbookHost<'a> {
             .filter_map(|(held, hatching)| Some((relocate(held)?, hatching)))
             .collect();
         self.indented = self.indented.iter().filter_map(|held| relocate(*held)).collect();
+        self.automatic_fonts = self.automatic_fonts.iter().filter_map(|held| relocate(*held)).collect();
         // A whole band of rows or columns carries its outline levels along;
         // a band put in starts at level one.
         if let Some(outline) = self.outlines.get_mut(&sheet) {
@@ -19119,7 +19152,12 @@ impl Host for WorkbookHost<'_> {
                         })
                     });
             }
+            // Measured: cells some of which are on the automatic colour and
+            // some plain black answer Null for Color as for ColorIndex.
             if name.eq_ignore_ascii_case("color") {
+                if self.uniform_marked(range, |_, marks| marks.automatic_font)?.is_none() {
+                    return Ok(Some(Value::Null));
+                }
                 return self
                     .uniform_font(range, |dress| dress.color.clone())
                     .map(|value| Some(style_color_value(value, BLACK)));
@@ -19151,6 +19189,11 @@ impl Host for WorkbookHost<'_> {
                 // names none answers 1 — the palette's black — rather than
                 // xlAutomatic, which is a state a cell only reaches by being
                 // put there.
+                match self.uniform_marked(range, |_, marks| marks.automatic_font)? {
+                    None => return Ok(Some(Value::Null)),
+                    Some(true) => return Ok(Some(Value::Integer(COLOUR_AUTOMATIC))),
+                    Some(false) => {}
+                }
                 return self
                     .uniform_style(range, |style| style.font_color.clone())
                     .map(|value| {
@@ -20818,10 +20861,19 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("colorindex") {
-                let colour = palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
+                // Measured: xlAutomatic and 0 put the font on the automatic
+                // colour (ColorIndex -4105 after), and xlNone is taken
+                // without complaint and reads 1 on a fresh cell.
+                let asked = any_whole_number(&value);
+                let colour = if asked == Some(COLOUR_NONE) {
+                    None
+                } else {
+                    palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?
+                };
                 self.forget_theme_paint(range, Paint::Font);
                 self.set_range_style(range, |_, style| style.font_color = colour.clone())?;
                 self.redress_runs(range, |dress| dress.color = colour.clone());
+                self.mark_automatic_font(range, matches!(asked, Some(COLOUR_AUTOMATIC) | Some(0)));
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("strikethrough") {
@@ -20918,10 +20970,15 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("color") {
-                let value = style_color(&value, "Font.Color")?;
+                // -1 is the automatic colour to a font, where any other
+                // number is its low three bytes: measured, -1 reads back 0
+                // with ColorIndex -4105, and -2 reads 16777214.
+                let automatic = any_whole_number(&value) == Some(-1);
+                let value = if automatic { None } else { style_color(&value, "Font.Color")? };
                 self.forget_theme_paint(range, Paint::Font);
                 self.set_range_style(range, |_, style| style.font_color = value.clone())?;
                 self.redress_runs(range, |dress| dress.color = value.clone());
+                self.mark_automatic_font(range, automatic);
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("themecolor") {
@@ -21323,7 +21380,15 @@ impl Host for WorkbookHost<'_> {
             let value = match value {
                 Value::Empty => None,
                 Value::String(value) if value.eq_ignore_ascii_case("general") => None,
-                Value::String(value) => Some(value),
+                Value::String(value) => {
+                    // Excel refuses a format it cannot read: measured, five
+                    // sections ("0.0.0;;;;") and a bracket left open ("[Red")
+                    // are both 1004.
+                    if !number_format_readable(&value) {
+                        return Err(host_error(1004, "Unable to set the NumberFormat property of the Range class"));
+                    }
+                    Some(value)
+                }
                 _ => return Err("Range.NumberFormat must be a string".to_string()),
             };
             self.set_range_style(range, |_, style| style.number_format = value.clone())?;
@@ -23966,14 +24031,41 @@ fn optional_dimension(value: Value, property: &str, maximum: f64) -> Result<Opti
     Ok(Some(number as f32))
 }
 
+/// Whether a number format is one Excel takes: no more than four sections,
+/// and every bracket and quote closed.
+fn number_format_readable(format: &str) -> bool {
+    let (mut sections, mut quoted, mut bracketed, mut escaped) = (1, false, false, false);
+    for character in format.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' if !quoted => escaped = true,
+            '"' if !bracketed => quoted = !quoted,
+            '[' if !quoted => {
+                if bracketed {
+                    return false;
+                }
+                bracketed = true;
+            }
+            ']' if !quoted && bracketed => bracketed = false,
+            ';' if !quoted && !bracketed => sections += 1,
+            _ => {}
+        }
+    }
+    sections <= 4 && !quoted && !bracketed
+}
+
 fn font_size(value: &Value) -> Result<Option<f32>, String> {
     let number = match value {
         Value::Empty => return Ok(None),
         value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err("Font.Size must be numeric".to_string()),
     };
-    if !number.is_finite() || number <= 0.0 || number > f32::MAX as f64 {
-        return Err("Font.Size must be a positive finite number".to_string());
+    // One to 409 points: measured, 0.5 and 410 are 1004 where 409 is taken.
+    if !number.is_finite() || !(1.0..=409.0).contains(&number) {
+        return Err(host_error(1004, "Unable to set the Size property of the Font class"));
     }
     Ok(Some(number as f32))
 }
@@ -23984,12 +24076,12 @@ fn color_number(value: &Value, property: &str) -> Result<Option<u32>, String> {
         value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err(format!("{property} must be an RGB color number")),
     };
-    if !number.is_finite() || number.fract() != 0.0 || !(0.0..=16_777_215.0).contains(&number) {
-        return Err(format!(
-            "{property} must be an RGB color number from 0 to 16777215"
-        ));
+    // A Long, of which the colour is the low three bytes: measured, -1 reads
+    // back 16777215, 16777216 reads 0 and 16777217 reads 1.
+    if !number.is_finite() || !(-2_147_483_648.5..2_147_483_647.5).contains(&number) {
+        return Err(format!("{property} must be an RGB color number"));
     }
-    Ok(Some(number as u32))
+    Ok(Some(((number.round_ties_even() as i64) & 0xFF_FFFF) as u32))
 }
 
 fn style_color(value: &Value, property: &str) -> Result<Option<String>, String> {
