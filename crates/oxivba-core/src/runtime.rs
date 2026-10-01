@@ -11295,6 +11295,11 @@ fn parse_val(source: &str) -> Result<f64, String> {
         _ => false,
     };
     if bytes.get(cursor) == Some(&b'&') {
+        // A sign does not go before a radix prefix: measured, Val("-&H1")
+        // is 0.
+        if cursor > 0 {
+            return Ok(0.0);
+        }
         let radix = match bytes.get(cursor + 1).map(u8::to_ascii_uppercase) {
             Some(b'H') => 16,
             Some(b'O') => 8,
