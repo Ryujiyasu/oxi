@@ -385,6 +385,9 @@ pub struct Runtime<'a> {
     next_internal_handle: u64,
     random_state: u32,
     random_entropy: u64,
+    /// The caller's variables behind the next call's arguments, for a
+    /// RaiseEvent whose handler takes them ByRef.
+    pending_references: Option<Vec<Option<ValueSlot>>>,
     current_time: f64,
 }
 
@@ -543,6 +546,7 @@ impl<'a> Runtime<'a> {
             next_internal_handle: 1_u64 << 63,
             random_state: 327_680,
             random_entropy: 327_680,
+            pending_references: None,
             current_time: default_current_time(),
         }
     }
@@ -786,7 +790,7 @@ impl<'a> Runtime<'a> {
     /// `RaiseEvent Name(args)` from the instance running now: every
     /// instance holding it in a `WithEvents` variable hears it, through its
     /// `variable_Name` procedure, in the order the instances were made.
-    fn raise_event(&mut self, name: &str, args: Vec<Value>, line: u32) -> Result<(), RuntimeError> {
+    fn raise_event(&mut self, name: &str, args: Vec<Value>, references: Vec<Option<ValueSlot>>, line: u32) -> Result<(), RuntimeError> {
         let Some(source) = self.me.clone() else {
             return Ok(());
         };
@@ -834,7 +838,12 @@ impl<'a> Runtime<'a> {
         }
         for (listener, procedure) in listeners {
             let values = args.clone();
+            let references = references.clone();
             self.as_instance(&listener, |this| {
+                // A ByRef parameter of the handler is the raiser's variable:
+                // measured, a handler setting Cancel = True is seen by the
+                // procedure that raised the event.
+                this.pending_references = Some(references);
                 this.call_kind(&procedure, &[ProcKind::Sub], values, Some(line)).map(|_| ())
             })?;
         }
@@ -1099,6 +1108,7 @@ impl<'a> Runtime<'a> {
         args: Vec<Value>,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
+        let references = self.pending_references.take().unwrap_or_default();
         let procedure = self.find_procedure(name, line)?;
         let fixed_count = procedure
             .params
@@ -1117,8 +1127,11 @@ impl<'a> Runtime<'a> {
         let received = args.len();
         let mut values = args.into_iter();
         let mut bound = Vec::with_capacity(procedure.params.len());
-        for param in &procedure.params[..fixed_count] {
+        for (index, param) in procedure.params[..fixed_count].iter().enumerate() {
             match values.next() {
+                Some(_) if param.mode == ParamMode::ByRef && references.get(index).is_some_and(Option::is_some) => {
+                    bound.push(BoundArgument::Reference(references[index].clone().expect("checked above")));
+                }
                 Some(value) => bound.push(BoundArgument::Value(value)),
                 None => bound.push(BoundArgument::Value(
                     self.omitted_parameter_value(param, line)?,
@@ -1759,13 +1772,22 @@ impl<'a> Runtime<'a> {
             Statement::Comment { .. } | Statement::Label { .. } => Ok(Flow::Continue),
             Statement::RaiseEvent(raised) => {
                 let mut values = Vec::with_capacity(raised.args.len());
+                let mut references = Vec::with_capacity(raised.args.len());
                 for argument in &raised.args {
                     values.push(match &argument.value {
                         Some(expr) => self.eval_expr(expr, frame)?,
                         None => Value::Missing,
                     });
+                    references.push(
+                        argument
+                            .value
+                            .as_ref()
+                            .and_then(expr_name)
+                            .filter(|name| !argument.force_by_value && !self.is_constant(frame, name))
+                            .and_then(|name| self.lookup_slot(frame, name)),
+                    );
                 }
-                self.raise_event(&raised.name, values, raised.span.line)?;
+                self.raise_event(&raised.name, values, references, raised.span.line)?;
                 Ok(Flow::Continue)
             }
             Statement::Open(open) => {
@@ -4905,7 +4927,14 @@ impl<'a> Runtime<'a> {
                         ));
                     }
                 }
-                read.push(self.read_argument(value, line.unwrap_or(0))?);
+                // An instance of a class with no default member is asked
+                // about as the object it is: measured, VarType of one is 9.
+                let instance = matches!(value, Value::Object(object)
+                    if matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_))));
+                match self.read_argument(value, line.unwrap_or(0)) {
+                    Err(failure) if asks_about && instance && failure.vba_number == Some(438) => read.push(value.clone()),
+                    answer => read.push(answer?),
+                }
             }
             Some(read)
         } else {
