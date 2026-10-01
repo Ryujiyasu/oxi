@@ -1805,6 +1805,8 @@ struct WorkbookHost<'a> {
     /// Filtering a second field narrows what the first left showing, so the
     /// tests accumulate and every row is judged against all of them.
     auto_filter: Option<AutoFilter>,
+    /// The list an in-place AdvancedFilter last hid rows of.
+    advanced_filter: Option<CellRange>,
     /// The module's own functions a formula may call, and what they have
     /// answered so far.
     user_functions: std::rc::Rc<std::cell::RefCell<UserFunctions>>,
@@ -1988,6 +1990,7 @@ impl<'a> WorkbookHost<'a> {
             clipboard: None,
             pending_cut: None,
             auto_filter: None,
+            advanced_filter: None,
             find_settings: (-4163, 2, 1),
             user_functions: Default::default(),
             selection: CellRange::single(CellAddress {
@@ -14718,6 +14721,169 @@ impl<'a> WorkbookHost<'a> {
         Ok(Value::Boolean(true))
     }
 
+    /// `Range.AdvancedFilter Action, CriteriaRange, CopyToRange, Unique`.
+    /// The criteria range's first row names columns of the list; under it,
+    /// the cells of one row must all hold and any one row will do. Text
+    /// without an operator asks for a beginning, in any case. Measured over
+    /// Dept/Pay rows Sales,>200 and Ops: the Sales rows paying 300 and both
+    /// the "Ops" and the "ops" row are kept; in place the others' rows are
+    /// hidden and FilterMode is True until ShowAllData. A CopyToRange of
+    /// more than one cell names the columns to copy, and an empty name in it
+    /// is error 1004.
+    fn advanced_filter(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        self.settle_book();
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let failed = || host_error(1004, "AdvancedFilter method of Range class failed");
+        // One cell is no list: measured, Range("A1").AdvancedFilter over a
+        // list at A1:C6 is error 1004.
+        if range.start_row == range.end_row && range.start_column == range.end_column {
+            return Err(failed());
+        }
+        let list = self.cut_to_contents(range)?;
+        let action = match given(0) {
+            Some(value) => sort_number(value, "AdvancedFilter Action")?,
+            None => return Err(failed()),
+        };
+        let unique = given(3).is_some_and(|value| match value {
+            Value::Boolean(flag) => *flag,
+            other => sort_number(other, "AdvancedFilter Unique").is_ok_and(|held| held != 0),
+        });
+        let heading = |this: &Self, sheet: usize, row: u32, column: u32| {
+            find_value_text(&this.cell_value(CellAddress { sheet, row, column })).trim().to_lowercase()
+        };
+        let headings: Vec<String> = (list.start_column..=list.end_column)
+            .map(|column| heading(self, list.sheet, list.start_row, column))
+            .collect();
+        let column_named = |name: &str| {
+            headings
+                .iter()
+                .position(|held| !name.is_empty() && held == name)
+                .map(|at| list.start_column + at as u32)
+        };
+
+        // Each criteria row: the column of the list and the test on it.
+        let mut alternatives: Vec<Vec<(u32, Criteria)>> = Vec::new();
+        // Left out, the criteria are the sheet's own Criteria name, which an
+        // earlier filter given some left behind: measured, a second in-place
+        // filter with none keeps to the first one's Pay =200.
+        let asked = match given(1) {
+            Some(value) => Some(self.criteria_range(value, "AdvancedFilter")?),
+            None => {
+                let held = format!("{}!Criteria", quoted_sheet(&self.workbook.sheets[list.sheet].name));
+                match self.name_at(&held) {
+                    Some(_) => self.named_range(list.sheet, &held, NameReach::ThisSheet, String::new()).ok(),
+                    None => None,
+                }
+            }
+        };
+        if let Some(criteria) = asked {
+            let names: Vec<Option<u32>> = (criteria.start_column..=criteria.end_column)
+                .map(|column| column_named(&heading(self, criteria.sheet, criteria.start_row, column)))
+                .collect();
+            for row in (criteria.start_row + 1)..=criteria.end_row {
+                let mut tests = Vec::new();
+                for (at, column) in (criteria.start_column..=criteria.end_column).enumerate() {
+                    let asked = self.cell_value(CellAddress { sheet: criteria.sheet, row, column });
+                    if matches!(asked, Value::Empty) {
+                        continue;
+                    }
+                    let Some(target) = names[at] else {
+                        return Err(failed());
+                    };
+                    let test = match &asked {
+                        Value::String(text) if !text.trim_start().starts_with(['=', '<', '>']) => {
+                            parse_criteria(&Value::String(format!("{}*", text.trim())))
+                        }
+                        other => parse_criteria(other),
+                    };
+                    tests.push((target, test));
+                }
+                alternatives.push(tests);
+            }
+        }
+
+        let mut kept: Vec<u32> = Vec::new();
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        for row in (list.start_row + 1)..=list.end_row {
+            let holds = alternatives.is_empty()
+                || alternatives.iter().any(|tests| {
+                    tests.iter().all(|(column, test)| {
+                        test.matches(&self.cell_value(CellAddress { sheet: list.sheet, row, column: *column }))
+                    })
+                });
+            if !holds {
+                continue;
+            }
+            if unique {
+                let key: Vec<String> = (list.start_column..=list.end_column)
+                    .map(|column| heading(self, list.sheet, row, column))
+                    .collect();
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.push(key);
+            }
+            kept.push(row);
+        }
+
+        // What it was asked of is kept in the sheet's names: measured,
+        // Sheet1!_FilterDatabase the list, Sheet1!Criteria the criteria given
+        // and Sheet1!Extract the heading row it copied to.
+        self.name_sheet_block(list.sheet, "_FilterDatabase", list);
+        if let (Some(_), Some(criteria)) = (given(1), asked) {
+            self.name_sheet_block(list.sheet, "Criteria", criteria);
+        }
+        if action == 1 {
+            for row in (list.start_row + 1)..=list.end_row {
+                self.set_row_visible(list.sheet, row, kept.contains(&row));
+            }
+            self.advanced_filter = Some(list);
+            return Ok(Value::Boolean(true));
+        }
+        let Some(target) = given(2) else {
+            return Err(failed());
+        };
+        let target = self.criteria_range(target, "AdvancedFilter")?;
+        let columns: Vec<u32> = if target.start_column == target.end_column && target.start_row == target.end_row {
+            (list.start_column..=list.end_column).collect()
+        } else {
+            let mut columns = Vec::new();
+            for column in target.start_column..=target.end_column {
+                match column_named(&heading(self, target.sheet, target.start_row, column)) {
+                    Some(found) => columns.push(found),
+                    None => return Err(failed()),
+                }
+            }
+            columns
+        };
+        let extract = CellRange {
+            end_row: target.start_row,
+            end_column: target.start_column + columns.len() as u32 - 1,
+            ..target
+        };
+        self.name_sheet_block(target.sheet, "Extract", extract);
+        let rows: Vec<u32> = std::iter::once(list.start_row).chain(kept).collect();
+        for (down, from) in rows.into_iter().enumerate() {
+            for (across, source) in columns.iter().enumerate() {
+                let address = CellAddress {
+                    sheet: target.sheet,
+                    row: target.start_row + down as u32,
+                    column: target.start_column + across as u32,
+                };
+                let cell = self.cell_here(list.sheet, from, *source).map(|mut cell| {
+                    cell.col = address.column;
+                    cell
+                });
+                self.put_cell(address, cell)?;
+            }
+        }
+        self.wrote = true;
+        Ok(Value::Boolean(true))
+    }
+
     /// Which column of the sheet a `Columns:=` number stands for.
     fn duplicate_lane(value: &Value, range: CellRange, width: u32) -> Result<u32, String> {
         let asked = sort_number(value, "RemoveDuplicates Columns")?;
@@ -15545,6 +15711,16 @@ impl<'a> WorkbookHost<'a> {
     /// filtered the name still refers to the FIRST. Turning the filter off
     /// does not take it away either: the name outlives the filter that made
     /// it.
+    /// A sheet's own name for a block, made or moved.
+    fn name_sheet_block(&mut self, sheet: usize, name: &str, range: CellRange) {
+        let held = format!("{}!{name}", quoted_sheet(&self.workbook.sheets[sheet].name));
+        let refers_to = self.address_of(range);
+        match self.workbook.defined_names.iter().position(|(existing, _)| same_defined_name(existing, &held)) {
+            Some(at) => self.workbook.defined_names[at].1 = refers_to,
+            None => self.workbook.defined_names.push((held, refers_to)),
+        }
+    }
+
     fn note_filter_database(&mut self, range: CellRange) {
         let held = format!(
             "{}!_FilterDatabase",
@@ -17095,6 +17271,9 @@ impl Host for WorkbookHost<'_> {
                         return Err(host_error(1004, "no filtered data to show on this worksheet"));
                     }
                     self.show_all_rows(sheet)?;
+                    if self.advanced_filter.is_some_and(|list| list.sheet == sheet) {
+                        self.advanced_filter = None;
+                    }
                     if let Some(filter) = self.auto_filter.as_mut() {
                         if filter.range.sheet == sheet {
                             filter.fields.clear();
@@ -17674,6 +17853,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("removeduplicates") {
                     return self.remove_duplicates(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("advancedfilter") {
+                    return self.advanced_filter(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("specialcells") {
                     return self.special_cells(range, args).map(Some);
                 }
@@ -18075,6 +18257,8 @@ impl Host for WorkbookHost<'_> {
             }
         } else if name.eq_ignore_ascii_case("autofilter") {
             Some(&["Field", "Criteria1", "Operator", "Criteria2", "VisibleDropDown"][..])
+        } else if name.eq_ignore_ascii_case("advancedfilter") {
+            Some(&["Action", "CriteriaRange", "CopyToRange", "Unique"][..])
         // What the drawing layer's methods call their arguments.
         } else if name.eq_ignore_ascii_case("addshape") {
             Some(&["Type", "Left", "Top", "Width", "Height"][..])
@@ -19084,7 +19268,8 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("filtermode") {
                 return Ok(Some(Value::Boolean(
-                    self.auto_filter.as_ref().is_some_and(|filter| filter.range.sheet == sheet && !filter.fields.is_empty()),
+                    self.auto_filter.as_ref().is_some_and(|filter| filter.range.sheet == sheet && !filter.fields.is_empty())
+                        || self.advanced_filter.is_some_and(|list| list.sheet == sheet),
                 )));
             }
             if name.eq_ignore_ascii_case("scrollarea") {
@@ -24010,6 +24195,8 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlchart" => -4109,
         "xlsheetveryhidden" => 2,
         "xlfiltervalues" => 7,
+        "xlfilterinplace" => 1,
+        "xlfiltercopy" => 2,
         "xlrows" => 1,
         "xlcolumns" => 2,
         "xllinear" => -4132,
