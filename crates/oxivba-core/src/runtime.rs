@@ -1063,9 +1063,12 @@ impl<'a> Runtime<'a> {
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
         let answer = self.call_procedure_body(name, args, line);
-        // Its locals are gone now; an instance only they held is done.
+        // Its locals are gone now; an instance only they held is done --
+        // on the way out by an error too: measured, a local of a procedure
+        // that raises is terminated before the caller's handler goes on.
+        let collected = self.collect_instances(line.unwrap_or(0));
         if answer.is_ok() {
-            self.collect_instances(line.unwrap_or(0))?;
+            collected?;
         }
         answer
     }
@@ -1123,9 +1126,15 @@ impl<'a> Runtime<'a> {
                     .is_some_and(|module| self.has_procedure_of(module, "Class_Terminate", &[ProcKind::Sub]));
                 if has_terminate {
                     let this = ObjectRef::new(handle, class);
-                    self.as_instance(&this, |runtime| {
+                    // Its own Err is its own: measured, the 5 a procedure
+                    // raised still stands in the caller after one of its
+                    // locals was terminated on the way out.
+                    let saved = (self.err_in.take(), self.err_out.take());
+                    let ran = self.as_instance(&this, |runtime| {
                         runtime.call_kind("Class_Terminate", &[ProcKind::Sub], Vec::new(), Some(line)).map(|_| ())
-                    })?;
+                    });
+                    (self.err_in, self.err_out) = saved;
+                    ran?;
                 }
                 // Gone, and with it whatever it alone was holding.
                 self.internal_objects.remove(&handle);
@@ -1656,7 +1665,16 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 let value = self.let_value(value, span.line)?;
+                // A variable that held an object, or an array that might,
+                // may have held the last reference: measured, `v = 5` over
+                // an instance runs its Class_Terminate on that line.
+                let held = expr_name(target)
+                    .and_then(|name| self.lookup_slot(frame, name))
+                    .is_some_and(|slot| matches!(&*slot.borrow(), Value::Object(_) | Value::Array(_)));
                 self.assign(target, value, frame, span.line)?;
+                if held {
+                    self.collect_instances(span.line)?;
+                }
                 Ok(Flow::Continue)
             }
             Statement::SetAssign {
@@ -1702,12 +1720,16 @@ impl<'a> Runtime<'a> {
                 for item in items {
                     self.redim(item, *preserve, frame, span.line)?;
                 }
+                // What the array let go of is done: measured, ReDim Preserve
+                // to fewer elements terminates the ones cut off.
+                self.collect_instances(span.line)?;
                 Ok(Flow::Continue)
             }
             Statement::Erase { targets, span } => {
                 for target in targets {
                     self.erase_array(target, frame, span.line)?;
                 }
+                self.collect_instances(span.line)?;
                 Ok(Flow::Continue)
             }
             Statement::MidAssign(statement) => {
@@ -4693,8 +4715,9 @@ impl<'a> Runtime<'a> {
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
         let answer = self.call_user_procedure_body(name, args, force_by_value, frame, line);
+        let collected = self.collect_instances(line.unwrap_or(0));
         if answer.is_ok() {
-            self.collect_instances(line.unwrap_or(0))?;
+            collected?;
         }
         answer
     }
