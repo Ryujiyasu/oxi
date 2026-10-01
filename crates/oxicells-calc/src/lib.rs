@@ -64,7 +64,7 @@ pub use ast::{BinaryOp, Expr, UnaryOp};
 pub use engine::{set_digit_width, set_user_function_hook, CalcError, RecalcReport, UserArg, UserCaller, Workbook};
 pub use numfmt::{format_number, format_text, looks_like_a_date};
 pub use lexer::{
-    canonical_formula, canonical_tables, map_table_references, rename_table_column, drop_own_table_name, drop_sheet_in_formula, move_sheet_in_formula, implied_intersections, move_formula_references, normalise_formula_ranges, rename_sheet_in_formula, without_intersections,
+    canonical_formula, canonical_tables, map_table_references, rename_table_column, drop_own_table_name, drop_sheet_in_formula, move_sheet_in_formula, implied_intersections, move_formula_references, normalise_formula_ranges, rename_name_in_formula, rename_sheet_in_formula, without_intersections,
     shift_formula_references,
     translate_formula_references,
     transpose_formula_references, CellMove, ReferenceShift, ShiftAxis,

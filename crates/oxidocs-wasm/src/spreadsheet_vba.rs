@@ -10087,8 +10087,20 @@ impl<'a> WorkbookHost<'a> {
     /// leaves `="Sheet1!$A$2"`, which names no cells at all. A Range hands
     /// over its own address, written absolute.
     fn add_name(&mut self, args: &[Value]) -> Result<Value, String> {
-        let (name, refers_to) = match args {
-            [Value::String(name), refers_to] => (name.clone(), refers_to),
+        // RefersToR1C1 (the tenth argument) stands in for RefersTo: measured,
+        // `Names.Add Name:="zeta", RefersToR1C1:="=Sheet1!R1C1:R3C1"` is
+        // =Sheet1!$A$1:$A$3.
+        let given = |at: usize| args.get(at).filter(|value| !matches!(value, Value::Missing));
+        let from_r1c1;
+        let (name, refers_to) = match (given(0), given(1), given(9).or_else(|| given(10))) {
+            (Some(Value::String(name)), Some(refers_to), _) => (name.clone(), refers_to),
+            (Some(Value::String(name)), None, Some(Value::String(written))) => {
+                let body = written.trim();
+                let body = body.strip_prefix('=').unwrap_or(body);
+                let a1 = oxicells_calc::formula_from_r1c1(&format!("={body}"), 0, 0)?;
+                from_r1c1 = Value::String(a1);
+                (name.clone(), &from_r1c1)
+            }
             _ => return Err("Names.Add needs a Name and what it RefersTo".to_string()),
         };
         // A name may carry the sheet it belongs to: asked of Excel,
@@ -10176,7 +10188,18 @@ impl<'a> WorkbookHost<'a> {
             "comment" => return Ok(Value::String(String::new())),
             "macrotype" => return Ok(Value::Integer(-4142)),
             "validworkbookparameter" | "workbookparameter" => return Ok(Value::Boolean(false)),
-            "parent" => return Ok(self.call(None, "ActiveWorkbook", &[])?.unwrap_or(Value::Nothing)),
+            // A sheet's own name has that sheet for its Parent: measured,
+            // Names("Sheet1!local").Parent.Name is Sheet1.
+            "parent" => {
+                let held = self.workbook.defined_names[at].0.clone();
+                if let Some((scope, _)) = held.rsplit_once('!') {
+                    let scope = scope.trim_matches('\'').replace("''", "'");
+                    if let Some(sheet) = self.workbook.sheets.iter().position(|one| same_sheet_name(&one.name, &scope)) {
+                        return Ok(self.object(HostObject::Worksheet(sheet)));
+                    }
+                }
+                return Ok(self.call(None, "ActiveWorkbook", &[])?.unwrap_or(Value::Nothing));
+            }
             "application" => return Ok(self.call(None, "Application", &[])?.unwrap_or(Value::Nothing)),
             _ => {}
         }
@@ -19101,7 +19124,7 @@ impl Host for WorkbookHost<'_> {
             }) {
                 Some(&["Left", "Top", "Width", "Height"][..])
             } else if receiver.is_some_and(|receiver| self.is_names(receiver) || matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SheetNames(_)))) {
-                Some(&["Name", "RefersTo"][..])
+                Some(&["Name", "RefersTo", "Visible", "MacroType", "ShortcutKey", "Category", "NameLocal", "RefersToLocal", "CategoryLocal", "RefersToR1C1", "RefersToR1C1Local"][..])
             } else if receiver.is_some_and(|receiver| self.hyperlink_scope(receiver).is_some()) {
                 Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
             } else if receiver.is_some_and(|receiver| self.validation_range(receiver).is_some()) {
@@ -21187,7 +21210,25 @@ impl Host for WorkbookHost<'_> {
             };
             if name.eq_ignore_ascii_case("name") {
                 check_name(written)?;
+                // What reads the name follows it to its new one: measured,
+                // a name =SUM(...)*rate works out the same after rate is
+                // renamed rate2.
+                let old = held.rsplit('!').next().unwrap_or(&held).to_string();
+                let new = written.rsplit('!').next().unwrap_or(written).to_string();
                 self.workbook.defined_names[at].0 = written.clone();
+                for (_, refers_to) in self.workbook.defined_names.iter_mut() {
+                    *refers_to = oxicells_calc::rename_name_in_formula(refers_to, &old, &new);
+                }
+                for sheet in self.workbook.sheets.iter_mut() {
+                    for row in sheet.rows.iter_mut() {
+                        for cell in row.cells.iter_mut() {
+                            if let Some(formula) = cell.formula.as_mut() {
+                                *formula = oxicells_calc::rename_name_in_formula(formula, &old, &new);
+                            }
+                        }
+                    }
+                }
+                self.wrote = true;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("refersto") || name.eq_ignore_ascii_case("value") {

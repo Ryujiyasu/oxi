@@ -1363,6 +1363,39 @@ pub fn rename_sheet_in_formula(input: &str, old: &str, new: &str) -> String {
     output
 }
 
+/// Rewrite every use of the defined name `old` so it says `new`, leaving
+/// functions of that spelling, string literals and sheet-qualified cells
+/// alone. Measured: renaming the name `rate` to `rate2` leaves a name
+/// `=SUM(A1:A3)*rate` reading `*rate2`, and it still works out.
+pub fn rename_name_in_formula(input: &str, old: &str, new: &str) -> String {
+    let had_equals = input.trim_start().starts_with('=');
+    let Ok(mut tokens) = tokenize(input) else {
+        return input.to_string();
+    };
+    let mut touched = false;
+    let count = tokens.len();
+    for at in 0..count {
+        let calls = matches!(tokens.get(at + 1), Some(Token::LParen));
+        if let Token::Name { name, .. } = &mut tokens[at] {
+            if !calls && name.eq_ignore_ascii_case(old) {
+                *name = new.to_string();
+                touched = true;
+            }
+        }
+    }
+    if !touched {
+        return input.to_string();
+    }
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in tokens {
+        render_token(&mut output, token);
+    }
+    output
+}
+
 /// A formula once the sheet `gone` is deleted, `order` being the sheets as
 /// they stood. Measured through `.Formula`: `=Jan!A1+Data3!A1` becomes
 /// `=Jan!A1+#REF!A1`, and `=SUM(Jan:Data3!A1)`, whose last sheet went,
