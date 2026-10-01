@@ -12154,12 +12154,21 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_has_formula(&self, range: CellRange) -> Result<Value, String> {
-        let total = Self::range_cell_count_large(range)?;
+        Self::range_cell_count_large(range)?;
         let sheet = self
             .workbook
             .sheets
             .get(range.sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        // Excel looks only inside the sheet's used range: a blank cell
+        // outside it is passed over. Measured, F1:F2 over a formula in F1 is
+        // True while nothing else is written and Null once G2 holds a value;
+        // with F1 and J1 formulas, J1:K1 is True and I1:J1 Null; D1:D2 over
+        // a formula in D2 is Null with A1:C1 written.
+        let used = self.used_range(range.sheet)?;
+        let rows = range.end_row.min(used.end_row).saturating_add(1).saturating_sub(range.start_row.max(used.start_row));
+        let columns = range.end_column.min(used.end_column).saturating_add(1).saturating_sub(range.start_column.max(used.start_column));
+        let total = u64::from(rows) * u64::from(columns);
         let formulas = sheet
             .rows
             .iter()
