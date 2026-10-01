@@ -297,6 +297,10 @@ enum HostObject {
     /// Several blocks named as one range, which `Union` and `Range("A1,C3")`
     /// make. Held by their place in a side list so this stays `Copy`.
     Blocks(usize),
+    /// `.Rows` or `.Columns` of one of those: still every block -- its
+    /// Address, Cells and For Each take them all -- but counted, and indexed,
+    /// by the first block's rows or columns.
+    BlocksAxis(usize, RangeAxis),
     /// The blocks one of those is made of.
     Areas(usize),
     /// The face, the fill or the edges of every block of one of those.
@@ -2130,7 +2134,7 @@ impl<'a> WorkbookHost<'a> {
                 // measured, of Worksheets, ActiveWorkbook.Worksheets and
                 // Application.Worksheets alike.
                 HostObject::Worksheets => "Sheets",
-                HostObject::Blocks(_) => "Range",
+                HostObject::Blocks(_) | HostObject::BlocksAxis(..) => "Range",
                 HostObject::Areas(_) => "Areas",
                 HostObject::BlocksStyle(_, StyleFace::Font) => "Font",
                 HostObject::BlocksStyle(_, StyleFace::Interior) => "Interior",
@@ -2447,9 +2451,9 @@ impl<'a> WorkbookHost<'a> {
     /// The blocks a many-block range is made of.
     fn blocks(&self, object: &ObjectRef) -> Option<&[CellRange]> {
         match self.objects.get(object.handle as usize) {
-            Some(HostObject::Blocks(handle)) | Some(HostObject::Areas(handle)) => {
-                self.blocks.get(*handle).map(Vec::as_slice)
-            }
+            Some(HostObject::Blocks(handle))
+            | Some(HostObject::Areas(handle))
+            | Some(HostObject::BlocksAxis(handle, _)) => self.blocks.get(*handle).map(Vec::as_slice),
             _ => None,
         }
     }
@@ -3237,6 +3241,12 @@ impl<'a> WorkbookHost<'a> {
             } else {
                 RangeAxis::Columns
             };
+            // Measured: `Range("A1:B2,D4:E5").Columns` keeps both blocks
+            // (Address A1:B2,D4:E5, Cells.Count 8, For Each A1:A2 B1:B2 D4:D5
+            // E4:E5) while its Count is 2 and Columns(3) is C1:C2.
+            if args.is_empty() {
+                return Ok(Some(self.object(HostObject::BlocksAxis(handle, axis))));
+            }
             return self
                 .range_collection_object_or_item(areas[0], axis, args)
                 .map(Some);
@@ -9061,6 +9071,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::SortFields(sheet) => moved(sheet).map(HostObject::SortFields),
                 HostObject::Drawing(part) => part.renumbered(moved).map(HostObject::Drawing),
                 HostObject::Blocks(_)
+                | HostObject::BlocksAxis(..)
                 | HostObject::Areas(_)
                 | HostObject::BlocksStyle(..)
                 | HostObject::Worksheets
@@ -9746,6 +9757,28 @@ impl<'a> WorkbookHost<'a> {
                 return self.written_blocks_object(given);
             }
         }
+        // A space between blocks is Excel's intersection: measured,
+        // `Range("A1:B2 B2:C3")` is B2. Blocks that do not meet are 1004.
+        if let [Value::String(reference)] = args {
+            let parts: Vec<&str> = reference.split_whitespace().collect();
+            if parts.len() > 1 {
+                let mut shared = text_block(sheet, parts[0])?;
+                for part in &parts[1..] {
+                    let other = text_block(sheet, part)?;
+                    shared = CellRange {
+                        sheet,
+                        start_row: shared.start_row.max(other.start_row),
+                        start_column: shared.start_column.max(other.start_column),
+                        end_row: shared.end_row.min(other.end_row),
+                        end_column: shared.end_column.min(other.end_column),
+                    };
+                    if shared.start_row > shared.end_row || shared.start_column > shared.end_column {
+                        return Err(host_error(1004, "the blocks named do not meet"));
+                    }
+                }
+                return Ok(self.object(HostObject::Range(shared)));
+            }
+        }
         if let [Value::String(reference)] = args {
             if let Some(band) = parse_band_reference(reference) {
                 return Ok(self.object(HostObject::Range(CellRange {
@@ -9767,6 +9800,18 @@ impl<'a> WorkbookHost<'a> {
                     return Ok(self.object(HostObject::Range(named)));
                 }
             },
+            // Either corner may itself be a block: measured,
+            // `Range("A1", "C3:D4")` is A1:D4.
+            [Value::String(start), Value::String(end)] if start.contains(':') || end.contains(':') => {
+                let (one, other) = (text_block(sheet, start)?, text_block(sheet, end)?);
+                return Ok(self.object(HostObject::Range(CellRange {
+                    sheet,
+                    start_row: one.start_row.min(other.start_row),
+                    start_column: one.start_column.min(other.start_column),
+                    end_row: one.end_row.max(other.end_row),
+                    end_column: one.end_column.max(other.end_column),
+                })));
+            }
             [Value::String(start), Value::String(end)] => {
                 (parse_a1_reference(start)?, parse_a1_reference(end)?)
             }
@@ -17797,6 +17842,19 @@ impl Host for WorkbookHost<'_> {
             if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
                 return self.blocks_member(*handle, name, args);
             }
+            if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(receiver.handle as usize).copied() {
+                let first = self.blocks[handle][0];
+                if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("item") {
+                    if name.eq_ignore_ascii_case("count") && args.is_empty() {
+                        return Ok(Some(Value::Integer(i64::from(match axis {
+                            RangeAxis::Rows => first.end_row - first.start_row + 1,
+                            RangeAxis::Columns => first.end_column - first.start_column + 1,
+                        }))));
+                    }
+                    return self.range_collection_object_or_item(first, axis, args).map(Some);
+                }
+                return self.blocks_member(handle, name, args);
+            }
             if let Some(HostObject::Areas(handle)) = self.objects.get(receiver.handle as usize) {
                 let handle = *handle;
                 let areas = self.blocks[handle].clone();
@@ -18897,6 +18955,16 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
             return self.blocks_member(*handle, name, &[]);
+        }
+        if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(receiver.handle as usize).copied() {
+            if name.eq_ignore_ascii_case("count") {
+                let first = self.blocks[handle][0];
+                return Ok(Some(Value::Integer(i64::from(match axis {
+                    RangeAxis::Rows => first.end_row - first.start_row + 1,
+                    RangeAxis::Columns => first.end_column - first.start_column + 1,
+                }))));
+            }
+            return self.blocks_member(handle, name, &[]);
         }
         if let Some(HostObject::BlocksStyle(handle, face)) =
             self.objects.get(receiver.handle as usize)
@@ -21568,6 +21636,21 @@ impl Host for WorkbookHost<'_> {
         // cell that two blocks both name: `For Each` over `A1:A2,A2:A3` gives
         // A1 A2 A2 A3. `Areas` hands over the blocks themselves instead, in
         // the same order.
+        if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(receiver.handle as usize).copied() {
+            let areas = self.blocks[handle].clone();
+            let mut items = Vec::new();
+            for block in areas {
+                Self::range_cell_count(block)?;
+                let count = match axis {
+                    RangeAxis::Rows => block.end_row - block.start_row + 1,
+                    RangeAxis::Columns => block.end_column - block.start_column + 1,
+                };
+                for index in 1..=count {
+                    items.push(self.range_collection_item(block, axis, &Value::Integer(i64::from(index)))?);
+                }
+            }
+            return Ok(Some(items));
+        }
         if let Some(areas) = self.blocks(receiver).map(<[CellRange]>::to_vec) {
             let holding_areas =
                 matches!(self.objects.get(receiver.handle as usize), Some(HostObject::Areas(_)));
@@ -23464,6 +23547,22 @@ fn worksheet_number(value: &Value, name: &str) -> Result<f64, String> {
             .map_err(|_| format!("WorksheetFunction.{name} expects a number")),
         _ => Err(format!("WorksheetFunction.{name} expects a number")),
     }
+}
+
+/// The block a piece of an address names, `A1`, `A1:B2`, `A:A` or `1:1`.
+fn text_block(sheet: usize, text: &str) -> Result<CellRange, String> {
+    let text = text.trim();
+    if let Some(band) = parse_band_reference(text) {
+        return Ok(CellRange { sheet, start_row: band.0, start_column: band.1, end_row: band.2, end_column: band.3 });
+    }
+    let (start, end) = parse_range_reference(text)?;
+    Ok(CellRange {
+        sheet,
+        start_row: start.1.min(end.1),
+        start_column: start.0.min(end.0),
+        end_row: start.1.max(end.1),
+        end_column: start.0.max(end.0),
+    })
 }
 
 fn sort_number(value: &Value, label: &str) -> Result<i64, String> {
