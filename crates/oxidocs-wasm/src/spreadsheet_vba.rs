@@ -344,6 +344,8 @@ enum HostObject {
     /// formats worked out, and its font and fill.
     DisplayFormat(CellRange),
     DisplayFont(CellRange),
+    /// A cell style's own Font, by the style's place in the table.
+    StyleFont(usize),
     DisplayInterior(CellRange),
     /// `Range.Characters(Start, Length)`: a stretch of one cell's text.
     Characters(CellAddress, u32, Option<u32>),
@@ -2137,6 +2139,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::ConditionInterior(_) => "Interior",
                 HostObject::DisplayFormat(_) => "DisplayFormat",
                 HostObject::DisplayFont(_) => "Font",
+                HostObject::StyleFont(_) => "Font",
                 HostObject::DisplayInterior(_) => "Interior",
                 HostObject::Characters(..) => "Characters",
                 HostObject::CharactersFont(..) => "Font",
@@ -3563,8 +3566,28 @@ impl<'a> WorkbookHost<'a> {
             Value::Boolean(style.protection)
         } else if name.eq_ignore_ascii_case("numberformat") {
             Value::String(style.number.unwrap_or("General").to_string())
+        } else if name.eq_ignore_ascii_case("font") {
+            self.object(HostObject::StyleFont(index))
         } else {
             return Ok(None);
+        };
+        Ok(Some(answer))
+    }
+
+    /// A style's Font: what the style sets, and the book's own face and size
+    /// where it sets none -- measured, Styles("Normal").Font is 游ゴシック 11.
+    fn style_font_member(&self, index: usize, name: &str) -> Result<Option<Value>, String> {
+        let font = BUILT_IN_STYLES[index].font.as_ref();
+        let (face, size) = self.normal_font();
+        let answer = match name.to_ascii_lowercase().as_str() {
+            "name" => Value::String(font.and_then(|font| font.name).map_or(face, str::to_string)),
+            "size" => Value::Double(f64::from(font.map_or(size, |font| font.size))),
+            "bold" => Value::Boolean(font.is_some_and(|font| font.bold)),
+            "italic" => Value::Boolean(font.is_some_and(|font| font.italic)),
+            // xlUnderlineStyleSingle 2, xlUnderlineStyleNone -4142.
+            "underline" => Value::Integer(if font.is_some_and(|font| font.underline) { 2 } else { -4142 }),
+            "color" => Value::Double(font.and_then(|font| font.color).unwrap_or(0) as f64),
+            _ => return Ok(None),
         };
         Ok(Some(answer))
     }
@@ -8894,6 +8917,7 @@ impl<'a> WorkbookHost<'a> {
                 | HostObject::DebugConsole
                 | HostObject::Window
                 | HostObject::Style(_)
+                | HostObject::StyleFont(_)
                 | HostObject::Styles
                 | HostObject::Hyperlink(_)
                 | HostObject::ListObject(_)
@@ -18562,6 +18586,10 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(scope) = self.hyperlink_scope(receiver) {
             return self.hyperlinks_member(scope, name, &[]);
+        }
+        if let Some(HostObject::StyleFont(index)) = self.objects.get(receiver.handle as usize) {
+            let index = *index;
+            return self.style_font_member(index, name);
         }
         if let Some(index) = self.style_index(receiver) {
             return self.style_member(index, name);
