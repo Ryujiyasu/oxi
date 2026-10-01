@@ -2101,8 +2101,11 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::RangeFont(_) => "Font",
                 HostObject::RangeInterior(_) => "Interior",
                 HostObject::RangeBorders(_, _) => "Borders",
-                HostObject::RangeCollection(_, RangeAxis::Rows) => "Rows",
-                HostObject::RangeCollection(_, RangeAxis::Columns) => "Columns",
+                // A range's rows and columns are a Range to TypeName:
+                // measured, TypeName(Range("A1:B2").Columns), of EntireRow
+                // and of Rows(1) all answer Range.
+                HostObject::RangeCollection(_, RangeAxis::Rows) => "Range",
+                HostObject::RangeCollection(_, RangeAxis::Columns) => "Range",
                 HostObject::Worksheet(_) => "Worksheet",
                 HostObject::Worksheets => "Worksheets",
                 HostObject::Blocks(_) => "Range",
@@ -12084,8 +12087,10 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_end(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        // Asked with no direction it is the wrong number of arguments:
+        // measured, 450.
         let [direction] = args else {
-            return Err("Range.End expects one direction".to_string());
+            return Err(host_error(450, "Range.End expects one direction"));
         };
         let direction = end_direction(direction)?;
         let worksheet = self
@@ -18582,6 +18587,12 @@ impl Host for WorkbookHost<'_> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
+        // Every object Excel hands out says it was made by Excel: measured,
+        // Creator is 1480803660 ("XCEL") of the Application, a sheet, a range
+        // and a Font alike.
+        if name.eq_ignore_ascii_case("creator") && self.objects.get(receiver.handle as usize).is_some() {
+            return Ok(Some(Value::Integer(1_480_803_660)));
+        }
         if let Some(object @ (HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..))) =
             self.objects.get(receiver.handle as usize).copied()
         {
@@ -19882,6 +19893,50 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("columnwidth") {
             return self.range_column_width(range).map(Some);
         }
+        // True while every row (column) keeps the sheet's standard size:
+        // measured, A1 True and C3 False once row 3 and column C were sized,
+        // and A1:C3 False rather than Null.
+        if name.eq_ignore_ascii_case("usestandardheight") {
+            let sheet = self.workbook.sheets.get(range.sheet);
+            let standard = (range.start_row..=range.end_row.min(range.start_row + 1_048_576)).all(|row| {
+                !sheet.is_some_and(|sheet| sheet.rows.iter().any(|held| held.index == row && held.custom_height))
+            });
+            return Ok(Some(Value::Boolean(standard)));
+        }
+        if name.eq_ignore_ascii_case("usestandardwidth") {
+            let sheet = self.workbook.sheets.get(range.sheet);
+            let standard = (range.start_column..=range.end_column).all(|column| {
+                !sheet.is_some_and(|sheet| sheet.col_widths.get(column as usize).is_some_and(|width| *width > 0.0))
+            });
+            return Ok(Some(Value::Boolean(standard)));
+        }
+        // What a book made here answers for the rest of a cell's dress and
+        // links: measured, AllowEdit True, HasRichDataType False,
+        // ListHeaderRows 0, SavedAsArray False, MDX "", LinkedDataTypeState 0
+        // and no threaded comment.
+        if name.eq_ignore_ascii_case("allowedit") {
+            return Ok(Some(Value::Boolean(true)));
+        }
+        if name.eq_ignore_ascii_case("hasrichdatatype") || name.eq_ignore_ascii_case("savedasarray") {
+            return Ok(Some(Value::Boolean(false)));
+        }
+        if name.eq_ignore_ascii_case("listheaderrows") || name.eq_ignore_ascii_case("linkeddatatypestate") {
+            return Ok(Some(Value::Integer(0)));
+        }
+        if name.eq_ignore_ascii_case("mdx") {
+            return Ok(Some(Value::String(String::new())));
+        }
+        if name.eq_ignore_ascii_case("commentthreaded") {
+            return Ok(Some(Value::Nothing));
+        }
+        // Of a cell in no pivot table, query table or outline: measured, each
+        // of these raises 1004.
+        if ["pivottable", "pivotfield", "pivotitem", "pivotcell", "querytable", "serveractions", "showdetail", "summary", "locationintable", "pagebreak"]
+            .iter()
+            .any(|wanted| name.eq_ignore_ascii_case(wanted))
+        {
+            return Err(host_error(1004, format!("Unable to get the {name} property of the Range class")));
+        }
         if name.eq_ignore_ascii_case("rowheight") {
             return self.range_row_height(range).map(Some);
         }
@@ -19980,17 +20035,24 @@ impl Host for WorkbookHost<'_> {
         // A step sideways from the top-left cell, and only ever one cell
         // however big the range is: asked of Excel, `Range("A1:B2").Next` is
         // B1 and `Range("B2:C3").Previous` is A2. Neither wraps to another
-        // row — `A2.Previous` and `XFD1.Next` are both Nothing.
+        // row, and off the edge is no cell at all: measured, `A1.Previous`,
+        // `A2.Previous` and `XFD1.Next` each raise 1004.
         if name.eq_ignore_ascii_case("next") || name.eq_ignore_ascii_case("previous") {
             let forward = name.eq_ignore_ascii_case("next");
+            let off_edge = || {
+                host_error(
+                    1004,
+                    format!("Unable to get the {} property of the Range class", if forward { "Next" } else { "Previous" }),
+                )
+            };
             let column = if forward {
                 if range.start_column >= MAX_WORKSHEET_COLUMN {
-                    return Ok(Some(Value::Nothing));
+                    return Err(off_edge());
                 }
                 range.start_column + 1
             } else {
                 if range.start_column == 0 {
-                    return Ok(Some(Value::Nothing));
+                    return Err(off_edge());
                 }
                 range.start_column - 1
             };
@@ -28523,9 +28585,9 @@ mod tests {
     /// of one and a `Cells` of itself, so a macro written for a selection of
     /// several blocks keeps working on a selection of one. `Next` and
     /// `Previous` step one column from the top-left cell whatever the size of
-    /// the range — `A1:B2.Next` is B1, not C1 — and hand back Nothing rather
-    /// than wrapping into another row: `A2.Previous` and `XFD1.Next` are both
-    /// Nothing where `A1048576.Next` is B1048576.
+    /// the range — `A1:B2.Next` is B1, not C1 — and raise 1004 rather than
+    /// wrapping into another row: `A2.Previous` and `XFD1.Next` both raise
+    /// where `A1048576.Next` is B1048576.
     #[test]
     fn every_range_has_its_areas_its_cells_and_its_neighbours() {
         let mut workbook = workbook();
@@ -28541,8 +28603,14 @@ mod tests {
                Ask = Ask & \"|\" & Range(\"B2:C3\").Cells.Address(0, 0)\n\
                Ask = Ask & \"|\" & Range(\"A1:B2\").Next.Address(0, 0)\n\
                Ask = Ask & \"|\" & Range(\"B2:C3\").Previous.Address(0, 0)\n\
-               Ask = Ask & \"|\" & (Range(\"A2\").Previous Is Nothing)\n\
-               Ask = Ask & \"|\" & (Range(\"XFD1\").Next Is Nothing)\n\
+               On Error Resume Next\n\
+               Dim r As Object\n\
+               Set r = Range(\"A2\").Previous\n\
+               Ask = Ask & \"|\" & Err.Number\n\
+               Err.Clear\n\
+               Set r = Range(\"XFD1\").Next\n\
+               Ask = Ask & \"|\" & Err.Number\n\
+               Err.Clear\n\
                Ask = Ask & \"|\" & Range(\"A1048576\").Next.Address(0, 0)\n\
              End Function\n",
         )
@@ -28554,7 +28622,7 @@ mod tests {
         assert_eq!(
             result,
             Value::String(
-                "1|A1|A1|4|B2:C3|B1|A2|True|True|B1048576".to_string()
+                "1|A1|A1|4|B2:C3|B1|A2|1004|1004|B1048576".to_string()
             )
         );
     }
