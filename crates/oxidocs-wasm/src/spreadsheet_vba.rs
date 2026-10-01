@@ -3210,9 +3210,15 @@ impl<'a> WorkbookHost<'a> {
             };
         }
         if name.eq_ignore_ascii_case("address") || name.eq_ignore_ascii_case("addresslocal") {
+            // The book and sheet stand once, before the first block:
+            // measured, `'[Book1]My Data'!RC:R[1]C[1],R[3]C[3]`.
+            let mut rest = args.to_vec();
+            if rest.len() > 3 {
+                rest[3] = Value::Boolean(false);
+            }
             let mut written = Vec::with_capacity(areas.len());
-            for block in &areas {
-                written.push(self.range_address_from_args(*block, args)?);
+            for (index, block) in areas.iter().enumerate() {
+                written.push(self.range_address_from_args(*block, if index == 0 { args } else { &rest })?);
             }
             return Ok(Some(Value::String(written.join(","))));
         }
