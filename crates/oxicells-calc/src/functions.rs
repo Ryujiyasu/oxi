@@ -3534,7 +3534,19 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if !(0..=3999).contains(&n) {
                 return Err(ExcelError::Value);
             }
-            Ok(Value::Text(roman_numeral(n)))
+            // The form: 0 (or TRUE) classic up to 4 (or FALSE) simplest.
+            let form = match args.get(1) {
+                None => 0,
+                Some(a) => match a.scalar() {
+                    Value::Blank => 0,
+                    Value::Logical(flag) => if flag { 0 } else { 4 },
+                    _ => num(a)? as i64,
+                },
+            };
+            if !(0..=4).contains(&form) {
+                return Err(ExcelError::Value);
+            }
+            Ok(Value::Text(if form == 0 { roman_numeral(n) } else { roman_form(n, form) }))
         }
         "ARABIC" => {
             let s = text(&args.first().ok_or(ExcelError::Value)?.clone())?;
@@ -4895,6 +4907,46 @@ fn roman_numeral(mut n: i64) -> String {
         while n >= value {
             out.push_str(sign);
             n -= value;
+        }
+    }
+    out
+}
+
+/// ROMAN's shorter forms: a 4 or 9 of some place may be written as the
+/// largest letter it can reach taking away one up to `form` places below --
+/// measured, ROMAN(1999, 4) is MIM. The walk is LibreOffice's ScRoman.
+fn roman_form(n: i64, form: i64) -> String {
+    const LETTERS: [char; 7] = ['M', 'D', 'C', 'L', 'X', 'V', 'I'];
+    const VALUES: [i64; 7] = [1000, 500, 100, 50, 10, 5, 1];
+    let last = VALUES.len() - 1;
+    let mut left = n;
+    let mut out = String::new();
+    for step in 0..=last / 2 {
+        let mut index = 2 * step;
+        let digit = left / VALUES[index];
+        if digit % 5 == 4 {
+            let taken = if digit == 4 { index - 1 } else { index - 2 };
+            let mut steps = 0;
+            while steps < form && index < last {
+                steps += 1;
+                if VALUES[taken] - VALUES[index + 1] <= left {
+                    index += 1;
+                } else {
+                    steps = form;
+                }
+            }
+            out.push(LETTERS[index]);
+            out.push(LETTERS[taken]);
+            left += VALUES[index];
+            left -= VALUES[taken];
+        } else {
+            if digit > 4 {
+                out.push(LETTERS[index - 1]);
+            }
+            for _ in 0..digit % 5 {
+                out.push(LETTERS[index]);
+            }
+            left %= VALUES[index];
         }
     }
     out
