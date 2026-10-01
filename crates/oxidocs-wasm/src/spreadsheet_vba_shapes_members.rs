@@ -506,7 +506,12 @@ impl<'a> WorkbookHost<'a> {
                     "paragraphformat" => Some(self.part(DrawingPart::ParagraphFormat(id))),
                     "characters" => Some(self.part(DrawingPart::Characters(id, 1, None))),
                     "paragraphs" => Some(self.part(DrawingPart::Paragraphs(id))),
-                    "length" | "count" => Some(Value::Integer(shape.text().chars().count() as i64)),
+                    "length" => Some(Value::Integer(shape.text().chars().count() as i64)),
+                    // Measured on "ab cd": Count 1 (one range), Start 1,
+                    // LanguageID 1033, Parent the TextFrame2.
+                    "count" | "start" => Some(Value::Integer(1)),
+                    "languageid" => Some(Value::Integer(1033)),
+                    "parent" => Some(self.part(DrawingPart::TextFrame2(id))),
                     _ => None,
                 })
             }
@@ -740,6 +745,25 @@ impl<'a> WorkbookHost<'a> {
 
     fn shape_get(&mut self, part: DrawingPart, id: u64, lower: &str) -> Result<Option<Value>, String> {
         let shape = self.shape(id)?.clone();
+        // A ChartObject is the older object: measured, its place is a Double,
+        // Visible a Boolean, ZOrder its place, and it prints, has square
+        // corners, no shadow and no chart protection.
+        if matches!(part, DrawingPart::ChartObject(_)) {
+            match lower {
+                "left" => return Ok(Some(Value::Double(shape.left))),
+                "top" => return Ok(Some(Value::Double(shape.top))),
+                "width" => return Ok(Some(Value::Double(shape.width))),
+                "height" => return Ok(Some(Value::Double(shape.height))),
+                "visible" => return Ok(Some(Value::Boolean(shape.visible))),
+                "zorder" => {
+                    let at = self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1);
+                    return Ok(Some(Value::Integer(at)));
+                }
+                "printobject" => return Ok(Some(Value::Boolean(true))),
+                "protectchartobject" | "roundedcorners" | "shadow" => return Ok(Some(Value::Boolean(false))),
+                _ => {}
+            }
+        }
         Ok(match lower {
             "name" => Some(Value::String(shape.name)),
             // Singles, as Excel hands them: measured, TypeName of a shape's
@@ -841,7 +865,20 @@ impl<'a> WorkbookHost<'a> {
                 shape.name.rsplit(' ').next().unwrap_or("")
             ))),
             "parent" => Some(self.part(DrawingPart::ChartObject(id))),
-            "visible" => Some(mso(shape.visible)),
+            // An embedded chart's own Visible and CodeName are 1004, and
+            // HasAxis wants its axis: measured, 440 asked bare.
+            "visible" | "codename" => return Err(host_error(1004, "an embedded chart has no such property")),
+            "hasaxis" => return Err(host_error(440, "HasAxis wants an axis")),
+            // The plain answers of a fresh column chart: measured.
+            "autoscaling" | "plotvisibleonly" => Some(Value::Boolean(true)),
+            "hasdatatable" | "rightangleaxes" | "showallfieldbuttons" | "showdatalabelsovermaximum" => Some(Value::Boolean(false)),
+            "barshape" | "plotby" => Some(Value::Integer(0)),
+            "depthpercent" | "heightpercent" => Some(Value::Integer(100)),
+            "displayblanksas" => Some(Value::Integer(1)),
+            "elevation" => Some(Value::Integer(15)),
+            "gapdepth" => Some(Value::Integer(150)),
+            "perspective" => Some(Value::Integer(30)),
+            "rotation" => Some(Value::Integer(20)),
             _ => None,
         })
     }
@@ -1461,6 +1498,11 @@ impl<'a> WorkbookHost<'a> {
                 "add" => {
                     let (left, top, width, height) = Self::placed(args, 0, "ChartObjects.Add")?;
                     let id = self.add_chart(sheet, left, top, width, height, 51)?;
+                    // Measured: a chart made by ChartObjects.Add has
+                    // ChartStyle 2, where AddChart2's default is 201.
+                    if let ShapeKind::Chart(chart) = &mut self.shape_mut(id)?.kind {
+                        chart.style = 2;
+                    }
                     Ok(Some(self.part(DrawingPart::ChartObject(id))))
                 }
                 "delete" => {
