@@ -243,6 +243,61 @@ def measure_doc(docx_path: str) -> dict:
     }
 
 
+def measure_docs_batch(docx_paths, exe=None, env=None, stall_timeout=300):
+    """Measure many documents with ONE renderer process (`--batch=LIST`).
+
+    A renderer cold start costs ~1.25s of a ~1.6s median document, so this is
+    what makes a 1076-document gate fast. Returns a list parallel to
+    `docx_paths`: the measure_doc() dict, or an Exception. A document that makes
+    no progress for `stall_timeout` seconds is killed and recorded as an error;
+    the batch resumes with the next one.
+    """
+    import threading, queue
+    exe = exe or RENDERER
+    results = [None] * len(docx_paths)
+    start = 0
+    while start < len(docx_paths):
+        with tempfile.TemporaryDirectory(prefix="oxi_batch_") as tmp:
+            dumps = [os.path.join(tmp, f"{i}.json") for i in range(len(docx_paths))]
+            lst = os.path.join(tmp, "list.txt")
+            with open(lst, "w", encoding="utf-8") as f:
+                for i in range(start, len(docx_paths)):
+                    f.write(f"{docx_paths[i]}\t{dumps[i]}\n")
+            proc = subprocess.Popen([exe, "--batch=" + lst], stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                    env=env)
+            q = queue.Queue()
+            threading.Thread(target=lambda: [q.put(l) for l in proc.stdout] + [q.put(None)], daemon=True).start()
+            i = start
+            while i < len(docx_paths):
+                try:
+                    line = q.get(timeout=stall_timeout)
+                except queue.Empty:
+                    proc.kill()
+                    results[i] = RuntimeError(f"stalled > {stall_timeout}s")
+                    i += 1
+                    break
+                if line is None:  # process ended early (crash / memory cap)
+                    results[i] = RuntimeError(f"renderer exited (rc={proc.wait()})")
+                    i += 1
+                    break
+                if not line.startswith(("BATCH-OK ", "BATCH-ERR ")):
+                    continue
+                if line.startswith("BATCH-OK ") and os.path.exists(dumps[i]):
+                    with open(dumps[i], encoding="utf-8") as f:
+                        dump = json.load(f)
+                    results[i] = {"filename": os.path.basename(docx_paths[i]),
+                                  "n_pages": len(dump.get("pages", [])),
+                                  "pages": aggregate_dump(dump)}
+                else:
+                    results[i] = RuntimeError("renderer failed on this document")
+                i += 1
+            proc.kill()
+            proc.wait()
+            start = i
+    return results
+
+
 def main() -> int:
     if not os.path.exists(RENDERER):
         print(f"renderer not found at {RENDERER}", file=sys.stderr)

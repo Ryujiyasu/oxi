@@ -48,9 +48,51 @@ fn install_memory_cap() {
 #[cfg(not(windows))]
 fn install_memory_cap() {}
 
+/// Lay out one document and write its layout dump (the `--dump-layout` path).
+fn layout_and_dump(docx_path: &str, dump_path: &str) {
+    let data = std::fs::read(docx_path).expect("Cannot read docx file");
+    let doc = oxidocs_core::parser::parse_docx(&data).expect("Cannot parse docx");
+    let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc);
+    let engine = if std::env::var("OXI_S483_DISABLE").is_ok() {
+        engine
+    } else {
+        engine.with_show_revisions(oxidocs_core::ir::ShowRevisions::Final)
+    };
+    let engine = if std::env::var("OXI_S980_DISABLE").is_ok() {
+        engine
+    } else {
+        engine.with_show_comments(false)
+    };
+    let result = engine.layout(&doc);
+    dump_layout_json(&result, dump_path);
+}
+
+/// `--batch=LIST`: lay out many documents in ONE process. Each line of LIST is
+/// `input.docx<TAB>dump.json`. A cold start costs ~1.25s (the embedded font
+/// metrics are parsed once per process, `FontMetricsRegistry::load`), against a
+/// median of ~1.6s for a whole document, so per-document processes spent most
+/// of a pagination gate starting up. A document that panics prints
+/// `BATCH-ERR <path>` and the batch carries on; each finished one prints
+/// `BATCH-OK <path>`.
+fn run_batch(list_path: &str) {
+    let list = std::fs::read_to_string(list_path).expect("Cannot read batch list");
+    for line in list.lines() {
+        let Some((docx, dump)) = line.split_once('\t') else { continue };
+        let (docx, dump) = (docx.trim().to_string(), dump.trim().to_string());
+        let ok = std::panic::catch_unwind(|| layout_and_dump(&docx, &dump)).is_ok();
+        println!("{} {}", if ok { "BATCH-OK" } else { "BATCH-ERR" }, docx);
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    }
+}
+
 fn main() {
     install_memory_cap();
     let args: Vec<String> = std::env::args().collect();
+    if let Some(list) = args.get(1).and_then(|a| a.strip_prefix("--batch=")) {
+        run_batch(list);
+        return;
+    }
     if args.len() < 3 {
         eprintln!("Usage: {} <input.docx> <output_prefix> [dpi] [--exclude=text,border,shading,box,image,clip] [--supersample=N]", args[0]);
         std::process::exit(1);

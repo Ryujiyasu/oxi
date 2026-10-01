@@ -5,10 +5,15 @@
          [--flags OXI_S1589_DISABLE,OXI_S1590_DISABLE] [--jobs 3] [--identity 12]
 
 What it does, compared with subset_gate.py:
-  * runs documents in PARALLEL (--jobs worker processes; each renderer is capped
-    at OXI_MEM_CAP_MB, so 3 fits a 14GB machine);
-  * CACHES the base binary's result per document under
-    pipeline_data/gate_cache/<sha12 of BASE>/ -- a base is measured once, ever;
+  * runs documents in PARALLEL: --jobs renderer processes, each laying out a
+    chunk of documents in ONE process (`--batch`; a cold start is ~1.25s of a
+    ~1.6s median document, so per-document processes spent most of the gate
+    starting up); each renderer is capped at OXI_MEM_CAP_MB, so the default
+    3 fits a 14GB machine;
+  * CACHES every binary's result per document under
+    pipeline_data/gate_cache/<sha12 of the binary>/ -- the base AND the new
+    binary (when run without --new-env), so a binary is measured once, ever,
+    and the commit you gate today is tomorrow's cached base;
   * for every PASS->FAIL document, re-runs that document once per --flags entry
     (the fix's opt-out env) and reports which flag restores the PASS, so a batch
     of fixes needs one gate run and at most (#regressions x #flags) re-renders.
@@ -26,14 +31,46 @@ import feature_census as FC  # noqa: E402
 from subset_gate import truth_for  # noqa: E402
 
 CACHE = REPO / "pipeline_data" / "gate_cache"
-ONE = r'''
-import json, os, sys
-sys.path.insert(0, sys.argv[1])
-import measure_pagination_oxi as MO, pagination_diff as PD
-word = json.load(open(sys.argv[3], encoding="utf-8"))
-d = PD.diff_doc("x", word, MO.measure_doc(sys.argv[2]))
-print(json.dumps({"pass": d["pass"], "score": d["score"], "pcd": d.get("page_count_delta")}))
-'''
+
+CHUNK = 24
+
+
+def _run_chunk(exe, items, extra_env):
+    """items: [(key, path, truth)] -> {key: result} with one batch renderer."""
+    import measure_pagination_oxi as MO, pagination_diff as PD
+    env = dict(os.environ)
+    env.update(extra_env or {})
+    env["OXI_GDI_EXE"] = exe
+    outs = MO.measure_docs_batch([it[1] for it in items], exe=exe, env=env)
+    res = {}
+    for (key, _path, truth), o in zip(items, outs):
+        if isinstance(o, Exception):
+            res[key] = {"pass": None, "err": str(o)[-200:]}
+            continue
+        try:
+            word = json.load(open(truth, encoding="utf-8"))
+            d = PD.diff_doc("x", word, o)
+            res[key] = {"pass": d["pass"], "score": d["score"], "pcd": d.get("page_count_delta")}
+        except Exception as e:
+            res[key] = {"pass": None, "err": str(e)[-200:]}
+    return res
+
+
+def run_many(tasks, jobs):
+    """tasks: [(key, exe, path, truth, env)] -> {key: result}. Documents that
+    share a binary and env go through batch renderers CHUNK at a time."""
+    groups = {}
+    for key, exe, path, truth, env in tasks:
+        groups.setdefault((exe, tuple(sorted((env or {}).items()))), []).append((key, path, str(truth)))
+    chunks = [(exe, items[i:i + CHUNK], dict(envt))
+              for (exe, envt), items in groups.items() for i in range(0, len(items), CHUNK)]
+    out = {}
+    total = sum(len(c[1]) for c in chunks)
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        for r in pool.map(lambda c: _run_chunk(*c), chunks):
+            out.update(r)
+            print(f"  progress {len(out)}/{total}", flush=True)
+    return out
 
 
 def sha12(p):
@@ -42,18 +79,6 @@ def sha12(p):
         for b in iter(lambda: f.read(1 << 20), b""):
             h.update(b)
     return h.hexdigest()[:12]
-
-
-def run_one(exe, path, truth, extra_env=None):
-    env = dict(os.environ, OXI_GDI_EXE=exe)
-    if extra_env:
-        env.update(extra_env)
-    r = subprocess.run([sys.executable, "-c", ONE, str(REPO / "tools" / "metrics"), path, str(truth)],
-                       capture_output=True, text=True, env=env)
-    try:
-        return json.loads(r.stdout.strip().splitlines()[-1])
-    except Exception:
-        return {"pass": None, "err": (r.stderr or r.stdout)[-200:]}
 
 
 def dump(exe, path):
@@ -75,28 +100,36 @@ def main():
     flags = [f for f in (arg("--flags", "") or "").split(",") if f]
     jobs = int(arg("--jobs", "3"))
     n_id = int(arg("--identity", "0"))
+    new_env = dict(kv.split("=", 1) for kv in (arg("--new-env", "") or "").split(",") if kv)
     rows = FC.load()
     hits = FC.query(expr)
     work = [(d, rows[d]["path"], truth_for(d)) for d in hits]
     work = [w for w in work if w[2] is not None]
     print(f"predicate: {expr}\nmatched {len(hits)} docs, {len(work)} with truth, jobs={jobs}", flush=True)
 
-    bdir = CACHE / sha12(base)
-    bdir.mkdir(parents=True, exist_ok=True)
+    def cached(binary, env):
+        d = CACHE / sha12(binary)
+        d.mkdir(parents=True, exist_ok=True)
+        got, todo = {}, []
+        for w in work:
+            f = d / (w[0].replace("/", "__") + ".json")
+            if not env and f.exists():
+                got[w[0]] = json.loads(f.read_text(encoding="utf-8"))
+            else:
+                todo.append(w)
+        return d, got, todo
 
-    def base_result(w):
-        did, path, truth = w
-        f = bdir / (did.replace("/", "__") + ".json")
-        if f.exists():
-            return json.loads(f.read_text(encoding="utf-8"))
-        r = run_one(base, path, truth)
-        if r.get("pass") is not None:
-            f.write_text(json.dumps(r), encoding="utf-8")
-        return r
-
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        new_res = list(pool.map(lambda w: run_one(exe, w[1], w[2]), work))
-        base_res = list(pool.map(base_result, work))
+    bdir, base_res, todo_base = cached(base, None)
+    ndir, new_res, todo_new = cached(exe, new_env)
+    print(f"cached: base {len(base_res)}/{len(work)}  new {len(new_res)}/{len(work)}", flush=True)
+    tasks = ([(("b", w[0]), base, w[1], w[2], None) for w in todo_base]
+             + [(("n", w[0]), exe, w[1], w[2], new_env or None) for w in todo_new])
+    for (side, key), r in run_many(tasks, jobs).items():
+        (base_res if side == "b" else new_res)[key] = r
+        if r.get("pass") is not None and (side == "b" or not new_env):
+            ((bdir if side == "b" else ndir) / (key.replace("/", "__") + ".json")).write_text(json.dumps(r), encoding="utf-8")
+    base_res = [base_res[w[0]] for w in work]
+    new_res = [new_res[w[0]] for w in work]
 
     flips = []
     n_new = n_base = 0
@@ -114,11 +147,12 @@ def main():
 
     if flips and flags:
         print("attribution (flag that restores PASS):")
-        tasks = [(w, fl) for w in flips for fl in flags]
-        with ThreadPoolExecutor(max_workers=jobs) as pool:
-            outs = list(pool.map(lambda t: run_one(exe, t[0][1], t[0][2], {t[1]: "1"}), tasks))
-        for (w, fl), r in zip(tasks, outs):
-            print(f"  {w[0]} with {fl}: pass={r.get('pass')} {r.get('score')}")
+        tasks = [((w[0], fl), exe, w[1], w[2], {**new_env, fl: "1"}) for w in flips for fl in flags]
+        outs = run_many(tasks, jobs)
+        for w in flips:
+            for fl in flags:
+                r = outs[(w[0], fl)]
+                print(f"  {w[0]} with {fl}: pass={r.get('pass')} {r.get('score')}")
 
     if n_id:
         rest = [d for d in rows if d not in set(hits) and "error" not in rows[d]]
