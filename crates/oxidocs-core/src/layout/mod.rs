@@ -49984,6 +49984,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     }
                                     let total_lines = lines.len();
                                     let mut float_row_height = 0.0_f32;
+                                    // S1626: the paragraph's ruby GROUPS, consumed in order as
+                                    // their base fragments are laid out (index, base chars seen).
+                                    // A ruby whose base runs differ in formatting (forms__01c5a769:
+                                    // spacing 150 on the first base char, 30 on the second) parses
+                                    // into consecutive runs that each carry the same ruby; they are
+                                    // ONE annotation.
+                                    let mut s1626_rubies: Vec<Vec<&Run>> = Vec::new();
+                                    for r in para.runs.iter() {
+                                        let Some(rb) = r.ruby.as_ref() else { continue };
+                                        let same = s1626_rubies.last().and_then(|g| g.last()).and_then(|l| l.ruby.as_ref())
+                                            .map_or(false, |prev| prev.text == rb.text && prev.base == rb.base);
+                                        let adjacent = s1626_rubies.last().and_then(|g| g.last())
+                                            .map_or(false, |l| std::ptr::eq(*l, &para.runs[para.runs.iter().position(|x| std::ptr::eq(x, r)).unwrap_or(0).saturating_sub(1)]));
+                                        if same && adjacent {
+                                            s1626_rubies.last_mut().unwrap().push(r);
+                                        } else {
+                                            s1626_rubies.push(vec![r]);
+                                        }
+                                    }
+                                    let mut s1626_ri = 0usize;
+                                    let mut s1626_seen = 0usize;
                                     for (line_idx, line) in lines.iter().enumerate() {
                                         let float_frame = cell_float_wrap.as_ref().map(|wrap|
                                             wrap.frame(line_idx, wrap_w, first_line_wrap_w, p_indent_left, p_first_line_indent));
@@ -51039,6 +51060,57 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         };
                                         let cell_text_y_off =
                                             cell_text_y_off + cell_glyph_dy + s664_dy - s698_reduce;
+                                        // S1625 (2026-10-01, default ON, opt-out OXI_S1625_DISABLE):
+                                        // a RUBY line on a typed grid centres the ruby-plus-base BLOCK
+                                        // in its grid cells, not the base em box. The block runs from
+                                        // the annotation box's top (raise + its upper box part) to the
+                                        // base box's bottom (the lower part of the 83/64 box), so the
+                                        // base baseline sits at lh/2 + (raise + up(ruby) - down(base))/2.
+                                        // `_pb_gridruby_gen.py` (12 arms, base 10.5 / 14, hps 8, raise
+                                        // 5..25pt over 2..4 cells): Word's baseline-from-rule fits that
+                                        // to +0.29..+0.32 on every arm (the half rule above the cell);
+                                        // forms__002abc3e (base 12, hps 5, raise 11) +0.44. Oxi kept the
+                                        // em centring, 3-5pt high and blind to the raise.
+                                        let cell_text_y_off = match row_line_pitch
+                                            .filter(|p| *p > 0.0 && para.style.snap_to_grid)
+                                        {
+                                            Some(_) if std::env::var_os("OXI_S1625_DISABLE").is_none()
+                                                && effective_line_rule != Some("exact")
+                                                && line.iter().any(|t| t.15) =>
+                                            {
+                                                let base_t = line.iter().filter(|t| t.15)
+                                                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                                let ruby = para.runs.iter().filter_map(|r| r.ruby.as_ref())
+                                                    .max_by_key(|r| r.hps_raise_halfpt.unwrap_or(0));
+                                                match (base_t, ruby) {
+                                                    (Some(bt), Some(rb)) => {
+                                                        let bfs = bt.1;
+                                                        let bm = match bt.8.as_deref() {
+                                                            Some(ff) => self.registry.get(ff),
+                                                            None => self.registry.default_metrics(),
+                                                        };
+                                                        let hps = rb.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(bfs / 2.0);
+                                                        let raise = rb.hps_raise_halfpt.map(|h| h as f32 / 2.0)
+                                                            .unwrap_or_else(|| ruby::default_hps_raise_pt(bfs, hps));
+                                                        let rm = rb.annotation_fonts.first()
+                                                            .map(|n| self.registry.get(n))
+                                                            .unwrap_or(bm);
+                                                        let parts = |m: &FontMetrics, fs: f32| {
+                                                            let extra = (Self::s1367_cjk_box(m, fs)
+                                                                - (m.win_ascent + m.win_descent) * fs).max(0.0) / 2.0;
+                                                            (m.win_ascent * fs + extra, m.win_descent * fs + extra)
+                                                        };
+                                                        let (up_r, _) = parts(rm, hps);
+                                                        let (_, down_b) = parts(bm, bfs);
+                                                        let baseline = lh / 2.0 + (raise + up_r - down_b) / 2.0;
+                                                        // renderer: baseline = y + text_y_off - 1.0 + ascent
+                                                        baseline - bm.win_ascent * bfs + 1.0
+                                                    }
+                                                    _ => cell_text_y_off,
+                                                }
+                                            }
+                                            _ => cell_text_y_off,
+                                        };
                                         // S592: line-1 body starts AFTER the inline marker (no overlap).
                                         // S718: line-1 body pulled left to the defaultTabStop position.
                                         let mut rx = if s592_cell_space && line_idx == 0 {
@@ -51140,7 +51212,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 ts,
                                                 lrpb_before,
                                                 _,
-                                                _, // S1312 ruby flag
+                                                s1626_frag_ruby, // S1312 ruby flag
                                                 _source_style,
                                             ),
                                         ) in line.iter().enumerate()
@@ -51599,6 +51671,90 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 }
                                             } else {
                                                 cell_elements.push(cell_el);
+                                            }
+                                            // S1626 (2026-10-01, default ON, opt-out OXI_S1626_DISABLE):
+                                            // draw the ruby annotation of a CELL run. The body path
+                                            // (Round 7) emits it; the cell path never did, so every
+                                            // ruby in a table cell rendered bare (forms__01c5a769
+                                            // furigana over the name label, 002abc3e, 160e800d). Placed
+                                            // like the body: over the base run per rubyAlign, its
+                                            // baseline `raise` above the base baseline the renderer
+                                            // draws (y + text_y_off - 1.0 + ascent).
+                                            if *s1626_frag_ruby
+                                                && std::env::var_os("OXI_S1626_DISABLE").is_none()
+                                                && s1626_ri < s1626_rubies.len()
+                                            {
+                                                let group = &s1626_rubies[s1626_ri];
+                                                let run = group[0];
+                                                let group_chars: usize = group.iter().map(|r| r.text.chars().count()).sum();
+                                                if s1626_seen == 0 {
+                                                    if let Some(ruby_ir) = run.ruby.as_ref() {
+                                                        let base_pt = *fs;
+                                                        let hps_pt = ruby_ir.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(base_pt / 2.0);
+                                                        let raise_pt = ruby_ir.hps_raise_halfpt.map(|h| h as f32 / 2.0)
+                                                            .unwrap_or_else(|| ruby::default_hps_raise_pt(base_pt, hps_pt));
+                                                        let base_m = match font_family.as_deref() {
+                                                            Some(ff) => self.registry.get(ff),
+                                                            None => self.registry.default_metrics(),
+                                                        };
+                                                        let ruby_family = ruby_ir.annotation_fonts.first().cloned()
+                                                            .or_else(|| font_family.clone());
+                                                        let ruby_m = match ruby_family.as_deref() {
+                                                            Some(ff) => self.registry.get(ff),
+                                                            None => self.registry.default_metrics(),
+                                                        };
+                                                        let ruby_text = ruby_ir.text.as_str();
+                                                        let ruby_n = ruby_text.chars().count();
+                                                        let ruby_w: f32 = ruby_text.chars()
+                                                            .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_m))
+                                                            .sum();
+                                                        let base_w: f32 = group.iter().map(|r| {
+                                                            let n = r.text.chars().count() as f32;
+                                                            r.text.chars()
+                                                                .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, base_m))
+                                                                .sum::<f32>()
+                                                                + r.style.character_spacing.unwrap_or(0.0) * n
+                                                        }).sum();
+                                                        let (dx, ruby_cs) = ruby::ruby_position(base_w, ruby_w, ruby_n, ruby_ir.align);
+                                                        let base_x = cell_x + pad_l + line_indent + align_offset + rx + aki_leading;
+                                                        let base_baseline = content_h + cell_text_y_off - 1.0 + base_m.win_ascent * base_pt;
+                                                        let ruby_baseline = base_baseline - raise_pt;
+                                                        let mut ruby_el = LayoutElement::new(
+                                                            base_x + dx,
+                                                            content_h,
+                                                            ruby_w + ruby_cs.max(0.0) * ruby_n as f32,
+                                                            hps_pt * 1.2,
+                                                            LayoutContent::Text {
+                                                                text: ruby_text.to_string(),
+                                                                font_size: hps_pt,
+                                                                font_family: ruby_family,
+                                                                bold: false,
+                                                                italic: false,
+                                                                underline: false,
+                                                                underline_style: None,
+                                                                strikethrough: false,
+                                                                double_strikethrough: false,
+                                                                color: color.clone(),
+                                                                highlight: None,
+                                                                character_spacing: ruby_cs,
+                                                                field_type: None,
+                                                                text_scale: 100.0,
+                                                                is_vertical: false,
+                                                                effects: TextEffects::default(),
+                                                            },
+                                                        );
+                                                        ruby_el.text_y_off = ruby_baseline - content_h + 1.0 - ruby_m.win_ascent * hps_pt;
+                                                        ruby_el.paragraph_index = block_idx;
+                                                        ruby_el.cell_row_index = Some(row_idx);
+                                                        ruby_el.cell_col_index = Some(cell_idx);
+                                                        cell_elements.push(ruby_el);
+                                                    }
+                                                }
+                                                s1626_seen += text.chars().count();
+                                                if s1626_seen >= group_chars {
+                                                    s1626_ri += 1;
+                                                    s1626_seen = 0;
+                                                }
                                             }
                                             rx += adj_w + frag_spacing[frag_idx];
                                         }

@@ -35,7 +35,7 @@ pub const DEFAULT_HPS_RAISE_PT: f32 = 9.0;
 /// otherwise — the non-typical `hps ≈ base` case empirically maps
 /// to `default_raise ≈ base + 0.5pt` but isn't covered until a
 /// fixture surfaces it.
-fn default_hps_raise_pt(base_pt: f32, hps_pt: f32) -> f32 {
+pub(crate) fn default_hps_raise_pt(base_pt: f32, hps_pt: f32) -> f32 {
     // Round-8/V6 calibrated invariant: at base = 10.5pt the empirical
     // default_raise is exactly 9pt (Word measurement V6, hps-independent
     // across tested range). The V13 derived "base − 1pt" rule gives 9.5pt
