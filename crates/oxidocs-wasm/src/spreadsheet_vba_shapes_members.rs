@@ -594,6 +594,15 @@ impl<'a> WorkbookHost<'a> {
                     "charttype" => Some(Value::Integer(series.chart_type.unwrap_or(self.chart(id)?.chart_type))),
                     "axisgroup" => Some(Value::Integer(1)),
                     "plotorder" => Some(Value::Integer(number as i64)),
+                    // The plain answers of a column series: measured.
+                    "barshape" | "explosion" => Some(Value::Integer(0)),
+                    "haserrorbars" | "invertifnegative" => Some(Value::Boolean(false)),
+                    "hasleaderlines" => Some(Value::Boolean(true)),
+                    "markersize" => Some(Value::Integer(5)),
+                    "markerstyle" => Some(Value::Integer(-4142)),
+                    "picturetype" => Some(Value::Integer(1)),
+                    "type" => Some(Value::Integer(3)),
+                    "smooth" => return Err(host_error(1004, "a column series has no Smooth")),
                     "format" => Some(self.part(DrawingPart::SeriesFormat(id, number))),
                     "interior" => Some(self.part(DrawingPart::SeriesColor(id, number))),
                     "border" => Some(self.part(DrawingPart::SeriesColor(id, number))),
@@ -649,6 +658,11 @@ impl<'a> WorkbookHost<'a> {
             }
             DrawingPart::Legend(id) => Ok(match lower.as_str() {
                 "position" => Some(Value::Integer(self.chart(id)?.legend_position)),
+                // Measured: 凡例, in the layout, no shadow, the chart its Parent.
+                "name" => Some(Value::String("凡例".to_string())),
+                "includeinlayout" => Some(Value::Boolean(true)),
+                "shadow" => Some(Value::Boolean(false)),
+                "parent" => Some(self.part(DrawingPart::Chart(id))),
                 _ => None,
             }),
             DrawingPart::Axes(id) => Ok(match lower.as_str() {
@@ -675,6 +689,23 @@ impl<'a> WorkbookHost<'a> {
                         chart.series.first().map(|s| s.xs.iter().map(|x| Value::String(x.clone())).collect()).unwrap_or_default(),
                     )),
                     "type" => Some(Value::Integer(which)),
+                    "parent" => Some(self.part(DrawingPart::Chart(id))),
+                    // The value axis of a fresh column chart, measured:
+                    // primary, crossing automatically at 0, linear, outside
+                    // major ticks, labels next to the axis, major gridlines
+                    // only, no display unit; the category members are 440.
+                    "axisgroup" if which == 2 => Some(Value::Integer(1)),
+                    "crosses" if which == 2 => Some(Value::Integer(-4105)),
+                    "crossesat" if which == 2 => Some(Value::Double(0.0)),
+                    "displayunit" | "minortickmark" if which == 2 => Some(Value::Integer(-4142)),
+                    "hasdisplayunitlabel" | "hasminorgridlines" | "reverseplotorder" if which == 2 => Some(Value::Boolean(false)),
+                    "hasmajorgridlines" if which == 2 => Some(Value::Boolean(true)),
+                    "majortickmark" if which == 2 => Some(Value::Integer(3)),
+                    "scaletype" if which == 2 => Some(Value::Integer(-4132)),
+                    "ticklabelposition" if which == 2 => Some(Value::Integer(4)),
+                    "axisbetweencategories" | "categorytype" if which == 2 => {
+                        return Err(host_error(440, "a value axis has no categories"))
+                    }
                     _ => None,
                 })
             }
@@ -696,6 +727,10 @@ impl<'a> WorkbookHost<'a> {
                     "format" => Some(self.part(DrawingPart::ChartArea(id))),
                     "fill" | "interior" | "forecolor" => Some(self.part(DrawingPart::ChartArea(id))),
                     "rgb" | "color" => Some(Value::Integer(WHITE)),
+                    // Measured: グラフ, square corners, no shadow.
+                    "name" => Some(Value::String("グラフ".to_string())),
+                    "roundedcorners" | "shadow" => Some(Value::Boolean(false)),
+                    "parent" => Some(self.part(DrawingPart::Chart(id))),
                     _ => None,
                 })
             }
