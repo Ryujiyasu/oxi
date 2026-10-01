@@ -13617,6 +13617,19 @@ impl<'a> WorkbookHost<'a> {
     /// draws nothing along is the neighbour's, if the neighbour draws one.
     /// Measured, the cell under a `見出し 1` cell answers its top border as
     /// that cell's thick bottom one.
+    /// The style whose edges a Borders reading sees. The whole set counts a
+    /// cell's own four edges only -- measured, F2 beside a boxed E2 answers
+    /// Borders.LineStyle xlNone though its Borders(xlEdgeLeft) is drawn.
+    fn border_style_for(&self, address: CellAddress, selection: BorderSelection) -> CellStyle {
+        if selection == BorderSelection::All {
+            return self
+                .cell_here(address.sheet, address.row, address.column)
+                .map(|cell| cell.style)
+                .unwrap_or_else(|| self.template_style(address));
+        }
+        self.style_with_shared_edges(address)
+    }
+
     fn style_with_shared_edges(&self, address: CellAddress) -> CellStyle {
         let dress_at = |row: u32, column: u32| -> Option<CellStyle> {
             let sheet = self.workbook.sheets.get(address.sheet)?;
@@ -13663,7 +13676,7 @@ impl<'a> WorkbookHost<'a> {
         Self::range_cell_count(range)?;
         let mut first = None;
         for address in range.addresses() {
-            let style = self.style_with_shared_edges(address);
+            let style = self.border_style_for(address, selection);
             for value in selected_borders(&style, address, range, selection) {
                 if first.is_some_and(|first| first != value) {
                     return Ok(None);
@@ -13681,9 +13694,18 @@ impl<'a> WorkbookHost<'a> {
         selection: BorderSelection,
     ) -> Result<Option<EdgeColour>, String> {
         Self::range_cell_count(range)?;
+        // The whole set's colour is read off its top-left cell alone, and
+        // edges there that disagree (or that have no line) answer xlNone:
+        // measured, E2:F2 over a boxed E2 and a bare F2 answers -4105, a
+        // cell boxed in automatic with a red bottom -4142.
+        let range = if selection == BorderSelection::All {
+            CellRange { end_row: range.start_row, end_column: range.start_column, ..range }
+        } else {
+            range
+        };
         let mut first: Option<EdgeColour> = None;
         for address in range.addresses() {
-            let style = self.style_with_shared_edges(address);
+            let style = self.border_style_for(address, selection);
             for edge in selected_border_lines(&style, address, range, selection) {
                 let colour = match edge {
                     None => EdgeColour::NoLine,
@@ -18970,6 +18992,24 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("parent") {
                 return Ok(Some(self.object(HostObject::Range(range))));
             }
+            // An outer edge of a block is read off one cell: the top and left
+            // from its top-left cell, the bottom and right from its
+            // bottom-right one. Measured, B2:C3's bottom answers C3's thick
+            // line over B3's thin one, E2:F3's top E2's thin over F2's thick,
+            // and A2:B2's bottom none though A2 has a line.
+            let range = match selection {
+                BorderSelection::EdgeTop | BorderSelection::EdgeLeft => CellRange {
+                    end_row: range.start_row,
+                    end_column: range.start_column,
+                    ..range
+                },
+                BorderSelection::EdgeBottom | BorderSelection::EdgeRight => CellRange {
+                    start_row: range.end_row,
+                    start_column: range.end_column,
+                    ..range
+                },
+                _ => range,
+            };
             // Value is the LineStyle by another name: measured, -4142 of an
             // undrawn cell's Borders.
             if name.eq_ignore_ascii_case("linestyle") || name.eq_ignore_ascii_case("weight") || name.eq_ignore_ascii_case("value") {
@@ -19026,6 +19066,7 @@ impl Host for WorkbookHost<'_> {
                         ),
                         Some(EdgeColour::Automatic) => Value::Integer(COLOUR_AUTOMATIC),
                         Some(EdgeColour::NoLine) => Value::Integer(LINE_NONE),
+                        None if selection == BorderSelection::All => Value::Integer(LINE_NONE),
                         None => Value::Null,
                     })
                 });
@@ -24401,6 +24442,9 @@ fn selected_border_lines(
         BorderSelection::EdgeRight if address.column == range.end_column => {
             vec![style.border_right.clone()]
         }
+        // Measured: a drawn diagonal answers ColorIndex xlAutomatic.
+        BorderSelection::DiagonalDown => vec![style.border_diagonal.clone().filter(|_| style.diagonal_down)],
+        BorderSelection::DiagonalUp => vec![style.border_diagonal.clone().filter(|_| style.diagonal_up)],
         BorderSelection::InsideVertical => {
             let mut edges = Vec::with_capacity(2);
             if address.column > range.start_column {
