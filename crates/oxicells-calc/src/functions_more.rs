@@ -370,7 +370,8 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let freedom = if actual.width > 1 && actual.height > 1 {
                 ((actual.width - 1) * (actual.height - 1)) as f64
             } else {
-                (actual.cells.len() - 1) as f64
+                // An empty block has no freedom at all, not a wrapped-round one.
+                actual.cells.len() as f64 - 1.0
             };
             if freedom < 1.0 {
                 return Err(ExcelError::NA);
@@ -660,6 +661,12 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if cost < 0.0 || salvage < 0.0 || life <= 0.0 || start < 0.0 || end < start || end > life || factor <= 0.0 {
                 return Err(ExcelError::Num);
             }
+            // The schedule is walked period by period; past a million of them
+            // the answer is refused rather than the sheet held up. A guard, not
+            // a measurement.
+            if end > 1_000_000.0 {
+                return Err(ExcelError::Num);
+            }
             finite(vdb(cost, salvage, life, start, end, factor, no_switch))
         }
         // Measured: REGEXTEST("ABC","abc") FALSE and with 1 TRUE; "(" #VALUE!.
@@ -839,7 +846,9 @@ pub(crate) fn call_block(name: &str, args: &[Arg]) -> Option<Arg> {
                 return Err(ExcelError::Value);
             }
             let size = at(args, 0)?.trunc();
-            if size < 1.0 {
+            // No bigger than SEQUENCE will make, so a stray large number is an
+            // error rather than the whole of memory.
+            if size < 1.0 || size * size > 1_048_576.0 {
                 return Err(ExcelError::Value);
             }
             let size = size as usize;

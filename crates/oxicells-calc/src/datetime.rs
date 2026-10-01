@@ -117,7 +117,16 @@ pub fn serial_from_date(year: i64, month: i64, day: i64) -> Result<i64, ExcelErr
     };
 
     // Normalise the month first so that day roll-over lands in the right month.
-    let month_index = year * 12 + (month - 1);
+    // Counted without wrapping: a month or year far out is simply off the
+    // calendar, #NUM!, not a date somewhere else.
+    let month_index = year
+        .checked_mul(12)
+        .and_then(|months| months.checked_add(month.checked_sub(1)?))
+        .ok_or(ExcelError::Num)?;
+    // Far past 9999 either way, the day cannot bring it back.
+    if !(-120_000..=120_000).contains(&month_index) {
+        return Err(ExcelError::Num);
+    }
     let (year, month) = (month_index.div_euclid(12), month_index.rem_euclid(12) + 1);
 
     // The day counts on from the first of the month in SERIALS, so it runs
@@ -130,7 +139,7 @@ pub fn serial_from_date(year: i64, month: i64, day: i64) -> Result<i64, ExcelErr
     } else {
         first + OFFSET_AFTER_PHANTOM
     };
-    let serial = first_serial + (day - 1);
+    let serial = first_serial.checked_add(day.checked_sub(1).ok_or(ExcelError::Num)?).ok_or(ExcelError::Num)?;
 
     if !(0..=MAX_SERIAL).contains(&serial) {
         return Err(ExcelError::Num);

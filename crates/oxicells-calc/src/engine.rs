@@ -1436,7 +1436,8 @@ impl Workbook {
                         return Arg::Value(Value::Error(why))
                     }
                 };
-                if rows < 1.0 || cols < 1.0 || low > high {
+                // No bigger than SEQUENCE will make.
+                if rows < 1.0 || cols < 1.0 || low > high || rows.trunc() * cols.trunc() > 1_048_576.0 {
                     return Arg::Value(Value::Error(ExcelError::Value));
                 }
                 let (height, width) = (rows as usize, cols as usize);
@@ -2514,6 +2515,10 @@ impl Workbook {
                 let (Some(height), Some(width)) = (count(rows), count(columns)) else {
                     return bad();
                 };
+                // No bigger than SEQUENCE will make.
+                if height as f64 * width as f64 > 1_048_576.0 {
+                    return bad();
+                }
                 let mut cells = Vec::with_capacity(width * height);
                 for row in 1..=height {
                     for col in 1..=width {

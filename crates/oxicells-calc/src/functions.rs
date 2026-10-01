@@ -167,7 +167,7 @@ fn weeknum_iso(serial: i64) -> Result<Value, ExcelError> {
     // serial 1 is a Sunday to it, so the first days of 1900 fall in the last
     // week of 1899 -- measured, ISOWEEKNUM(1) and ISOWEEKNUM(0.5) are 52.
     let monday_based = |day: i64| (day + 5).rem_euclid(7) + 1;
-    if serial < 0 {
+    if !(0..=2_958_465).contains(&serial) {
         return Err(ExcelError::Num);
     }
     // The Thursday of this date's week settles which year the week belongs to.
@@ -1356,7 +1356,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let start = (start as usize - 1).min(s.len());
-            let end = (start + len as usize).min(s.len());
+            let end = start.saturating_add(len as usize).min(s.len());
             Ok(Value::Text(from_utf16(&s[start..end])))
         }
         // Full-width letters, digits and katakana to their half-width forms;
@@ -1629,7 +1629,8 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
             // No longer than a cell holds: measured, REPT("a",32768) is #VALUE!.
             let unit = text(&args[0])?;
-            if unit.encode_utf16().count() * (n as usize) > 32_767 {
+            // Counted in floating point, so a huge count cannot wrap round.
+            if unit.encode_utf16().count() as f64 * n.trunc() > 32_767.0 {
                 return Err(ExcelError::Value);
             }
             Ok(Value::Text(unit.repeat(n as usize)))
@@ -1777,7 +1778,15 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             // (POISSON.DIST(4,2.5,FALSE) 0.133601885781085), the running sum
             // by logarithms (POISSON.DIST(2,3,TRUE) 0.423190081126843).
             let by_logs = |j: f64| (j * mean.ln() - mean - lanczos_ln_gamma(j + 1.0)).exp();
-            let answer = if cumulative { (0..=x as i64).map(|j| by_logs(j as f64)).sum() } else { mass(x) };
+            // A count too high to add term by term is the incomplete gamma's
+            // tail, which the sum is.
+            let answer = if cumulative && x > 100_000.0 {
+                crate::distributions::regularized_gamma_q(x + 1.0, mean)
+            } else if cumulative {
+                (0..=x as i64).map(|j| by_logs(j as f64)).sum()
+            } else {
+                mass(x)
+            };
             Ok(Value::Number(answer))
         }
         "EXPON.DIST" | "EXPONDIST" => {
@@ -2294,7 +2303,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let from = (from as usize - 1).min(held.len());
-            let to = (from + many as usize).min(held.len());
+            let to = from.saturating_add(many as usize).min(held.len());
             let mut out = from_utf16(&held[..from]);
             out.push_str(&text(&args[3])?);
             out.push_str(&from_utf16(&held[to..]));
@@ -2480,12 +2489,17 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     holidays.push(serial(&Arg::Value(one))?);
                 }
             }
+            if !(0..=2_958_465).contains(&start) {
+                return Err(ExcelError::Num);
+            }
             let step = if days < 0 { -1 } else { 1 };
             let mut at = start;
             let mut left = days.abs();
             while left > 0 {
                 at += step;
-                if at < 0 {
+                // Off either end of the calendar Excel keeps, 9999-12-31 the
+                // last day, there is nowhere to land.
+                if at < 0 || at > 2_958_465 {
                     return Err(ExcelError::Num);
                 }
                 // Saturday and Sunday are 6 and 7 when Monday is 1.
@@ -3547,6 +3561,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // ---- more one-number maths --------------------------------------
         "EVEN" | "ODD" => {
             let n = num(&args.first().ok_or(ExcelError::Value)?.clone())?;
+            // Past 2^53 every Double is a whole even number already.
+            if n.abs() >= 9_007_199_254_740_992.0 {
+                return Ok(Value::Number(n));
+            }
             let mut up = n.abs().ceil() as i64;
             let want_even = name == "EVEN";
             if (up % 2 == 0) != want_even {
@@ -3588,6 +3606,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 Some(a) => num(a)? as i32,
                 None => 2,
             };
+            // No more than 127 places, as the function's own limit says.
+            if digits > 127 {
+                return Err(ExcelError::Value);
+            }
             // A negative digit count rounds to the left of the point, the way
             // ROUND does; the shown number carries no decimals then.
             let places = digits.max(0) as usize;
@@ -3655,7 +3677,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let (x, order) = (num(&args[0])?, num(&args[1])?.trunc());
-            if order < 0.0 || (matches!(name, "BESSELY" | "BESSELK") && x <= 0.0) {
+            // Past ten million orders Excel will not go: measured, BESSELI(1,
+            // 10000000) is 0 and BESSELI(1, 10000001) #NUM!, the same for all
+            // four.
+            if order < 0.0 || order > 10_000_000.0 || (matches!(name, "BESSELY" | "BESSELK") && x <= 0.0) {
                 return Err(ExcelError::Num);
             }
             let order = order as i64;
@@ -3682,6 +3707,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let weekend = weekend_days(if intl { args.get(2) } else { None })?;
             let holidays = holiday_serials(args.get(if intl { 3 } else { 2 }))?;
             let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+            if lo < 0 || hi > 2_958_465 {
+                return Err(ExcelError::Num);
+            }
             let mut days = 0i64;
             for day in lo..=hi {
                 if !weekend[monday_zero(day)?] && !holidays.contains(&day) {
@@ -3699,12 +3727,17 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let holidays = holiday_serials(args.get(3))?;
+            if !(0..=2_958_465).contains(&start) {
+                return Err(ExcelError::Num);
+            }
             let step = if days < 0 { -1 } else { 1 };
             let mut at = start;
             let mut left = days.abs();
             while left > 0 {
                 at += step;
-                if at < 0 {
+                // Off either end of the calendar Excel keeps, 9999-12-31 the
+                // last day, there is nowhere to land.
+                if at < 0 || at > 2_958_465 {
                     return Err(ExcelError::Num);
                 }
                 if weekend[monday_zero(at)?] || holidays.contains(&at) {
@@ -3756,7 +3789,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let (start, n) = (start as usize, n as usize);
             let total = bytes_of(&t);
             let head = bytes_between(&t, 1, start - 1);
-            let tail_from = start + n;
+            let tail_from = start.saturating_add(n);
             let tail = if tail_from > total {
                 String::new()
             } else {
@@ -4136,6 +4169,18 @@ fn fin_db(cost: f64, salvage: f64, life: f64, period: f64, month: f64) -> Result
     // The whole rate is rounded to three decimals, not the ratio inside it.
     let rate = ((1.0 - (salvage / cost).powf(1.0 / life)) * 1000.0).round() / 1000.0;
     let target = period.floor() as i64;
+    // A period too far out to walk to is reckoned at once: after the first
+    // year the book falls by the same rate every period.
+    if target > 100_000 {
+        let first = cost * rate * month / 12.0;
+        let book = (cost - first) * (1.0 - rate).powf((target - 2) as f64);
+        let answer = if (target as f64) == last && month < 12.0 {
+            book * rate * (12.0 - month) / 12.0
+        } else {
+            book * rate
+        };
+        return fin_finite(answer);
+    }
     let mut total = 0.0;
     let mut answer = 0.0;
     for p in 1..=target {
@@ -4665,6 +4710,10 @@ fn combin(n: f64, k: f64) -> Result<f64, ExcelError> {
     let mut acc = 1.0f64;
     for i in 0..k {
         acc = acc * (n - i) as f64 / (i + 1) as f64;
+        // Past what a Double holds, and no use going on: COMBIN(1E10, 5E9).
+        if !acc.is_finite() {
+            return Err(ExcelError::Num);
+        }
     }
     Ok(acc.round())
 }
@@ -5633,6 +5682,10 @@ fn reshaped(name: &str, args: &[Arg]) -> Result<RangeData, ExcelError> {
             if rows < block.height as i64 || cols < block.width as i64 {
                 return Err(ExcelError::Value);
             }
+            // No bigger than SEQUENCE will make.
+            if rows as f64 * cols as f64 > 1_048_576.0 {
+                return Err(ExcelError::Value);
+            }
             let pad = optional_pad(args, 3);
             block_from_rows(
                 (0..rows as usize)
@@ -6016,7 +6069,7 @@ fn bytes_between(t: &str, from: usize, count: usize) -> String {
     if count == 0 || from == 0 {
         return String::new();
     }
-    let last = from + count - 1;
+    let last = from.saturating_add(count - 1);
     let mut out = String::new();
     let mut at = 1usize;
     for c in t.chars() {
@@ -6567,6 +6620,46 @@ mod tests {
             }
         }
         assert!(fell.is_empty(), "panicked: {}", fell.join(", "));
+    }
+
+    /// Nor with odd arguments: text, blanks, errors, an empty block, a
+    /// block with a gap, numbers far out, and more of them than it takes.
+    #[test]
+    fn no_function_panics_on_odd_arguments() {
+        let block = |cells: Vec<Value>, width: usize| {
+            let height = if width == 0 { 0 } else { cells.len() / width };
+            Arg::Range(RangeData { width, height, cells })
+        };
+        let kinds: Vec<Arg> = vec![
+            Arg::Value(Value::text("")),
+            Arg::Value(Value::text("abc")),
+            Arg::Value(Value::Blank),
+            Arg::Value(Value::Logical(true)),
+            Arg::Value(Value::Error(ExcelError::NA)),
+            Arg::Value(Value::Number(-1.0)),
+            Arg::Value(Value::Number(0.0)),
+            Arg::Value(Value::Number(0.5)),
+            Arg::Value(Value::Number(1e300)),
+            Arg::Value(Value::Number(-1e300)),
+            Arg::Value(Value::Number(1e10)),
+            block(Vec::new(), 0),
+            block(vec![Value::Number(1.0), Value::Blank, Value::text("x"), Value::Number(4.0)], 2),
+            block(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)], 1),
+        ];
+        let mut fell: Vec<String> = Vec::new();
+        for name in KNOWN_FUNCTIONS {
+            for kind in &kinds {
+                for count in 1..=6 {
+                    let args: Vec<Arg> = (0..count).map(|_| kind.clone()).collect();
+                    let caught = std::panic::catch_unwind(|| call(name, &args));
+                    if caught.is_err() {
+                        fell.push(format!("{name}/{count}x{kind:?}"));
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(fell.is_empty(), "panicked ({}): {}", fell.len(), fell.join("\n"));
     }
 
     fn v(n: f64) -> Arg {
