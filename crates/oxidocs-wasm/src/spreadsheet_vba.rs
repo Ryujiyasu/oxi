@@ -14046,7 +14046,9 @@ impl<'a> WorkbookHost<'a> {
         let sideways = Self::shift_direction(range, args, false)?;
         self.guard_structure(range.sheet, sideways, false)?;
         self.shift_cells(range, sideways, false)?;
-        Ok(Value::Empty)
+        // Delete is a function to Excel: measured, CallByName of it answers
+        // True where ClearContents, a Sub, answers Empty.
+        Ok(Value::Boolean(true))
     }
 
     /// Moves everything the range pushes ahead of it, drops what a removal
@@ -14861,7 +14863,9 @@ impl<'a> WorkbookHost<'a> {
         let width = range.end_column - range.start_column + 1;
         let mut lanes: Vec<u32> = Vec::new();
         match given(0) {
-            None => lanes.extend(range.start_column..=range.end_column),
+            // With no columns named nothing is compared and nothing goes:
+            // measured, A1:B4 of four equal rows keeps all eight cells.
+            None => return Ok(Value::Boolean(true)),
             Some(Value::Array(listed)) => {
                 for value in &listed.values {
                     lanes.push(Self::duplicate_lane(value, range, width)?);
@@ -17989,9 +17993,27 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("addcomment") {
                     return self.add_comment(range, args).map(Some);
                 }
-                if name.eq_ignore_ascii_case("calculate") {
+                // A range's Calculate answers Null: measured through CallByName,
+                // as does CalculateRowMajorOrder.
+                if name.eq_ignore_ascii_case("calculate") || name.eq_ignore_ascii_case("calculaterowmajororder") {
                     self.recalculate();
+                    return Ok(Some(Value::Null));
+                }
+                // Dirty marks the cells for working out again, which every
+                // recalculation here does anyway; a Sub, so Empty.
+                if name.eq_ignore_ascii_case("dirty") {
+                    return Ok(Some(Value::Empty));
+                }
+                // Show scrolls the window to the range and the arrows trace a
+                // cell's links on screen; none of that is kept here, and each
+                // answers True: measured through CallByName.
+                if ["show", "showdependents", "showprecedents"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
                     return Ok(Some(Value::Boolean(true)));
+                }
+                // Justify over numbers and a data table with no input cell
+                // are refused: measured, both 1004 over a block of 1s.
+                if name.eq_ignore_ascii_case("justify") || (name.eq_ignore_ascii_case("table") && args.is_empty()) {
+                    return Err(host_error(1004, format!("{name} method of Range class failed")));
                 }
                 if name.eq_ignore_ascii_case("texttocolumns") {
                     return self.text_to_columns(range, args).map(Some);
@@ -18036,8 +18058,10 @@ impl Host for WorkbookHost<'_> {
                     self.delete_links(&ids, true)?;
                     return Ok(Some(Value::Empty));
                 }
-                // Answers True, as `Clear` does.
-                if name.eq_ignore_ascii_case("clearcomments") {
+                // ClearComments is a Sub to Excel, so CallByName of it answers
+                // Empty, where ClearNotes, a function, answers True: measured.
+                if name.eq_ignore_ascii_case("clearcomments") || name.eq_ignore_ascii_case("clearnotes") {
+                    let notes = name.eq_ignore_ascii_case("clearnotes");
                     if !args.is_empty() {
                         return Err("Range.ClearComments does not accept arguments".to_string());
                     }
@@ -18046,7 +18070,7 @@ impl Host for WorkbookHost<'_> {
                     if !self.objects_protected(range.sheet) {
                         self.clear_comments(range);
                     }
-                    return Ok(Some(Value::Boolean(true)));
+                    return Ok(Some(if notes { Value::Boolean(true) } else { Value::Empty }));
                 }
                 // The older way to a note: `NoteText` alone reads it (an empty
                 // string where there is none) and `NoteText "x"` writes it,
@@ -18100,13 +18124,18 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("fillleft") {
                     return self.fill_edge(range, FillEdge::Right).map(Some);
                 }
+                // A Sub to Excel: measured, CallByName of it answers Empty.
                 if name.eq_ignore_ascii_case("removeduplicates") {
-                    return self.remove_duplicates(range, args).map(Some);
+                    return self.remove_duplicates(range, args).map(|_| Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("advancedfilter") {
                     return self.advanced_filter(range, args).map(Some);
                 }
+                // Its Type is not optional: measured, asked with none it is 449.
                 if name.eq_ignore_ascii_case("specialcells") {
+                    if args.is_empty() || matches!(args.first(), Some(Value::Missing)) {
+                        return Err(host_error(449, "Argument not optional"));
+                    }
                     return self.special_cells(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("select") {
