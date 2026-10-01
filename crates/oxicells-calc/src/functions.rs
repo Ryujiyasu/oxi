@@ -678,6 +678,19 @@ pub fn call(name: &str, args: &[Arg]) -> Value {
 }
 
 fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
+    // The few that read their arguments by place before counting them are
+    // given too few here rather than fall over: Excel refuses such a formula
+    // as it is typed, so the answer is only ever a guard.
+    let least = match name {
+        "ASC" | "CEILING" | "CEILING.MATH" | "DATEVALUE" | "DBCS" | "FLOOR" | "FLOOR.MATH"
+        | "ISOWEEKNUM" | "NUMBERVALUE" | "TIMEVALUE" | "WEEKNUM" => 1,
+        "NETWORKDAYS" | "NETWORKDAYS.INTL" | "WORKDAY" | "WORKDAY.INTL" => 2,
+        "AVERAGEIFS" | "MAXIFS" | "MINIFS" | "SUMIFS" => 3,
+        _ => 0,
+    };
+    if args.len() < least {
+        return Err(ExcelError::Value);
+    }
     // Some functions have to SEE an error rather than pass it on. For IFERROR
     // and IFNA that is the whole point of them; for the IS* family it is too —
     // `ISNUMBER(#VALUE!)` is FALSE in Excel, not `#VALUE!`, and a function that
@@ -6536,6 +6549,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// No function falls over when it is given too few arguments, which a
+    /// cell can always do: `=NETWORKDAYS(1)` used to panic the engine. Each
+    /// is called with nothing, then one, two and three numbers.
+    #[test]
+    fn no_function_panics_on_too_few_arguments() {
+        let mut fell: Vec<String> = Vec::new();
+        for name in KNOWN_FUNCTIONS {
+            for count in 0..=3 {
+                let args: Vec<Arg> = (0..count).map(|at| Arg::Value(Value::Number(1.0 + at as f64))).collect();
+                let caught = std::panic::catch_unwind(|| call(name, &args));
+                if caught.is_err() {
+                    fell.push(format!("{name}/{count}"));
+                }
+            }
+        }
+        assert!(fell.is_empty(), "panicked: {}", fell.join(", "));
     }
 
     fn v(n: f64) -> Arg {

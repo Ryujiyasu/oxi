@@ -26536,6 +26536,15 @@ fn vba_has_its_own(name: &str) -> bool {
         "LET", "BYROW", "BYCOL", "MAP", "REDUCE", "SCAN", "MAKEARRAY", "ISOMITTED", "GROUPBY",
         "PIVOTBY", "PERCENTOF", "TRIMRANGE", "REGEXTEST", "REGEXEXTRACT", "REGEXREPLACE",
         "IMAGE", "IFS", "SWITCH", "SHEET", "SHEETS", "FORMULATEXT",
+        // and, asked of every name the engine knows, these too: the ones VBA
+        // says its own way (Atn, Cos, Exp, Sgn, Fix, Now, Rnd, IIf, True),
+        // the byte forms, and the ones about references.
+        "ADDRESS", "AREAS", "ATAN", "CELL", "COLUMN", "COS", "ECMA.CEILING", "ECMA_CEILING",
+        "EXP", "FALSE", "IF", "INDIRECT", "INFO", "LEFTB", "LENB", "MIDB", "RIGHTB", "N", "NA",
+        "NOW", "OFFSET", "RAND", "ROW", "SIGN", "SIN", "T", "TAN", "TODAY", "TRUE", "TRUNC",
+        "TYPE", "YIELD",
+        // DATEDIF's units, which the engine lists among its names.
+        "D", "M", "Y", "MD", "YM", "YD",
     ];
     ABSENT
         .iter()
