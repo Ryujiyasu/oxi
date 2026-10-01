@@ -9582,7 +9582,15 @@ fn format_date(
         "short time" => return Ok(format!("{:02}:{:02}", parts.hour, parts.minute)),
         _ => {}
     }
-    let has_ampm = lower.contains("am/pm") || lower.contains("a/p");
+    // An hour is written once the whole picture has been read. Each am/pm
+    // turns the nearest hour before it over by one step -- measured, of a
+    // 3 PM: "h:n:s|hh:nn:ss|AM/PM" is 15:4:5|03:04:05|PM, two of them make
+    // it 15 again ("h AM/PM am/pm" 15 PM pm), three write the weekday
+    // ("h:mm|AM/PM|am/pm|A/P" Tue:04|PM|pm|P), more write nothing -- and an
+    // hour after an am/pm is on the twelve-hour clock ("AM/PM h h" PM 3 3).
+    // Each hour: where it goes in the output, two digits or not, the steps.
+    let mut hours: Vec<(usize, bool, u32)> = Vec::new();
+    let mut seen_ampm = false;
     let mut output = String::new();
     let mut cursor = 0;
     let mut after_hour = false;
@@ -9621,10 +9629,21 @@ fn format_date(
                 word.to_string()
             }
         };
+        let ampm = ["ampm", "am/pm", "a/p"].iter().any(|marker| remaining.starts_with(marker));
+        if ampm {
+            seen_ampm = true;
+            if let Some(last) = hours.last_mut() {
+                last.2 += 1;
+            }
+        }
         let (length, replacement) = if remaining.starts_with("am/pm") {
             (5, said(if parts.hour < 12 { "am" } else { "pm" }))
         } else if remaining.starts_with("a/p") {
             (3, said(if parts.hour < 12 { "a" } else { "p" }))
+        // `AMPM` is the machine's own marker, in capitals however it is
+        // spelt: measured, "ampm" gives PM.
+        } else if remaining.starts_with("ampm") {
+            (4, if parts.hour < 12 { "AM" } else { "PM" }.to_string())
         // `dddddd`, `ddddd` and `ttttt` are the long date, the short date
         // and the time as this machine writes them: measured, Tuesday, March
         // 5, 2024 / 3/5/2024 / 2:30:05 PM.
@@ -9653,7 +9672,8 @@ fn format_date(
             (2, format!("{:02}", parts.day))
         } else if remaining.starts_with("hh") {
             after_hour = true;
-            (2, format!("{:02}", hour_value(parts.hour, has_ampm)))
+            hours.push((output.len(), true, u32::from(seen_ampm)));
+            (2, String::new())
         } else if remaining.starts_with("nn") {
             (2, format!("{:02}", parts.minute))
         } else if remaining.starts_with("ss") {
@@ -9689,7 +9709,8 @@ fn format_date(
                     .to_string(),
                 'h' => {
                     after_hour = true;
-                    hour_value(parts.hour, has_ampm).to_string()
+                    hours.push((output.len(), false, u32::from(seen_ampm)));
+                    String::new()
                 }
                 'n' => parts.minute.to_string(),
                 's' => parts.second.to_string(),
@@ -9707,6 +9728,20 @@ fn format_date(
         };
         output.push_str(&replacement);
         cursor += length;
+    }
+    for (at, two_digits, steps) in hours.into_iter().rev() {
+        let written = match steps {
+            0 | 2 => Some(parts.hour),
+            1 => Some(hour_value(parts.hour, true)),
+            _ => None,
+        };
+        let text = match (written, steps) {
+            (Some(hour), _) if two_digits => format!("{hour:02}"),
+            (Some(hour), _) => hour.to_string(),
+            (None, 3) => weekday_name(serial)[..3].to_string(),
+            (None, _) => String::new(),
+        };
+        output.insert_str(at, &text);
     }
     Ok(output)
 }
