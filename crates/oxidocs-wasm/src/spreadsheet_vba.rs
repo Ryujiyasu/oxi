@@ -19402,6 +19402,26 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("creator") && self.objects.get(receiver.handle as usize).is_some() {
             return Ok(Some(Value::Integer(1_480_803_660)));
         }
+        // The collections a sheet or the book keeps answer it as Parent, and
+        // every Excel object answers the Application: measured, Outline,
+        // Comments, Hyperlinks and Shapes have the worksheet for Parent,
+        // Worksheets and Names the workbook.
+        match self.objects.get(receiver.handle as usize).copied() {
+            Some(HostObject::Outline(sheet) | HostObject::Comments(sheet)) if name.eq_ignore_ascii_case("parent") => {
+                return Ok(Some(self.object(HostObject::Worksheet(sheet))));
+            }
+            Some(HostObject::Hyperlinks(HyperlinkScope::Sheet(sheet))) if name.eq_ignore_ascii_case("parent") => {
+                return Ok(Some(self.object(HostObject::Worksheet(sheet))));
+            }
+            Some(HostObject::Worksheets | HostObject::Names) if name.eq_ignore_ascii_case("parent") => {
+                return Ok(Some(self.object(HostObject::Workbook)));
+            }
+            Some(HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..)) => {}
+            Some(_) if name.eq_ignore_ascii_case("application") => {
+                return Ok(Some(self.object(HostObject::Application)));
+            }
+            _ => {}
+        }
         if let Some(object @ (HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..))) =
             self.objects.get(receiver.handle as usize).copied()
         {
