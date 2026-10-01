@@ -3892,6 +3892,14 @@ impl<'a> WorkbookHost<'a> {
         name: &str,
         args: &[Value],
     ) -> Result<Option<Value>, String> {
+        // A cell's link has no shape, and asking a web link its mail subject
+        // is an automation error: measured, Shape 1004 and EmailSubject 440.
+        if name.eq_ignore_ascii_case("shape") {
+            return Err(host_error(1004, "Unable to get the Shape property of the Hyperlink class"));
+        }
+        if name.eq_ignore_ascii_case("emailsubject") {
+            return Err(host_error(440, "Automation error"));
+        }
         let Some(index) = self.link_index(id) else {
             return Err("the hyperlink has been deleted".to_string());
         };
@@ -4888,6 +4896,28 @@ impl<'a> WorkbookHost<'a> {
         };
         match part {
             TablePart::Whole => {
+                // What a table made here answers of the rest: measured, its
+                // DisplayName is its Name, it is not Active, comes from a range
+                // (xlSrcRange 1), shows its filter buttons, and has no alt
+                // text, comment, summary or insert row.
+                let plain = match name.to_ascii_lowercase().as_str() {
+                    "displayname" => Some(Value::String(table.name.clone())),
+                    "active" | "displayrighttoleft" => Some(Value::Boolean(false)),
+                    "alternativetext" | "comment" | "summary" => Some(Value::String(String::new())),
+                    "sourcetype" => Some(Value::Integer(1)),
+                    "insertrowrange" => Some(Value::Nothing),
+                    _ => None,
+                };
+                if let Some(plain) = plain {
+                    return Ok(Some(plain));
+                }
+                if name.eq_ignore_ascii_case("showautofilterdropdown") {
+                    return self.table_member(id, part, "ShowAutoFilter", args);
+                }
+                // Of a table made from a range: measured, both 1004.
+                if name.eq_ignore_ascii_case("querytable") || name.eq_ignore_ascii_case("tableobject") {
+                    return Err(host_error(1004, format!("Unable to get the {name} property of the ListObject class")));
+                }
                 let answer = if name.eq_ignore_ascii_case("name") {
                     Value::String(table.name.clone())
                 } else if name.eq_ignore_ascii_case("range") {
@@ -4903,8 +4933,9 @@ impl<'a> WorkbookHost<'a> {
                         None => Value::Nothing,
                     }
                 } else if name.eq_ignore_ascii_case("totalsrowrange") {
+                    // Measured: Nothing while the table shows no totals row.
                     if self.totals_rows(id) == 0 {
-                        return Err("the table shows no totals row".to_string());
+                        return Ok(Some(Value::Nothing));
                     }
                     self.object(HostObject::Range(CellRange {
                         start_row: whole.end_row,
@@ -6602,6 +6633,10 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("add") {
             self.add_validation(range, args, false)?;
             return Ok(Some(Value::Empty));
+        }
+        // xlIMEModeNoControl: measured 0 on a rule just added.
+        if name.eq_ignore_ascii_case("imemode") {
+            return Ok(Some(Value::Integer(0)));
         }
         if name.eq_ignore_ascii_case("modify") {
             self.add_validation(range, args, true)?;
@@ -9950,6 +9985,24 @@ impl<'a> WorkbookHost<'a> {
         let Some(at) = self.name_at(held) else {
             return Err(format!("the name {held:?} is no longer in the workbook"));
         };
+        // The Local forms are the same words in this English-formula host:
+        // measured, NameLocal nm, RefersToLocal =Sheet1!$A$1:$B$2.
+        let name = match name.to_ascii_lowercase().as_str() {
+            "namelocal" => "Name",
+            "referstolocal" => "RefersTo",
+            "referstor1c1local" => "RefersToR1C1",
+            _ => name,
+        };
+        // And the rest a plain name answers: measured, no comment,
+        // MacroType xlNone (-4142), no workbook parameter, the book its Parent.
+        match name.to_ascii_lowercase().as_str() {
+            "comment" => return Ok(Value::String(String::new())),
+            "macrotype" => return Ok(Value::Integer(-4142)),
+            "validworkbookparameter" | "workbookparameter" => return Ok(Value::Boolean(false)),
+            "parent" => return Ok(self.call(None, "ActiveWorkbook", &[])?.unwrap_or(Value::Nothing)),
+            "application" => return Ok(self.call(None, "Application", &[])?.unwrap_or(Value::Nothing)),
+            _ => {}
+        }
         // A sheet's own name is spelt with the sheet quoted where it needs it:
         // measured, `'Sheet1 (2)'!loc`.
         if name.eq_ignore_ascii_case("name") {
