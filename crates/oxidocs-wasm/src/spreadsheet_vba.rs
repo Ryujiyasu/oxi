@@ -3010,6 +3010,9 @@ impl<'a> WorkbookHost<'a> {
         let test = filter.fields.iter().find(|test| test.field == field);
         let refuse = || host_error(1004, "Application-defined or object-defined error");
         match lower.as_str() {
+            // Measured: a Filter's Parent is the AutoFilter.
+            "parent" => Ok(Some(self.object(HostObject::SheetFilter(sheet)))),
+            "application" => Ok(Some(Value::String("Microsoft Excel".to_string()))),
             "on" => Ok(Some(Value::Boolean(test.is_some()))),
             "criteria1" | "criteria2" => {
                 let at = usize::from(lower == "criteria2");
@@ -3046,6 +3049,9 @@ impl<'a> WorkbookHost<'a> {
         };
         match name.to_ascii_lowercase().as_str() {
             "range" => Ok(Some(self.object(HostObject::Range(range)))),
+            // Measured: its Parent is the worksheet.
+            "parent" => Ok(Some(self.object(HostObject::Worksheet(sheet)))),
+            "application" => Ok(Some(Value::String("Microsoft Excel".to_string()))),
             "filters" => match args {
                 [] | [Value::Missing] => Ok(Some(self.object(HostObject::SheetFilters(sheet)))),
                 [index] => {
@@ -4080,8 +4086,8 @@ impl<'a> WorkbookHost<'a> {
             let anchor = self.links[index].anchor;
             self.object(HostObject::Range(anchor))
         } else if name.eq_ignore_ascii_case("type") {
-            // msoHyperlinkRange.
-            Value::Integer(1)
+            // msoHyperlinkRange, which is 0: measured.
+            Value::Integer(0)
         } else if name.eq_ignore_ascii_case("delete") {
             if !args.is_empty() {
                 return Err("Hyperlink.Delete does not accept arguments".to_string());
@@ -5044,6 +5050,21 @@ impl<'a> WorkbookHost<'a> {
                 end_column: column_to,
             })
         };
+        // The plain members a column and a row answer, measured on a fresh
+        // table: a column's ListDataFormat 0, SharePointFormula and XPath "",
+        // Total Nothing; a row's InvalidData 1004. A table stands for its
+        // Name where a value is wanted: a column's Parent read as a value is
+        // テーブル1.
+        match (part, name.to_ascii_lowercase().as_str()) {
+            (TablePart::Column(_), "listdataformat") => return Ok(Some(Value::Integer(0))),
+            (TablePart::Column(_), "sharepointformula" | "xpath") => return Ok(Some(Value::String(String::new()))),
+            (TablePart::Column(_), "total") => return Ok(Some(Value::Nothing)),
+            (TablePart::Row(_), "invaliddata") => {
+                return Err(host_error(1004, "Application-defined or object-defined error"))
+            }
+            (TablePart::Whole, "value") if args.is_empty() => return Ok(Some(Value::String(table.name.clone()))),
+            _ => {}
+        }
         match part {
             TablePart::Whole => {
                 // What a table made here answers of the rest: measured, its
