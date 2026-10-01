@@ -11531,7 +11531,21 @@ impl<'a> WorkbookHost<'a> {
             Ok(Value::Error(_)) => Err(unable()),
             Ok(answer) => Ok(answer),
             Err(message) if message.starts_with("vba-error:") => Err(message),
-            Err(_) if oxicells_calc::functions::is_known_function(&name.to_ascii_uppercase()) => Err(unable()),
+            Err(_) if oxicells_calc::functions::is_known_function(&name.to_ascii_uppercase().replace('_', ".")) => Err(unable()),
+            // These are members, which only a browser cannot answer: measured,
+            // Excel raises 1004 from each where an unknown name is 438.
+            Err(_)
+                if ["filterxml", "webservice", "stockhistory", "fieldvalue"]
+                    .iter()
+                    .any(|member| name.eq_ignore_ascii_case(member)) =>
+            {
+                Err(unable())
+            }
+            // A name no worksheet function has is no member at all: measured,
+            // `CallByName(WorksheetFunction, "Copilot", VbMethod, 1)` is 438.
+            Err(message) if message.ends_with("is not supported in the browser") => {
+                Err(host_error(438, "Object doesn't support this property or method"))
+            }
             Err(message) => Err(message),
         }
     }
@@ -11559,6 +11573,24 @@ impl<'a> WorkbookHost<'a> {
         name: &str,
         args: &[Value],
     ) -> Result<Value, String> {
+        // RandArray draws in the engine, which is reached through a formula.
+        if name.eq_ignore_ascii_case("randarray") {
+            let mut parts = Vec::new();
+            for (at, value) in args.iter().enumerate().take(5) {
+                parts.push(match value {
+                    Value::Missing | Value::Empty => String::new(),
+                    Value::Boolean(state) => if *state { "TRUE" } else { "FALSE" }.to_string(),
+                    other if at < 4 => match any_number(other) {
+                        Some(number) => oxivba_core::runtime::vba_number_text(number),
+                        None => return Ok(Value::Error(2015)),
+                    },
+                    other => if any_number(other).is_some_and(|number| number != 0.0) { "TRUE" } else { "FALSE" }.to_string(),
+                });
+            }
+            let formula = format!("RANDARRAY({})", parts.join(","));
+            let sheet = self.active_sheet;
+            return self.evaluate_object(sheet, &[Value::String(formula)]);
+        }
         // PI alone takes nothing.
         if args.is_empty() && !name.eq_ignore_ascii_case("pi") {
             return Err(format!(
@@ -26496,6 +26528,14 @@ fn vba_has_its_own(name: &str) -> bool {
         // and ERROR.TYPE, which VBA asks of an error with CVErr's number:
         // measured, `WorksheetFunction.Error_Type` is 438.
         "ERROR.TYPE", "ERROR_TYPE",
+        // and the newer functions the object model never took in: measured,
+        // each of these is 438 from WorksheetFunction while Unique, Sort,
+        // Sequence, Concat, XLookup and ArrayToText answer.
+        "TAKE", "DROP", "TOCOL", "TOROW", "VSTACK", "HSTACK", "CHOOSECOLS", "CHOOSEROWS",
+        "WRAPROWS", "WRAPCOLS", "EXPAND", "TEXTSPLIT", "TEXTBEFORE", "TEXTAFTER", "LAMBDA",
+        "LET", "BYROW", "BYCOL", "MAP", "REDUCE", "SCAN", "MAKEARRAY", "ISOMITTED", "GROUPBY",
+        "PIVOTBY", "PERCENTOF", "TRIMRANGE", "REGEXTEST", "REGEXEXTRACT", "REGEXREPLACE",
+        "IMAGE", "IFS", "SWITCH", "SHEET", "SHEETS", "FORMULATEXT",
     ];
     ABSENT
         .iter()

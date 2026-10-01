@@ -163,13 +163,25 @@ pub(crate) fn wildcard_match(text: &str, pattern: &str) -> bool {
 /// year's first Thursday, so a date in early January can belong to the year
 /// before it.
 fn weeknum_iso(serial: i64) -> Result<Value, ExcelError> {
+    // Worked on the serial alone, the way Excel counts the days of the week:
+    // serial 1 is a Sunday to it, so the first days of 1900 fall in the last
+    // week of 1899 -- measured, ISOWEEKNUM(1) and ISOWEEKNUM(0.5) are 52.
+    let monday_based = |day: i64| (day + 5).rem_euclid(7) + 1;
+    if serial < 0 {
+        return Err(ExcelError::Num);
+    }
     // The Thursday of this date's week settles which year the week belongs to.
-    let weekday = weekday_with_type(serial, 2)?; // Monday = 1
-    let thursday = serial - (weekday - 1) + 3;
-    let year = datetime::date_from_serial(thursday)?.year;
-    let first = datetime::serial_from_date(year, 1, 1)?;
-    let first_weekday = weekday_with_type(first, 2)?;
-    let first_thursday = first - (first_weekday - 1) + 3;
+    let thursday = serial - (monday_based(serial) - 1) + 3;
+    let first = if thursday >= 1 {
+        let year = datetime::date_from_serial(thursday)?.year;
+        datetime::serial_from_date(year, 1, 1)?
+    } else {
+        // 1 January 1899, counted back from Excel's 1 January 1900.
+        1 - 365
+    };
+    // Week one is the one holding the year's first Thursday: measured,
+    // ISOWEEKNUM of 1 January 2021, a Friday, is 53.
+    let first_thursday = first + (4 - monday_based(first)).rem_euclid(7);
     Ok(Value::Number(((thursday - first_thursday) / 7 + 1) as f64))
 }
 
