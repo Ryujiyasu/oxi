@@ -9354,6 +9354,11 @@ fn format_value(
             let section = if written.is_empty() { &sections[1] } else { &sections[0] };
             return Ok(string_picture(&written, section));
         }
+        // With no section for it, the empty string stays empty: measured,
+        // Format("", "(@@@)") and Format("", "!@@") are both "".
+        if written.is_empty() {
+            return Ok(String::new());
+        }
         return Ok(string_picture(&written, pattern));
     }
     let lower = pattern.to_ascii_lowercase();
@@ -10026,6 +10031,11 @@ fn number_picture(value: f64, picture: &str) -> String {
     } else {
         (sections[0].as_str(), negative)
     };
+    // A section of nothing writes nothing, not even the sign: measured,
+    // Format(-5, ";;") is "" where Format(-5, """"";;") is "-".
+    if section.is_empty() && sections.len() > 1 {
+        return String::new();
+    }
 
     let (magnitude, tokens) = section_magnitude(value, section);
     // So does a positive one, when there is a zero section: measured,
