@@ -34,13 +34,38 @@ pub fn format_number(value: f64, format: &str) -> String {
         let chosen = numeric
             .iter()
             .zip(&conditions)
-            .find(|(_, condition)| match condition {
+            .enumerate()
+            .find(|(_, (_, condition))| match condition {
                 Some((op, bound)) => condition_holds(op, value, *bound),
                 None => true,
             })
-            .map(|(one, _)| *one);
+            .map(|(index, (one, condition))| (index, *one, condition.clone()));
+        // The number loses its sign in a section only negative numbers can
+        // reach: measured, -5 under `[<0]0;0`, `[<-1]0.0;0` and
+        // `[=-5]"x";0` shows 5, 5.0 and x, where under `[<5]0;"k"` it is -5.
+        // A second section with no condition of its own takes what the
+        // first leaves: -0.5 under `[<-1]0.0;0` and -5 under `[>=0]0;0`
+        // show 1 and 5, under `[>100]0;0` and `[=-5]"x";0` -5 and -1.
+        let negative_only = |op: &str, bound: f64| match op {
+            "<" => bound <= 0.0,
+            "<=" | "=" => bound < 0.0,
+            _ => false,
+        };
         match chosen {
-            Some(one) => (one, true),
+            Some((_, one, Some((op, bound)))) => (one, !negative_only(&op, bound)),
+            Some((1, one, None)) => {
+                let dropped = match &conditions[0] {
+                    Some((op, bound)) => match op.as_str() {
+                        "<" | "<=" => true,
+                        ">=" => *bound <= 0.0,
+                        ">" => *bound < 0.0,
+                        _ => false,
+                    },
+                    None => false,
+                };
+                (one, !dropped)
+            }
+            Some((_, one, None)) => (one, true),
             None => return "#".repeat(1),
         }
     } else if value < 0.0 && sections.len() > 1 {
@@ -721,6 +746,10 @@ fn format_numeric(value: f64, format: &str) -> String {
         }
         if from_right < digits.len() {
             slot.push(digits[digits.len() - 1 - from_right]);
+        } else if scientific.is_some() && digits.is_empty() {
+            // A nought's mantissa fills every place: measured, 0 under
+            // `##0.0E+0` is 000.0E+0.
+            slot.push('0');
         } else {
             slot.push_str(empty_place(*place));
         }
@@ -1607,3 +1636,4 @@ pub fn sections_with_percents(format: &str) -> impl Iterator<Item = usize> {
     }
     counts.into_iter()
 }
+

@@ -11729,6 +11729,12 @@ impl<'a> WorkbookHost<'a> {
         let Some(number) = number else {
             return if measure(&shown) > room { "#".repeat(hashes) } else { shown };
         };
+        // A number no section of its format takes fills the cell with #s:
+        // measured, 3 under `[>100]"b";[<0]"n"` reads ####### in a
+        // standard column.
+        if shown == "#" && !general {
+            return "#".repeat(hashes);
+        }
         // A date or time picture has nothing to show for a number off the
         // calendar: measured, -0.5 and 1E+15 under `[h]:mm` read #######.
         if format.is_some_and(oxicells_calc::looks_like_a_date) && !(0.0..2_958_466.0).contains(&number) {
@@ -14561,7 +14567,16 @@ impl<'a> WorkbookHost<'a> {
             let face = cell.style.font_name.clone().unwrap_or_else(|| normal_face.clone());
             let size = cell.style.font_size.unwrap_or(normal_size);
             let shown = shown_text(&from_cell_value(&cell.value), cell.style.number_format.as_deref());
+            // A number no section of the format takes shows #s whatever the
+            // width, and a column is only ever widened here: measured, 3
+            // under `[>100]"b";[<0]"n"` leaves the column as it was.
+            if shown.starts_with('#') {
+                continue;
+            }
             let px = fitted_px(text_px(&shown, &face, size, cell.style.bold));
+            if px <= f64::from(self.column_px(range.sheet, address.column)) {
+                continue;
+            }
             let width = ((px - 5.0) / digit * 100.0).round() / 100.0;
             let lane = CellRange {
                 sheet: range.sheet,
