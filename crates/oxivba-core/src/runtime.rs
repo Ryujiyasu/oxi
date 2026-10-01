@@ -383,6 +383,12 @@ pub struct Runtime<'a> {
     wanted_kinds: Option<&'static [ProcKind]>,
     internal_objects: BTreeMap<u64, InternalObject>,
     next_internal_handle: u64,
+    /// The share of life each Collection and Dictionary has, so that one let
+    /// go of lets go of what it holds.
+    container_lives: BTreeMap<u64, Rc<()>>,
+    /// The class instances alive, so that looking for the ones due does not
+    /// walk every object the run has made.
+    instance_handles: BTreeSet<u64>,
     random_state: u32,
     random_entropy: u64,
     /// The caller's variables behind the next call's arguments, for a
@@ -544,6 +550,8 @@ impl<'a> Runtime<'a> {
             wanted_kinds: None,
             internal_objects: BTreeMap::new(),
             next_internal_handle: 1_u64 << 63,
+            container_lives: BTreeMap::new(),
+            instance_handles: BTreeSet::new(),
             random_state: 327_680,
             random_entropy: 327_680,
             pending_references: None,
@@ -953,6 +961,8 @@ impl<'a> Runtime<'a> {
             self.module_declared.clear();
             self.module_variants.clear();
             self.internal_objects.clear();
+            self.container_lives.clear();
+            self.instance_handles.clear();
             self.next_internal_handle = 1_u64 << 63;
             self.module_initialized = false;
         }
@@ -1063,15 +1073,28 @@ impl<'a> Runtime<'a> {
     /// Run every Class_Terminate that is due: an instance whose only share
     /// of life left is the registry's own. Terminating one may free others.
     fn collect_instances(&mut self, line: u32) -> Result<(), RuntimeError> {
-        if !self.internal_objects.values().any(|object| matches!(object, InternalObject::Instance(_))) {
+        if self.container_lives.is_empty() && self.instance_handles.is_empty() {
             return Ok(());
         }
         loop {
-            let due: Vec<(u64, String)> = self
-                .internal_objects
+            // A Collection or Dictionary nothing holds any more is gone, and
+            // what it held with it: measured, `Set col = Nothing` runs the
+            // Class_Terminate of the instance only the collection held.
+            let dropped: Vec<u64> = self
+                .container_lives
                 .iter()
-                .filter_map(|(handle, object)| match object {
-                    InternalObject::Instance(instance)
+                .filter(|(_, life)| Rc::strong_count(life) == 1)
+                .map(|(handle, _)| *handle)
+                .collect();
+            for handle in &dropped {
+                self.container_lives.remove(handle);
+                self.internal_objects.remove(handle);
+            }
+            let due: Vec<(u64, String)> = self
+                .instance_handles
+                .iter()
+                .filter_map(|handle| match self.internal_objects.get(handle) {
+                    Some(InternalObject::Instance(instance))
                         if !instance.terminated && Rc::strong_count(&instance.life) == 1 =>
                     {
                         Some((*handle, instance.class.clone()))
@@ -1080,7 +1103,10 @@ impl<'a> Runtime<'a> {
                 })
                 .collect();
             if due.is_empty() {
-                return Ok(());
+                if dropped.is_empty() {
+                    return Ok(());
+                }
+                continue;
             }
             for (handle, class) in due {
                 // A Class_Terminate run before this one may already have
@@ -1103,6 +1129,7 @@ impl<'a> Runtime<'a> {
                 }
                 // Gone, and with it whatever it alone was holding.
                 self.internal_objects.remove(&handle);
+                self.instance_handles.remove(&handle);
             }
         }
     }
@@ -1799,8 +1826,13 @@ impl<'a> Runtime<'a> {
                 self.exec_error_statement(target, frame, span.line)?;
                 Ok(Flow::Continue)
             }
-            Statement::Call { target, .. } => {
+            Statement::Call { target, span, .. } => {
                 self.eval_call(target, frame)?;
+                // What the call answered is thrown away here, and so is
+                // anything only that answer held: measured, `Make "Z"` runs
+                // Z's Class_Terminate on that line, and `col.Remove 1` the
+                // removed instance's.
+                self.collect_instances(span.line)?;
                 Ok(Flow::Continue)
             }
             Statement::Exit { what, .. } => Ok(Flow::Exit(*what)),
@@ -3611,6 +3643,7 @@ impl<'a> Runtime<'a> {
                 handle,
                 InternalObject::Instance(ClassInstance { class: name.clone(), state: None, life: life.clone(), terminated: false }),
             );
+            self.instance_handles.insert(handle);
             let made = ObjectRef { handle, kind: name, life: Some(life) };
             // Its variables are set up, then Class_Initialize runs, as the
             // instance comes into being.
@@ -3637,7 +3670,13 @@ impl<'a> Runtime<'a> {
                 Some(line),
             )
         })?;
+        let container = matches!(object, InternalObject::Collection(_) | InternalObject::Dictionary(_));
         self.internal_objects.insert(handle, object);
+        if container {
+            let life = Rc::new(());
+            self.container_lives.insert(handle, life.clone());
+            return Ok(Value::Object(ObjectRef { handle, kind: kind.to_string(), life: Some(life) }));
+        }
         Ok(Value::Object(ObjectRef::new(handle, kind)))
     }
 
