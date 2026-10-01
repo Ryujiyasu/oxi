@@ -1694,6 +1694,7 @@ struct CellMarks {
     underline: Option<i64>,
     hatching: Option<Hatching>,
     indented: bool,
+    raised: Option<&'static str>,
 }
 
 /// The functions `Range.Subtotal` totals with: the xlConsolidationFunction
@@ -1905,6 +1906,11 @@ struct WorkbookHost<'a> {
     hatchings: std::collections::HashMap<CellAddress, Hatching>,
     /// The cells whose indent grows with their rotation (`AddIndent`).
     indented: std::collections::HashSet<CellAddress>,
+    /// The cells whose whole writing is raised or lowered ("superscript" or
+    /// "subscript") where no run of their own says so.
+    raised: std::collections::HashMap<CellAddress, &'static str>,
+    /// The theme font a macro gave a cell (xlThemeFontMajor 1, Minor 2).
+    theme_fonts: std::collections::HashMap<CellAddress, i64>,
     /// The formats given to whole sheets, columns and rows, for the cells
     /// not yet made there.
     templates: std::collections::HashMap<FormatScope, CellStyle>,
@@ -2041,6 +2047,8 @@ impl<'a> WorkbookHost<'a> {
             underlines: std::collections::HashMap::new(),
             hatchings: std::collections::HashMap::new(),
             indented: std::collections::HashSet::new(),
+            raised: std::collections::HashMap::new(),
+            theme_fonts: std::collections::HashMap::new(),
             templates: std::collections::HashMap::new(),
             table_counter,
             next_link: 1,
@@ -6806,9 +6814,15 @@ impl<'a> WorkbookHost<'a> {
         };
         let mut first: Option<T> = None;
         for address in addresses {
+            let raised = |mut dress: Dress| {
+                if let Some(which) = self.raised.get(&address) {
+                    dress.vert_align = Some((*which).to_string());
+                }
+                dress
+            };
             let values: Vec<T> = match self.cell_here(address.sheet, address.row, address.column) {
-                None => vec![read(&Dress::of_style(&self.template_style(address)))],
-                Some(cell) if cell.runs.is_empty() => vec![read(&Dress::of_style(&cell.style))],
+                None => vec![read(&raised(Dress::of_style(&self.template_style(address))))],
+                Some(cell) if cell.runs.is_empty() => vec![read(&raised(Dress::of_style(&cell.style)))],
                 Some(cell) => cell
                     .runs
                     .iter()
@@ -7510,6 +7524,7 @@ impl<'a> WorkbookHost<'a> {
             underline: self.underlines.get(&at).copied(),
             hatching: self.hatchings.get(&at).copied(),
             indented: self.indented.contains(&at),
+            raised: self.raised.get(&at).copied(),
         }
     }
 
@@ -7520,6 +7535,7 @@ impl<'a> WorkbookHost<'a> {
             underline: self.underlines.remove(&at),
             hatching: self.hatchings.remove(&at),
             indented: self.indented.remove(&at),
+            raised: self.raised.remove(&at),
         }
     }
 
@@ -7553,6 +7569,14 @@ impl<'a> WorkbookHost<'a> {
             self.indented.insert(at);
         } else {
             self.indented.remove(&at);
+        }
+        match marks.raised {
+            Some(which) => {
+                self.raised.insert(at, which);
+            }
+            None => {
+                self.raised.remove(&at);
+            }
         }
     }
 
@@ -13630,6 +13654,13 @@ impl<'a> WorkbookHost<'a> {
         clear_formats: bool,
     ) -> Result<(), String> {
         let band = Self::band_of(range);
+        if clear_formats {
+            self.raised.retain(|at, _| {
+                !(at.sheet == range.sheet
+                    && (range.start_row..=range.end_row).contains(&at.row)
+                    && (range.start_column..=range.end_column).contains(&at.column))
+            });
+        }
         if band == Band::Cells {
             Self::range_cell_count(range)?;
         } else if clear_formats {
@@ -18675,11 +18706,22 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(range) = self.range_font(receiver) {
-            // Measured: a cell in the workbook's own face reads ThemeFont
-            // xlThemeFontMinor (2); this build keeps no other, so it always
-            // answers the minor. OutlineFont and Shadow are always False.
+            // None (0) until a macro names one: measured, a fresh cell, one
+            // holding a value and one given a face all read 0, and one given
+            // xlThemeFontMinor reads 2 until a face is named again.
+            // OutlineFont and Shadow are always False.
             if name.eq_ignore_ascii_case("themefont") {
-                return Ok(Some(Value::Integer(2)));
+                // Cells that differ read None, not Null: measured, C4:C5 over
+                // Minor and Major is 0.
+                let mut seen: Option<i64> = None;
+                for at in self.touched(range) {
+                    let held = self.theme_fonts.get(&at).copied().unwrap_or(0);
+                    if seen.is_some_and(|first| first != held) {
+                        return Ok(Some(Value::Integer(0)));
+                    }
+                    seen = Some(held);
+                }
+                return Ok(Some(Value::Integer(seen.unwrap_or(0))));
             }
             if name.eq_ignore_ascii_case("outlinefont") || name.eq_ignore_ascii_case("shadow") {
                 return Ok(Some(Value::Boolean(false)));
@@ -20344,6 +20386,10 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("name") {
+                // A face named lets go of the theme's font.
+                for at in self.touched(range) {
+                    self.theme_fonts.remove(&at);
+                }
                 // Excel keeps whatever it is given — a face this machine has
                 // never heard of is stored verbatim — and a number is taken as
                 // its own text. An empty name is not an empty face: it puts
@@ -20413,14 +20459,48 @@ impl Host for WorkbookHost<'_> {
                 self.redress_runs(range, |dress| {
                     dress.vert_align = held.then(|| which.to_string());
                 });
+                // A cell with no runs keeps it beside its style, the one
+                // putting the other off: measured, Superscript True and then
+                // Subscript True reads Superscript False, Subscript True.
+                for at in self.touched(range) {
+                    if held {
+                        self.raised.insert(at, which);
+                    } else if self.raised.get(&at) == Some(&which) {
+                        self.raised.remove(&at);
+                    }
+                }
                 return Ok(true);
             }
             // A recorder writes the whole of a cell's font: these are the
             // members this build does not keep, taken without a word so the
             // block goes through.
+            if name.eq_ignore_ascii_case("themefont") {
+                let asked = any_whole_number(&value).unwrap_or(0);
+                // The theme's face comes with it: measured, Minor writes
+                // 游ゴシック over Arial and Major 游ゴシック Light -- the
+                // book's own face and the one its title style wears.
+                let face = match asked {
+                    1 => BUILT_IN_STYLES.iter().find_map(|style| style.font.as_ref().and_then(|font| font.name)).map(str::to_string),
+                    2 => Some(self.normal_font().0),
+                    _ => None,
+                };
+                if let Some(face) = face {
+                    let named = Some(face);
+                    self.set_range_style(range, |_, style| style.font_name = named.clone())?;
+                    self.redress_runs(range, |dress| dress.font = named.clone());
+                }
+                for at in self.touched(range) {
+                    if asked == 0 {
+                        self.theme_fonts.remove(&at);
+                    } else {
+                        self.theme_fonts.insert(at, asked);
+                    }
+                }
+                return Ok(true);
+            }
             if matches!(
                 name.to_ascii_lowercase().as_str(),
-                "outlinefont" | "shadow" | "themefont" | "fontstyle"
+                "outlinefont" | "shadow" | "fontstyle"
             ) {
                 return Ok(true);
             }
