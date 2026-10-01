@@ -4851,6 +4851,9 @@ impl<'a> Runtime<'a> {
         if name.eq_ignore_ascii_case("rnd") {
             return self.call_rnd(&args, line);
         }
+        if name.eq_ignore_ascii_case("callbyname") {
+            return self.call_by_name(&args, line);
+        }
         if name.eq_ignore_ascii_case("randomize") {
             return self.call_randomize(&args, line);
         }
@@ -5002,8 +5005,11 @@ impl<'a> Runtime<'a> {
             Some(value) => number(value)
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?,
         };
+        // A negative argument seeds from its Single bits, the top byte added
+        // in: measured, Rnd(-3) is 0.9633257 however often it is asked.
         if argument < 0.0 {
-            self.random_state = (argument as f32).to_bits() & 0x00ff_ffff;
+            let bits = (argument as f32).to_bits();
+            self.random_state = bits.wrapping_add(bits >> 24) & 0x00ff_ffff;
         }
         if argument != 0.0 {
             self.random_state = self
@@ -5012,7 +5018,44 @@ impl<'a> Runtime<'a> {
                 .wrapping_add(12_820_163)
                 & 0x00ff_ffff;
         }
-        Ok(Value::Double(f64::from(self.random_state) / 16_777_216.0))
+        Ok(Value::Single(self.random_state as f32 / 16_777_216.0))
+    }
+
+    /// `CallByName object, name, kind, args...`: the member read (VbGet 2),
+    /// called (VbMethod 1) or assigned (VbLet 4, VbSet 8), as a dotted name
+    /// would be. Measured: CallByName(Range("A1"), "Address", VbGet) $A$1.
+    fn call_by_name(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+        let at = line.unwrap_or(0);
+        let [target, member, kind, rest @ ..] = args else {
+            return Err(error(RuntimeErrorKind::ArgumentCount, "CallByName wants an object, a name and a call type", line));
+        };
+        let Value::Object(receiver) = target else {
+            return Err(raised_error(424, String::new(), "Object required".to_string(), at));
+        };
+        let member = text(member).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+        let kind = number(kind).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))? as i64;
+        let missing = || no_such_member(format!("{} has no member {member}", receiver.kind), line);
+        match kind {
+            4 | 8 => {
+                let Some(value) = rest.last() else {
+                    return Err(invalid_procedure_call("CallByName assigns a value".to_string(), line));
+                };
+                if self.host_set(receiver, &member, value.clone(), at)? {
+                    Ok(Value::Empty)
+                } else {
+                    Err(missing())
+                }
+            }
+            1 | 2 => {
+                if kind == 2 && rest.is_empty() {
+                    if let Some(value) = self.host_get(receiver, &member, at)? {
+                        return Ok(value);
+                    }
+                }
+                self.host_call(Some(receiver), &member, rest, at)?.ok_or_else(missing)
+            }
+            _ => Err(invalid_procedure_call(format!("CallByName has no call type {kind}"), line)),
+        }
     }
 
     fn call_randomize(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -5038,7 +5081,9 @@ impl<'a> Runtime<'a> {
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
                 .to_bits(),
         };
-        let folded = (bits as u32) ^ (bits >> 32) as u32;
+        // Only the Double's upper half counts: measured, Randomize 5 and
+        // Randomize 0.5 lead to 0.8944274 and 8.430773E-02.
+        let folded = (bits >> 32) as u32;
         self.random_state = ((folded & 0xffff) ^ (folded >> 16)) << 8 | (self.random_state & 0xff);
         self.random_state &= 0x00ff_ffff;
         Ok(Value::Empty)
@@ -11292,6 +11337,13 @@ fn call_string_builtin(
         "lenb" | "leftb" | "rightb" | "midb" | "instrb" | "ascb" => {
             let text_of = |value: &Value| nullable_text(value);
             let bytes_to_units = |n: i64| usize::try_from(n.max(0) / 2).unwrap_or(0);
+            // A cut at an odd byte pairs the bytes afresh: measured,
+            // AscB(MidB("abc", 2)) is 0, the high byte of the a. A last byte
+            // left over has no unit of its own to live in and is dropped.
+            let bytes_of = |value: &str| value.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+            let paired = |bytes: &[u8]| {
+                String::from_utf16_lossy(&bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>())
+            };
             match name {
                 "lenb" => {
                     if args.len() != 1 {
@@ -11315,10 +11367,10 @@ fn call_string_builtin(
                         return Err(wrong_count("2 arguments"));
                     }
                     let Some(value) = text_of(&args[0])? else { return Ok(Value::Null) };
-                    let units = value.encode_utf16().collect::<Vec<_>>();
-                    let length = bytes_to_units(integer_argument(&args[1], line)?).min(units.len());
-                    let selected = if name == "leftb" { &units[..length] } else { &units[units.len() - length..] };
-                    Ok(Value::String(String::from_utf16_lossy(selected)))
+                    let bytes = bytes_of(&value);
+                    let length = usize::try_from(integer_argument(&args[1], line)?.max(0)).unwrap_or(0).min(bytes.len());
+                    let selected = if name == "leftb" { &bytes[..length] } else { &bytes[bytes.len() - length..] };
+                    Ok(Value::String(paired(selected)))
                 }
                 "midb" => {
                     if !(2..=3).contains(&args.len()) {
@@ -11329,13 +11381,13 @@ fn call_string_builtin(
                     if start < 1 {
                         return Err(invalid_procedure_call("String position must be positive".to_string(), line));
                     }
-                    let units = value.encode_utf16().collect::<Vec<_>>();
-                    let from = bytes_to_units(start - 1).min(units.len());
+                    let bytes = bytes_of(&value);
+                    let from = usize::try_from(start - 1).unwrap_or(0).min(bytes.len());
                     let length = match args.get(2) {
-                        Some(argument) => bytes_to_units(integer_argument(argument, line)?).min(units.len() - from),
-                        None => units.len() - from,
+                        Some(argument) => usize::try_from(integer_argument(argument, line)?.max(0)).unwrap_or(0).min(bytes.len() - from),
+                        None => bytes.len() - from,
                     };
-                    Ok(Value::String(String::from_utf16_lossy(&units[from..from + length])))
+                    Ok(Value::String(paired(&bytes[from..from + length])))
                 }
                 _ => {
                     // InStrB([start,] string1, string2): a byte position.
