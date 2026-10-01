@@ -42390,10 +42390,35 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // doc ≥ its 1.75 value). Render-only → element.y/pagination
                     // unchanged → Phase-1 preserved. See [[ssim_residual_is_subpixel_position]].
                     let s455_dy = if line_is_cjk_8364 {
-                        std::env::var("OXI_S455_CJK_GLYPH_DY")
+                        let k = std::env::var("OXI_S455_CJK_GLYPH_DY")
                             .ok()
                             .and_then(|v| v.parse::<f32>().ok())
-                            .unwrap_or(1.88) // S625 2026-06-19: 1.75->1.88, see below
+                            .unwrap_or(1.88); // S625 2026-06-19: 1.75->1.88, see below
+                        // S1633 (2026-10-02, default ON, opt-out OXI_S1633_DISABLE):
+                        // above body size the glyph's drop grows with it -- Word
+                        // centres the em in the 83/64 line box, so the drop is
+                        // ~0.15 x fs, which the 1.88 constant only matches near
+                        // 10.5pt. `_pb_bodyruby_gen.py` BR_PLAIN (no grid, a CJK
+                        // run larger than the 10.5pt paragraph mark): Word sits
+                        // 0.12 / 0.35 / 1.32 / 2.83 / 5.04pt lower than Oxi at
+                        // 10.5 / 14 / 20 / 30 / 40pt while the next line agrees,
+                        // i.e. Oxi kept text_y_off at 2.38 for every size. The
+                        // extra 0.15 x (fs - 10.5) leaves body sizes untouched.
+                        let max_cjk_fs = line
+                            .fragments
+                            .iter()
+                            .filter(|f| {
+                                !f.text.trim().is_empty()
+                                    && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
+                            })
+                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                            .fold(0.0_f32, f32::max);
+                        let extra = if std::env::var_os("OXI_S1633_DISABLE").is_none() {
+                            0.15 * (max_cjk_fs - 10.5).max(0.0)
+                        } else {
+                            0.0
+                        };
+                        k + extra
                     } else {
                         0.0
                     };
