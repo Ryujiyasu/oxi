@@ -1869,6 +1869,12 @@ struct WorkbookHost<'a> {
     /// is Sheet3, or Base, gets Sheet1 next -- so a workbook the browser
     /// has just read starts from nothing.
     sheet_counter: usize,
+    /// What `Range.Sort` last asked for its three orders and its
+    /// orientation, which a later sort that leaves them out takes up again.
+    /// Measured: Order1 left out after a descending sort sorts descending,
+    /// and Orientation left out after xlLeftToRight sorts sideways; Header
+    /// is not kept.
+    sort_memory: ([bool; 3], bool),
     /// What the window shows of each sheet, once a macro has changed it.
     views: std::collections::HashMap<usize, View>,
     /// Each sheet's outline, once a macro has grouped anything.
@@ -2036,6 +2042,7 @@ impl<'a> WorkbookHost<'a> {
             page_setups: std::collections::HashMap::new(),
             selections: std::collections::HashMap::new(),
             sheet_counter: 0,
+            sort_memory: ([false; 3], false),
             saved: false,
             views: std::collections::HashMap::new(),
             outlines: std::collections::HashMap::new(),
@@ -15447,7 +15454,7 @@ impl<'a> WorkbookHost<'a> {
         };
         let match_case = given(9).is_some_and(|value| matches!(value, Value::Boolean(true)));
         let sideways = match given(10) {
-            None => false,
+            None => self.sort_memory.1,
             Some(value) => match sort_number(value, "Orientation")? {
                 1 => false,
                 2 => true,
@@ -15464,8 +15471,18 @@ impl<'a> WorkbookHost<'a> {
             },
         };
 
+        let mut orders = self.sort_memory.0;
+        for (slot, order) in [1, 4, 6].into_iter().enumerate() {
+            if let Some(value) = given(order) {
+                orders[slot] = match sort_number(value, "Order")? {
+                    1 => false,
+                    2 => true,
+                    other => return Err(format!("Range.Sort has no order {other}")),
+                };
+            }
+        }
         let mut keys = Vec::new();
-        for (key, order) in [(0, 1), (2, 4), (5, 6)] {
+        for (slot, key) in [0, 2, 5].into_iter().enumerate() {
             let Some(key) = given(key) else { continue };
             let Value::Object(object) = key else {
                 return Err("Range.Sort takes a cell as a key".to_string());
@@ -15487,19 +15504,12 @@ impl<'a> WorkbookHost<'a> {
                 // Excel quietly sorts nothing here; saying so is more use.
                 return Err("Range.Sort was given a key outside the range".to_string());
             }
-            let descending = match given(order) {
-                None => false,
-                Some(value) => match sort_number(value, "Order")? {
-                    1 => false,
-                    2 => true,
-                    other => return Err(format!("Range.Sort has no order {other}")),
-                },
-            };
-            keys.push((lane, descending));
+            keys.push((lane, orders[slot]));
         }
         if keys.is_empty() {
             return Err("Range.Sort expects at least one key".to_string());
         }
+        self.sort_memory = (orders, sideways);
 
         self.apply_sort(range, &keys, &[], header, match_case, sideways)
     }
@@ -18838,6 +18848,8 @@ impl Host for WorkbookHost<'_> {
                 "header" => Some(Value::Integer(if state.header == 0 { 0 } else { state.header })),
                 "matchcase" => Some(Value::Boolean(state.match_case)),
                 "orientation" => Some(Value::Integer(if state.sideways { 2 } else { 1 })),
+                // Measured: xlPinYin (1), which a set does not change here.
+                "sortmethod" => Some(Value::Integer(1)),
                 "rng" | "range" => state
                     .range
                     .map(|range| self.object(HostObject::Range(range))),
