@@ -38181,6 +38181,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     }
 
     /// The opening edge of a continuation uses its current row's overrides.
+    /// S1623 (2026-10-01, default ON, opt-out OXI_S1623_DISABLE): whether body
+    /// tables follow the compat-15 autofit and placement rules. A document with
+    /// NO compatibilityMode parses as 15 but Word lays its tables out the
+    /// legacy way: JA forms__01c5a769 (no compat element, TableGrid tblInd 0,
+    /// grid 8702tw over a 425.2pt body) -- Word draws the table at 79.70..514.90
+    /// (margin - cellMar, full grid); Oxi kept it on the margin AND shrank it to
+    /// the body width (S1422), so «　…立…中学校» (18 x 18pt in a 326.75 cell)
+    /// wrapped its last glyph and every later row sat up to 48pt low. S1239
+    /// already reads an undeclared compat as legacy for the negative-tblInd
+    /// absorption; this extends that to the zero case (S621) and to S1422.
+    fn table_modern_compat(&self) -> bool {
+        self.compat_mode >= 15
+            && (self.compat_mode_explicit || std::env::var_os("OXI_S1623_DISABLE").is_some())
+    }
+
     fn table_fragment_top_width(&self, table: &Table, row: &TableRow) -> f32 {
         let outer = match table.style.top_border.as_ref() {
             Some(d) => self.s1188_drawn(&d.style, d.width),
@@ -42646,7 +42661,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && table.style.indent.is_some_and(|v| v < -0.1)
                     && (self.compat_mode <= 14 || !self.compat_mode_explicit);
                 let absorb = if std::env::var("OXI_S621_DISABLE").is_err() {
-                    (indent_zero && self.compat_mode <= 14) || s1239_negative
+                    (indent_zero && !self.table_modern_compat()) || s1239_negative
                 } else {
                     matches!(table.style.indent, Some(v) if v.abs() < 0.01)
                         && !table.style.explicit_borders
@@ -42903,9 +42918,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         };
         let inherited_top_rule = prepare_outer(&table.style.top_border);
         let inherited_bottom_rule = prepare_outer(&table.style.bottom_border);
+        // S1621: how far this row's drawn top edge sits above its box on a
+        // continuation page (set by the table restart below, 0 otherwise).
+        let mut s1621_lift: f32;
         for (row_idx, row) in table.rows.iter().enumerate() {
             let inherited_outer_page_before_row = pages.len();
             let mut row_declared_top_edges = Vec::new();
+            s1621_lift = 0.0;
             // S740: page-transition bookkeeping + commit of the PREVIOUS row's
             // footnote reserve. On a page push the new page starts with zero
             // table-note reserve; the previous row's notes are committed to the
@@ -44899,9 +44918,36 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let first_row = if replay_header_on_restart { 0 } else { row_idx };
                         self.table_fragment_top_width(table, &table.rows[first_row])
                             - self.s1188_edge_bw(table, first_row)
+                    } else if std::env::var_os("OXI_S1622_DISABLE").is_none() {
+                        // S1622 (2026-10-01, default ON, opt-out OXI_S1622_DISABLE):
+                        // the same replacement for a table without separate outer
+                        // edges. Word charges ONE rule at the continuation top --
+                        // the row's own cell top where declared, else the table's
+                        // top -- and never the row above's bottom; the row model
+                        // already carries its collapsed top (s1188_edge_bw), so only
+                        // the difference is added. `_pb_tblrestart_gen.py`, 6 arms
+                        // (cell border none / bottom / top x table top style / none):
+                        // Word's first continued row sits 0.5 above Oxi's in the
+                        // three arms where the row's collapsed top was ADDED to the
+                        // outer rule (bottom+style, top+style, bottom+none) and
+                        // agrees in the other three; reports__0013bcb8 p3 (no cell
+                        // borders) is the none+style arm.
+                        let first_row = if replay_header_on_restart { 0 } else { row_idx };
+                        self.table_fragment_top_width(table, &table.rows[first_row])
+                            - self.s1188_edge_bw(table, first_row)
                     } else { outer };
                     page_top + outer
                 } else { page_top };
+                // S1621 (2026-10-01, default ON, opt-out OXI_S1621_DISABLE): the
+                // continued table's top rule is drawn AT the page top; only the
+                // row content sits `outer` lower. EN reports__0013bcb8 p3 (a
+                // TabloKlavuzu table continued from p2, top rule from the style):
+                // Word rule 71.04 against Oxi's 71.60 (drawn at page_top + 0.5)
+                // and 71.10 at page_top; the cell text and the next rule (91.46 /
+                // 91.48) already agree with the content at page_top + 0.5.
+                if std::env::var_os("OXI_S1621_DISABLE").is_none() && !separate_outer_edges {
+                    s1621_lift = table_restart_top - page_top;
+                }
                 cursor.set(table_restart_top);
                 s1083_row_start.clear();
                 // S728: replay the captured tblHeader row(s) at the new page
@@ -50150,7 +50196,41 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             && line.iter().any(|t| t.15)
                                         {
                                             let s1312_fs = self.resolve_font_size(&RunStyle::default(), &para.style);
-                                            lh += self.s1396_ruby_expansion(para, s1312_fs);
+                                            let exp = self.s1396_ruby_expansion(para, s1312_fs);
+                                            // S1624 (2026-10-01, default ON, opt-out OXI_S1624_DISABLE):
+                                            // on a typed grid the ruby goes into the line's grid cells
+                                            // first -- the row is the natural line plus the expansion,
+                                            // rounded UP to whole cells, not the snapped line plus it.
+                                            // `_pb_gridruby_gen.py` (forms__01c5a769 host, lines 360,
+                                            // hps 8, base 10.5 / 14 x hpsRaise 5..25pt, 12 arms): Word's
+                                            // rows are 36 / 36 / 54 / 54 / 54 / 72 and 36 / 36 / 54 /
+                                            // 54 / 72 / 72 (+0.48 rule), = ceil((nat + exp) / 18) cells
+                                            // on all 12; Oxi gave 36 + exp (40.5 .. 80.5). Witness: the
+                                            // form's «ふりがな／氏名» row, Word 36.48 against Oxi 48.5.
+                                            // An exact line is never grid-snapped and carries no
+                                            // expansion (S1396): legal__03512306's «ふりがな／氏名»
+                                            // cells are line=400 exact and stay 20pt in Word.
+                                            match row_line_pitch.filter(|p| *p > 0.0 && para.style.snap_to_grid) {
+                                                Some(pitch) if std::env::var_os("OXI_S1624_DISABLE").is_none()
+                                                    && exp > 0.0
+                                                    && effective_line_rule != Some("exact") => {
+                                                    let nat = line.iter()
+                                                        .filter(|t| !t.0.trim().is_empty())
+                                                        .map(|t| {
+                                                            let metrics = match t.8.as_deref() {
+                                                                Some(ff) => self.registry.get(ff),
+                                                                None => self.registry.default_metrics(),
+                                                            };
+                                                            self.line_height_inner(t.1, effective_line_spacing,
+                                                                effective_line_rule, metrics,
+                                                                para.style.snap_to_grid, None, true)
+                                                        })
+                                                        .fold(0.0_f32, f32::max);
+                                                    let cells = ((nat + exp) / pitch - 1e-3).ceil().max(1.0);
+                                                    lh = lh.max(cells * pitch);
+                                                }
+                                                _ => lh += exp,
+                                            }
                                         }
                                         // S1517 cell site (2026-09-21, default ON, opt-out
                                         // OXI_S1517_DISABLE): a raised/lowered run shifts its
@@ -52305,14 +52385,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     {
                         let edge = LayoutElement::new(
                             bx,
-                            by,
+                            by - s1621_lift,
                             eff_cell_w,
                             0.0,
                             LayoutContent::TableBorder {
                                 x1: bx,
-                                y1: by,
+                                y1: by - s1621_lift,
                                 x2: bx + eff_cell_w,
-                                y2: by,
+                                y2: by - s1621_lift,
                                 color: top_color,
                                 width: top_width,
                                 style: top_style,
@@ -52361,12 +52441,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if left_color.is_some() && (!use_collapsed || cell_idx == 0) {
                         elements.push(LayoutElement::new(
                             bx,
-                            by,
+                            by - s1621_lift,
                             0.0,
-                            row_height,
+                            row_height + s1621_lift,
                             LayoutContent::TableBorder {
                                 x1: bx,
-                                y1: by,
+                                y1: by - s1621_lift,
                                 x2: bx,
                                 y2: by + row_height,
                                 color: left_color,
@@ -52379,12 +52459,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if right_color.is_some() {
                         elements.push(LayoutElement::new(
                             bx + eff_cell_w,
-                            by,
+                            by - s1621_lift,
                             0.0,
-                            row_height,
+                            row_height + s1621_lift,
                             LayoutContent::TableBorder {
                                 x1: bx + eff_cell_w,
-                                y1: by,
+                                y1: by - s1621_lift,
                                 x2: bx + eff_cell_w,
                                 y2: by + row_height,
                                 color: right_color,
@@ -55514,7 +55594,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     } else {
                                         line_advance += bw;
                                     }
-                                    if self.compat_mode >= 15
+                                    if self.table_modern_compat()
                                         && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none() /* S1422 */
                                         && kinsoku::is_cjk(ch)
                                     {
@@ -55859,7 +55939,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 && !is_fixed
                 && !is_dxa_fixed
                 && !is_pct_overwide
-                && (total > available || (self.compat_mode >= 15
+                && (total > available || (self.table_modern_compat()
                     && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none() /* S1422 */))
                 && table_grid_columns.len() > 1
             {
@@ -55922,7 +56002,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // column and wrapped its cell text one line short. With the
                 // redistribution Oxi gives 26.27 / 228.06 / 170.37. Env gates:
                 // ja 188 same, golden 185 same.
-                let modern_auto = self.compat_mode >= 15
+                let modern_auto = self.table_modern_compat()
                     && !is_nested && s1126_dxa
                     && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none();
                 let s1126 = std::env::var("OXI_S1126_DISABLE").is_err()
