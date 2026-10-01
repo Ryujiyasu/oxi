@@ -4041,8 +4041,8 @@ impl<'a> WorkbookHost<'a> {
     fn page_setup_member(&mut self, sheet: usize, name: &str) -> Result<Option<Value>, String> {
         let setup = self.page_setups.get(&sheet).cloned().unwrap_or_default();
         let answer = match name.to_ascii_lowercase().as_str() {
-            "orientation" => Value::Integer(setup.orientation),
-            "papersize" => Value::Integer(setup.paper_size),
+            "orientation" => Value::Double(setup.orientation as f64),
+            "papersize" => Value::Double(setup.paper_size as f64),
             "zoom" => match setup.zoom {
                 Some(zoom) => Value::Integer(zoom),
                 None => Value::Boolean(false),
@@ -4091,7 +4091,10 @@ impl<'a> WorkbookHost<'a> {
             "printgridlines" => Value::Boolean(setup.print_gridlines),
             "printheadings" => Value::Boolean(setup.print_headings),
             "firstpagenumber" => Value::Integer(setup.first_page_number),
-            "order" => Value::Integer(setup.order),
+            // Doubles, as Excel hands them: measured, TypeName of Order,
+            // Orientation and PaperSize.
+            "order" => Value::Double(setup.order as f64),
+            "printnotes" => Value::Boolean(false),
             "blackandwhite" => Value::Boolean(setup.black_and_white),
             "draft" => Value::Boolean(setup.draft),
             "printerrors" => Value::Integer(setup.print_errors),
@@ -18795,8 +18798,15 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("count") && matches!(selection, BorderSelection::All) {
                 return Ok(Some(Value::Integer(6)));
             }
-            if name.eq_ignore_ascii_case("linestyle") || name.eq_ignore_ascii_case("weight") {
-                let line = name.eq_ignore_ascii_case("linestyle");
+            // Its Range is its Parent: measured, Borders(xlEdgeTop).Parent and
+            // Borders.Parent are both a Range.
+            if name.eq_ignore_ascii_case("parent") {
+                return Ok(Some(self.object(HostObject::Range(range))));
+            }
+            // Value is the LineStyle by another name: measured, -4142 of an
+            // undrawn cell's Borders.
+            if name.eq_ignore_ascii_case("linestyle") || name.eq_ignore_ascii_case("weight") || name.eq_ignore_ascii_case("value") {
+                let line = !name.eq_ignore_ascii_case("weight");
                 return self.uniform_border(range, selection).map(|value| {
                     Some(match value {
                         Some((kind, weight)) => {
@@ -18814,6 +18824,11 @@ impl Host for WorkbookHost<'_> {
                 };
             }
             if name.eq_ignore_ascii_case("tintandshade") {
+                // An edge with no line has no shade either: measured, Null of
+                // an undrawn cell's Borders(xlEdgeTop) and of its Borders.
+                if matches!(self.uniform_border(range, selection)?, Some((LINE_NONE, _)) | None) {
+                    return Ok(Some(Value::Null));
+                }
                 return match self.uniform_theme_paint(range, Paint::Edge(selection))? {
                     None => Ok(Some(Value::Null)),
                     Some(Some((_, tint))) => Ok(Some(Value::Double(tint))),
@@ -19173,11 +19188,12 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("displayzeros") {
                 return Ok(Some(Value::Boolean(view.zeros)));
             }
+            // Doubles, as Excel hands them: measured, TypeName(ScrollRow).
             if name.eq_ignore_ascii_case("scrollrow") {
-                return Ok(Some(Value::Integer(i64::from(view.scroll_row))));
+                return Ok(Some(Value::Double(f64::from(view.scroll_row))));
             }
             if name.eq_ignore_ascii_case("scrollcolumn") {
-                return Ok(Some(Value::Integer(i64::from(view.scroll_column))));
+                return Ok(Some(Value::Double(f64::from(view.scroll_column))));
             }
             // A window is open at its full size, in the normal view, with the
             // headings shown: measured on a fresh one.
@@ -19193,7 +19209,38 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("freezepanes") {
                 return Ok(Some(Value::Boolean(sheet.frozen_rows > 0 || sheet.frozen_cols > 0)));
             }
-            return Ok(None);
+            // The window shows the active sheet: its cell, its selection and
+            // its book are the ones the names say unqualified. Measured,
+            // ActiveWindow.ActiveCell is $A$1 and its Parent a Workbook.
+            if ["activecell", "selection", "activesheet"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+                return self.call(None, name, &[]);
+            }
+            if name.eq_ignore_ascii_case("rangeselection") {
+                return self.call(None, "Selection", &[]);
+            }
+            if name.eq_ignore_ascii_case("parent") {
+                return self.call(None, "ActiveWorkbook", &[]);
+            }
+            // The rest a fresh window answers: measured, Caption Book1, the
+            // bars, outline, ruler and tabs shown, left to right, automatic
+            // gridlines (ColorIndex -4105, Color 0), TabRatio 0.6, the first
+            // window of a book of one (Index 1, WindowNumber 1, Type 1).
+            if name.eq_ignore_ascii_case("caption") {
+                return Ok(Some(Value::String(self.file_name.clone().unwrap_or_else(|| "Book1".to_string()))));
+            }
+            let plain = match name.to_ascii_lowercase().as_str() {
+                "displayhorizontalscrollbar" | "displayverticalscrollbar" | "displayoutline" | "displayruler"
+                | "displaywhitespace" | "displayworkbooktabs" | "enableresize" | "visible" => Value::Boolean(true),
+                "displayrighttoleft" => Value::Boolean(false),
+                "gridlinecolor" => Value::Double(0.0),
+                "gridlinecolorindex" => Value::Integer(-4105),
+                "index" | "type" => Value::Integer(1),
+                "splithorizontal" | "splitvertical" => Value::Integer(0),
+                "tabratio" => Value::Double(0.6),
+                "windownumber" => Value::Double(1.0),
+                _ => return Ok(None),
+            };
+            return Ok(Some(plain));
         }
         if let Some(sheet) = self.worksheet(receiver) {
             if name.eq_ignore_ascii_case("comments") {
