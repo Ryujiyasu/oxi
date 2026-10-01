@@ -19413,8 +19413,19 @@ impl Host for WorkbookHost<'_> {
             Some(HostObject::Hyperlinks(HyperlinkScope::Sheet(sheet))) if name.eq_ignore_ascii_case("parent") => {
                 return Ok(Some(self.object(HostObject::Worksheet(sheet))));
             }
-            Some(HostObject::Worksheets | HostObject::Names) if name.eq_ignore_ascii_case("parent") => {
+            Some(HostObject::Worksheets | HostObject::Names | HostObject::Styles) if name.eq_ignore_ascii_case("parent") => {
                 return Ok(Some(self.object(HostObject::Workbook)));
+            }
+            // Measured: Areas has its range for Parent, Filters the
+            // AutoFilter, SortFields the sheet's Sort.
+            Some(HostObject::Areas(handle)) if name.eq_ignore_ascii_case("parent") => {
+                return Ok(Some(self.object(HostObject::Blocks(handle))));
+            }
+            Some(HostObject::SheetFilters(sheet)) if name.eq_ignore_ascii_case("parent") => {
+                return Ok(Some(self.object(HostObject::SheetFilter(sheet))));
+            }
+            Some(HostObject::SortFields(sheet)) if name.eq_ignore_ascii_case("parent") => {
+                return Ok(Some(self.object(HostObject::Sort(sheet))));
             }
             Some(HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..)) => {}
             Some(_) if name.eq_ignore_ascii_case("application") => {
