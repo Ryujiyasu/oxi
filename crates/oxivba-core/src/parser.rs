@@ -109,6 +109,7 @@ pub fn parse_module(source: &str) -> Result<Module, LexError> {
         pos: 0,
         terminated: true,
         pending_next_counters: Vec::new(),
+        enum_names: Vec::new(),
     };
     let mut module = parser.parse_module();
     if let Some((text, span)) = header {
@@ -188,6 +189,9 @@ struct Parser<'a> {
     /// Remaining counters from a combined `Next inner, outer` terminator.
     /// The inner loop consumes the first and leaves the rest for its parents.
     pending_next_counters: Vec<Expr>,
+    /// The module's Enums so far, which come before any procedure that
+    /// names one.
+    enum_names: Vec<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -610,6 +614,7 @@ impl<'a> Parser<'a> {
     fn parse_enum_def(&mut self, visibility: Visibility, span: Span) -> Option<ModuleItem> {
         self.pos += 1;
         let name = self.parse_ident()?;
+        self.enum_names.push(name.to_ascii_lowercase());
         self.end_statement();
         let mut members = Vec::new();
         loop {
@@ -750,6 +755,9 @@ impl<'a> Parser<'a> {
         }
         let is_new = self.eat_kw("new");
         let name = self.parse_qualified_name()?;
+        // A variable of an Enum's type is a Long: measured, TypeName of one
+        // is Long and VarType 3, and it starts at 0.
+        let name = if self.enum_names.contains(&name.to_ascii_lowercase()) { "Long".to_string() } else { name };
         let fixed_length = if name.eq_ignore_ascii_case("String") && self.eat_punct(Punct::Star) {
             self.parse_expr()
         } else {
