@@ -457,6 +457,14 @@ impl<'a> WorkbookHost<'a> {
                     // a value is its colour.
                     "rgb" | "value" => Some(Value::Integer(shape.fill)),
                     "objectthemecolor" => Some(Value::Integer(shape.fill_theme.map_or(0, |theme| theme as i64))),
+                    // Measured on a fresh shape (accent1): Type
+                    // msoColorTypeScheme (2), SchemeColor 21, no brightness
+                    // or tint, the FillFormat its Parent. An RGB colour is
+                    // Type 1; SchemeColor is given only for accent1.
+                    "type" => Some(Value::Integer(if shape.fill_theme.is_some() { 2 } else { 1 })),
+                    "schemecolor" if shape.fill_theme == Some(5) => Some(Value::Integer(21)),
+                    "brightness" | "tintandshade" => Some(Value::Single(0.0)),
+                    "parent" => Some(self.part(DrawingPart::Fill(id))),
                     _ => None,
                 })
             }
@@ -543,8 +551,10 @@ impl<'a> WorkbookHost<'a> {
             DrawingPart::TextRange(id) => {
                 let shape = self.shape(id)?.clone();
                 Ok(match lower.as_str() {
-                    "text" => Some(Value::String(shape.text())),
-                    "font" => Some(self.part(DrawingPart::CharactersFont(id, 1, None))),
+                    // Text is the default member: measured, a TextRange read
+                    // as a value is its text.
+                    "text" | "value" => Some(Value::String(shape.text())),
+                    "font" => Some(self.part(DrawingPart::Font2(id))),
                     "paragraphformat" => Some(self.part(DrawingPart::ParagraphFormat(id))),
                     "characters" => Some(self.part(DrawingPart::Characters(id, 1, None))),
                     "paragraphs" => Some(self.part(DrawingPart::Paragraphs(id))),
@@ -560,6 +570,18 @@ impl<'a> WorkbookHost<'a> {
             DrawingPart::ParagraphFormat(id) => {
                 let shape = self.shape(id)?;
                 Ok(match lower.as_str() {
+                    // The rest of a fresh paragraph, measured: baseline auto
+                    // (5), far-east line breaking and hanging punctuation on,
+                    // level 1, no indents or spacing, single lines, mixed
+                    // direction, wrapping, the TextRange its Parent.
+                    "baselinealignment" => Some(Value::Integer(5)),
+                    "fareastlinebreaklevel" | "hangingpunctuation" | "linerulewithin" | "wordwrap" => Some(Value::Integer(-1)),
+                    "indentlevel" => Some(Value::Integer(1)),
+                    "firstlineindent" | "leftindent" | "rightindent" | "spaceafter" | "spacebefore" => Some(Value::Single(0.0)),
+                    "spacewithin" => Some(Value::Single(1.0)),
+                    "lineruleafter" | "linerulebefore" => Some(Value::Integer(0)),
+                    "textdirection" => Some(Value::Integer(-2)),
+                    "parent" => Some(self.part(DrawingPart::TextRange(id))),
                     // msoAlignLeft 1, Center 2, Right 3.
                     "alignment" => Some(Value::Integer(match shape.h_align {
                         -4108 => 2,
@@ -610,6 +632,38 @@ impl<'a> WorkbookHost<'a> {
                         if shape.uniform_style(start, length, |s| s.color) == Some(WHITE) { 2 } else { 1 },
                     )),
                     _ => None,
+                })
+            }
+            // Font2 reads the characters' dress and answers it as Office does:
+            // measured on fresh text, Bold and Italic msoFalse, Size Single 11,
+            // the Latin face for Name and NameAscii, 游ゴシック east, +mn-cs
+            // complex, no caps, strike, kerning or spacing, and the
+            // TextRange its Parent.
+            DrawingPart::Font2(id) => {
+                let inner = DrawingPart::CharactersFont(id, 1, None);
+                let read = |host: &mut Self, what: &str| host.drawing_get(inner, what);
+                Ok(match lower.as_str() {
+                    "bold" | "italic" => match read(self, &lower)? {
+                        Some(Value::Boolean(held)) => Some(mso(held)),
+                        other => other,
+                    },
+                    "size" => match read(self, "size")? {
+                        Some(Value::Double(size)) => Some(Value::Single(size as f32)),
+                        other => other,
+                    },
+                    "name" | "nameascii" => read(self, "name")?,
+                    "namefareast" => Some(Value::String("游ゴシック".to_string())),
+                    "namecomplexscript" => Some(Value::String("+mn-cs".to_string())),
+                    "nameother" => Some(Value::String(String::new())),
+                    "allcaps" | "caps" | "doublestrikethrough" | "equalize" | "smallcaps" | "softedgeformat" | "strike"
+                    | "strikethrough" | "subscript" | "superscript" => Some(Value::Integer(0)),
+                    "underlinestyle" => match read(self, "underline")? {
+                        Some(Value::Integer(UNDERLINE_SINGLE)) => Some(Value::Integer(1)),
+                        _ => Some(Value::Integer(0)),
+                    },
+                    "kerning" | "spacing" => Some(Value::Single(0.0)),
+                    "parent" => Some(self.part(DrawingPart::TextRange(id))),
+                    _ => read(self, &lower)?,
                 })
             }
             DrawingPart::Chart(id) => self.chart_get(id, &lower),
@@ -1255,6 +1309,8 @@ impl<'a> WorkbookHost<'a> {
                 }
                 Ok(false)
             }
+            // Font2 writes the characters' dress; msoTrue (-1) is True there.
+            DrawingPart::Font2(id) => self.drawing_set(DrawingPart::CharactersFont(id, 1, None), name, value),
             DrawingPart::CharactersFont(id, start, length) => {
                 let taken = {
                     let shape = self.shape_mut(id)?;

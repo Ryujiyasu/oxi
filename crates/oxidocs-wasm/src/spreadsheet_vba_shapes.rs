@@ -187,6 +187,9 @@ pub(super) enum DrawingPart {
     /// xlCategory 1 or xlValue 2.
     Axis(u64, i64),
     AxisTitle(u64, i64),
+    /// `TextFrame2.TextRange.Font`: the same dress as the characters' Font,
+    /// answered the Office way (msoTriState, Singles).
+    Font2(u64),
     /// One point of a series: the series' number and the point's, from 1.
     Point(u64, usize, usize),
     ChartArea(u64),
@@ -213,6 +216,7 @@ impl DrawingPart {
             DrawingPart::TextRange(_) => "TextRange2",
             DrawingPart::Characters(..) => "Characters",
             DrawingPart::CharactersFont(..) => "Font",
+            DrawingPart::Font2(_) => "Font2",
             DrawingPart::ParagraphFormat(_) => "ParagraphFormat2",
             DrawingPart::ChartObjects(_) => "ChartObjects",
             DrawingPart::ChartObject(_) => "ChartObject",
