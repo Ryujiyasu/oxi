@@ -379,6 +379,8 @@ enum HostObject {
     /// `Worksheet.Names`: the names that sheet keeps for itself.
     SheetNames(usize),
     SortFields(usize),
+    /// One of a sheet's sort fields, by its place (from 1).
+    SortField(usize, usize),
     /// A shape, a chart, or one of the objects hung off them.
     Drawing(shapes::DrawingPart),
     /// An object whose worksheet has been deleted. Excel answers every
@@ -1661,6 +1663,8 @@ struct SortState {
     match_case: bool,
     sideways: bool,
     fields: Vec<(u32, bool)>,
+    /// Each field's key as it was given, lined up with `fields`.
+    keys: Vec<CellRange>,
     /// Each field's `CustomOrder` list, lined up with `fields`.
     orders: Vec<Option<Vec<String>>>,
 }
@@ -2193,6 +2197,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::SheetNames(_) => "Names",
                 HostObject::FilterColumn(_, _) => "Filter",
                 HostObject::SortFields(_) => "SortFields",
+                HostObject::SortField(..) => "SortField",
                 HostObject::Drawing(part) => part.kind_name(),
                 HostObject::Gone => "Nothing",
                 HostObject::RegExp(_) => "RegExp",
@@ -3782,10 +3787,33 @@ impl<'a> WorkbookHost<'a> {
             Value::Boolean(style.fill.is_some())
         } else if name.eq_ignore_ascii_case("includeprotection") {
             Value::Boolean(style.protection)
-        } else if name.eq_ignore_ascii_case("numberformat") {
+        } else if name.eq_ignore_ascii_case("numberformat") || name.eq_ignore_ascii_case("numberformatlocal") {
             Value::String(style.number.unwrap_or("General").to_string())
         } else if name.eq_ignore_ascii_case("font") {
             self.object(HostObject::StyleFont(index))
+        // The alignment and protection a style keeps, measured on Normal:
+        // general across, centred down (this Office's default), no wrap,
+        // shrink, indent (IndentLevel Null) or rotation, locked, not hidden,
+        // context reading order; MergeCells 1004. Other styles are given
+        // the same, unmeasured.
+        } else if name.eq_ignore_ascii_case("horizontalalignment") {
+            Value::Integer(1)
+        } else if name.eq_ignore_ascii_case("verticalalignment") {
+            Value::Integer(-4108)
+        } else if ["addindent", "formulahidden", "shrinktofit", "wraptext"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+            Value::Boolean(false)
+        } else if name.eq_ignore_ascii_case("locked") {
+            Value::Boolean(true)
+        } else if name.eq_ignore_ascii_case("indentlevel") {
+            Value::Null
+        } else if name.eq_ignore_ascii_case("orientation") {
+            Value::Integer(-4128)
+        } else if name.eq_ignore_ascii_case("readingorder") {
+            Value::Integer(-5002)
+        } else if name.eq_ignore_ascii_case("mergecells") {
+            return Err(host_error(1004, "a style has no MergeCells"));
+        } else if name.eq_ignore_ascii_case("parent") {
+            self.object(HostObject::Workbook)
         } else {
             return Ok(None);
         };
@@ -7187,6 +7215,10 @@ impl<'a> WorkbookHost<'a> {
                 })
                 .unwrap_or_default()
         };
+        // Measured: a run of plain characters has no phonetic text.
+        if name.eq_ignore_ascii_case("phoneticcharacters") {
+            return Ok(Some(Value::String(String::new())));
+        }
         if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("caption") {
             return Ok(Some(Value::String(text_of())));
         }
@@ -7752,7 +7784,12 @@ impl<'a> WorkbookHost<'a> {
                 None => Value::Integer(COLOUR_NONE),
             },
             "themecolor" => Value::Integer(tab.and_then(|tab| tab.theme).map_or(0, |theme| theme as i64)),
-            "tintandshade" => Value::Double(tab.map_or(0.0, |tab| tab.tint)),
+            // Measured: False (a Boolean) on a tab with no colour, as Color.
+            "tintandshade" => match tab {
+                Some(tab) => Value::Double(tab.tint),
+                None => Value::Boolean(false),
+            },
+            "parent" => return None,
             _ => return None,
         })
     }
@@ -9227,6 +9264,7 @@ impl<'a> WorkbookHost<'a> {
                     moved(sheet).map(|sheet| HostObject::FilterColumn(sheet, field))
                 }
                 HostObject::SortFields(sheet) => moved(sheet).map(HostObject::SortFields),
+                HostObject::SortField(sheet, at) => moved(sheet).map(|sheet| HostObject::SortField(sheet, at)),
                 HostObject::Drawing(part) => part.renumbered(moved).map(HostObject::Drawing),
                 HostObject::Blocks(_)
                 | HostObject::BlocksAxis(..)
@@ -15741,7 +15779,8 @@ impl<'a> WorkbookHost<'a> {
     /// place (Count stays).
     fn sort_object_call(&mut self, sheet: usize, name: &str, args: &[Value]) -> Result<Value, String> {
         match name.to_ascii_lowercase().as_str() {
-            "sortfields" => Ok(self.object(HostObject::SortFields(sheet))),
+            "sortfields" if args.is_empty() => Ok(self.object(HostObject::SortFields(sheet))),
+            "sortfields" => self.sort_fields_call(sheet, "Item", args),
             "setrange" => {
                 let range = args
                     .first()
@@ -15780,6 +15819,7 @@ impl<'a> WorkbookHost<'a> {
                 let state = self.sorts.entry(sheet).or_default();
                 state.fields.clear();
                 state.orders.clear();
+                state.keys.clear();
                 Ok(Value::Empty)
             }
             "count" => Ok(Value::Integer(
@@ -15806,9 +15846,21 @@ impl<'a> WorkbookHost<'a> {
                 };
                 let state = self.sorts.entry(sheet).or_default();
                 state.orders.resize(state.fields.len(), None);
+                state.keys.resize(state.fields.len(), key);
                 state.fields.push((lane, descending));
                 state.orders.push(order);
-                Ok(Value::Empty)
+                state.keys.push(key);
+                // Measured: Add hands back the SortField it made.
+                let at = state.fields.len();
+                Ok(self.object(HostObject::SortField(sheet, at)))
+            }
+            "item" | "_default" => {
+                let count = self.sorts.get(&sheet).map_or(0, |state| state.fields.len());
+                let at = args.first().map(|wanted| positive_index(wanted, "SortFields index")).transpose()?.unwrap_or(0) as usize;
+                if at == 0 || at > count {
+                    return Err(host_error(9, "Subscript out of range"));
+                }
+                Ok(self.object(HostObject::SortField(sheet, at)))
             }
             _ => Ok(Value::Empty),
         }
@@ -19356,6 +19408,10 @@ impl Host for WorkbookHost<'_> {
             return self.regexp_member(object, name, &[]);
         }
         if let Some(sheet) = self.tab_sheet(receiver) {
+            // Measured: a Tab's Parent is its worksheet.
+            if name.eq_ignore_ascii_case("parent") {
+                return Ok(Some(self.object(HostObject::Worksheet(sheet))));
+            }
             return Ok(self.tab_member(sheet, name));
         }
         if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(receiver.handle as usize).copied() {
@@ -19390,6 +19446,24 @@ impl Host for WorkbookHost<'_> {
                 "count" => Some(Value::Integer(
                     self.sorts.get(&sheet).map_or(0, |state| state.fields.len() as i64),
                 )),
+                _ => None,
+            });
+        }
+        // A sort field: measured, a values field added descending answers
+        // Order 2, Priority 1, SortOn 0, DataOption 0, Key its range, Parent
+        // the SortFields, and SortOnValue 1004.
+        if let Some(HostObject::SortField(sheet, at)) = self.objects.get(receiver.handle as usize).copied() {
+            let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
+            let Some(&(_, descending)) = state.fields.get(at - 1) else {
+                return Err(host_error(1004, "the sort field has been cleared"));
+            };
+            return Ok(match name.to_ascii_lowercase().as_str() {
+                "order" => Some(Value::Integer(if descending { 2 } else { 1 })),
+                "priority" => Some(Value::Integer(at as i64)),
+                "sorton" | "dataoption" => Some(Value::Integer(0)),
+                "key" => state.keys.get(at - 1).map(|key| self.object(HostObject::Range(*key))),
+                "parent" => Some(self.object(HostObject::SortFields(sheet))),
+                "sortonvalue" => return Err(host_error(1004, "a values field has no SortOnValue")),
                 _ => None,
             });
         }
@@ -19582,10 +19656,17 @@ impl Host for WorkbookHost<'_> {
                     })
                 });
             }
-            // Measured: an edge not painted from the theme answers Null.
+            // Measured: an edge not painted from the theme answers Null --
+            // while it has no line. One edge with a line drawn in a plain
+            // colour is error 5.
             if name.eq_ignore_ascii_case("themecolor") {
                 return match self.uniform_theme_paint(range, Paint::Edge(selection))? {
                     Some(Some((theme, _))) => Ok(Some(Value::Integer(theme as i64))),
+                    _ if selection != BorderSelection::All
+                        && matches!(self.uniform_border(range, selection)?, Some((kind, _)) if kind != LINE_NONE) =>
+                    {
+                        Err(host_error(5, "the edge's colour is not a theme colour"))
+                    }
                     _ => Ok(Some(Value::Null)),
                 };
             }
