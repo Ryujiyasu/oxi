@@ -115,6 +115,7 @@ def shapes_of(xml: str) -> list[dict]:
         if "<a:normAutofit" in body:
             continue
         off = re.search(r'<a:off x="(-?\d+)" y="(-?\d+)"\s*/>', body)
+        ext = re.search(r'<a:ext cx="(\d+)" cy="(\d+)"\s*/>', body)
         if not off:
             continue
         t_ins = re.search(r'tIns="(-?\d+)"', body_pr.group(0))
@@ -131,6 +132,7 @@ def shapes_of(xml: str) -> list[dict]:
             "face": face[0],
             "text": text.strip(),
             "explicit_t_ins": bool(t_ins),
+            "h": int(ext.group(2)) / EMU if ext else 0.0,
         })
     return out
 
@@ -143,6 +145,7 @@ def main() -> None:
     wanted = {s.strip() for s in args.decks.split(",")} if args.decks else None
 
     tally: Counter = Counter()
+    by_lines: Counter = Counter()
     per_face: dict[str, Counter] = {}
     for deck in sorted(DEV.joinpath("pptx").glob("*.pptx")):
         if wanted and deck.stem.split("__")[0] not in wanted:
@@ -195,6 +198,15 @@ def main() -> None:
                     if hit is None:
                         continue
                     measured = hit[0] - shape["top"]
+                    # How many lines PowerPoint set the paragraph in: distinct
+                    # baselines of same-size spans whose text belongs to it,
+                    # inside the box.
+                    body_text = shape["text"].replace(" ", "")
+                    ys = sorted({round(y, 1) for text, y, size, _m, _r in spans
+                                 if text and text.replace(" ", "") in body_text
+                                 and abs(size - shape["size"]) <= 0.6
+                                 and hit[0] - 0.5 <= y <= shape["top"] + shape["h"] + size})
+                    lines = len(ys)
                     # Find the embedded font whose PostScript name matches the
                     # requested family, ignoring spaces and the style suffix.
                     key = re.sub(r"[^a-z0-9]", "", shape["face"].lower())
@@ -215,13 +227,14 @@ def main() -> None:
                         continue  # the shape is not the one the span belongs to
                     best = min(errs, key=lambda k: errs[k])
                     tally[best] += 1
+                    by_lines[(min(lines, 2), best)] += 1
                     per_face.setdefault(met["name"], Counter())[best] += 1
                     if args.verbose:
                         print(f"  {deck.stem[:10]:12s} s{page_index + 1:<3d} "
                               f"{met['name'][:22]:24s} fsSel=0x{met['fs_selection']:04x} "
                               f"sz={hit[1]:6.2f} n={shape['n']:.4f} meas={measured:8.3f} "
                               + "  ".join(f"{k}={errs[k]:6.3f}" for k in sorted(errs))
-                              + f"  -> {best}")
+                              + f"  lines={lines}  -> {best}")
         finally:
             doc.close()
     print("\nclosest metric source, over", sum(tally.values()), "measurable shapes:")
