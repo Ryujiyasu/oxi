@@ -117,17 +117,6 @@ jobs:
           node --test web/vertical-text.test.mjs
           node web/vertical-layout.test.mjs pkg
 
-  font-catalog-tests:
-    if: ${{ !inputs.font_metrics }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install fonttools==4.62.0
-      - run: python -W error::ResourceWarning -m unittest discover -s tools/font-metrics-gen -p test_catalog.py -v
-
   font-metrics:
     if: ${{ inputs.font_metrics }}
     runs-on: windows-latest

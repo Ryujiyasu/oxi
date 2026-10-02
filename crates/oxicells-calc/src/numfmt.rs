@@ -1240,7 +1240,7 @@ mod tests {
     #[test]
     fn places_sections_and_text_as_excel_shows_them() {
         assert_eq!(format_number(12.0, "0.##"), "12.");
-        assert_eq!(format_number(3.14159, "??.??"), " 3.14");
+        assert_eq!(format_number(std::f64::consts::PI, "??.??"), " 3.14");
         assert_eq!(format_number(0.000123, "0.0E+0"), "1.2E-4");
         assert_eq!(format_number(12345.678, "0.00E+00"), "1.23E+04");
         assert_eq!(format_number(1234567.0, "#,##0,,"), "1");

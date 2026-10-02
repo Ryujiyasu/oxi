@@ -8,6 +8,12 @@
 //! downward (Miller) for J and I, upward for Y and K. Measured over 112
 //! cases: these give Excel's answers to the last digit for every Y, I and K
 //! and for J below x = 8.
+//!
+//! The approximations are reproduced with their published eight-digit
+//! constants (2/pi as 0.636619772, Euler's gamma as 0.5772156649) because
+//! that is what Excel evaluates; the exact library constants would move the
+//! last digits away from Excel's.
+#![allow(clippy::approx_constant)]
 
 const ACC: f64 = 40.0;
 const BIG: f64 = 1e10;
