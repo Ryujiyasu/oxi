@@ -96,6 +96,8 @@ def census(path):
         "ruby": d.count("<w:ruby>"),
         "vertical": 'w:orient="landscape"' in d or "<w:textDirection" in d,
         "fields": d.count("<w:instrText") + d.count("<w:fldSimple"),
+        # S1634: w:ind carrying BOTH firstLineChars (non-zero) and a cached firstLine
+        "flc_cached": len([m for m in re.findall(r"<w:ind [^>]*/>", d + st) if re.search(r'firstLineChars="-?[1-9]', m) and "firstLine=" in m]),
         "toc": "TOC" in d and "instrText" in d,
         "footnotes": d.count("<w:footnoteReference"),
         "ea_latin_run": len(re.findall(r'<w:rFonts[^>]*w:eastAsia="(Times New Roman|Arial|Calibri|Cambria|Century|Georgia|Verdana|Tahoma)"', d)),

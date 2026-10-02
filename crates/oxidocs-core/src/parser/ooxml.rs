@@ -5633,8 +5633,28 @@ fn parse_paragraph_properties(
                             // not 2.03 characters (18.27 at 9pt, 21.32 at 10.5).
                             // Including it here cost a1d6e4ef / 3a4f9fbe / 04b88e7e
                             // a PASS each on the first golden chunk.
+                            // S1634 (2026-10-02, default ON, opt-out OXI_S1634_DISABLE): Word
+                            // DRAWS the cached `w:firstLine` twips and only recomputes them
+                            // from firstLineChars when it edits the paragraph. Measured on
+                            // the corpus PDFs (`_flc_cache_census.py`): wherever the cache
+                            // disagrees with chars x size the drawn indent is the cache --
+                            // en/forms 004a48b1 18.00 (chars x size 15.75), ja 1245d99e
+                            // 12/24/66 (10.5/21/63), 0108a2 20.65 (19.70), 09422f63's
+                            // centred title 15 (35.6: a fitText run's spacing cache would
+                            // have been counted twice). The chars value stays the fallback
+                            // for a w:ind that carries no twips.
+                            // 31680 twips (22in, Word's maximum) is the sentinel of an
+                            // INVALID cache: ja/educational 13344a6b stores
+                            // firstLine="31680" on 131 paragraphs and Word draws those
+                            // from chars (400 -> 42.05 = 4 x 10.5, 250 -> 26.33).
+                            let s1634 = std::env::var("OXI_S1634_DISABLE").is_err()
+                                && style.indent_first_line.map_or(false, |v| v.abs() < 1584.0);
                             if first_line_chars.map_or(false, |v| v != 0.0) {
-                                style.indent_first_line = None;
+                                if s1634 {
+                                    first_line_chars = None;
+                                } else {
+                                    style.indent_first_line = None;
+                                }
                             }
                         }
                         let has_twip_left = style.indent_left.is_some();
