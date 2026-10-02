@@ -245,6 +245,21 @@ export function recalculate_spreadsheet(workbook: any, now?: number | null): any
 export function rename_sheet(workbook: any, index: number, new_name: string): any;
 
 /**
+ * The height Excel gives a row whose tallest font is this one, in 96-dpi
+ * pixels, or nothing for a font that has never been measured.
+ *
+ * The same measured table the native renderer draws with — a row height is
+ * not derivable from a font's own metrics, so the numbers were read off Excel
+ * and stand as data. The browser cannot measure a row the way Excel does and
+ * was declining to try, which meant a sheet whose file records no row height
+ * (openpyxl and every other writer that leaves the cache out) drew every row
+ * at the default and clipped its own title.
+ *
+ * `size` is in points.
+ */
+export function row_height_px(face: string, size: number): number | undefined;
+
+/**
  * Execute VBA source against an OxiCells workbook IR.
  */
 export function run_spreadsheet_vba(workbook: any, source: string, procedure: string, args: any, active_sheet: number, file_name?: string | null): any;
@@ -324,6 +339,9 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly list_spreadsheet_vba_procedures: (a: number, b: number) => [number, number, number];
+    readonly run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
+    readonly read_macro_safety: (a: number, b: number) => [number, number, number];
     readonly break_slide_paragraph: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: any) => [number, number, number];
     readonly build_docx: (a: any) => [number, number, number, number];
     readonly build_docx_with_template: (a: any, b: number, c: number) => [number, number, number, number];
@@ -342,7 +360,6 @@ export interface InitOutput {
     readonly generate_hanko_svg: (a: any) => [number, number, number, number];
     readonly layout_document: (a: number, b: number) => [number, number, number];
     readonly layout_slide_shape: (a: any, b: any, c: any, d: any, e: number, f: number, g: any) => [number, number, number];
-    readonly list_spreadsheet_vba_procedures: (a: number, b: number) => [number, number, number];
     readonly parse_document: (a: number, b: number) => [number, number, number];
     readonly parse_pdf: (a: number, b: number) => [number, number, number];
     readonly parse_presentation: (a: number, b: number) => [number, number, number];
@@ -350,10 +367,9 @@ export interface InitOutput {
     readonly pdf_extract_text: (a: number, b: number) => [number, number, number, number];
     readonly pdf_verify_signatures: (a: number, b: number) => [number, number, number];
     readonly preview_hanko: (a: number, b: number) => [number, number];
-    readonly read_macro_safety: (a: number, b: number) => [number, number, number];
     readonly recalculate_spreadsheet: (a: any, b: number, c: number) => [number, number, number];
     readonly rename_sheet: (a: any, b: number, c: number, d: number) => [number, number, number];
-    readonly run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
+    readonly row_height_px: (a: number, b: number, c: number) => number;
     readonly set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
     readonly shift_band: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly slide_face_advance: (a: number, b: number, c: number, d: number, e: number, f: number) => number;

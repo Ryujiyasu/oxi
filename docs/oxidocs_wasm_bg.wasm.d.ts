@@ -1,6 +1,9 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const list_spreadsheet_vba_procedures: (a: number, b: number) => [number, number, number];
+export const run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
+export const read_macro_safety: (a: number, b: number) => [number, number, number];
 export const break_slide_paragraph: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: any) => [number, number, number];
 export const build_docx: (a: any) => [number, number, number, number];
 export const build_docx_with_template: (a: any, b: number, c: number) => [number, number, number, number];
@@ -19,7 +22,6 @@ export const format_cell_number: (a: number, b: number, c: number) => [number, n
 export const generate_hanko_svg: (a: any) => [number, number, number, number];
 export const layout_document: (a: number, b: number) => [number, number, number];
 export const layout_slide_shape: (a: any, b: any, c: any, d: any, e: number, f: number, g: any) => [number, number, number];
-export const list_spreadsheet_vba_procedures: (a: number, b: number) => [number, number, number];
 export const parse_document: (a: number, b: number) => [number, number, number];
 export const parse_pdf: (a: number, b: number) => [number, number, number];
 export const parse_presentation: (a: number, b: number) => [number, number, number];
@@ -27,10 +29,9 @@ export const parse_spreadsheet: (a: number, b: number) => [number, number, numbe
 export const pdf_extract_text: (a: number, b: number) => [number, number, number, number];
 export const pdf_verify_signatures: (a: number, b: number) => [number, number, number];
 export const preview_hanko: (a: number, b: number) => [number, number];
-export const read_macro_safety: (a: number, b: number) => [number, number, number];
 export const recalculate_spreadsheet: (a: any, b: number, c: number) => [number, number, number];
 export const rename_sheet: (a: any, b: number, c: number, d: number) => [number, number, number];
-export const run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
+export const row_height_px: (a: number, b: number, c: number) => number;
 export const set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
 export const shift_band: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const slide_face_advance: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
