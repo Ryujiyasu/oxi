@@ -1338,6 +1338,8 @@ impl<'a> ParagraphLayouter<'a> {
         // break_into_lines calls (first pass + S721 retry) with this paragraph's
         // index so the trace joins to the first-divergence dataset. Behaviour-neutral.
         S1026_REPLAY_PARA.with(|c| c.set(body_para_index));
+        // S1636: the lane's left edge relative to the paragraph's (0 at full width).
+        self.s1636_lane_shift.set(s758_band.map_or(0.0, |b| b.2));
         let mut lines = self.break_into_lines(
             &fragments,
             wrap_width,
@@ -1358,6 +1360,7 @@ impl<'a> ParagraphLayouter<'a> {
             caps_active,
             false,
         );
+        self.s1636_lane_shift.set(0.0);
         // S-TWOSEG: replace the full-width break with one row per pair of strips.
         if let Some((_, seg1_w, _, seg2_w)) = s758_two_seg {
             let two = self.break_two_segment_lines(
@@ -1408,6 +1411,7 @@ impl<'a> ParagraphLayouter<'a> {
                 && self.compat_mode < 15
             {
                 S721_ORPHAN_RETRY.with(|f| f.set(true));
+                self.s1636_lane_shift.set(s758_band.map_or(0.0, |b| b.2));
                 let retry = self.break_into_lines(
                     &fragments,
                     wrap_width,
@@ -1429,6 +1433,7 @@ impl<'a> ParagraphLayouter<'a> {
                     false,
                 );
                 S721_ORPHAN_RETRY.with(|f| f.set(false));
+                self.s1636_lane_shift.set(0.0);
                 if retry.len() < lines.len() {
                     retry
                 } else {
@@ -1724,6 +1729,7 @@ impl<'a> ParagraphLayouter<'a> {
                     let (_, red, shift) = band.unwrap_or((0.0, 0.0, 0.0));
                     let refs: Vec<_> = remaining.iter().map(|f|
                         (f.0.as_str(), &f.1, f.2.clone(), f.3, f.4)).collect();
+                    self.s1636_lane_shift.set(shift);
                     let mut broken = self.break_into_lines(&refs, (s758_wrap_full - floor_wrap_reduction(red)).max(s758_lane_minimum),
                         if planned.is_empty() { effective_first_indent } else { 0.0 },
                         &para.style, effective_char_pitch, effective_cw_ratio,
@@ -3526,6 +3532,7 @@ impl<'a> ParagraphLayouter<'a> {
                             .iter()
                             .map(|(t, st, ft, ri, co)| (t.as_str(), st, ft.clone(), *ri, *co))
                             .collect();
+                        self.s1636_lane_shift.set(0.0);
                         let nl = self.break_into_lines(
                             &refs,
                             s758_wrap_full,
@@ -4307,7 +4314,13 @@ impl<'a> ParagraphLayouter<'a> {
                         })
                     });
                 let v = if s1438_ruby {
-                    v.max(natural_lh + ruby_para_expansion_pt)
+                    let exp_line = if std::env::var_os("OXI_S1641_DISABLE").is_none() {
+                        lines.get(line_idx).map_or(ruby_para_expansion_pt,
+                            |l| self.s1641_line_ruby_expansion(l, para, para_font_size))
+                    } else {
+                        ruby_para_expansion_pt
+                    };
+                    v.max(natural_lh + exp_line)
                 } else {
                     v
                 };
@@ -6982,7 +6995,10 @@ impl<'a> ParagraphLayouter<'a> {
                 let baseline_adjust = baseline_adjust + line_ascent_growth
                     + if std::env::var("OXI_S1358_DISABLE").is_err()
                         && line_max_render_ascent > 0.0
-                        && !self.doc_body_has_real_cjk
+                        // S1641 (2026-10-02): CJK lines share one baseline too
+                        // (`_pb_mixedsize_gen.py`: Word's 12pt and 14pt glyph tops
+                        // differ by their ascents, 7.21 vs 5.46; Oxi aligned tops).
+                        && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1641_DISABLE").is_none())
                         && line_has_mixed_sizes
                     {
                         (line_max_render_ascent
@@ -7431,8 +7447,11 @@ impl<'a> ParagraphLayouter<'a> {
                         });
                     }
                 }
+                // S1650: a spread ruby base draws half a spread share right of
+                // its field start (the advance is unchanged; see ruby_lead).
+                let s1650_lead = if frag.style.ruby_spread { frag.style.ruby_lead } else { 0.0 };
                 let mut el = LayoutElement::new(
-                    el_x,
+                    el_x + s1650_lead,
                     emit_y,
                     adjusted_width,
                     line_height,
@@ -7529,7 +7548,7 @@ impl<'a> ParagraphLayouter<'a> {
                 }
                 // Round 7: capture base element x/y BEFORE push (move).
                 // Used below to position the ruby annotation above the base.
-                let base_el_x = el.x;
+                let base_el_x = el.x - s1650_lead;
                 let base_el_y = el.y;
                 let base_el_tyo = el.text_y_off;
                 elements.push(el);
@@ -7569,10 +7588,18 @@ impl<'a> ParagraphLayouter<'a> {
                                 .hps_halfpt
                                 .map(|h| h as f32 / 2.0)
                                 .unwrap_or(base_pt / 2.0);
+                            // S1642 (2026-10-02): the drawn raise defaults like the laid-out one
+                            // (base - 1, 9.0 at 10.5) -- the fixed 9.0 put a 12pt line's
+                            // annotation 1.84pt low (`_pb_bodyruby_gen.py` b24_h6_r0:
+                            // Word か 8.52 / Oxi 10.36 while the base matched).
                             let hps_raise_pt = ruby_ir
                                 .hps_raise_halfpt
                                 .map(|h| h as f32 / 2.0)
-                                .unwrap_or(ruby::DEFAULT_HPS_RAISE_PT);
+                                .unwrap_or_else(|| if std::env::var_os("OXI_S1642_DISABLE").is_none() {
+                                    ruby::default_hps_raise_pt(base_pt, hps_pt)
+                                } else {
+                                    ruby::DEFAULT_HPS_RAISE_PT
+                                });
                             let ruby_text = ruby_ir.text.as_str();
                             let mut ruby_run_style = frag.style.clone();
                             ruby_run_style.font_size = Some(hps_pt);
@@ -8440,6 +8467,16 @@ impl<'a> ParagraphLayouter<'a> {
                     && lines.get(line_idx).map_or(false, |l| {
                         l.fragments.iter().any(|f| para.runs.get(f.run_index).map_or(false, |r| r.ruby.is_some()))
                     });
+                // S1641: the expansion this LINE needs (its tallest run may already
+                // reach above the ruby's room)
+                let ruby_para_expansion_pt = if std::env::var_os("OXI_S1641_DISABLE").is_none()
+                    && ruby_para_expansion_pt > 0.0
+                {
+                    lines.get(line_idx).map_or(ruby_para_expansion_pt,
+                        |l| self.s1641_line_ruby_expansion(l, para, para_font_size))
+                } else {
+                    ruby_para_expansion_pt
+                };
                 if ruby_para_expansion_pt > 0.0
                     && (s1312_line_ruby || (!s1312_on && line_idx + 1 == lines.len()))
                 {
@@ -8469,9 +8506,37 @@ impl<'a> ParagraphLayouter<'a> {
                         // raise=9pt at base 12: augmented 18.02) gets 1 cell in
                         // Word, not 2; the true 2-cell configs clear the boundary
                         // by >= 1.27pt in the sweep, so 0.5 is mid-window.
-                        let augmented_snapped =
-                            ((nat + ruby_para_expansion_pt - 0.5) / pitch).ceil() * pitch;
+                        // S1638 (2026-10-02, default ON, opt-out OXI_S1638_DISABLE): on a
+                        // typed line grid Word centres the UNION of the ruby's box and the
+                        // base's box in the n-row box (n = ceil(union / pitch)); the base
+                        // therefore sits (R - R0)/2 + exp/2 lower than the base-only
+                        // centring (R = rows with ruby, R0 = rows of the base alone).
+                        // `_pb_bodyruby_gen.py` BR_GRID=1, 16 arms, all within 0.1pt:
+                        // b32 h16 r30 Word 32.42 / Oxi 28.72 (= 09422f63's 「2月の保健目標」
+                        // 3.5pt high), b24 h12 r22 30.02 / 18.57, and b21 h10 r20 takes TWO
+                        // rows in Word (the old -0.5 fudge gave one).
+                        let s1638 = std::env::var_os("OXI_S1638_DISABLE").is_none();
+                        let fudge = if s1638 { 0.01 } else { 0.5 };
+                        // S1641: rows from the exact union when it is known
+                        let union = if s1638 && std::env::var_os("OXI_S1641_DISABLE").is_none() {
+                            lines.get(line_idx).map_or(nat + ruby_para_expansion_pt,
+                                |l| self.s1641_line_ruby_union(l, para, para_font_size).1.max(nat))
+                        } else {
+                            nat + ruby_para_expansion_pt
+                        };
+                        let augmented_snapped = ((union - fudge) / pitch).ceil() * pitch;
+                        if std::env::var_os("OXI_DBG_RUBYGRID").is_some() {
+                            eprintln!("[RUBYGRID] nat={:.2} exp={:.2} pitch={:.2} base_rows={:.2} aug_rows={:.2}",
+                                nat, ruby_para_expansion_pt, pitch, base_snapped, augmented_snapped);
+                        }
                         cursor.advance((augmented_snapped - base_snapped).max(0.0));
+                        if s1638 {
+                            let shift = (augmented_snapped - base_snapped).max(0.0) * 0.5
+                                + ruby_para_expansion_pt * 0.5;
+                            for el in elements[flow_elements_start..].iter_mut() {
+                                el.y += shift;
+                            }
+                        }
                     } else {
                         cursor.advance(ruby_para_expansion_pt);
                         // S1631 (2026-10-02, default ON, opt-out OXI_S1631_DISABLE):

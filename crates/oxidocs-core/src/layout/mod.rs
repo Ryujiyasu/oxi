@@ -2823,12 +2823,16 @@ impl LayoutCursor {
 struct BodyWrapPolicy {
     minimum_lane_width: f32,
     break_long_words: bool,
+    /// S1635: the object is positioned relative to the page or margin (not to
+    /// its anchor paragraph); an empty anchor paragraph is not pushed by it.
+    absolute: bool,
 }
 
 impl BodyWrapPolicy {
-    const OBJECT: Self = Self { minimum_lane_width: 30.0, break_long_words: false };
-    const TEXT_FRAME: Self = Self { minimum_lane_width: 72.0, break_long_words: false };
-    const FLOATING_TABLE: Self = Self { minimum_lane_width: 18.75, break_long_words: true };
+    const OBJECT: Self = Self { minimum_lane_width: 30.0, break_long_words: false, absolute: false };
+    const OBJECT_ABS: Self = Self { minimum_lane_width: 30.0, break_long_words: false, absolute: true };
+    const TEXT_FRAME: Self = Self { minimum_lane_width: 72.0, break_long_words: false, absolute: false };
+    const FLOATING_TABLE: Self = Self { minimum_lane_width: 18.75, break_long_words: true, absolute: false };
 }
 
 pub struct LayoutEngine {
@@ -2857,6 +2861,10 @@ pub struct LayoutEngine {
     /// 「…（障害者総合支援法）」とされた。」 ends at 235.3 of 235.65, past the
     /// 230.0 floor of 20 cells).
     s1318_floor_slack: std::cell::Cell<f32>,
+    /// S1636: while a paragraph's lines are broken for a lane beside a float,
+    /// the lane's left edge relative to the paragraph's own left edge, so that
+    /// tab stops (explicit and the default grid) keep their margin origin.
+    s1636_lane_shift: std::cell::Cell<f32>,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
     /// S1370: the face a CJK character takes when its eastAsia font is
@@ -3499,6 +3507,7 @@ impl LayoutEngine {
             s1349_normal_fs: 11.0,
             doc_default_sz_declared: false,
             s1318_floor_slack: std::cell::Cell::new(0.0),
+            s1636_lane_shift: std::cell::Cell::new(0.0),
             default_font_family: None,
             default_font_family_east_asia: None,
             cjk_substitute_face: "Yu Mincho".to_string(),
@@ -3676,6 +3685,7 @@ impl LayoutEngine {
                 .and_then(|r| r.font_size)
                 .is_some(),
             s1318_floor_slack: std::cell::Cell::new(0.0),
+            s1636_lane_shift: std::cell::Cell::new(0.0),
             default_font_family,
             default_font_family_east_asia,
             cjk_substitute_face,
@@ -4848,7 +4858,14 @@ impl LayoutEngine {
     fn ruby_expansion_for_runs(
         &self, runs: &[Run], default_size: f32, para_style: &ParagraphStyle,
     ) -> f32 {
-        if std::env::var_os("OXI_RUBY_FONT_ASCENT").is_none() {
+        // S1638 (2026-10-02): the font-ascent form below is now the default -- it
+        // is the box law the grid probe confirmed (ruby box ascent = win ascent +
+        // half the 83/64 surplus; the union raise + ruby_asc + base_desc decides
+        // the rows and is centred in them). Opt-out OXI_S1638_DISABLE (or the old
+        // opt-in OXI_RUBY_FONT_ASCENT keeps forcing it on).
+        if std::env::var_os("OXI_RUBY_FONT_ASCENT").is_none()
+            && std::env::var_os("OXI_S1638_DISABLE").is_some()
+        {
             return ruby::paragraph_ruby_expansion_pt(runs, default_size);
         }
         runs.iter().filter_map(|run| {
@@ -5395,6 +5412,15 @@ impl LayoutEngine {
         }
         self.resolve_fit_text_blocks(&mut page.header);
         self.resolve_fit_text_blocks(&mut page.footer);
+        // S1637 (2026-10-02, default ON, opt-out OXI_S1637_DISABLE): text-box
+        // content carries fitText too. 09422f63's box «寒さに負けず元気に外で遊ぼう»
+        // (fitText 8400 = 420pt over 14pt runs with ruby) was set at its natural
+        // 308pt because only body / notes / header / footer were resolved.
+        if std::env::var_os("OXI_S1637_DISABLE").is_none() {
+            for tb in &mut page.text_boxes {
+                self.resolve_fit_text_blocks(&mut tb.blocks);
+            }
+        }
     }
 
     // Resolve on the private layout copy so measurement and painting agree.
@@ -5552,6 +5578,17 @@ impl LayoutEngine {
                 for r in &mut runs[k..end] {
                     r.style.character_spacing = Some(r.style.character_spacing.unwrap_or(0.0) + extra);
                     r.style.ruby_spread = true;
+                    // S1650 (2026-10-02, default ON, opt-out OXI_S1650_DISABLE):
+                    // Word spreads the overhang like distributeSpace — half a
+                    // share before the first base glyph, a full share between,
+                    // half after. `_pb_bodyruby_gen.py BR_X=2 BR_BASE=漢
+                    // BR_RT=かんじ`: 漢 at 3.0 / 2.16 / 3.96 for 12 / 10.5 / 16pt
+                    // (= overhang/2); BR_BASE=漢字 BR_RT=かんじかん: 漢 1.44, 字
+                    // 16.44 (pitch 15 = 12 + 3). The trailing-only spacing put
+                    // 09422f63's «量» 3.05pt left of Word.
+                    if std::env::var_os("OXI_S1650_DISABLE").is_none() {
+                        r.style.ruby_lead = extra / 2.0;
+                    }
                 }
             }
             k = end;
@@ -7956,12 +7993,22 @@ cells={} pitch={:.2} text={:?}",
             ));
         }
 
-        // 3. Clip region — all TextBox content is clipped to the box boundary
+        // 3. Clip region — TextBox content is clipped to the box sideways; below
+        // the box it is clipped only when the shape says so.
+        // S1644 (2026-10-02, default ON, opt-out OXI_S1644_DISABLE): Word draws
+        // text that runs past a text box's bottom (vertOverflow defaults to
+        // "overflow"); 09422f63's 144pt box holds four 36pt ruby lines and Word
+        // shows the fourth («□室内に入る前に花粉を落とす», baseline 805.68) under
+        // the border -- Oxi dropped it. S481 found the same in 2026 and held back
+        // for the anchor-position errors fixed since.
+        let s1644_overflow = std::env::var_os("OXI_S1644_DISABLE").is_none()
+            && text_box.vert_overflow.as_deref() != Some("clip");
+        let s1644_extra = if s1644_overflow { 2000.0 } else { 0.0 };
         elements.push(LayoutElement::new(
             abs_x,
             abs_y,
             text_box.width,
-            text_box.height,
+            text_box.height + s1644_extra,
             LayoutContent::ClipStart,
         ));
 
@@ -8057,7 +8104,7 @@ cells={} pitch={:.2} text={:?}",
 
             match block {
                 Block::Paragraph(para) => {
-                    let clip_bottom = abs_y + text_box.height;
+                    let clip_bottom = abs_y + text_box.height + s1644_extra;
                     // Capture para start Y before layout_paragraph advances cursor_y.
                     // Used below to anchor inner-paragraph shapes at their declared offset.
                     let para_start_y = cursor.cursor_y;
@@ -8073,7 +8120,7 @@ cells={} pitch={:.2} text={:?}",
                         inner_x,
                         &mut cursor,
                         inner_width,
-                        inner_height,
+                        inner_height + s1644_extra,
                         abs_y + inset_t,
                         page,
                         &mut dummy_pages,
@@ -8237,7 +8284,9 @@ cells={} pitch={:.2} text={:?}",
                     // with X ~ 0.18..0.28 of a line. X is not pinned across the
                     // line-spacing rules yet, so that half is NOT implemented
                     // here; see the archive note for the measurement table.)
-                    let line_cutoff_y = if line_h > 0.5 && inner_h > 0.0 {
+                    let line_cutoff_y = if s1644_overflow {
+                        clip_bottom // S1644: whole lines past the box bottom are drawn, as in Word
+                    } else if line_h > 0.5 && inner_h > 0.0 {
                         let mut avail = (inner_h / line_h).floor();
                         if std::env::var("OXI_S1266_DISABLE").is_err() {
                             avail = avail.max(1.0);
@@ -9039,7 +9088,35 @@ cells={} pitch={:.2} text={:?}",
                 _ => false,
             });
             if !s843_has_ink && std::env::var("OXI_S843_DISABLE").is_err() {
-                return frame_floor;
+                // S1649 (2026-10-02, default ON, opt-out OXI_S1649_DISABLE): the
+                // footer's untouched-blank exemption (S909/S1525) holds for the
+                // header too. An ink-less header made of ONE paragraph that
+                // carries nothing but its style name is ignored (body at the
+                // margin); one with direct paragraph formatting — tabs / indents,
+                // a jc off the style chain, direct spacing, or any other pPr
+                // child (kinsoku, widowControl, adjustRightInd, ...) — or with
+                // two or more paragraphs reserves its stack like a text header.
+                // Word COM Info(6) on the 75 ink-less-header corpus docs: 16 push
+                // (14 direct / multi-paragraph, 2 under 3.3pt from other causes),
+                // 39 single pStyle-only paragraphs never push; the three docs the
+                // first (margin-based) form regressed are pStyle-only. Probes on
+                // 005be1f9 / 008f68d9: `<w:p/>` or an rPr-only pPr never pushes,
+                // direct tabs / jc / spacing push in every host by the line's
+                // own height (+ its before/after); direct spacing that merely
+                // restates the inherited values does not (not modelled: the
+                // census has no such doc).
+                let s1649_touched = std::env::var_os("OXI_S1649_DISABLE").is_none()
+                    && (blocks.len() > 1
+                        || blocks.iter().any(|b| match b {
+                            Block::Paragraph(p) => p.style.has_direct_tabs_or_ind
+                                || p.style.has_direct_alignment_off_style
+                                || p.style.has_direct_spacing
+                                || p.style.has_direct_ppr_other,
+                            _ => false,
+                        }));
+                if !s1649_touched {
+                    return frame_floor;
+                }
             }
             let header_y = page.header_distance.unwrap_or(36.0);
             let hdr_cw = page.size.width - page.margin.left - page.margin.right;
@@ -10909,6 +10986,15 @@ cells={} pitch={:.2} text={:?}",
                 && std::env::var("OXI_EMPTY_WRAP_SLOT_DISABLE").is_err()
             { 9.75 } else { 30.0 };
             let s1511_on = std::env::var_os("OXI_S1511_DISABLE").is_none();
+            // S1635 (2026-10-02): an all-whitespace paragraph is never pushed below
+            // a band -- it has nothing to collide with. ukframework's cover: a
+            // tight-wrap picture positioned relative to the PAGE fills the whole
+            // column (lanes < 0 on both sides) and hangs off an empty paragraph
+            // at the page top; Word leaves that paragraph where it is (the S1387
+            // observation) and the next content follows the picture. Pushing it
+            // 725pt (to the next page) moved every page of the document by one.
+            let s1635_empty_stays = std::env::var_os("OXI_S1635_DISABLE").is_none()
+                && para.runs.iter().all(|r| r.text.chars().all(char::is_whitespace));
             while let Some(band) = {
                 // S1511 (2026-09-21, default ON, opt-out OXI_S1511_DISABLE): the
                 // free lane is judged against the UNION of every band the line
@@ -10936,7 +11022,50 @@ cells={} pitch={:.2} text={:?}",
                     free_max = free_max.max(right - x);
                     free_max < overl.iter().map(|b| required_lane(&b.6)).fold(0.0, f32::max)
                 };
-                if forced_single || forced_union {
+                // S1636 (2026-10-02, default ON, opt-out OXI_S1636_DISABLE): a line that
+                // begins with a TAB needs room for the tab's jump (to the next stop
+                // measured from the paragraph's left edge) plus its first character;
+                // when no lane offers that, Word sets the whole line below the band.
+                // `_pb_lanemin_gen.py` (09422f63 host, 16pt, tab stop 1965tw, default
+                // stops 42pt): with the tab Word goes below for lanes <= 42pt and
+                // beside for >= 50 (tab to the default stop 504.55 + one 16pt glyph
+                // <= 552.75); without the tab it flows into a 20pt lane.
+                let s1636_tab_block = std::env::var_os("OXI_S1636_DISABLE").is_none()
+                    && para.runs.iter().find(|r| !r.text.is_empty()).map_or(false, |r| r.text.starts_with('\t'))
+                    && {
+                        let first_w = para.runs.iter().find(|r| !r.text.is_empty())
+                            .map(|r| self.resolve_font_size(&r.style, &para.style)).unwrap_or(10.5);
+                        let need_from = |lane_x: f32| -> f32 {
+                            let rel = lane_x - start_x;
+                            let stop = para.style.tab_stops.iter()
+                                .find(|ts| ts.position > rel + 0.01).map(|ts| ts.position)
+                                .unwrap_or(((rel / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop);
+                            (stop - rel) + first_w
+                        };
+                        // judged on the UNION of the overlapping bands (S1511): the free
+                        // intervals between them, clipped to the paragraph's edges
+                        let req = overl.iter().map(|b| required_lane(&b.6)).fold(0.0, f32::max);
+                        let mut iv: Vec<(f32, f32)> = overl.iter().map(|b| (b.3.max(left), b.4.min(right))).collect();
+                        iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                        let mut free: Vec<(f32, f32)> = Vec::new();
+                        let mut x = left;
+                        for (x0, x1) in iv {
+                            if x0 > x { free.push((x, x0)); }
+                            x = x.max(x1);
+                        }
+                        if right > x { free.push((x, right)); }
+                        !free.iter().any(|(x0, x1)| {
+                            let w = x1 - x0;
+                            w >= req && w >= need_from(*x0)
+                        })
+                    };
+                if s1635_empty_stays && !overl.is_empty() && overl.iter().all(|b| b.6.absolute) {
+                    // S1635: only page / margin-relative objects spare the empty
+                    // paragraph; a paragraph-relative float still pushes it
+                    // (en/educational 0050e825: Word pushes the empty anchor
+                    // paragraph 364pt below its own float).
+                    None
+                } else if forced_single || forced_union || s1636_tab_block {
                     // step by the band that ends first
                     overl.iter().copied().min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
                 } else { None }
@@ -11037,6 +11166,59 @@ cells={} pitch={:.2} text={:?}",
             })
             .find(|(_, red, _)| *red > 6.0 || (!self.doc_body_has_real_cjk && (std::env::var("OXI_WRAP_WORD_FIT").is_ok()
                 || std::env::var("OXI_S1472_DISABLE").is_err())));
+        // S1640 (2026-10-02, default ON, opt-out OXI_S1640_DISABLE): when the line
+        // crosses SEVERAL bands the lane is the widest free interval of their
+        // union, not the far side of whichever band is found first. 09422f63:
+        // body paragraphs between a left picture (band to 141) and a right one
+        // (band from 487.5) -- the left band alone gave a lane to the column's
+        // right edge (552.75) and the lines ran under the right picture, two
+        // lines short of Word (which ends them at 486.67).
+        let s758_para_band: Option<(f32, f32, f32)> = if std::env::var_os("OXI_S1640_DISABLE").is_none() {
+            let overl: Vec<&(usize, f32, f32, f32, f32, bool, BodyWrapPolicy)> = s758_bands
+                .iter()
+                .filter(|(pg, top, bot, bx0, bx1, _, _)| {
+                    *pg == current_page_idx
+                        && (if intersection { line_top + line_height > *top } else { cursor_y >= *top - 0.5 })
+                        && line_top < *bot - 0.5
+                        && *bx0 < start_x + content_width - 6.0
+                        && *bx1 > start_x + 6.0
+                })
+                .collect();
+            if overl.len() >= 2 {
+                let ind_l = para.style.indent_left
+                    .or_else(|| self.s1349_left_pt(para, page.grid_char_pitch, page.grid_char_cw_ratio))
+                    .unwrap_or(0.0).max(0.0);
+                let ind_r = para.style.indent_right
+                    .or_else(|| para.style.indent_right_chars.map(|c| self.s1349_default_chars_pt(c, para, page.grid_char_pitch, page.grid_char_cw_ratio)))
+                    .unwrap_or(0.0).max(0.0);
+                let pl = start_x + ind_l;
+                let pr = start_x + content_width - ind_r;
+                let mut iv: Vec<(f32, f32)> = overl.iter().map(|b| (b.3.max(pl), b.4.min(pr))).collect();
+                iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                let mut free: Vec<(f32, f32)> = Vec::new();
+                let mut x = pl;
+                for (x0, x1) in iv {
+                    if x0 > x { free.push((x, x0)); }
+                    x = x.max(x1);
+                }
+                if pr > x { free.push((x, pr)); }
+                let lane_min = overl.iter().map(|b| b.6.minimum_lane_width).fold(30.0_f32, f32::min);
+                match free.iter().filter(|(a, b)| b - a >= lane_min)
+                    .max_by(|a, b| (a.1 - a.0).partial_cmp(&(b.1 - b.0)).unwrap_or(std::cmp::Ordering::Equal)) {
+                    Some(&(x0, x1)) => {
+                        let bot = overl.iter().map(|b| b.2).fold(f32::INFINITY, f32::min);
+                        let shift = (x0 - pl).max(0.0);
+                        let red = shift + (pr - x1).max(0.0);
+                        if red > 6.0 { Some((bot, red, shift)) } else { s758_para_band }
+                    }
+                    None => s758_para_band,
+                }
+            } else {
+                s758_para_band
+            }
+        } else {
+            s758_para_band
+        };
         // S-TWOSEG: the same band, asked a different question -- does
         // this paragraph have usable room on BOTH sides of the float?
         // If it does, the single-segment answer above is the wrong
@@ -13506,6 +13688,60 @@ cells={} pitch={:.2} text={:?}",
     /// paragraph `line=320 exact` carrying ふりがな ruby over 氏名 sits in a
     /// 20pt row in Word (16 + cell margins), Oxi grew it to 36.5 -- twice per
     /// page, +33pt, an empty paragraph across the page boundary.
+    /// S1641 (2026-10-02): a line's ruby expansion measured against the LINE's
+    /// tallest box ascent, not the ruby base run's. Word grows a ruby line by the
+    /// union of {ruby top, every run's box ascent} above and {every run's box
+    /// descent} below (`_pb_mixedsize_gen.py` MS_RUBY=1: a 14pt «？» in a 12pt
+    /// ruby line adds 0.6pt = its extra box descent; 16pt adds 1.2; 18pt adds
+    /// 2.76 = descent + the ascent that finally tops the ruby). The paragraph
+    /// value counted the big run's box AND the whole ruby expansion (+2.0 / +3.9).
+    fn s1641_line_ruby_expansion(&self, line: &Line, para: &Paragraph, para_fs: f32) -> f32 {
+        self.s1641_line_ruby_union(line, para, para_fs).0
+    }
+
+    /// S1641: (expansion, union height) of a ruby line. The union is
+    /// raise + ruby box ascent above the baseline and the tallest CJK run's box
+    /// descent below -- the quantity whose ceil(/pitch) is the row count on a
+    /// typed grid (b21 h10 r20: 18.03 -> two rows in Word, where the floored
+    /// S1367 natural box 13.5 + exp fell to 17.93 -> one). Boxes are the exact
+    /// win box x 83/64 here; only 83/64 (East Asian) fragments take part -- a
+    /// Latin symbol run (09422f63's 🔶 in Segoe UI Symbol) does not eat the ruby
+    /// room in Word (its ruby lines keep the plain-ruby pitch).
+    fn s1641_line_ruby_union(&self, line: &Line, para: &Paragraph, para_fs: f32) -> (f32, f32) {
+        let surplus = |m: &FontMetrics, fs: f32| (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0 - 1.0) / 2.0;
+        let box_asc = |m: &FontMetrics, fs: f32| m.win_ascent * fs + surplus(m, fs);
+        let box_desc = |m: &FontMetrics, fs: f32| m.win_descent * fs + surplus(m, fs);
+        let mut line_asc = 0.0f32;
+        let mut line_desc = 0.0f32;
+        let mut ruby_top = 0.0f32;
+        for f in &line.fragments {
+            if f.text.trim().is_empty() {
+                continue;
+            }
+            let fs = f.style.font_size.unwrap_or(para_fs);
+            let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+            if !m.is_cjk_83_64_font() {
+                continue;
+            }
+            line_asc = line_asc.max(box_asc(m, fs));
+            line_desc = line_desc.max(box_desc(m, fs));
+            if let Some(ruby) = para.runs.get(f.run_index).and_then(|r| r.ruby.as_ref()) {
+                let hps = ruby.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(fs / 2.0);
+                let raise = ruby.hps_raise_halfpt.map(|h| h as f32 / 2.0)
+                    .unwrap_or_else(|| ruby::default_hps_raise_pt(fs, hps));
+                let run = &para.runs[f.run_index];
+                let ann_asc = if ruby.annotation_fonts.is_empty() {
+                    box_asc(self.metrics_for_text(&ruby.text, &run.style, &para.style), hps)
+                } else {
+                    ruby.annotation_fonts.iter().map(|n| box_asc(self.registry.get(n), hps)).fold(0.0, f32::max)
+                };
+                ruby_top = ruby_top.max(raise + ann_asc);
+            }
+        }
+        let exp = (ruby_top - line_asc).max(0.0);
+        (exp, ruby_top.max(line_asc) + line_desc)
+    }
+
     fn s1396_ruby_expansion(&self, para: &Paragraph, fs: f32) -> f32 {
         if std::env::var("OXI_S1396_DISABLE").is_err()
             && para.style.line_spacing_rule.as_deref() == Some("exact")
@@ -15474,6 +15710,24 @@ cells={} pitch={:.2} text={:?}",
                             max_font_size, line_height, max_font_cell,
                             (line_height - max_font_cell).max(0.5),
                             0.8 * line_height + 1.0 - 0.8594 * max_font_size);
+                    }
+                    // S1652 (2026-10-02, default ON, opt-out OXI_S1652_DISABLE): on
+                    // a pure-Latin atLeast line Word puts the baseline at
+                    // `line - winDescent*fs` from the line top (the slack goes
+                    // ABOVE the glyph), and the renderer draws the baseline at
+                    // `y + text_y_off - 1.0 + winAscent*fs`, so the offset is
+                    // `1.0 + (line - cell)` — the same missing `+1.0` S1356 found
+                    // for exact lines. `_pb_atleast_gen.py` (Arial bold 13.5, line
+                    // 16.5/20/25 atLeast): Word baselines 13.68/17.16/22.08 below
+                    // the margin = line - 2.82..2.92 (descent 2.86); Oxi sat
+                    // 12.46/15.82/20.86, 1.2pt high. The 0.5 floor stays for exact
+                    // / CJK / mixed lines. educational__0061215a (every line
+                    // atLeast 16.5 over Arial 12-13.5): -1.2..-1.6 on all 28 lines.
+                    if para_style.line_spacing_rule.as_deref() == Some("atLeast")
+                        && s504_latin_line
+                        && std::env::var_os("OXI_S1652_DISABLE").is_none()
+                    {
+                        return 1.0 + (line_height - max_font_cell).max(0.0);
                     }
                     return (line_height - max_font_cell).max(0.5);
                 }

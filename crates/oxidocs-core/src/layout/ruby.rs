@@ -198,6 +198,16 @@ pub fn ruby_position(
             // First char's left edge has half-spacing as offset.
             if ruby_char_count == 0 {
                 ((base_w_pt - ruby_w_pt) / 2.0, 0.0)
+            } else if ruby_char_count >= 2 && std::env::var_os("OXI_S1648_DISABLE").is_none() {
+                // S1648 (2026-10-02): Word aligns the first and last ruby
+                // characters with the base's ends and spreads the rest between
+                // them — no half-padding. `_pb_bodyruby_gen.py BR_ALIGN=
+                // distributeLetter BR_X=1`, «かんじ» over «漢字»: 12/6pt か 0.0 /
+                // ん 9.0 / じ 18.0; 21/7pt 0.0 / 17.52 / 35.04 (= (base − ruby)/
+                // (n−1) + ruby char). The half-padding form put 09422f63's «さむ»
+                // 4pt too far in.
+                let extra_total = (base_w_pt - ruby_w_pt).max(0.0);
+                (0.0, extra_total / (ruby_char_count - 1) as f32)
             } else {
                 let extra_total = base_w_pt - ruby_w_pt;
                 let per_char = extra_total / ruby_char_count as f32;
@@ -215,9 +225,21 @@ pub fn ruby_position(
             } else {
                 let field_w = base_w_pt.max(ruby_w_pt);
                 let extra_total = field_w - ruby_w_pt;
-                let per_char = extra_total / (ruby_char_count + 1) as f32;
-                let start_offset = per_char + (base_w_pt - field_w);
-                (start_offset, per_char)
+                if std::env::var_os("OXI_S1646_DISABLE").is_none() {
+                    // S1646 (2026-10-02): Word's distributeSpace puts a HALF gap at
+                    // each end and a whole gap between the ruby characters (2n
+                    // half-units), not n+1 equal gaps. `_pb_bodyruby_gen.py` BR_X=1,
+                    // «かんじ» over «漢字»: 12/6pt start 0.96 pitch 8.04 (= 6/6, 6+6/3),
+                    // 12/4pt 1.92 / 7.92, 16/8pt 1.32 / 10.68, 21/7pt 3.48 / 13.9 --
+                    // all = extra/(2n) and extra/n. 09422f63: «じき» over «時期»
+                    // 3.0 in, the title's «かふん» 47.5 apart over 142.5pt.
+                    let between = extra_total / ruby_char_count as f32;
+                    (between / 2.0 + (base_w_pt - field_w), between)
+                } else {
+                    let per_char = extra_total / (ruby_char_count + 1) as f32;
+                    let start_offset = per_char + (base_w_pt - field_w);
+                    (start_offset, per_char)
+                }
             }
         }
     }
@@ -559,9 +581,10 @@ mod tests {
     #[test]
     fn ruby_position_distribute_letter_spreads_across_base() {
         // base 30, ruby 10, 5 chars: extra = 20, per-char = 4. Start = 2.
+        // S1648: ends aligned, (30 - 10) / (5 - 1) between.
         let (x, sp) = ruby_position(30.0, 10.0, 5, Some(RubyAlign::DistributeLetter));
-        assert_eq!(x, 2.0);
-        assert_eq!(sp, 4.0);
+        assert_eq!(x, 0.0);
+        assert_eq!(sp, 5.0);
     }
 
     #[test]

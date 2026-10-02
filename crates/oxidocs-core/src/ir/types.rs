@@ -515,6 +515,11 @@ pub struct RunStyle {
     /// width already equals the ruby field width.
     #[serde(default)]
     pub ruby_spread: bool,
+    /// S1650: a spread base's glyphs are drawn this far right of the field's
+    /// start (half of one character's spread — Word distributes the overhang
+    /// like distributeSpace: half a share at each end, a full share between).
+    #[serde(default)]
+    pub ruby_lead: f32,
     /// S1314b: this run carries a ruby, so its base text wraps as one atomic unit.
     #[serde(default)]
     pub ruby_field: bool,
@@ -714,6 +719,7 @@ impl Default for RunStyle {
             font_hint_east_asia: None,
             east_asia_from_theme: false,
             ruby_spread: false,
+            ruby_lead: 0.0,
             ruby_field: false,
             east_asia_lang: None,
             latin_lang: None,
@@ -1631,6 +1637,12 @@ pub struct ParagraphStyle {
     /// direct tabs+ind must).
     #[serde(default)]
     pub has_direct_tabs_or_ind: bool,
+    /// S1649 (2026-10-02): the DIRECT pPr carries any paragraph property
+    /// other than pStyle / rPr / pPrChange / sectPr (kinsoku, widowControl,
+    /// adjustRightInd, autoSpace*, wordWrap, ...). A blank header paragraph
+    /// Word treats as "touched" reserves its line like a text header.
+    #[serde(default)]
+    pub has_direct_ppr_other: bool,
     /// S1525 (2026-09-24): the DIRECT `<w:jc>` names a value the style chain
     /// (paragraph style, docDefaults, else left) would not have given. A blank
     /// footer paragraph whose direct alignment departs from its style reserves
@@ -1913,6 +1925,7 @@ impl Default for ParagraphStyle {
             has_direct_alignment: false,
             has_direct_before_after: false,
             has_direct_tabs_or_ind: false,
+            has_direct_ppr_other: false,
             has_direct_alignment_off_style: false,
             has_direct_before: false,
             has_direct_after: false,

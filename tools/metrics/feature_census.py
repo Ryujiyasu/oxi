@@ -28,6 +28,26 @@ def part(z, name):
         return ""
 
 
+def _headers(z):
+    return [part(z, n) for n in z.namelist() if re.match(r"word/header\d*\.xml$", n)]
+
+
+def _blank(h):
+    return not (re.search(r"<w:t[^>]*>[^<]*\S", h) or "<w:drawing" in h or "<w:pict" in h or "<w:tbl>" in h
+                or "instrText" in h or "fldSimple" in h)
+
+
+def _touched(h):
+    paras = re.findall(r"<w:p\b[^>]*>.*?</w:p>|<w:p\b[^>]*/>", h, re.S)
+    if len(paras) > 1:
+        return True
+    for p in paras:
+        ppr = re.search(r"<w:pPr>(.*?)</w:pPr>", p, re.S)
+        if ppr and re.search(r"<w:(?!pStyle\b|rPr\b|pPrChange\b|sectPr\b)[A-Za-z]", re.sub(r"<w:rPr>.*?</w:rPr>", "", ppr.group(1), flags=re.S)):
+            return True
+    return False
+
+
 def census(path):
     z = zipfile.ZipFile(path)
     d = part(z, "word/document.xml"); st = part(z, "word/styles.xml"); se = part(z, "word/settings.xml"); th = part(z, "word/theme/theme1.xml")
@@ -96,8 +116,22 @@ def census(path):
         "ruby": d.count("<w:ruby>"),
         "vertical": 'w:orient="landscape"' in d or "<w:textDirection" in d,
         "fields": d.count("<w:instrText") + d.count("<w:fldSimple"),
+        # S1643 / S1645: w16se symbol runs and Segoe UI Symbol / Emoji faces
+        "symex": d.count("symEx"),
+        "segoe_sym": len(re.findall(r'w:rFonts[^>]*"Segoe UI (?:Symbol|Emoji)"', d + st)),
+        # S1635: square/tight-wrap pictures whose positionV is margin/page-relative
+        "wrap_abs_pic": sum(1 for a in anchors if "<pic:pic" in a and re.search(r"<wp:wrap(Square|Tight|Through)\b", a)
+                            and re.search(r'<wp:positionV relativeFrom="(margin|page|topMargin|bottomMargin)"', a)),
         # S1634: w:ind carrying BOTH firstLineChars (non-zero) and a cached firstLine
         "flc_cached": len([m for m in re.findall(r"<w:ind [^>]*/>", d + st) if re.search(r'firstLineChars="-?[1-9]', m) and "firstLine=" in m]),
+        # S1651: floating tables whose tblpPr names no vertAnchor (= margin)
+        "tblp_noanchor": len([m for m in re.findall(r"<w:tblpPr [^>]*/>", d) if "vertAnchor" not in m]),
+        # S1652: atLeast line spacing anywhere (document or styles)
+        "atleast": d.count('w:lineRule="atLeast"') + st.count('w:lineRule="atLeast"'),
+        # S1649: ink-less header parts, and those Word treats as "touched"
+        # (two or more paragraphs, or a pPr child other than pStyle / rPr)
+        "hdr_blank": sum(1 for h in _headers(z) if _blank(h)),
+        "hdr_blank_touched": sum(1 for h in _headers(z) if _blank(h) and _touched(h)),
         "toc": "TOC" in d and "instrText" in d,
         "footnotes": d.count("<w:footnoteReference"),
         "ea_latin_run": len(re.findall(r'<w:rFonts[^>]*w:eastAsia="(Times New Roman|Arial|Calibri|Cambria|Century|Georgia|Verdana|Tahoma)"', d)),

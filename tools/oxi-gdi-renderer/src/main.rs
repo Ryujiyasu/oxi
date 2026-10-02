@@ -479,7 +479,12 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                     let mut u16i: usize = 0;
                                     for (ci, ch) in text.chars().enumerate() {
                                         let left_extent = if u16i == 0 { 0 } else { dx[u16i - 1] };
-                                        let cx = x_draw as f64 + left_extent as f64 + (cs_px as f64) * (ci as f64);
+                                        // S1647 (2026-10-02): GetTextExtentExPointW already counts the
+                                        // SetTextCharacterExtra spacing, so adding cs_px per glyph
+                                        // doubled it in the dump (09422f63 «危険»: 険 dumped at
+                                        // 101.5 while TextOutW drew it at 80.9 = Word's 81.0).
+                                        let _ = ci;
+                                        let cx = x_draw as f64 + left_extent as f64;
                                         if !ch.is_whitespace() {
                                             page_glyphs.push((
                                                 ch,

@@ -1523,6 +1523,32 @@ impl<'a> PageLayouter<'a> {
         } else {
             Default::default()
         };
+        // S1635 (2026-10-02, default ON, opt-out OXI_S1635_DISABLE): a square /
+        // tight-wrap picture whose vertical position is MARGIN- or PAGE-relative
+        // also pushes the body text aside -- on the page its anchor paragraph
+        // lands on, at its absolute y. Only the paragraph-relative sources above
+        // were registered, so ja/educational 09422f63's left-margin picture
+        // (V margin 220.7pt, 123.8 x 146.2) was painted at (7.5, 263) while four
+        // body paragraphs ran under it at x 42.55 where Word starts them at 141;
+        // the title below then sat 8.8pt high. The corpus carries 66 such
+        // anchors in 21 documents.
+        let s1635_abs_squares: std::collections::HashMap<usize, Vec<usize>> = if s758_on
+            && std::env::var_os("OXI_S1635_DISABLE").is_none()
+        {
+            let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+            for (ii, img) in page.floating_images.iter().enumerate() {
+                if matches!(img.wrap_type, Some(crate::ir::WrapType::Square) | Some(crate::ir::WrapType::Tight))
+                    && img.position.as_ref().map_or(false, |ip| {
+                        matches!(ip.v_relative.as_deref(), Some("margin") | Some("page"))
+                    })
+                {
+                    m.entry(img.anchor_block_index).or_default().push(ii);
+                }
+            }
+            m
+        } else {
+            Default::default()
+        };
         // S758-TB (2026-07-07, default ON, opt-out OXI_S758_TB_DISABLE):
         // wrapSquare TEXTBOX side-wrap — the corpus's actual wrapSquare
         // anchors are all textboxes (29dc6e x1, 2ea81a x4, both word_png)
@@ -1588,12 +1614,16 @@ impl<'a> PageLayouter<'a> {
                             blk, sh.width, sh.height, sp.x, sp.y, sp.h_relative, sp.h_align
                         );
                     }
+                    // S1639: the keep-out box grows by effectExtent and distT / distB
+                    let (gt, gb, gl, gr) = if std::env::var_os("OXI_S1639_DISABLE").is_none() {
+                        (0.0, sp.dist_b.unwrap_or(0.0) + sp.eff_b, sp.eff_l, sp.eff_r)
+                    } else { (0.0, 0.0, 0.0, 0.0) };
                     m.entry(blk).or_default().push((
-                        sp.y,
-                        sh.width,
-                        sh.height,
+                        sp.y - gt,
+                        sh.width + gl + gr,
+                        sh.height + gt + gb,
                         sp.h_align.clone(),
-                        sp.x,
+                        sp.x - gl,
                         sp.dist_l.unwrap_or(9.0),
                         sp.dist_r.unwrap_or(9.0),
                         sp.h_relative.as_deref() == Some("column"),
@@ -2261,6 +2291,17 @@ impl<'a> PageLayouter<'a> {
             // wrapTight sidebar (y 528..840.75, past content bottom 770) that
             // Word keeps on p2; the content-bottom clamp/push sent it + its
             // anchor to p3 (S975=1: 2 -> 3 pages). REPORT_N.
+            // S1639 (2026-10-02, default ON, opt-out OXI_S1639_DISABLE): Word's keep-out
+            // box is the extent grown by wp:effectExtent left / right / bottom, plus
+            // distB below (distL / distR were already applied). NOT distT / eff_t:
+            // 09422f63's 「2月の保健目標」 line box ends 3.4pt inside the text box's
+            // distT=3.6 zone and Word leaves it in place (a top extension sent it
+            // into the 32pt sliver and cascaded the page). 09422f63:
+            // the left picture's effectExtent r=9525 EMU puts the lane edge at 141.0
+            // (Oxi 140.25) -- which decides whether the heading's tab stop at 140.85
+            // is still ahead -- and the text box's distB 3.6 puts the pushed heading's
+            // line top at 272.1 (Oxi 268.5).
+            let s1639 = std::env::var_os("OXI_S1639_DISABLE").is_none();
             let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool, bool, bool)> = {
                 // unified (pos_y, width, height, h_align, x, dist_l, dist_r, physical)
                 // over image + textbox wrapSquare sources anchored to this block
@@ -2269,12 +2310,15 @@ impl<'a> PageLayouter<'a> {
                     for &ii in iis {
                         let img = &page.floating_images[ii];
                         if let Some(ip) = img.position.as_ref() {
+                            let (gt, gb, gl, gr) = if s1639 {
+                                (0.0, ip.dist_b.unwrap_or(0.0) + ip.eff_b, ip.eff_l, ip.eff_r)
+                            } else { (0.0, 0.0, 0.0, 0.0) };
                             v.push((
-                                ip.y,
-                                img.width,
-                                img.height,
+                                ip.y - gt,
+                                img.width + gl + gr,
+                                img.height + gt + gb,
                                 ip.h_align.clone(),
-                                ip.x,
+                                ip.x - gl,
                                 ip.dist_l.unwrap_or(9.0),
                                 ip.dist_r.unwrap_or(9.0),
                                 false,
@@ -2296,12 +2340,15 @@ impl<'a> PageLayouter<'a> {
                             let s981_physical = std::env::var("OXI_S981_DISABLE").is_err()
                                 && tb.behind_doc
                                 && tb.wrap_type == Some(crate::ir::WrapType::Tight);
+                            let (gt, gb, gl, gr) = if s1639 {
+                                (0.0, tp.dist_b.unwrap_or(0.0) + tp.eff_b, tp.eff_l, tp.eff_r)
+                            } else { (0.0, 0.0, 0.0, 0.0) };
                             v.push((
-                                tp.y,
-                                tb.width,
-                                tb.height,
+                                tp.y - gt,
+                                tb.width + gl + gr,
+                                tb.height + gt + gb,
                                 tp.h_align.clone(),
-                                tp.x,
+                                tp.x - gl,
                                 tp.dist_l.unwrap_or(9.0),
                                 tp.dist_r.unwrap_or(9.0),
                                 s981_physical || self.legacy_square_textbox_clamp(tb),
@@ -2513,6 +2560,72 @@ impl<'a> PageLayouter<'a> {
                         }
                     }
                     s758_bands.push(nb);
+                }
+                // S1635: margin / page-relative square pictures anchored here (absolute y,
+                // the same reference the painter uses).
+                if let Some(iis) = s1635_abs_squares.get(&block_idx) {
+                    for &ii in iis {
+                        let img = &page.floating_images[ii];
+                        let Some(ip) = img.position.as_ref() else { continue };
+                        let top = match ip.v_relative.as_deref() {
+                            Some("page") => ip.y,
+                            _ => page.margin.top + ip.y,
+                        };
+                        let column_scope = ip.h_relative.as_deref() == Some("column")
+                            && crate::layout::s1467_float_column_flow();
+                        let content_left = if column_scope { start_x } else { page.margin.left };
+                        let band_width = if column_scope { content_width } else { total_content_width };
+                        let x0 = match ip.h_align.as_deref() {
+                            Some("right") => content_left + band_width - img.width,
+                            Some("center") => content_left + (band_width - img.width) * 0.5,
+                            Some("left") => content_left,
+                            _ => content_left + ip.x,
+                        };
+                        let (gt, gb, gl, gr) = if std::env::var_os("OXI_S1639_DISABLE").is_none() {
+                            (0.0, ip.dist_b.unwrap_or(0.0) + ip.eff_b, ip.eff_l, ip.eff_r)
+                        } else { (0.0, 0.0, 0.0, 0.0) };
+                        let nb = (current_page_idx, top - gt, top + img.height + gb,
+                                  x0 - gl - ip.dist_l.unwrap_or(9.0), x0 + img.width + gr + ip.dist_r.unwrap_or(9.0),
+                                  img.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT_ABS);
+                        if std::env::var_os("OXI_DBG_BANDS").is_some() {
+                            eprintln!("[S1635] blk={} band={:?} eff_r={} eff_b={} dist_t={:?} dist_b={:?}", block_idx, nb, ip.eff_r, ip.eff_b, ip.dist_t, ip.dist_b);
+                        }
+                        s758_bands.push(nb);
+                    }
+                }
+            }
+            // S1635: the absolute-position sources must register even when the block
+            // has no paragraph-relative float (the `if !s758_srcs.is_empty()` above).
+            if s758_srcs.is_empty() {
+                if let Some(iis) = s1635_abs_squares.get(&block_idx) {
+                    for &ii in iis {
+                        let img = &page.floating_images[ii];
+                        let Some(ip) = img.position.as_ref() else { continue };
+                        let top = match ip.v_relative.as_deref() {
+                            Some("page") => ip.y,
+                            _ => page.margin.top + ip.y,
+                        };
+                        let column_scope = ip.h_relative.as_deref() == Some("column")
+                            && crate::layout::s1467_float_column_flow();
+                        let content_left = if column_scope { start_x } else { page.margin.left };
+                        let band_width = if column_scope { content_width } else { total_content_width };
+                        let x0 = match ip.h_align.as_deref() {
+                            Some("right") => content_left + band_width - img.width,
+                            Some("center") => content_left + (band_width - img.width) * 0.5,
+                            Some("left") => content_left,
+                            _ => content_left + ip.x,
+                        };
+                        let (gt, gb, gl, gr) = if std::env::var_os("OXI_S1639_DISABLE").is_none() {
+                            (0.0, ip.dist_b.unwrap_or(0.0) + ip.eff_b, ip.eff_l, ip.eff_r)
+                        } else { (0.0, 0.0, 0.0, 0.0) };
+                        let nb = (current_page_idx, top - gt, top + img.height + gb,
+                                  x0 - gl - ip.dist_l.unwrap_or(9.0), x0 + img.width + gr + ip.dist_r.unwrap_or(9.0),
+                                  img.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT_ABS);
+                        if std::env::var_os("OXI_DBG_BANDS").is_some() {
+                            eprintln!("[S1635] blk={} band={:?} eff_r={} eff_b={} dist_t={:?} dist_b={:?}", block_idx, nb, ip.eff_r, ip.eff_b, ip.dist_t, ip.dist_b);
+                        }
+                        s758_bands.push(nb);
+                    }
                 }
             }
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and
@@ -7095,8 +7208,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if let Some(ref pos) = table.style.position {
                         candidate_y_top = match pos.v_anchor.as_deref() {
                             Some("page") => pos.y,
-                            Some("margin") => start_y + pos.y,
-                            _ => cursor.cursor_y + pos.y, // "text": offset from anchor para bottom
+                            // S1651 (2026-10-02, default ON, opt-out OXI_S1651_DISABLE):
+                            // an ABSENT vertAnchor means "margin" (the ECMA default),
+                            // and "margin" is the page's top margin, not the
+                            // header-pushed body top. `_pb_tblpy_anchor_gen.py`
+                            // (forms__005e0208: 59pt header picture, margin 72,
+                            // tblpY 2745, no vertAnchor): Word's first table rule
+                            // 209.18 = 72 + 137.25 both as-is and with
+                            // vertAnchor="margin"; "text" gives 232.7, "page"
+                            // 137.18. Oxi took the absent case as "text" and the
+                            // margin case from the pushed body top (232.65).
+                            Some("text") => cursor.cursor_y + pos.y, // offset from anchor para bottom
+                            Some("margin") if std::env::var_os("OXI_S1651_DISABLE").is_some() => start_y + pos.y,
+                            None if std::env::var_os("OXI_S1651_DISABLE").is_some() => cursor.cursor_y + pos.y,
+                            _ => page.margin.top + pos.y,
                         };
                         // S991 (2026-07-23, default ON, opt-out OXI_S991_DISABLE):
                         // a floating table with w:tblpYSpec="bottom" and vertAnchor
@@ -7120,7 +7245,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             && !matches!(pos.v_anchor.as_deref(), Some("text") | Some("page"))
                             && std::env::var("OXI_S991_DISABLE").is_err()
                         {
-                            let anchor_bottom = candidate_y_top;
+                            // S1651 leaves this derivation alone: the S991 budget
+                            // was measured from the anchor PARAGRAPH (anchor@325 ->
+                            // 5 of 7 rows) with vertAnchor absent, and the
+                            // margin-top origin fits more rows and moves
+                            // policies__003496577's row 5 a page (gate s1652).
+                            let anchor_bottom = match pos.v_anchor.as_deref() {
+                                Some("margin") => start_y + pos.y,
+                                _ => cursor.cursor_y + pos.y,
+                            };
                             let cb = start_y + content_height;
                             let avail = cb - anchor_bottom;
                             let cw_est =
@@ -7277,8 +7410,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if let Some(ref pos) = table.style.position {
                                 candidate_y_top = match pos.v_anchor.as_deref() {
                                     Some("page") => pos.y,
-                                    Some("margin") => start_y + pos.y,
-                                    _ => cursor.cursor_y + pos.y, // "text"
+                                    Some("text") => cursor.cursor_y + pos.y,
+                                    // S1651: absent = margin = the page's top margin.
+                                    Some("margin") if std::env::var_os("OXI_S1651_DISABLE").is_some() => start_y + pos.y,
+                                    None if std::env::var_os("OXI_S1651_DISABLE").is_some() => cursor.cursor_y + pos.y,
+                                    _ => page.margin.top + pos.y,
                                 };
                             }
                             cursor.set(candidate_y_top);

@@ -3740,7 +3740,20 @@ impl<'a> LineBreaker<'a> {
                                 && (!self.doc_body_has_real_cjk
                                     || std::env::var_os("OXI_S1560_DISABLE").is_none())
                                 && first_line_indent < -0.01;
-                            let line_start_abs = indent_left;
+                            // S1636 (2026-10-02, default ON, opt-out OXI_S1636_DISABLE): a
+                            // line set in a lane beside a float starts `lane_shift` right
+                            // of the paragraph's left edge; tab stops keep the margin
+                            // origin, so a tab inside the lane jumps to the next stop
+                            // measured from there (09422f63's heading «⇥くしゃみは…»: Word
+                            // tabs to the default stop 504.55 or, when that leaves no
+                            // room, moves the whole line below the box; Oxi added the
+                            // stop to the lane start and set the text at x 618).
+                            let line_start_abs = indent_left
+                                + if std::env::var_os("OXI_S1636_DISABLE").is_none() {
+                                    self.s1636_lane_shift.get()
+                                } else {
+                                    0.0
+                                };
                             let abs_pos = current_width + line_start_abs;
                             if dbg_frags.is_some() {
                                 eprintln!("[TAB] indent_left={:.2} cur={:.2} abs_pos={:.2} s881={} first_indent={:.2} line={}", indent_left, current_width, abs_pos, s881, first_line_indent, lines.len());

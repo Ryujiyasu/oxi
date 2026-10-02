@@ -5051,6 +5051,12 @@ fn parse_paragraph_properties(
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                // S1649: any direct paragraph-level child but the style name /
+                // mark formatting / revision / section marks the paragraph as
+                // "touched" (the blank header/footer discriminator).
+                if depth == 0 && !matches!(local.as_str(), "pStyle" | "rPr" | "pPrChange" | "sectPr") {
+                    style.has_direct_ppr_other = true;
+                }
                 match local.as_str() {
                     "rPr" if depth == 0 => {
                         // pPr/rPr: paragraph-level default run properties (empty para font)
@@ -5379,6 +5385,9 @@ fn parse_paragraph_properties(
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
+                if depth == 0 && !matches!(local.as_str(), "pStyle" | "rPr" | "pPrChange" | "sectPr") {
+                    style.has_direct_ppr_other = true; // S1649, see Event::Start
+                }
                 match local.as_str() {
                     "pStyle" => {
                         for attr in e.attributes().flatten() {
@@ -6248,7 +6257,9 @@ fn parse_run(
                     // mc:AlternateContent — prefer Choice (DrawingML)
                     "AlternateContent" if depth == 0 => {
                         let ac = parse_alternate_content(reader, ctx, styles)?;
-                        if drawing_result.is_none() {
+                        if let Some(sym) = ac.as_ref().and_then(|a| a.symbol_text.clone()) {
+                            text.push_str(&sym); // S1643
+                        } else if drawing_result.is_none() {
                             drawing_result = ac;
                         }
                     }
@@ -6917,12 +6928,15 @@ struct DrawingResult {
     image: Option<Image>,
     shape: Option<Shape>,
     text_box: Option<TextBox>,
+    /// S1643 (2026-10-02): a `w16se:symEx` symbol (an emoji / Segoe UI Symbol
+    /// character carried in mc:AlternateContent) -- plain run text, not a drawing.
+    symbol_text: Option<String>,
 }
 
 impl DrawingResult {
     /// Returns true if at least one component (image, shape, or text_box) is present
     fn has_content(&self) -> bool {
-        self.image.is_some() || self.shape.is_some() || self.text_box.is_some()
+        self.image.is_some() || self.shape.is_some() || self.text_box.is_some() || self.symbol_text.is_some()
     }
 }
 
@@ -8906,6 +8920,7 @@ fn parse_drawing(
     };
 
     Ok(DrawingResult {
+        symbol_text: None,
         image,
         shape,
         text_box,
@@ -9464,6 +9479,7 @@ fn parse_vml_pict(
     // path, so this VML-only fix leaves them byte-identical (canary-verified).
     if is_canvas_group && group_height > 0.0 && std::env::var("OXI_VMLCANVAS_DISABLE").is_err() {
         return Ok(DrawingResult {
+            symbol_text: None,
             image: Some(Image {
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
@@ -9698,6 +9714,7 @@ fn parse_vml_pict(
             behind_doc: false,
         });
         return Ok(DrawingResult {
+            symbol_text: None,
             image: placeholder,
             shape: None,
             text_box,
@@ -9733,6 +9750,7 @@ fn parse_vml_pict(
     });
 
     Ok(DrawingResult {
+        symbol_text: None,
         image,
         shape,
         text_box: None,
@@ -9990,6 +10008,7 @@ fn parse_ole_object(
 
     Ok((
         DrawingResult {
+            symbol_text: None,
             image,
             shape: None,
             text_box: None,
@@ -10066,6 +10085,16 @@ fn parse_alternate_content(
                             result = Some(dr);
                         }
                     }
+                    // S1643: <w16se:symEx w16se:font=".." w16se:char="2600"/> -- the symbol
+                    // is the run's text (09422f63's list markers ☀ in Segoe UI Emoji; the
+                    // Choice has no drawing, so the run came out empty and the line lost
+                    // the marker's 16.5pt)
+                    "symEx" if in_choice && result.is_none() => {
+                        if let Some(ch) = symex_char(&e) {
+                            result = Some(DrawingResult { image: None, shape: None, text_box: None, symbol_text: Some(ch) });
+                        }
+                        depth += 1;
+                    }
                     "pict" if (in_choice || in_fallback) && depth == 1 && result.is_none() => {
                         let dr = parse_vml_pict(reader, ctx, styles)?;
                         if std::env::var("OXI_DEBUG_AC").is_ok() {
@@ -10098,12 +10127,34 @@ fn parse_alternate_content(
                     depth -= 1;
                 }
             }
+            Event::Empty(e) => {
+                // S1643: the symbol element is usually self-closing
+                if in_choice && result.is_none() && local_name(e.name().as_ref()) == "symEx" {
+                    if let Some(ch) = symex_char(&e) {
+                        result = Some(DrawingResult { image: None, shape: None, text_box: None, symbol_text: Some(ch) });
+                    }
+                }
+            }
             Event::Eof => break,
             _ => {}
         }
     }
 
     Ok(result)
+}
+
+/// S1643: the character of a `w16se:symEx` element (its `char` attribute is the
+/// hexadecimal code point).
+fn symex_char(e: &quick_xml::events::BytesStart) -> Option<String> {
+    for attr in e.attributes().flatten() {
+        if local_name(attr.key.as_ref()) == "char" {
+            let v = String::from_utf8_lossy(&attr.value);
+            if let Some(c) = u32::from_str_radix(v.trim(), 16).ok().and_then(char::from_u32) {
+                return Some(c.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Parse OMML math element (m:oMath or m:oMathPara) into a text representation
