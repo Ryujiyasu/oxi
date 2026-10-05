@@ -148,3 +148,5 @@ In Oxi's browser editor, the spreadsheet engine implements `Host`. The macro run
 3. Write the "nothing panics" test on the first day. It is ten lines and it pays for itself the first time someone feeds the interpreter a real macro.
 
 `oxivba-core` lives in the [Oxi repository](https://github.com/Ryujiyasu/oxi) under MPL-2.0, alongside the DOCX, XLSX and PPTX engines. You can run workbook macros in the [browser editor](https://oxi-dd65f4.gitlab.io/).
+
+*Disclosure: this article was drafted with the help of an LLM (Claude) from the Oxi source code and its commit history, then reviewed and edited by the author. The code excerpts and numbers were checked against the repository.*
