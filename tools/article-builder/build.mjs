@@ -22,6 +22,24 @@ const articles = [
     alternateLabel: "English",
     home: "../ja/",
   },
+  {
+    source: "docs/articles/vba-object-lifetimes-rc.md",
+    output: "docs/articles/vba-object-lifetimes-rc.html",
+    lang: "en",
+    description: "How Oxi's dependency-free Rust VBA interpreter runs Class_Terminate at the exact moment Excel does, using an Rc<()> share of life per reference.",
+    alternate: "./vba-object-lifetimes-rc.ja.html",
+    alternateLabel: "日本語",
+    home: "../",
+  },
+  {
+    source: "docs/articles/vba-object-lifetimes-rc.ja.md",
+    output: "docs/articles/vba-object-lifetimes-rc.ja.html",
+    lang: "ja",
+    description: "依存ゼロの Rust 製 VBA インタプリタで、参照ごとの Rc<()> を寿命の持ち分にして、Excel と同じ瞬間に Class_Terminate を実行する方法。",
+    alternate: "./vba-object-lifetimes-rc.html",
+    alternateLabel: "English",
+    home: "../ja/",
+  },
 ];
 
 const style = `
@@ -34,7 +52,9 @@ article{max-width:820px;margin:auto;padding:64px 24px 80px}h1{font-size:clamp(2.
 
 for (const item of articles) {
   const markdown = await readFile(resolve(root, item.source), "utf8");
-  const title = markdown.match(/^# (.+)$/m)?.[1] ?? "Oxi";
+  const rawTitle = markdown.match(/^# (.+)$/m)?.[1] ?? "Oxi";
+  // The heading may carry inline code; the <title> and meta tags take plain, escaped text.
+  const title = rawTitle.replace(/`/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const body = await marked.parse(markdown);
   const firstParagraph = body.replace(/^<h1[^>]*>.*?<\/h1>\s*/s, "").match(/^<p>(.*?)<\/p>/s)?.[1] ?? "";
   const articleBody = body

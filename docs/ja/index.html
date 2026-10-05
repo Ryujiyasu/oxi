@@ -1175,6 +1175,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
       <h3>Excel — 数式と VBA をブラウザで</h3>
       <p>.xlsx エンジンは依存グラフ型の数式エンジン（215 関数。実在の 285 ワークブックで Excel 自身のキャッシュ値と突き合わせて検証）と、ワークブックのマクロをブラウザで実行するクライアントサイド VBA ホストを備えています: Range / Worksheet / Workbook 操作、Sort、AutoFilter、Find、Copy/PasteSpecial、WorksheetFunction — 11 種のホストオブジェクトに 95 メンバ。それぞれ実物の Excel COM の挙動から導出し、82 本のスクリプト比較で検証しています。マクロによる編集は差分だけを書き戻し、元の ZIP は保持 — 無編集保存はバイト単位で同一です。</p>
+      <p><strong>技術記事:</strong> <a href="../articles/vba-object-lifetimes-rc.ja.html">VBA のオブジェクトの寿命を Rust の <code>Rc&lt;()&gt;</code> で再現する</a> — Excel とまったく同じタイミングで Class_Terminate を実行する仕組み。</p>
 
       <h3>なぜこの精度が出せるのか</h3>
       <ul>
