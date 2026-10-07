@@ -1,4 +1,4 @@
-# VBA のオブジェクトの寿命を Rust の `Rc<()>` で再現する
+# VBA のオブジェクトの寿命を Rust の `Drop` で再現する
 
 どこの会社にも、何年も誰も中を見ていない Excel マクロのフォルダがあるものです。移行するにせよ廃止するにせよ、そもそも「コンテンツの有効化」を押してよいのか判断するにせよ、まずはそのマクロが何をするのかを知らなければなりません。そのために作ったのが `oxivba-core` です。VBA の字句解析・構文解析・静的解析・インタプリタを、依存クレートなしの Rust で書いたもので、CLI でもブラウザ（WebAssembly）でも同じように動きます。この記事では、その中で「簡単だろう」と思っていたのに一番手こずった部分、VBA のオブジェクトがいつ消えるかの扱いを紹介します。
 
@@ -20,7 +20,7 @@ Sub Work()
 End Sub          ' "working" の直後、まさにここで "released" が出る
 ```
 
-一般的なガベージコレクタでは、"released" が出るのは「そのうち」です。実際のマクロをそのとおりに動かすには、参照が 0 になる命令をぴったり特定しなければなりません。`Set x = Nothing` のような分かりやすい場合だけではありません。次のような場合にも、オブジェクトは手放されます。
+一般的なガベージコレクタでは、"released" が出るのは「そのうち」です。実際のマクロをそのとおりに動かすには、最後の参照が消える文をぴったり特定しなければなりません。`Set x = Nothing` のような分かりやすい場合だけではありません。次のような場合にも、オブジェクトは手放されます。
 
 - それを持っていた唯一の変数に、別の値を代入したとき
 - オブジェクトの配列に `Erase` や `ReDim` を実行したとき
@@ -29,60 +29,68 @@ End Sub          ' "working" の直後、まさにここで "released" が出る
 
 しかも `Class_Terminate` は、どの場合でも必ず 1 回だけ実行しなければなりません。
 
-## 参照ごとに「寿命の持ち分」を持たせる
+## 消えたら自分で知らせるトークン
 
-クラスモジュールのインスタンスは、実行時のオブジェクト表に数値のハンドルで登録されています。VBA の変数がそれを指すときは、`ObjectRef` を持ちます。
+クラスモジュールのインスタンスと、`Collection`・`Dictionary` のオブジェクトは、実行時のオブジェクト表に数値のハンドルで登録されています。VBA の変数がそれを指すときは `ObjectRef` を持ち、同じオブジェクトを指す `ObjectRef` はすべて、小さなトークンの `Rc` を共有します。
 
 ```rust
 #[derive(Debug, Clone)]
 pub struct ObjectRef {
     pub handle: u64,
     pub kind: String,
-    /// For an instance of a class module, a share in its life: the runtime
-    /// counts these to know when the last reference is gone and
-    /// Class_Terminate is due. None for everything else.
-    pub life: Option<Rc<()>>,
+    pub life: Option<Rc<LifeToken>>,
+}
+
+#[derive(Debug)]
+pub struct LifeToken {
+    handle: u64,
+    due: Rc<RefCell<Vec<u64>>>,
+}
+
+impl Drop for LifeToken {
+    fn drop(&mut self) {
+        self.due.borrow_mut().push(self.handle);
+    }
 }
 ```
 
-この `Rc<()>` は中身を持たない、ただのカウンタです。参照がコピーされるたびに、つまりローカル変数、配列の要素、別のオブジェクトのフィールド、`Collection` の項目のどこに入る場合でも `ObjectRef` が clone され、持ち分が 1 つ増えます。コピーが捨てられれば持ち分も減ります。COM が `AddRef` と `Release` で行っている帳簿付けを、Rust の所有権がそのまま肩代わりしてくれるわけです。増減を自分で書く箇所がないので、エラー処理の経路で書き忘れることもありません。
+参照をローカル変数、配列の要素、別のオブジェクトのフィールド、`Collection` の項目のどこに入れても、`ObjectRef` が clone されます。コピーを捨てれば、その `Rc` も捨てられます。最後の 1 つが消えると Rust が `LifeToken::drop` を呼び、トークンは自分のハンドルを、実行時が持っている待ち行列に入れます。COM が `AddRef` と `Release` で行っている帳簿付けを、Rust の所有権がそのまま肩代わりしてくれるわけです。増減を自分で書く箇所がどこにもないので、エラー処理の経路で書き忘れることもありません。
 
-さらに、実行時は生きているインスタンスごとに自分用の持ち分を 1 つ、登録簿に持っています。そのため「もう誰も持っていない」かどうかは、比較 1 回で分かります。
-
-```rust
-Rc::strong_count(&instance.life) == 1   // 残っているのは登録簿の持ち分だけ
-```
+同じくらい大事なのは、`drop` が `Class_Terminate` を**実行しない**ことです。VBA のコードを動かすには実行時全体への `&mut` が必要ですが、トークンはそれを持てません。終了処理がエラーを出すこともありますが、`Drop` にはそれを返す先がありません。終了処理の中でさらにオブジェクトが手放されることもあり、`drop` の中から実行時に入り直すことになってしまいます。そこでトークンは知らせるだけにして、実行してよい場所で実行時がその知らせを処理します。
 
 ## 回収するタイミング
 
-カウントがいつ減るかは Rust が決めます。こちらが決めるのは、いつ確認するかです。インタプリタは、参照が手放される可能性のある文の後で確認します。代入、`Set`、`Erase`、`ReDim`、戻り値を使わない呼び出し、そして手続きの終了（エラーによる終了も含む）です。回収のループを簡略化すると、次のようになります。
+最後の参照がいつ消えるかは Rust が決めます。実行時がいつ処理するかは、VBA の意味論が決めます。インタプリタは、参照が手放される可能性のある文の後で待ち行列を処理します。代入、`Set`、`Erase`、`ReDim`、戻り値を使わない呼び出し、そして手続きの終了（エラーによる終了も含む）です。ループを少し簡略化すると、次のようになります（補助関数の名前は、数行のインライン処理を表しています）。
 
 ```rust
 fn collect_instances(&mut self, line: u32) -> Result<(), RuntimeError> {
     loop {
-        // 誰も持たなくなったコンテナを消す。中身の持ち分も一緒に返る
-        let dropped: Vec<u64> = self.container_lives.iter()
-            .filter(|(_, life)| Rc::strong_count(life) == 1)
-            .map(|(handle, _)| *handle)
-            .collect();
-        for handle in &dropped {
-            self.container_lives.remove(handle);
-            self.internal_objects.remove(handle);
+        // 待ち行列を取り出し、何かを捨てる前に借用を手放す。
+        // 下でオブジェクトを捨てると、それだけが持っていたものが待ち行列に入る
+        let mut batch = std::mem::take(&mut *self.due.borrow_mut());
+        if batch.is_empty() {
+            return Ok(());
         }
-
-        let due = self.instances_with_only_the_registry_share();
-        if due.is_empty() {
-            if dropped.is_empty() { return Ok(()); }
-            continue; // コンテナが消えたことで、新たに解放されたインスタンスがあるかもしれない
+        // コンテナを先に消す。それで解放されたものは次の周回で扱う
+        let containers = self.containers_in(&batch);
+        if !containers.is_empty() {
+            for handle in &containers {
+                self.internal_objects.remove(handle);
+            }
+            batch.retain(|h| !containers.contains(h));
+            self.due.borrow_mut().extend(batch);
+            continue;
         }
-        for (handle, class) in due {
-            if !self.mark_terminated(handle) { continue; } // 2 回は実行しない
-            if self.class_has_terminate(&class) {
-                // Class_Terminate の Err は呼び出し側に持ち込まない
-                let saved = (self.err_in.take(), self.err_out.take());
-                let ran = self.run_terminate(handle, &class, line);
-                (self.err_in, self.err_out) = saved;
-                ran?;
+        batch.sort_unstable(); // インスタンスは作られた順に
+        for (i, &handle) in batch.iter().enumerate() {
+            let Some(class) = self.mark_terminated(handle) else { continue }; // 2 回は実行しない
+            // Class_Terminate の Err は呼び出し側に持ち込まない
+            let saved = (self.err_in.take(), self.err_out.take());
+            let ran = self.run_terminate(handle, &class, line);
+            (self.err_in, self.err_out) = saved;
+            if let Err(e) = ran {
+                self.due.borrow_mut().extend_from_slice(&batch[i + 1..]); // 残りはまだ処理待ち
+                return Err(e);
             }
             self.internal_objects.remove(&handle); // これだけが持っていたものも消える
         }
@@ -90,13 +98,19 @@ fn collect_instances(&mut self, line: u32) -> Result<(), RuntimeError> {
 }
 ```
 
-このループには工夫が 3 つありますが、どれも一度は間違えて直したところです。
+このループの工夫は、どれも一度は間違えて直したところです。
 
-- **ループにしてある。** オブジェクトを消すと、そのフィールドに入っていた `ObjectRef` も捨てられるので、別のインスタンスの持ち分が 1 になることがあります。`Set col = Nothing` で `Collection` を手放せば、中の項目も同じタイミングで道連れになります。
-- **終了済みは、消すのではなく印を付ける。** `Class_Terminate` の中でさらにオブジェクトが手放されることがあり、その直後の回収が、今まさに処理待ちのインスタンスに届くことがあります。印を付けておけば、終了処理が 2 回走ることはありません。
+- **何かを捨てる前に、待ち行列の借用を終える。** オブジェクトを消すと、その中の `ObjectRef` が捨てられ、それぞれのトークンが同じ待ち行列に入ろうとします。`RefCell` を借りたままだと、ここで panic します。
+- **ループにして、コンテナを先に処理する。** あるインスタンスを最後に持っていた `Collection` を `Set col = Nothing` で手放したら、そのインスタンスも同じタイミングで終了しなければなりません。
+- **終了済みは、消すのではなく印を付ける。** `Class_Terminate` の中でさらにオブジェクトが手放されることがあり、その直後の回収が、今のバッチにも入っているインスタンスに届くことがあります。印を付けておけば、終了処理が 2 回走ることはありません。
 - **呼び出しの前後で `Err` を退避する。** 手続きがエラー 5 を出し、抜ける途中でローカル変数のオブジェクトが終了した場合でも、呼び出し側から見えるのはエラー 5 のままです。終了処理の中の `On Error` の状態が外に漏れてはいけません。
+- **エラーで止まっても、残りは待ち行列に戻す。** 先に実行した終了処理がエラーを出したせいで、処理待ちのものが消えることはありません。
 
 これらはドキュメントを読んだ私の解釈ではなく、すべて本物の Excel で確かめた挙動です。実行時のソースには「measured」で始まるコメントが 200 個以上あり、どれも Rust のコードを書く前に、その場合 Excel がどう答えたかを記録したものです。ドキュメントと Excel の挙動が食い違ったら、Excel に合わせます。
+
+## 最初の版は数を見に行っていた
+
+最初の実装では、参照ごとに `Rc<()>` を 1 つ持たせ、登録簿にもう 1 つ持たせていました。回収のたびに生きているインスタンスを全部見て回り、`Rc::strong_count(..) == 1` のものを探していたのです。動きはしましたが、「数を数えるために `Rc<()>` を持たせて見に行くのは Rust らしくない」という指摘を受けました。もっともな指摘です。そこで `Drop` を使う形に書き直しましたが、外から見える挙動は 1 つも変えていません。それを確かめるため、書き直す前に、古い版が 11 の場面でどう動くかを記録しました。場面は、`Set Nothing`、再代入、`Erase`、`ReDim`、`Collection` の解放と項目の削除、`Dictionary`、エラーで抜けた手続き、`As New` による作り直し、戻り値を捨てた呼び出し、入れ子の `Collection` です。これをテストにして、新しいコードがすべてのログ文字列を同じに再現することを確かめました。副産物として、回収のたびに全インスタンスを見て回る必要がなくなり、知らされたハンドルだけを処理するようになりました。
 
 ## 何を渡されても落ちないこと
 
@@ -149,8 +163,8 @@ Oxi のブラウザ版エディタでは、スプレッドシートのエンジ�
 
 ## 同じようなインタプリタを作る人へ
 
-1. 言語がオブジェクトの寿命をプログラムに見せるなら、数えるのは Rust の所有権に任せ、自分で書くのは「いつ確認するか」だけにする。参照ごとに `Rc<()>` を持たせる方法は、参照カウントの仕組みを自前で書くよりずっと手軽で、エラー処理の経路でカウントがずれる心配もありません。
-2. 元の実装で実際に観測できる挙動を仕様とし、確かめた結果は、それを根拠にしたコードのすぐそばに書き残す。
+1. 言語がオブジェクトの寿命をプログラムに見せるなら、参照を数えるのは Rust の所有権に任せ、最後の 1 つが消えたことは `Drop` に知らせてもらう。ただし、`drop` の中でその言語のコードを実行してはいけない。知らせを待ち行列に入れ、実行時全体を持っていてエラーを返せる場所で処理する。
+2. 元の実装で実際に観測できる挙動を仕様とし、確かめた結果は、それを根拠にしたコードのすぐそばに書き残す。書き直す前には、今の挙動をテストにしておく。
 3. 「何を渡しても panic しない」テストは最初の日に書く。10 行ほどで書けて、誰かが本物のマクロを流し込んだその日に元が取れます。
 
 `oxivba-core` は MPL-2.0 で、DOCX・XLSX・PPTX の各エンジンと一緒に [Oxi のリポジトリ](https://github.com/Ryujiyasu/oxi) で公開しています。ワークブックのマクロは [ブラウザ版エディタ](https://oxi-dd65f4.gitlab.io/ja/) で実際に動かせます。

@@ -1172,7 +1172,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
       <h3>Excel — formulas and VBA in the browser</h3>
       <p>The .xlsx engine ships a dependency-graph formula engine — 215 functions, recalculation diffed against Excel&rsquo;s own cached results across 285 real workbooks — and a client-side VBA host that runs workbook macros in the browser: Range / Worksheet / Workbook operations, Sort, AutoFilter, Find, Copy/PasteSpecial and WorksheetFunction, 95 members across 11 host objects, each derived from and verified against real Excel COM behaviour (82 scripted A/B comparisons). Macro edits write back differentially — the original ZIP is preserved, and a no-edit save is byte-identical.</p>
-      <p><strong>Engineering deep dive:</strong> <a href="./articles/vba-object-lifetimes-rc.html">Reproducing VBA's object lifetimes in Rust with <code>Rc&lt;()&gt;</code></a> — how the interpreter runs Class_Terminate at the exact moment Excel does.</p>
+      <p><strong>Engineering deep dive:</strong> <a href="./articles/vba-object-lifetimes-rc.html">Reproducing VBA's object lifetimes in Rust with <code>Drop</code></a> — how the interpreter runs Class_Terminate at the exact moment Excel does.</p>
 
       <h3>How the fidelity is earned</h3>
       <ul>

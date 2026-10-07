@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Reproducing VBA's object lifetimes in Rust with Rc&lt;()&gt; — Oxi</title>
+<title>Reproducing VBA's object lifetimes in Rust with Drop — Oxi</title>
 <meta name="description" content="How Oxi's dependency-free Rust VBA interpreter runs Class_Terminate at the exact moment Excel does, using an Rc<()> share of life per reference.">
 <link rel="canonical" href="https://oxi-dd65f4.gitlab.io/articles/vba-object-lifetimes-rc.html">
 <link rel="alternate" hreflang="ja" href="https://oxi-dd65f4.gitlab.io/articles/vba-object-lifetimes-rc.ja.html">
 <meta property="og:type" content="article">
-<meta property="og:title" content="Reproducing VBA's object lifetimes in Rust with Rc&lt;()&gt;">
+<meta property="og:title" content="Reproducing VBA's object lifetimes in Rust with Drop">
 <meta property="og:description" content="How Oxi's dependency-free Rust VBA interpreter runs Class_Terminate at the exact moment Excel does, using an Rc<()> share of life per reference.">
 <meta property="og:image" content="https://oxi-dd65f4.gitlab.io/oxi-logo.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -26,7 +26,7 @@ article{max-width:820px;margin:auto;padding:64px 24px 80px}h1{font-size:clamp(2.
 <header class="site"><div class="site-inner"><a class="brand" href="../">Oxi</a><nav><a href="../">Home</a><a href="./vba-object-lifetimes-rc.ja.html" hreflang="ja">日本語</a></nav></div></header>
 <article>
 <div class="meta">Engineering · Word compatibility · Rust</div>
-<h1>Reproducing VBA's object lifetimes in Rust with Rc&lt;()&gt;</h1>
+<h1>Reproducing VBA's object lifetimes in Rust with Drop</h1>
 <p class="lede">Somewhere in most companies there is a folder of Excel macros nobody has read in years. Before you can migrate them, retire them, or even decide whether it is safe to click &quot;Enable Content&quot;, you need to know what they do. Oxi&#39;s answer is <code>oxivba-core</code>: a VBA lexer, parser, static analyser and interpreter written in Rust with zero dependencies, so that it runs the same way in a CLI and in a browser tab through WebAssembly. This post is about the part of that interpreter I expected to be easy and was not: deciding when a VBA object dies.</p>
 <h2>Why lifetimes matter in VBA</h2>
 <p>VBA sits on COM, and COM objects are reference counted. That is visible to the program. A class module can declare a <code>Class_Terminate</code> procedure, and VBA runs it at a precise moment: when the last reference to the instance goes away. Code in the wild depends on that moment. People use it to close a log file, to restore <code>Application.ScreenUpdating</code>, and to print &quot;done&quot; when a helper object falls out of scope at the end of a procedure.</p>
@@ -42,64 +42,77 @@ Sub Work()
     Debug.Print &quot;working&quot;
 End Sub          &#39; prints &quot;working&quot;, then &quot;released&quot; here, not later
 </code></pre>
-<p>A tracing garbage collector would print &quot;released&quot; at some unspecified later time. To run real macros faithfully, an interpreter has to know the exact instruction at which the count reaches zero. That includes the less obvious cases. <code>Set x = Nothing</code> releases the instance. So does reassigning the only variable that held it, <code>Erase</code> or <code>ReDim</code> on an array of objects, a <code>Collection</code> that was the last holder being released, and a procedure left early by a runtime error. And it has to run <code>Class_Terminate</code> exactly once.</p>
-<h2>A share of life</h2>
-<p>Instances of class modules live in the runtime&#39;s object table, addressed by a numeric handle. A VBA variable that holds one holds an <code>ObjectRef</code>:</p>
+<p>A tracing garbage collector would print &quot;released&quot; at some unspecified later time. To run real macros faithfully, an interpreter has to know the exact statement at which the last reference goes. That includes the less obvious cases. <code>Set x = Nothing</code> releases the instance. So does reassigning the only variable that held it, <code>Erase</code> or <code>ReDim</code> on an array of objects, a <code>Collection</code> that was the last holder being released, and a procedure left early by a runtime error. And it has to run <code>Class_Terminate</code> exactly once.</p>
+<h2>A token that reports its own death</h2>
+<p>Instances of class modules, and <code>Collection</code> and <code>Dictionary</code> objects, live in the runtime&#39;s object table, addressed by a numeric handle. A VBA variable that holds one holds an <code>ObjectRef</code>, and every <code>ObjectRef</code> to the same object shares one <code>Rc</code> of a small token:</p>
 <pre><code class="language-rust">#[derive(Debug, Clone)]
 pub struct ObjectRef {
     pub handle: u64,
     pub kind: String,
-    /// For an instance of a class module, a share in its life: the runtime
-    /// counts these to know when the last reference is gone and
-    /// Class_Terminate is due. None for everything else.
-    pub life: Option&lt;Rc&lt;()&gt;&gt;,
+    pub life: Option&lt;Rc&lt;LifeToken&gt;&gt;,
+}
+
+#[derive(Debug)]
+pub struct LifeToken {
+    handle: u64,
+    due: Rc&lt;RefCell&lt;Vec&lt;u64&gt;&gt;&gt;,
+}
+
+impl Drop for LifeToken {
+    fn drop(&amp;mut self) {
+        self.due.borrow_mut().push(self.handle);
+    }
 }
 </code></pre>
-<p>The <code>Rc&lt;()&gt;</code> carries no data. It is only a counter. Every copy of the reference, whether it is a local variable, an array element, a field of another object, or an item inside a <code>Collection</code>, clones the <code>ObjectRef</code> and so takes one share. Dropping the copy gives the share back. Rust&#39;s ordinary ownership does the bookkeeping that COM does with <code>AddRef</code> and <code>Release</code>. I never write an increment or a decrement by hand, so I cannot forget one on an error path.</p>
-<p>The runtime keeps one share of its own for every live instance, in its registry. That makes the test for &quot;nobody holds this any more&quot; a single comparison:</p>
-<pre><code class="language-rust">Rc::strong_count(&amp;instance.life) == 1   // only the registry&#39;s own share is left
-</code></pre>
+<p>Copying a reference into a local variable, an array element, a field of another object or an item of a <code>Collection</code> clones the <code>ObjectRef</code>. Dropping the copy drops its <code>Rc</code>. When the last one goes, Rust runs <code>LifeToken::drop</code>, and the token puts its handle on a queue the runtime owns. Rust&#39;s ownership does the bookkeeping that COM does with <code>AddRef</code> and <code>Release</code>. There is no increment or decrement written by hand anywhere, so none can be forgotten on an error path.</p>
+<p>What <code>drop</code> does <em>not</em> do matters just as much: it does not run <code>Class_Terminate</code>. Running VBA code needs <code>&amp;mut</code> access to the whole runtime, which a token cannot have. The handler may raise an error, and <code>Drop</code> has nowhere to return it. It may also release more objects, which would re-enter the runtime from inside a drop. So the token only reports, and the runtime acts on the report when it is safe to.</p>
 <h2>Collecting at the right moment</h2>
-<p>When the count drops is decided by Rust. When the runtime <em>looks</em> is decided by VBA semantics. The interpreter checks after statements that can release references: assignments, <code>Set</code>, <code>Erase</code>, <code>ReDim</code>, a call statement whose return value is thrown away, and procedure exit, including exit by error. A simplified version of the collection loop looks like this:</p>
+<p>When the last reference goes is decided by Rust. When the runtime <em>acts</em> is decided by VBA semantics. The interpreter drains the queue after the statements that can release references: assignments, <code>Set</code>, <code>Erase</code>, <code>ReDim</code>, a call statement whose return value is thrown away, and procedure exit, including exit by error. A slightly simplified version of the loop (the helper names stand for a few inline lines each):</p>
 <pre><code class="language-rust">fn collect_instances(&amp;mut self, line: u32) -&gt; Result&lt;(), RuntimeError&gt; {
     loop {
-        // Containers nothing holds any more are gone, and what they held
-        // gives back its shares with them.
-        let dropped: Vec&lt;u64&gt; = self.container_lives.iter()
-            .filter(|(_, life)| Rc::strong_count(life) == 1)
-            .map(|(handle, _)| *handle)
-            .collect();
-        for handle in &amp;dropped {
-            self.container_lives.remove(handle);
-            self.internal_objects.remove(handle);
+        // Take the queue and release the borrow before anything is dropped:
+        // dropping an object below queues what it alone held.
+        let mut batch = std::mem::take(&amp;mut *self.due.borrow_mut());
+        if batch.is_empty() {
+            return Ok(());
         }
-
-        let due = self.instances_with_only_the_registry_share();
-        if due.is_empty() {
-            if dropped.is_empty() { return Ok(()); }
-            continue; // a dropped container may have freed instances
+        // Containers first; what they free joins the next round.
+        let containers = self.containers_in(&amp;batch);
+        if !containers.is_empty() {
+            for handle in &amp;containers {
+                self.internal_objects.remove(handle);
+            }
+            batch.retain(|h| !containers.contains(h));
+            self.due.borrow_mut().extend(batch);
+            continue;
         }
-        for (handle, class) in due {
-            if !self.mark_terminated(handle) { continue; } // never twice
-            if self.class_has_terminate(&amp;class) {
-                // Class_Terminate has its own Err; the caller&#39;s survives it.
-                let saved = (self.err_in.take(), self.err_out.take());
-                let ran = self.run_terminate(handle, &amp;class, line);
-                (self.err_in, self.err_out) = saved;
-                ran?;
+        batch.sort_unstable(); // instances in the order they were made
+        for (i, &amp;handle) in batch.iter().enumerate() {
+            let Some(class) = self.mark_terminated(handle) else { continue }; // never twice
+            // Class_Terminate has its own Err; the caller&#39;s survives it.
+            let saved = (self.err_in.take(), self.err_out.take());
+            let ran = self.run_terminate(handle, &amp;class, line);
+            (self.err_in, self.err_out) = saved;
+            if let Err(e) = ran {
+                self.due.borrow_mut().extend_from_slice(&amp;batch[i + 1..]); // still due
+                return Err(e);
             }
             self.internal_objects.remove(&amp;handle); // and what it alone held
         }
     }
 }
 </code></pre>
-<p>Three details in that loop each came from a case that went wrong first:</p>
+<p>The details in that loop each came from a case that went wrong first:</p>
 <ul>
-<li><strong>It is a loop.</strong> Removing an object drops the <code>ObjectRef</code>s stored in its fields, and that can bring other instances down to one share. A <code>Collection</code> released by <code>Set col = Nothing</code> takes its items with it in the same step.</li>
-<li><strong>Terminated is a flag, not a removal.</strong> A <code>Class_Terminate</code> body may itself release objects, and the collection that runs on its return may reach an instance this pass already queued. The flag makes sure each instance terminates once.</li>
+<li><strong>The borrow of the queue ends before anything is dropped.</strong> Removing an object drops the <code>ObjectRef</code>s stored in it, and their tokens push onto the same queue. Holding the <code>RefCell</code> borrow across that would panic.</li>
+<li><strong>It is a loop, containers first.</strong> <code>Set col = Nothing</code> on a <code>Collection</code> that was the last holder of an instance must terminate that instance in the same step.</li>
+<li><strong>Terminated is a flag, not a removal.</strong> A <code>Class_Terminate</code> body may itself release objects, and the collection that runs on its return may reach an instance this batch also holds. The flag makes sure each instance terminates once.</li>
 <li><strong><code>Err</code> is saved around the call.</strong> Suppose a procedure raises error 5 and, on the way out, one of its locals is terminated. The caller still sees error 5. The terminate handler&#39;s own <code>On Error</code> state must not leak into it.</li>
+<li><strong>On an error, the rest stay queued.</strong> Nothing that was due is lost because an earlier handler raised.</li>
 </ul>
 <p>Each of those is checked against Excel itself rather than against my reading of the documentation. The runtime has a couple of hundred comments that start with &quot;measured&quot;. Each records what real Excel answered for a case before the Rust code was written to match it. When the documentation and Excel disagree, Excel wins.</p>
+<h2>The first version polled a counter</h2>
+<p>The first implementation kept an <code>Rc&lt;()&gt;</code> in every reference, plus one in a registry, and on each collection walked every live instance looking for <code>Rc::strong_count(..) == 1</code>. It worked, but a reviewer rightly pointed out that using <code>Rc&lt;()&gt;</code> as a counter you poll is not idiomatic Rust. The <code>Drop</code> version replaced it without changing a single observable behaviour. To be sure of that, I first wrote down what the old version did in eleven lifetime scenarios (<code>Set Nothing</code>, reassignment, <code>Erase</code>, <code>ReDim</code>, a <code>Collection</code> released and an item removed, a <code>Dictionary</code>, a procedure left by an error, <code>As New</code> recreating its object, a discarded call result, a <code>Collection</code> nested in another). Those became a test, and the new code had to reproduce every log string. As a side effect, a collection no longer scans every live instance; it only touches the handles that were reported.</p>
 <h2>An interpreter that must not fall over</h2>
 <p>A runtime that reads other people&#39;s macros will be handed things nobody intended. A VBA program can pass <code>Null</code>, <code>Empty</code>, a string several hundred characters long, the largest <code>Decimal</code>, <code>#12/31/9999#</code> or <code>Nothing</code> to any built-in function. The answer may be a value or a VBA runtime error such as &quot;Invalid procedure call&quot;. It must never be a Rust panic that takes the host page down with it.</p>
 <p>So there is one test that does nothing else. It calls every built-in function the runtime implements (145 of them, from <code>Abs</code> to <code>Year</code>) with no arguments and with one to four copies of each of 24 awkward values. Each call runs under <code>On Error Resume Next</code>, and the test asserts that nothing panics:</p>
@@ -136,8 +149,8 @@ assert!(fell.is_empty(), &quot;panicked: {}&quot;, fell.join(&quot; &quot;));
 <p>In Oxi&#39;s browser editor, the spreadsheet engine implements <code>Host</code>. The macro runs in a Web Worker through the WebAssembly bindings, so a long-running macro does not block the page. The same interpreter can be driven by a CLI host that has no spreadsheet at all, for analysing a folder of <code>.bas</code> files.</p>
 <h2>What I would tell someone starting a similar interpreter</h2>
 <ol>
-<li>If the language exposes object lifetimes, let Rust&#39;s ownership do the counting and keep your own code to deciding <em>when to look</em>. An <code>Rc&lt;()&gt;</code> share in every reference cost far less than an explicit reference-counting layer, and it cannot drift out of sync on an error path.</li>
-<li>Treat the original implementation&#39;s observable behaviour as the specification, and write down each measurement next to the code it justifies.</li>
+<li>If the language exposes object lifetimes, let Rust&#39;s ownership count the references, and let <code>Drop</code> tell you when the last one is gone. Do not run the language&#39;s own code inside <code>drop</code>: queue the event and act on it where you have the whole runtime and a place to return errors.</li>
+<li>Treat the original implementation&#39;s observable behaviour as the specification, and write down each measurement next to the code it justifies. Before refactoring, turn the current behaviour into a test.</li>
 <li>Write the &quot;nothing panics&quot; test on the first day. It is ten lines and it pays for itself the first time someone feeds the interpreter a real macro.</li>
 </ol>
 <p><code>oxivba-core</code> lives in the <a href="https://github.com/Ryujiyasu/oxi">Oxi repository</a> under MPL-2.0, alongside the DOCX, XLSX and PPTX engines. You can run workbook macros in the <a href="https://oxi-dd65f4.gitlab.io/">browser editor</a>.</p>
