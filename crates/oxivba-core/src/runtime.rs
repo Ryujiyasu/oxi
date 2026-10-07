@@ -144,10 +144,27 @@ impl RecordValue {
 pub struct ObjectRef {
     pub handle: u64,
     pub kind: String,
-    /// For an instance of a class module, a share in its life: the runtime
-    /// counts these to know when the last reference is gone and
-    /// Class_Terminate is due. None for everything else.
-    pub life: Option<Rc<()>>,
+    /// For a class instance, a Collection or a Dictionary, a share in its
+    /// life: when the last share is dropped the object reports itself due
+    /// (see [`LifeToken`]). None for everything else.
+    pub life: Option<Rc<LifeToken>>,
+}
+
+/// The life of a reference-counted VBA object. Every reference to the object
+/// holds one `Rc` of the token; when the last is dropped, `Drop` queues the
+/// object's handle. Nothing runs here -- Class_Terminate needs the whole
+/// runtime and may raise -- the runtime drains the queue at the points where
+/// VBA releases objects.
+#[derive(Debug)]
+pub struct LifeToken {
+    handle: u64,
+    due: Rc<RefCell<Vec<u64>>>,
+}
+
+impl Drop for LifeToken {
+    fn drop(&mut self) {
+        self.due.borrow_mut().push(self.handle);
+    }
 }
 
 impl ObjectRef {
@@ -383,12 +400,9 @@ pub struct Runtime<'a> {
     wanted_kinds: Option<&'static [ProcKind]>,
     internal_objects: BTreeMap<u64, InternalObject>,
     next_internal_handle: u64,
-    /// The share of life each Collection and Dictionary has, so that one let
-    /// go of lets go of what it holds.
-    container_lives: BTreeMap<u64, Rc<()>>,
-    /// The class instances alive, so that looking for the ones due does not
-    /// walk every object the run has made.
-    instance_handles: BTreeSet<u64>,
+    /// Handles of reference-counted objects whose last reference is gone,
+    /// queued by [`LifeToken`]'s `Drop`.
+    due: Rc<RefCell<Vec<u64>>>,
     random_state: u32,
     random_entropy: u64,
     /// The caller's variables behind the next call's arguments, for a
@@ -463,9 +477,6 @@ enum InternalObject {
 struct ClassInstance {
     class: String,
     state: Option<ModuleState>,
-    /// The registry's own share; when it is the only one left, the instance
-    /// is unreachable.
-    life: Rc<()>,
     terminated: bool,
 }
 
@@ -550,8 +561,7 @@ impl<'a> Runtime<'a> {
             wanted_kinds: None,
             internal_objects: BTreeMap::new(),
             next_internal_handle: 1_u64 << 63,
-            container_lives: BTreeMap::new(),
-            instance_handles: BTreeSet::new(),
+            due: Rc::new(RefCell::new(Vec::new())),
             random_state: 327_680,
             random_entropy: 327_680,
             pending_references: None,
@@ -961,8 +971,8 @@ impl<'a> Runtime<'a> {
             self.module_declared.clear();
             self.module_variants.clear();
             self.internal_objects.clear();
-            self.container_lives.clear();
-            self.instance_handles.clear();
+            // Dropping the objects above queued the handles of what they held.
+            self.due.borrow_mut().clear();
             self.next_internal_handle = 1_u64 << 63;
             self.module_initialized = false;
         }
@@ -1073,53 +1083,51 @@ impl<'a> Runtime<'a> {
         answer
     }
 
-    /// Run every Class_Terminate that is due: an instance whose only share
-    /// of life left is the registry's own. Terminating one may free others.
+    /// Run every Class_Terminate that is due: the objects whose last
+    /// reference was dropped since the last look ([`LifeToken`] queued them).
+    /// Terminating one may free others, which queue themselves in turn.
     fn collect_instances(&mut self, line: u32) -> Result<(), RuntimeError> {
-        if self.container_lives.is_empty() && self.instance_handles.is_empty() {
-            return Ok(());
-        }
         loop {
+            // Take the queue and let go of it before anything is dropped:
+            // dropping an object below queues what it alone held.
+            let mut batch = std::mem::take(&mut *self.due.borrow_mut());
+            if batch.is_empty() {
+                return Ok(());
+            }
             // A Collection or Dictionary nothing holds any more is gone, and
             // what it held with it: measured, `Set col = Nothing` runs the
-            // Class_Terminate of the instance only the collection held.
-            let dropped: Vec<u64> = self
-                .container_lives
+            // Class_Terminate of the instance only the collection held. The
+            // containers go first, and what they free joins this round.
+            let containers: Vec<u64> = batch
                 .iter()
-                .filter(|(_, life)| Rc::strong_count(life) == 1)
-                .map(|(handle, _)| *handle)
-                .collect();
-            for handle in &dropped {
-                self.container_lives.remove(handle);
-                self.internal_objects.remove(handle);
-            }
-            let due: Vec<(u64, String)> = self
-                .instance_handles
-                .iter()
-                .filter_map(|handle| match self.internal_objects.get(handle) {
-                    Some(InternalObject::Instance(instance))
-                        if !instance.terminated && Rc::strong_count(&instance.life) == 1 =>
-                    {
-                        Some((*handle, instance.class.clone()))
-                    }
-                    _ => None,
+                .copied()
+                .filter(|handle| {
+                    matches!(self.internal_objects.get(handle), Some(InternalObject::Collection(_) | InternalObject::Dictionary(_)))
                 })
                 .collect();
-            if due.is_empty() {
-                if dropped.is_empty() {
-                    return Ok(());
+            if !containers.is_empty() {
+                for handle in &containers {
+                    self.internal_objects.remove(handle);
                 }
+                batch.retain(|handle| !containers.contains(handle));
+                self.due.borrow_mut().extend(batch);
                 continue;
             }
-            for (handle, class) in due {
+            // Instances in the order they were made.
+            batch.sort_unstable();
+            batch.dedup();
+            for (index, &handle) in batch.iter().enumerate() {
                 // A Class_Terminate run before this one may already have
                 // collected it -- its own return collects what is due -- and
                 // then it is not to be terminated twice, nor looked for in
                 // the standard module once it is gone.
-                match self.internal_objects.get_mut(&handle) {
-                    Some(InternalObject::Instance(instance)) if !instance.terminated => instance.terminated = true,
+                let class = match self.internal_objects.get_mut(&handle) {
+                    Some(InternalObject::Instance(instance)) if !instance.terminated => {
+                        instance.terminated = true;
+                        instance.class.clone()
+                    }
                     _ => continue,
-                }
+                };
                 let has_terminate = self
                     .classes
                     .get(&class.to_ascii_lowercase())
@@ -1134,11 +1142,14 @@ impl<'a> Runtime<'a> {
                         runtime.call_kind("Class_Terminate", &[ProcKind::Sub], Vec::new(), Some(line)).map(|_| ())
                     });
                     (self.err_in, self.err_out) = saved;
-                    ran?;
+                    if let Err(raised) = ran {
+                        // The rest stay due for the next look.
+                        self.due.borrow_mut().extend_from_slice(&batch[index + 1..]);
+                        return Err(raised);
+                    }
                 }
                 // Gone, and with it whatever it alone was holding.
                 self.internal_objects.remove(&handle);
-                self.instance_handles.remove(&handle);
             }
         }
     }
@@ -3673,12 +3684,11 @@ impl<'a> Runtime<'a> {
                 .unwrap_or_else(|| type_name.to_string());
             let handle = self.next_internal_handle;
             self.next_internal_handle += 1;
-            let life = Rc::new(());
             self.internal_objects.insert(
                 handle,
-                InternalObject::Instance(ClassInstance { class: name.clone(), state: None, life: life.clone(), terminated: false }),
+                InternalObject::Instance(ClassInstance { class: name.clone(), state: None, terminated: false }),
             );
-            self.instance_handles.insert(handle);
+            let life = Rc::new(LifeToken { handle, due: Rc::clone(&self.due) });
             let made = ObjectRef { handle, kind: name, life: Some(life) };
             // Its variables are set up, then Class_Initialize runs, as the
             // instance comes into being.
@@ -3708,8 +3718,7 @@ impl<'a> Runtime<'a> {
         let container = matches!(object, InternalObject::Collection(_) | InternalObject::Dictionary(_));
         self.internal_objects.insert(handle, object);
         if container {
-            let life = Rc::new(());
-            self.container_lives.insert(handle, life.clone());
+            let life = Rc::new(LifeToken { handle, due: Rc::clone(&self.due) });
             return Ok(Value::Object(ObjectRef { handle, kind: kind.to_string(), life: Some(life) }));
         }
         Ok(Value::Object(ObjectRef::new(handle, kind)))
@@ -14464,6 +14473,153 @@ mod tests {
             Ok(false)
         }
     }
+
+
+    /// Characterisation of the object-lifetime rules the runtime implements
+    /// (the commits that added them carried their Excel measurements): when
+    /// each Class_Terminate runs, relative to the statements around it.
+    fn lifetime_log(body: &str) -> String {
+        let source = format!(
+            "Public Log As String
+{body}
+VERSION 1.0 CLASS
+Attribute VB_Name = \"Grid\"
+Private Sub Class_Initialize()
+Log = Log & \"I\"
+End Sub
+Private Sub Class_Terminate()
+Log = Log & \"T\"
+End Sub
+Public Sub Touch()
+Log = Log & \"t\"
+End Sub
+"
+        );
+        let (module, classes) = crate::parser::parse_project(&source).unwrap();
+        match Runtime::new(&module).with_classes(&classes).call("Main", vec![]) {
+            Ok(Value::String(s)) => s,
+            other => format!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn lifetime_rules_hold() {
+        let cases: &[(&str, &str)] = &[
+            ("set_nothing", "Function Main() As String
+Dim g As Grid
+Set g = New Grid
+Log = Log & \"a\"
+Set g = Nothing
+Log = Log & \"b\"
+Main = Log
+End Function"),
+            ("reassign", "Function Main() As String
+Dim g As Grid
+Set g = New Grid
+Set g = New Grid
+Log = Log & \"a\"
+Set g = Nothing
+Main = Log
+End Function"),
+            ("erase", "Function Main() As String
+Dim a(1) As Grid
+Set a(0) = New Grid
+Set a(1) = New Grid
+Log = Log & \"a\"
+Erase a
+Log = Log & \"b\"
+Main = Log
+End Function"),
+            ("redim", "Function Main() As String
+Dim a() As Grid
+ReDim a(1)
+Set a(0) = New Grid
+Log = Log & \"a\"
+ReDim a(2)
+Log = Log & \"b\"
+Main = Log
+End Function"),
+            ("collection", "Function Main() As String
+Dim c As Collection
+Set c = New Collection
+c.Add New Grid
+c.Add New Grid
+Log = Log & \"a\"
+Set c = Nothing
+Log = Log & \"b\"
+Main = Log
+End Function"),
+            ("collection_remove", "Function Main() As String
+Dim c As Collection
+Set c = New Collection
+c.Add New Grid
+Log = Log & \"a\"
+c.Remove 1
+Log = Log & \"b\"
+Main = Log
+End Function"),
+            ("dictionary", "Function Main() As String
+Dim d As Object
+Set d = CreateObject(\"Scripting.Dictionary\")
+d.Add \"k\", New Grid
+Log = Log & \"a\"
+Set d = Nothing
+Log = Log & \"b\"
+Main = Log
+End Function"),
+            ("left_by_error", "Sub P()
+Dim g As Grid
+Set g = New Grid
+Err.Raise 5
+End Sub
+Function Main() As String
+On Error Resume Next
+P
+Log = Log & \"e\" & Err.Number
+Main = Log
+End Function"),
+            ("as_new", "Function Main() As String
+Dim g As New Grid
+g.Touch
+Set g = Nothing
+Log = Log & \"a\"
+g.Touch
+Log = Log & \"b\"
+Main = Log
+End Function"),
+            ("discarded_result", "Function Make() As Grid
+Set Make = New Grid
+End Function
+Function Main() As String
+Make
+Log = Log & \"a\"
+Main = Log
+End Function"),
+            ("nested_holder", "Function Main() As String
+Dim c As Collection
+Set c = New Collection
+Dim inner As Collection
+Set inner = New Collection
+inner.Add New Grid
+c.Add inner
+Set inner = Nothing
+Log = Log & \"a\"
+Set c = Nothing
+Log = Log & \"b\"
+Main = Log
+End Function"),
+        ];
+        let got: Vec<(String, String)> = cases.iter().map(|(n, b)| (n.to_string(), lifetime_log(b))).collect();
+        if std::env::var_os("LIFETIME_PRINT").is_some() {
+            for (n, g) in &got { eprintln!("LIFETIME {n} = {g}"); }
+        }
+        let expected: &[(&str, &str)] = EXPECTED_LIFETIME;
+        for ((n, g), (en, e)) in got.iter().zip(expected) {
+            assert_eq!((n.as_str(), g.as_str()), (*en, *e));
+        }
+    }
+
+    const EXPECTED_LIFETIME: &[(&str, &str)] = &[("set_nothing", "IaTb"), ("reassign", "IITaT"), ("erase", "IIaTTb"), ("redim", "IaTb"), ("collection", "IIaTTb"), ("collection_remove", "IaTb"), ("dictionary", "IaTb"), ("left_by_error", "ITe5"), ("as_new", "ItTaItb"), ("discarded_result", "ITa"), ("nested_holder", "IaTb")];
 
     /// Two instances let go together are each terminated once: the first
     /// one's Class_Terminate collects the second on its own return, and the
