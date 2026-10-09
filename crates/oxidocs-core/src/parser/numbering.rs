@@ -300,7 +300,15 @@ impl NumberingDefinitions {
                     if let Some(other_level) = self.effective_level(num_id, abstract_num, lvl_i) {
                         let other_count = self.other_level_count(
                             num_id, lvl_i, other_level, counters);
-                        let other_fmt = format_number(other_count, &other_level.num_fmt);
+                        // A referenced level with numFmt none contributes nothing
+                        // (Word: "%1%2." with level 0 none prints "2.").
+                        let other_fmt = if other_level.num_fmt == "none"
+                            && std::env::var_os("OXI_NUMFMT_NONE_REF_DISABLE").is_none()
+                        {
+                            String::new()
+                        } else {
+                            format_number(other_count, &other_level.num_fmt)
+                        };
                         text = text.replace(&placeholder, &other_fmt);
                     }
                 }

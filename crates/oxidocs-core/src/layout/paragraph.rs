@@ -3336,6 +3336,23 @@ impl<'a> ParagraphLayouter<'a> {
                             }
                         }
                     }
+                    // OXI_ASCDESC_MIX: with no CJK 83/64 face on the line the box is
+                    // the largest ascent(+gap) over the largest descent of its faces.
+                    if std::env::var_os("OXI_ASCDESC_MIX_DISABLE").is_none() && !s902_all_ws
+                        && !super::ascdesc_mix_excluded(&first_line.fragments)
+                        && !first_line.fragments.is_empty()
+                    {
+                        let ms: Vec<(crate::font::FontMetricsRef<'_>, f32)> = first_line.fragments.iter()
+                            .filter(|f| !f.text.trim().is_empty())
+                            .map(|f| (self.metrics_for_text(&f.text, &f.style, &para.style),
+                                f.style.font_size.unwrap_or(para_font_size)))
+                            .collect();
+                        if !ms.is_empty() && !ms.iter().any(|(m, _)| m.is_cjk_83_64_font()) {
+                            let mix = super::ascdesc_mix_height(ms.iter().map(|(m, fs)| (&**m, *fs)));
+                            if mix > s805_hhea_max { s805_hhea_max = mix; }
+                            if s1363_site2 && mix > s1363_box_max { s1363_box_max = mix; }
+                        }
+                    }
                     if has_latin {
                         if let Some(frag) = first_line.fragments.first() {
                             let fs = frag.style.font_size.unwrap_or(para_font_size);

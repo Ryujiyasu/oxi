@@ -70,7 +70,8 @@ impl<'a> TableFitLayouter<'a> {
                 // Repeated heading rows also depend on continuation sizing.
                 // Keep their current geometry until header replay and that
                 // sizing can be corrected together.
-                && !table.rows.iter().any(|row| row.header)
+                && (!table.rows.iter().any(|row| row.header)
+                    || std::env::var_os("OXI_HEADER_TABLE_GEOMETRY_DISABLE").is_none())
         });
         let mut elements = Vec::new();
         // S740 running state: reserve on the CURRENT page + page-offset tracking.
@@ -4998,6 +4999,34 @@ impl<'a> TableFitLayouter<'a> {
                                         > = Vec::new();
                                         // S1443: a page break inside a cell is inert (see the breaker note).
                                         let s586_run_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
+                                        // Shaped cluster advances for complex-script text, the
+                                        // same family choice as the body breaker (line_break.rs).
+                                        let cell_deva_adv: Option<Vec<f32>> = if std::env::var_os("OXI_INDIA_CELL_DEVA_DISABLE").is_none()
+                                            && s586_run_chars.iter().any(|&c| crate::font::is_complex_script(c))
+                                        {
+                                            let shaped: String = s586_run_chars.iter().collect();
+                                            let emit_fam = self
+                                                .resolve_font_family_for_text(&shaped, &run.style, &para.style)
+                                                .map(|s| s.to_string());
+                                            let emit_fam = if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none() {
+                                                run.style.font_family_cs.clone()
+                                                    .or_else(|| para.style.default_run_style.as_ref().and_then(|s| s.font_family_cs.clone()))
+                                                    .or(emit_fam)
+                                            } else { emit_fam };
+                                            let shape_fam = match emit_fam {
+                                                Some(f) if crate::font::shape::family_covers(&f, '\u{0915}') => f,
+                                                Some(f) if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none()
+                                                    && !self.registry.supports_family(&f)
+                                                    && crate::font::runtime::resolve(&f, false, false).is_none()
+                                                    && crate::font::shape::family_covers("Mangal", '\u{0915}') => "Mangal".to_string(),
+                                                _ => "Nirmala UI".to_string(),
+                                            };
+                                            crate::font::shape::cluster_advances(&shape_fam, run.style.bold, run.style.italic, &shaped, font_size)
+                                                .map(|(adv, _)| adv)
+                                                .filter(|adv| adv.len() == s586_run_chars.len())
+                                        } else {
+                                            None
+                                        };
                                         for (s586_ci, ch) in
                                             s586_run_chars.iter().copied().enumerate()
                                         {
@@ -5219,6 +5248,13 @@ impl<'a> TableFitLayouter<'a> {
                                             // be what pushes 37 glyphs over a 389.24 budget.
                                             if std::env::var("OXI_S1203").is_ok() {
                                                 cw = (cw * 600.0 / 72.0 + 0.5).floor() * 72.0 / 600.0;
+                                            }
+                                            if let Some(adv) = cell_deva_adv.as_ref() {
+                                                if crate::font::is_complex_script(ch)
+                                                    || s586_run_chars.get(s586_ci.wrapping_sub(1)).map_or(false, |&p| crate::font::is_complex_script(p))
+                                                {
+                                                    cw = adv[s586_ci];
+                                                }
                                             }
                                             // S869 (2026-07-16, default ON, opt-out OXI_S869_DISABLE):
                                             // LATINEM for the CELL wrapper. The cell
@@ -7525,9 +7561,19 @@ impl<'a> TableFitLayouter<'a> {
                                                     // body lines and the cell height pre-pass do.
                                                     // A compensating excess in surrounding flow
                                                     // cannot justify sizing bold text as regular.
-                                                    let metrics = &*match font_family.as_deref() {
-                                                        Some(ff) => self.registry.get_with_style(ff, *s1629_bold, *s1629_italic),
-                                                        None => self.registry.default_metrics(),
+                                                    // Complex-script text takes the same line box as in
+                                                    // the body (cs face if installed, else Nirmala UI);
+                                                    // the resolved family is the Latin slot when the cs
+                                                    // face is missing (igrsup_md_v4: Word 16.2, TNR 13.8).
+                                                    let deva_cell = std::env::var_os("OXI_INDIA_CELL_DEVA_DISABLE").is_none()
+                                                        && _text.chars().any(crate::font::is_complex_script);
+                                                    let metrics = &*if deva_cell {
+                                                        self.metrics_for_text(_text, _source_style, &para.style)
+                                                    } else {
+                                                        match font_family.as_deref() {
+                                                            Some(ff) => self.registry.get_with_style(ff, *s1629_bold, *s1629_italic),
+                                                            None => self.registry.default_metrics(),
+                                                        }
                                                     };
                                                     // S1119 cells (measured 2026-08-14,
                                                     // `_pb_symline_gen.py ... cell`): Word applies
@@ -10855,6 +10901,21 @@ impl<'a> TableFitLayouter<'a> {
                                 }
                             }
                         }
+                        // A nested row whose FIRST paragraph would leave one of two
+                        // lines behind moves whole, as a top-level row does.
+                        let nested_orphan_on = std::env::var_os("OXI_NESTED_ORPHAN_ROW_DISABLE").is_none();
+                        let mut nested_row_top: std::collections::HashMap<(Vec<(usize, usize, usize)>, usize), f32> =
+                            Default::default();
+                        if nested_orphan_on {
+                            for (key, lines) in plines.iter() {
+                                if key.0.is_empty() { continue; }
+                                let t = lines.iter().map(|l| l.0).fold(f32::INFINITY, f32::min);
+                                let e = nested_row_top.entry((key.0.clone(), key.1)).or_insert(t);
+                                if t < *e { *e = t; }
+                            }
+                        }
+                        let all_keys: Vec<CellFlowKey> = plines.keys().cloned().collect();
+                        let mut nested_rows_moved: Vec<(Vec<(usize, usize, usize)>, usize)> = Vec::new();
                         let mut out = std::collections::HashMap::new();
                         for (key, mut lines) in plines {
                             if lines.len() < 2 {
@@ -10898,6 +10959,13 @@ impl<'a> TableFitLayouter<'a> {
                                     l.1 + extra <= split_y + row_fit_epsilon - s819_fit_q
                                 })
                                 .count();
+                            if nested_orphan_on && !key.0.is_empty() && key.1 > 0 && key.3 == 0
+                                && n == 2 && k == 1
+                                && self.compat_mode >= 15 && self.compat_mode_explicit
+                            {
+                                nested_rows_moved.push((key.0.clone(), key.1));
+                                continue;
+                            }
                             // Once earlier paragraphs of this cell have fitted,
                             // keep the next paragraph's first two lines together.
                             // Moving a row's first paragraph needs a separate
@@ -10931,6 +10999,13 @@ impl<'a> TableFitLayouter<'a> {
                                 out.insert(key, lines[0].0);
                             } else if n >= 4 && k == n - 1 {
                                 out.insert(key, lines[n - 2].0);
+                            }
+                        }
+                        for (path, r) in nested_rows_moved {
+                            if let Some(&top) = nested_row_top.get(&(path.clone(), r)) {
+                                for k2 in all_keys.iter().filter(|k2| k2.0 == path && k2.1 == r) {
+                                    out.insert(k2.clone(), top);
+                                }
                             }
                         }
                         out

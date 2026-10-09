@@ -39,12 +39,61 @@ thread_local! {
     static FACES: RefCell<ShapeCache> = RefCell::new(ShapeCache::default());
 }
 
+thread_local! {
+    // Faces embedded in the document being laid out (default ON, opt-out OXI_EMBEDDED_FONTS_DISABLE).
+    static DOCUMENT_FONTS: RefCell<HashMap<(String, bool, bool), Vec<u8>>> = RefCell::new(HashMap::new());
+}
+
+/// Restores the previous document's faces when the layout that set them ends.
+pub(crate) struct DocumentFontScope(HashMap<(String, bool, bool), Vec<u8>>);
+impl Drop for DocumentFontScope {
+    fn drop(&mut self) {
+        DOCUMENT_FONTS.with(|fonts| *fonts.borrow_mut() = std::mem::take(&mut self.0));
+    }
+}
+
+pub(crate) fn enter_document_fonts(doc: &crate::ir::Document) -> DocumentFontScope {
+    let styles = &doc.styles;
+    let mut current = HashMap::new();
+    if std::env::var_os("OXI_EMBEDDED_FONTS_DISABLE").is_none() {
+        let usable = super::usable_embedded_families(doc);
+        for (name, info) in &styles.font_table {
+            if !usable.contains(&name.to_lowercase()) {
+                continue;
+            }
+            if info.embedded_faces.is_empty()
+                || super::runtime::resolve(name, false, false).is_some()
+                || super::FontMetricsRegistry::load().supports_family(name)
+            {
+                continue;
+            }
+            for face in &info.embedded_faces {
+                current.insert((name.to_lowercase(), face.bold, face.italic), face.data.clone());
+            }
+        }
+    }
+    DocumentFontScope(DOCUMENT_FONTS.with(|fonts| std::mem::replace(&mut *fonts.borrow_mut(), current)))
+}
+
 fn with_face<R>(
     family: &str,
     bold: bool,
     italic: bool,
     f: impl FnOnce(Option<&ShapeFace<'_>>) -> R,
 ) -> R {
+    let mut callback = Some(f);
+    let embedded = DOCUMENT_FONTS.with(|fonts| {
+        let fonts = fonts.borrow();
+        let data = fonts.get(&(family.to_lowercase(), bold, italic))
+            .or_else(|| fonts.get(&(family.to_lowercase(), false, false)))?;
+        let face = rustybuzz::Face::from_slice(data, 0)?;
+        let upm = face.units_per_em() as f32;
+        Some(callback.take().unwrap()(Some(&ShapeFace { face, upm })))
+    });
+    if let Some(result) = embedded {
+        return result;
+    }
+    let f = callback.unwrap();
     // Borrow a registered programme only within this shaping call. The Arc
     // keeps the font alive through a concurrent clear or replacement, and no
     // self-referential/static face retains superseded caller bytes.

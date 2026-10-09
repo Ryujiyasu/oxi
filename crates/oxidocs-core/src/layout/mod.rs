@@ -2251,6 +2251,40 @@ fn s1486_wrap_bottom(path_bottom: f32, stroke_width: Option<f32>) -> f32 {
 /// glyph-width error (Word PDF vs Oxi agree within 0.1pt over 27 lines), bold /
 /// shd / lang / color / settings content, commas and hyphens (allow identical),
 /// and the CANDIDATE word (only the line's LAST word moves it).
+/// Default ON (opt-out OXI_JSHRINK_TOKEN_DISABLE): the justify-shrink "last word" is the WHOLE
+/// whitespace-delimited token and its "space" the whole whitespace run before it
+/// (igrsup_md_v19 «5000/-.»: Word allows 21.0, the '.'-only piece gave 6.5).
+fn s1475_token_tail(frags: &[LineFragment]) -> Option<(i32, i32)> {
+    let tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
+    let (mut tok, mut sp, mut in_space) = (0.0f32, 0.0f32, false);
+    for f in frags.iter().rev() {
+        if f.text.is_empty() { continue; }
+        let all_ws = f.text.chars().all(char::is_whitespace);
+        let any_ws = f.text.chars().any(char::is_whitespace);
+        if !in_space {
+            if all_ws { in_space = true; sp += f.width; continue; }
+            if any_ws { return None; }
+            tok += f.width;
+        } else if all_ws {
+            sp += f.width;
+        } else {
+            break;
+        }
+    }
+    Some((tw(tok), tw(sp)))
+}
+
+fn s1475_token_cap(credit_tw: i32, word_tw: i32, space_tw: i32, on: bool,
+    frags: &[LineFragment], token_on: bool) -> i32 {
+    if on && token_on {
+        if let Some((tok_tw, run_tw)) = s1475_token_tail(frags) {
+            let sp = if run_tw > 0 { run_tw } else { space_tw };
+            return s1475_last_word_cap(credit_tw, tok_tw + word_tw, sp, on);
+        }
+    }
+    s1475_last_word_cap(credit_tw, word_tw, space_tw, on)
+}
+
 pub(crate) fn s1475_last_word_cap(credit_tw: i32, word_tw: i32, space_tw: i32, on: bool) -> i32 {
     if !on {
         return credit_tw;
@@ -3016,8 +3050,84 @@ impl BodyWrapPolicy {
     const FLOATING_TABLE: Self = Self { minimum_lane_width: 18.75, break_long_words: true, absolute: false };
 }
 
+fn document_deva_font_families(doc: &Document) -> std::collections::HashSet<String> {
+    fn collect(blocks: &[Block], families: &mut std::collections::HashSet<String>) {
+        for block in blocks {
+            match block {
+                Block::Paragraph(p) => {
+                    for run in &p.runs {
+                        if !run.text.chars().any(crate::font::is_complex_script) { continue; }
+                        let inherited = p.style.default_run_style.as_ref();
+                        if let Some(family) = run.style.font_family_cs.as_ref()
+                            .or_else(|| inherited.and_then(|s| s.font_family_cs.as_ref()))
+                            .or(run.style.font_family.as_ref())
+                            .or_else(|| inherited.and_then(|s| s.font_family.as_ref()))
+                        { families.insert(family.to_lowercase()); }
+                    }
+                }
+                Block::Table(t) => {
+                    for row in &t.rows { for cell in &row.cells { collect(&cell.blocks, families); } }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut families = std::collections::HashSet::new();
+    for page in &doc.pages { collect(&page.blocks, &mut families); }
+    families
+}
+
+/// Word shapes a Devanagari cluster across a run boundary when both runs carry
+/// the same formatting (igrsup_md_v9 `द` + `्वारा`: one 17.86pt cluster, not two
+/// shaped pieces). Join such plain-text runs so the shaper sees the cluster whole.
+/// OXI_ASCDESC_MIX_DISABLE a line with no CJK 83/64 face, Word stacks the largest
+/// above-baseline part over the largest below-baseline part of the line's faces,
+/// all leading sitting above the baseline: A = natural - winDescent, D = winDescent
+/// (Calibri 10.5 + Arial 11: +0.30; Nirmala UI + Courier New 12: 16.5).
+/// Lines with a legacy Symbol/Wingdings PUA glyph or a w:position run keep
+/// their own baseline-overflow rule (spacing multiple scales the box only).
+fn ascdesc_mix_excluded(frags: &[LineFragment]) -> bool {
+    frags.iter().any(|f| f.text.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
+        || (f.style.inline_object_image.is_none() && f.style.position.unwrap_or(0.0) != 0.0))
+}
+
+pub(crate) fn ascdesc_mix_height<'a>(items: impl Iterator<Item = (&'a FontMetrics, f32)>) -> f32 {
+    let (mut a, mut d) = (0.0f32, 0.0f32);
+    for (m, fs) in items {
+        // The descent of the box that governs the face's line: typo for a
+        // USE_TYPO_METRICS face (Cambria Math's win box is 5.58em), else win.
+        let desc = if m.use_typo_metrics && m.typo_descent > 0.0 { m.typo_descent } else { m.win_descent } * fs;
+        a = a.max(m.natural_line_height_hhea(fs) - desc);
+        d = d.max(desc);
+    }
+    a + d
+}
+
+fn merge_split_deva_clusters(runs: &mut Vec<Run>) {
+    let is_mark = |c: char| matches!(c as u32, 0x0900..=0x0903 | 0x093A..=0x094F | 0x0951..=0x0957 | 0x0962..=0x0963);
+    let plain = |r: &Run| r.url.is_none() && r.footnote_ref.is_none() && r.endnote_ref.is_none()
+        && r.comment_range_start.is_empty() && r.comment_range_end.is_empty() && r.comment_references.is_empty()
+        && r.tracked_change.is_none() && r.rpr_change.is_none() && r.ruby.is_none() && r.bookmark_name.is_none()
+        && !r.is_math && r.field_type.is_none() && !r.has_last_rendered_page_break && !r.text.is_empty();
+    let mut i = 0;
+    while i + 1 < runs.len() {
+        let joins = runs[i + 1].text.chars().next().map_or(false, is_mark)
+            || runs[i].text.ends_with('\u{094D}');
+        if joins && plain(&runs[i]) && plain(&runs[i + 1])
+            && serde_json::to_value(&runs[i].style).ok() == serde_json::to_value(&runs[i + 1].style).ok()
+        {
+            let next = runs.remove(i + 1);
+            runs[i].text.push_str(&next.text);
+        } else {
+            i += 1;
+        }
+    }
+}
+
 pub struct LayoutEngine {
     field_language: FieldLanguage,
+    /// Families that carry complex-script (Devanagari) text in this document.
+    deva_font_families: std::collections::HashSet<String>,
     default_font_size: f32,
     cell_end_style_id: Option<String>,
     cell_default_style_id: Option<String>,
@@ -3144,6 +3254,11 @@ pub struct LayoutEngine {
     /// curly quotes ’ “ ” as CJK, S762) — a UK gov doc with curly quotes but no
     /// kanji must read as a PURE-LATIN document for the cell wrap-margin fix.
     doc_body_has_real_cjk: bool,
+    /// Some run drawn in Arial Unicode MS carries a Japanese Latin language
+    /// (w:lang w:val=ja*). With AUM absent, Word picks ONE substitute for the
+    /// whole document: this flag set -> the Japanese face (half-width Latin,
+    /// S1036's MS Mincho), clear -> Arial (S1564). See `aum_japanese_substitute`.
+    doc_aum_ja_lang: bool,
     /// S811: saved-LRPB distrust for metric-incompatible-substitution docs.
     doc_lrpb_distrust: bool,
     /// S1304: the same distrust, decided by COUNTING. A file cannot hold more
@@ -3185,6 +3300,34 @@ fn block_has_real_cjk(block: &Block) -> bool {
             row.cells
                 .iter()
                 .any(|c| c.blocks.iter().any(block_has_real_cjk))
+        }),
+        _ => false,
+    }
+}
+
+/// A run whose resolved Latin face is Arial Unicode MS and whose Latin language
+/// is Japanese. Word, with AUM absent, decides the substitute once per document:
+/// one such run switches every AUM run in the file to the Japanese face. Measured
+/// (owned Word, PDF faces): reports__619945 (all en-US) draws its AUM text in
+/// ArialMT and fits Word's 3 pages; one appended AUM run with w:lang ja-JP turns
+/// ALL of its digits to MS-Gothic half-width (4 pages), while an Arial run with
+/// ja-JP or an AUM run with only w:eastAsia=ja-JP changes nothing.
+/// forms__00bb58e7 (en-US, eastAsia ja-JP) draws Arial; correspondence__11395292
+/// (default w:val=ja) draws MS-Mincho half-width.
+fn block_has_aum_ja_run(block: &Block, default_family: Option<&str>) -> bool {
+    match block {
+        Block::Paragraph(p) => p.runs.iter().any(|r| {
+            let family = r.style.font_family.as_deref()
+                .or_else(|| p.style.default_run_style.as_ref().and_then(|s| s.font_family.as_deref()))
+                .or(default_family);
+            let lang = r.style.latin_lang.as_deref()
+                .or_else(|| p.style.default_run_style.as_ref().and_then(|s| s.latin_lang.as_deref()));
+            family == Some("Arial Unicode MS")
+                && lang.is_some_and(|l| l.to_ascii_lowercase().starts_with("ja"))
+                && !r.text.is_empty()
+        }),
+        Block::Table(t) => t.rows.iter().any(|row| {
+            row.cells.iter().any(|c| c.blocks.iter().any(|b| block_has_aum_ja_run(b, default_family)))
         }),
         _ => false,
     }
@@ -3703,6 +3846,7 @@ impl LayoutEngine {
             cjk_substitute_face: "Yu Mincho".to_string(),
             doc_east_asia_lang_cjk: false,
             doc_latin_lang_cjk: false,
+            deva_font_families: std::collections::HashSet::new(),
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
@@ -3728,6 +3872,7 @@ impl LayoutEngine {
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: false,
             doc_body_has_real_cjk: false,
+            doc_aum_ja_lang: false,
             doc_lrpb_distrust: false,
             lrpb_count_distrust: std::cell::Cell::new(false),
             doc_grid_all_no_type: false,
@@ -3839,6 +3984,10 @@ impl LayoutEngine {
                     });
                 (!cjk_language).then(|| "Times New Roman".to_owned())
             });
+        let doc_aum_ja_lang = doc
+            .pages
+            .iter()
+            .any(|pg| pg.blocks.iter().any(|b| block_has_aum_ja_run(b, default_font_family.as_deref())));
         let default_font_family_east_asia = doc
             .styles
             .doc_default_run_style
@@ -3905,7 +4054,8 @@ impl LayoutEngine {
             cjk_substitute_face,
             doc_east_asia_lang_cjk,
             doc_latin_lang_cjk,
-            registry: FontMetricsRegistry::load(),
+            deva_font_families: document_deva_font_families(doc),
+            registry: FontMetricsRegistry::for_document(doc),
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
@@ -3963,6 +4113,7 @@ impl LayoutEngine {
                 .pages
                 .iter()
                 .any(|pg| pg.blocks.iter().any(block_has_real_cjk)),
+            doc_aum_ja_lang,
             // S1062: true only when EVERY page that declares a grid pitch is a
             // no-type docGrid (see the field doc comment for why this is
             // document-level rather than threaded).
@@ -3995,6 +4146,7 @@ impl LayoutEngine {
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
+        let _document_fonts = crate::font::shape::enter_document_fonts(doc);
         let math_font_doc;
         let doc=if document_has_math_font_runs(doc) {
             let mut copy=doc.clone();
@@ -5078,9 +5230,10 @@ impl LayoutEngine {
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
         family: &'a str,
+        text: Option<&str>,
     ) -> &'a str {
         if family == "Arial Unicode MS"
-            && !self.doc_body_has_real_cjk
+            && !self.aum_japanese_substitute(text)
             && std::env::var("OXI_S1036_DISABLE").is_err()
             && self.resolve_font_family(run_style, para_style) == Some("Arial Unicode MS")
         {
@@ -5103,6 +5256,25 @@ impl LayoutEngine {
             }
         } else {
             family
+        }
+    }
+
+    /// Whether an absent Arial Unicode MS takes the Japanese face (S1036) rather
+    /// than Arial (S1564). The run's Latin metrics (no text, or text carrying
+    /// Latin letters, digits or spaces) follow Word's per-document choice: a
+    /// Japanese-language AUM run anywhere (`block_has_aum_ja_run`) -> Japanese
+    /// face, otherwise Arial -- reports__619945 is a Japanese report whose runs
+    /// are all en-US and Word draws the digits and spaces of its AUM runs in
+    /// ArialMT. Pure-CJK text keeps the body-CJK gate: digitalcontract (en-US,
+    /// CJK body) sizes its AUM 委託契約書 heading by the Japanese face's box
+    /// (Word 20.25pt row). Opt-out OXI_AUMJA_DISABLE restores the body-CJK gate.
+    fn aum_japanese_substitute(&self, text: Option<&str>) -> bool {
+        if std::env::var_os("OXI_AUMJA_DISABLE").is_some() {
+            return self.doc_body_has_real_cjk;
+        }
+        match text {
+            Some(t) if !t.chars().any(|c| c.is_ascii_alphanumeric() || c == ' ') => self.doc_body_has_real_cjk,
+            _ => self.doc_aum_ja_lang,
         }
     }
 
@@ -5155,7 +5327,7 @@ impl LayoutEngine {
     fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> FontMetricsRef<'_> {
         match self.resolve_font_family(run_style, para_style) {
             Some(family) => self.registry.get_with_style(
-                self.s1036_metric_family(run_style, para_style, family),
+                self.s1036_metric_family(run_style, para_style, family, None),
                 self.resolve_bold(run_style, para_style),
                 self.resolve_italic(run_style, para_style),
             ),
@@ -5265,6 +5437,13 @@ impl LayoutEngine {
                 if m.char_widths.contains_key(&'\u{0915}') {
                     return m;
                 }
+                if std::env::var_os("OXI_INDIA_CS_METRICS_DISABLE").is_none()
+                    && !self.registry.supports_family(cs)
+                    && crate::font::runtime::resolve(cs, false, false).is_none()
+                {
+                    let fallback = self.registry.get("Mangal");
+                    if fallback.char_widths.contains_key(&'\u{0915}') { return fallback; }
+                }
             }
             let nirmala = self.registry.get("Nirmala UI");
             if nirmala.char_widths.contains_key(&'\u{0915}') {
@@ -5274,7 +5453,7 @@ impl LayoutEngine {
         let quote_latin = std::env::var("OXI_S763M_DISABLE").is_err();
         match self.resolve_font_family_for_text_g(text, run_style, para_style, quote_latin) {
             Some(family) => self.registry.get_with_style(
-                self.s1036_metric_family(run_style, para_style, family),
+                self.s1036_metric_family(run_style, para_style, family, Some(text)),
                 self.resolve_bold(run_style, para_style),
                 self.resolve_italic(run_style, para_style),
             ),
@@ -5300,6 +5479,17 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
         prefer_ascii: bool,
     ) -> FontMetricsRef<'_> {
+        if std::env::var_os("OXI_INDIA_CS_MARK_DISABLE").is_none() {
+            if let Some(family) = self.resolve_font_family(run_style, para_style) {
+                if self.deva_font_families.contains(&family.to_lowercase())
+                    && !self.registry.supports_family(family)
+                    && crate::font::runtime::resolve(family, false, false).is_none()
+                {
+                    let fallback = self.registry.get("Mangal");
+                    if fallback.char_widths.contains_key(&'\u{0915}') { return fallback; }
+                }
+            }
+        }
         // S707 (2026-06-30): in a NO-GRID / no-type-docGrid context the empty-
         // paragraph / ¶-mark line height is governed by the ASCII (Latin) font,
         // NOT the eastAsia font (the S583 rule, here for the no-grid case S583
@@ -5845,6 +6035,9 @@ impl LayoutEngine {
         for block in blocks.iter_mut() {
             match block {
                 Block::Paragraph(para) => {
+                    if std::env::var_os("OXI_DEVA_XRUN_MERGE_DISABLE").is_none() {
+                        merge_split_deva_clusters(&mut para.runs);
+                    }
                     if std::env::var_os("OXI_CJK_FALLBACK_DISABLE").is_none() {
                         self.resolve_cjk_fallback_runs(&mut para.runs, &para.style);
                     }
@@ -10284,7 +10477,10 @@ cells={} pitch={:.2} text={:?}",
                     // Block::Paragraph was handled) — probezhdrtbl {-1:5}. Sum
                     // the rows' natural heights (trHeight floor per row).
                     // Corpus-safe: 0 corpus docs have tables in headers.
-                    if std::env::var("OXI_S731_DISABLE").is_err() {
+                    if std::env::var("OXI_S731_DISABLE").is_err()
+                        && (t.style.position.is_none()
+                            || std::env::var_os("OXI_HEADER_FLOAT_FLOW_DISABLE").is_some())
+                    {
                         let col_widths = self.resolve_table_col_widths_n(t, hdr_cw, false);
                         let dp = t.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
@@ -10528,6 +10724,21 @@ cells={} pitch={:.2} text={:?}",
                         .filter(|(_, r)| !r.style.vanish)
                         .map(|(i, r)| (r.text.as_str(), &r.style, r.field_type.clone(), i, 0usize))
                         .collect();
+                    // An empty footer paragraph whose ascii font is the missing Arial
+                    // Unicode MS takes a 1.76em line in Word (8/10/12/16pt: 14.04 /
+                    // 17.64 / 21.12 / 28.20). default ON, opt-out OXI_AUM_MARK_LH_DISABLE.
+                    if std::env::var_os("OXI_AUM_MARK_LH_DISABLE").is_none()
+                        && p.runs.iter().all(|r| r.text.trim().is_empty() && r.style.inline_object_image.is_none())
+                    {
+                        let mark = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let fam = self.resolve_font_family(&mark, &p.style).map(|s| s.to_string());
+                        if fam.as_deref() == Some("Arial Unicode MS")
+                            && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
+                        {
+                            let mark_size = self.resolve_font_size(&mark, &p.style);
+                            return 1.76 * mark_size;
+                        }
+                    }
                     let width = (cw - p.style.indent_left.unwrap_or(0.0)
                         - p.style.indent_right.unwrap_or(0.0)).max(1.0);
                     let mut lines = self.break_into_lines(&fragments, width,
@@ -14137,6 +14348,20 @@ cells={} pitch={:.2} text={:?}",
         // The same mixing was noted at S620 and dismissed there on a 0.1pt
         // reading of one gen2 cohort; the arms above are 0.5pt and say which
         // way Word goes.
+        let ascdesc_mix = std::env::var_os("OXI_ASCDESC_MIX_DISABLE").is_none()
+            && !ascdesc_mix_excluded(&line.fragments)
+            && !line.fragments.iter().any(|f| {
+                self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
+            });
+        if ascdesc_mix && !line.fragments.is_empty() {
+            let ms: Vec<(FontMetricsRef<'_>, f32)> = line.fragments.iter()
+                .filter(|f| !f.text.trim().is_empty())
+                .map(|f| (self.metrics_for_text(&f.text, &f.style, para_style), f.style.font_size.unwrap_or(para_font_size)))
+                .collect();
+            if !ms.is_empty() {
+                return ascdesc_mix_height(ms.iter().map(|(m, fs)| (&**m, *fs)));
+            }
+        }
         if std::env::var("OXI_S1361_DISABLE").is_err() && max_box > 0.0 {
             return max_box;
         }
@@ -14794,6 +15019,26 @@ cells={} pitch={:.2} text={:?}",
         // about 4%, which is more than one line per page. The same mixing was
         // noted at S620 and dismissed on a 0.1pt reading of one cohort; these
         // arms are 0.5pt and say which way Word goes.
+        // Without any CJK 83/64 face on the line, Word stacks the largest
+        // ascent over the largest descent of the line's faces (Nirmala UI +
+        // Courier New "-" 12pt: 16.5, Arial + Courier New: 14.85 -- above
+        // either face's own box). default ON, opt-out OXI_ASCDESC_MIX_DISABLE.
+        let ascdesc_mix = std::env::var_os("OXI_ASCDESC_MIX_DISABLE").is_none()
+            && !ascdesc_mix_excluded(&line.fragments)
+            && !line.fragments.iter().any(|f| {
+                self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
+            });
+        if ascdesc_mix {
+            let ms: Vec<(FontMetricsRef<'_>, f32)> = line.fragments.iter()
+                .filter(|f| !f.text.trim().is_empty() && !Self::s1298_glyphless(f))
+                .map(|f| (self.metrics_for_text(&f.text, &f.style, para_style), f.style.font_size.unwrap_or(para_font_size)))
+                .collect();
+            if !ms.is_empty() {
+                let mix = ascdesc_mix_height(ms.iter().map(|(m, fs)| (&**m, *fs)));
+                hhea_natural_max = hhea_natural_max.max(mix);
+                max_combined = max_combined.max(mix);
+            }
+        }
         let run_base = if std::env::var("OXI_S1361_DISABLE").is_err() && max_combined > 0.0 {
             max_combined
         } else {

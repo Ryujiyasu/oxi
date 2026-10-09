@@ -394,6 +394,7 @@ impl<'a> LineBreaker<'a> {
             && self.compat_mode >= 15
             && self.compat_mode_explicit;
         let mut s1475_space_tw: i32 = 0;
+        let s1475_token = std::env::var_os("OXI_JSHRINK_TOKEN_DISABLE").is_none();
         let s799_cap: f32 = std::env::var("OXI_S799_CAP")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -534,6 +535,60 @@ impl<'a> LineBreaker<'a> {
         // Pairs with OXI_S1026_W (width penalty) on the corrected runtime tuples.
         // Scope: c14 monospace (the 2 Courier twins; JP CJK-gated out).
         let s1027_on = std::env::var("OXI_S1027_DISABLE").is_err();
+        // Word does not break at a space whose next character is closing
+        // punctuation (. , : ; ? ! % ) ] } ’ ”): the word before the space goes
+        // to the next line with it (default ON, opt-out OXI_LATIN_LEADPUNCT_CARRY_DISABLE).
+        let leadpunct_on = std::env::var_os("OXI_LATIN_LEADPUNCT_CARRY_DISABLE").is_none();
+        macro_rules! leadpunct_take {
+            ($word:expr, $wfw:expr, $avail:expr) => {{
+                let mut lp_carry: Vec<LineFragment> = Vec::new();
+                if leadpunct_on {
+                    let proh = |c: char| matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201D}');
+                    let is_sp = |f: &LineFragment| !f.text.is_empty() && f.text.chars().all(|c| c == ' ');
+                    let is_wd = |f: &LineFragment| f.tab_position.is_none() && f.field_type.is_none()
+                        && !f.text.is_empty() && !f.text.chars().any(|c| c == ' ' || c == '\t');
+                    let mut lead = $word.chars().next();
+                    let mut carry_tw = 0i32;
+                    while lead.map_or(false, proh) {
+                        let n = current_line.fragments.len();
+                        let n_sp = current_line.fragments.iter().rev().take_while(|f| is_sp(f)).count();
+                        if n_sp == 0 { break; }
+                        let mut k = n - n_sp;
+                        while k > 0 && is_wd(&current_line.fragments[k - 1]) { k -= 1; }
+                        if k == 0 || k == n - n_sp { break; }
+                        let mut chunk: Vec<LineFragment> = current_line.fragments.drain(k..).collect();
+                        for f in &chunk {
+                            current_width -= f.width;
+                            current_width_tw -= pt_to_tw(f.width);
+                            current_capw_tw -= pt_to_tw(f.width);
+                            carry_tw += pt_to_tw(f.width);
+                        }
+                        lead = chunk.first().and_then(|f| f.text.chars().next());
+                        chunk.extend(lp_carry.drain(..));
+                        lp_carry = chunk;
+                    }
+                    if !lp_carry.is_empty() && carry_tw + $wfw > $avail {
+                        for f in lp_carry.drain(..) {
+                            current_width += f.width;
+                            current_width_tw += pt_to_tw(f.width);
+                            current_capw_tw += pt_to_tw(f.width);
+                            current_line.fragments.push(f);
+                        }
+                    }
+                }
+                lp_carry
+            }};
+        }
+        macro_rules! leadpunct_put {
+            ($v:expr) => {{
+                for f in $v {
+                    current_width += f.width;
+                    current_width_tw += pt_to_tw(f.width);
+                    current_capw_tw += pt_to_tw(f.width);
+                    current_line.fragments.push(f);
+                }
+            }};
+        }
         macro_rules! wrap_and_seed {
             ($sty:expr) => {{
                 if std::env::var("OXI_DBGWRAP").is_ok() {
@@ -1191,7 +1246,7 @@ impl<'a> LineBreaker<'a> {
                         // identical. Opt-out OXI_OPENWRAP_DISABLE.
                         if std::env::var("OXI_OPENWRAP_DISABLE").is_err()
                             && preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && current_line.fragments.len() > 1 && !para_all_whitespace {
                             let mut carried: Vec<LineFragment> = Vec::new();
                             while current_line.fragments.len() > 1 {
@@ -1218,9 +1273,11 @@ impl<'a> LineBreaker<'a> {
                             }
                         }
                         if !preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
+                            let lp_carry = leadpunct_take!(word, word_fit_width_tw, available_tw);
                             wrap_and_seed!(ws);
+                            leadpunct_put!(lp_carry);
                         }
                         // Place the token as SEGMENTS split at the recorded break
                         // opportunities — IDENTICAL fragmentation to the default path (which
@@ -1295,7 +1352,7 @@ impl<'a> LineBreaker<'a> {
                             // final ','/'.' (one segment) then wraps here despite the KEEP
                             // decision («revenues,»: decision KEEP, segment wrapped).
                             // Apply the same exclusive-boundary hang to the LAST segment.
-                            if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), seg_w_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                            if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), seg_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 + segment_hang_tw
                                 && !current_line.fragments.is_empty() && !para_all_whitespace
                                 && !s1059_overlong {
@@ -1328,7 +1385,7 @@ impl<'a> LineBreaker<'a> {
                                 let piece_w_tw = pt_to_tw(piece_w);
                                 let limit = available_tw
                                     + if std::env::var("OXI_SEGMENT_CREDIT_DISABLE").is_err() { s1346_credit_tw } else { 0 }
-                                    + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), piece_w_tw, s1475_space_tw, s1475_on) })
+                                    + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), piece_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) })
                                     + right_tab_slack_tw
                                     + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                     + segment_hang_tw;
@@ -1404,7 +1461,7 @@ impl<'a> LineBreaker<'a> {
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
                     let mut hyphenated = false;
-                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_last_word_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         // S1128 (2026-08-15, SHIPPED default-ON, opt-out
                         // OXI_S1128_DISABLE): `<w:autoHyphenation/>`.
@@ -1477,7 +1534,9 @@ impl<'a> LineBreaker<'a> {
                                 }
                             }
                         }
+                        let lp_carry = if hyphenated { Vec::new() } else { leadpunct_take!(word, word_fit_width_tw, available_tw) };
                         wrap_and_seed!(ws);
+                        leadpunct_put!(lp_carry);
                     }
                     // S1128: the hyphenation branch replaces `word` with its TAIL, so
                     // the twips advance has to be recomputed — but ONLY then. Doing it
@@ -2724,8 +2783,17 @@ impl<'a> LineBreaker<'a> {
                 let emit_fam = self
                     .resolve_font_family_for_text(text, style, para_style)
                     .map(|s| s.to_string());
+                let emit_fam = if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none() {
+                    style.font_family_cs.clone()
+                        .or_else(|| para_style.default_run_style.as_ref().and_then(|s| s.font_family_cs.clone()))
+                        .or(emit_fam)
+                } else { emit_fam };
                 let shape_fam = match emit_fam {
                     Some(f) if crate::font::shape::family_covers(&f, '\u{0915}') => f,
+                    Some(f) if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none()
+                        && !self.registry.supports_family(&f)
+                        && crate::font::runtime::resolve(&f, false, false).is_none()
+                        && crate::font::shape::family_covers("Mangal", '\u{0915}') => "Mangal".to_string(),
                     _ => "Nirmala UI".to_string(),
                 };
                 crate::font::shape::cluster_advances(
@@ -3321,7 +3389,23 @@ impl<'a> LineBreaker<'a> {
                             }
                         })
                         .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
-                    if prev_is_cjk || next_is_cjk {
+                    // A space that touches another space or NBSP is also half an
+                    // em under the balancing setting (any font, across runs); a
+                    // lone space between Latin words keeps its natural advance.
+                    let is_sp = |c: char| c == ' ' || c == '\u{00a0}';
+                    let bal_space_run = grid_char_pitch.is_none()
+                        && std::env::var_os("OXI_BAL_SPACE_RUN_DISABLE").is_none()
+                        && (chars_vec.get(char_index.wrapping_sub(1)).copied()
+                            .or_else(|| if char_index == 0 {
+                                fragments.get(frag_outer_idx.wrapping_sub(1)).and_then(|f| f.0.chars().last())
+                            } else { None })
+                            .map_or(false, is_sp)
+                            || chars_vec.get(char_index + 1).copied()
+                                .or_else(|| if char_index + 1 == chars_vec.len() {
+                                    fragments.get(frag_outer_idx + 1).and_then(|f| f.0.chars().next())
+                                } else { None })
+                                .map_or(false, is_sp));
+                    if prev_is_cjk || next_is_cjk || bal_space_run {
                         // S1337S (2026-09-06, HELD opt-in OXI_S1337S=1): on a character
                         // grid the balanced space is half the CELL, like every other
                         // single-byte character -- 0ea3ec86 p5 「能訓練 31か所 生活訓練
@@ -4262,9 +4346,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     char_metrics.char_widths.get(&' ').copied().unwrap_or(-1.0)
                                 );
                             }
-                            if kernbreak_para && ch == ' ' {
+                            // Leading whitespace retains its natural width; only spaces
+                            // after visible content can contribute justification fit credit.
+                            let shrinkable_space = std::env::var_os("OXI_LEADING_SPACE_CREDIT_DISABLE").is_some()
+                                || current_line.fragments.iter().any(|f| {
+                                    f.text.chars().any(|c| !c.is_whitespace())
+                                });
+                            if kernbreak_para && ch == ' ' && shrinkable_space {
                                 latin_space_credit_tw += pt_to_tw(char_width * kernbreak_cap);
-                            } else if s799_space_shrink && ch == ' ' {
+                            } else if s799_space_shrink && ch == ' ' && shrinkable_space {
                                 // S825 (2026-07-13, opt-out OXI_S825_DISABLE): the
                                 // COMPAT-15 justified space-shrink capacity, DERIVED
                                 // (_pb_cs3_gen m15 sweeps, 4 cs profiles, fits ±0.03
@@ -4490,7 +4580,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // Record a break OPPORTUNITY (after this char) instead of forcing
                         // a flush — the maximal Latin token is kept together and only split
                         // by flush_word when it overflows a full line (Western word-wrap).
-                        word_breaks.push((word.chars().count(), word_width));
+                        // No break opportunity before a hyphen (UAX#14 LB21): Word
+                        // never splits «5000/-» at the '/' (default ON, opt-out OXI_JSHRINK_TOKEN_DISABLE).
+                        let next_hy = s1475_token
+                            && chars_vec.get(char_index + 1).copied().or_else(|| {
+                                fragments[frag_outer_idx + 1..].iter().find_map(|f| f.0.chars().next())
+                            }) == Some('-');
+                        if !next_hy {
+                            word_breaks.push((word.chars().count(), word_width));
+                        }
                         seg_pending = true; // next char starts a new segment
                     } else {
                         flush_word!(style);

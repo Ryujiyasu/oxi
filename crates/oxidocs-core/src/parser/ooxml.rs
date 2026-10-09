@@ -564,6 +564,14 @@ impl OoxmlParser {
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
         let default_tab_stop = self.parse_default_tab_stop();
         let (compat_mode, compat_mode_explicit) = self.parse_compat_mode();
+        let mut sections = sections;
+        if std::env::var_os("OXI_LEGACY_TBLSTYLE_NORMAL_SZ_DISABLE").is_none()
+            && (compat_mode <= 14 || !compat_mode_explicit)
+        {
+            for s in sections.iter_mut() {
+                legacy_tblstyle_normal_sz(&mut s.blocks, &styles);
+            }
+        }
         let settings_part_exists = self.read_part("word/settings.xml").is_ok();
         let fn_special_declared = self.parse_fn_special_declared();
         let endnote_sep_line = self.parse_endnote_sep_line();
@@ -1621,6 +1629,8 @@ impl OoxmlParser {
             Ok(x) => x,
             Err(_) => return,
         };
+        let font_rels = self.read_part("word/_rels/fontTable.xml.rels")
+            .ok().and_then(|xml| parse_relationships(&xml).ok()).unwrap_or_default();
         let mut reader = Reader::from_str(&xml);
         let mut current_font: Option<String> = None;
         let mut current_info = crate::ir::FontInfo::default();
@@ -1654,6 +1664,29 @@ impl OoxmlParser {
                         // S1008 (2026-07-26): w:altName = the family Word substitutes
                         // when the primary font is unavailable (e.g. Myriad Pro Light
                         // → Segoe UI Light). Consumed by resolve_declared_font_alias.
+                        "embedRegular" | "embedBold" | "embedItalic" | "embedBoldItalic" => {
+                            let rid = e.attributes().flatten().find_map(|a| {
+                                (local_name(a.key.as_ref()) == "id")
+                                    .then(|| String::from_utf8_lossy(&a.value).into_owned())
+                            });
+                            if let Some(rel) = rid.as_ref().and_then(|id| font_rels.get(id)) {
+                                if rel.rel_type.ends_with("/font") {
+                                    let path = if rel.target.starts_with('/') {
+                                        rel.target.trim_start_matches('/').to_string()
+                                    } else { format!("word/{}", rel.target) };
+                                    if let Ok(data) = self.read_binary_part(&path) {
+                                        // Invalid or obfuscated faces retain the existing fallback.
+                                        if rustybuzz::Face::from_slice(&data, 0).is_some() {
+                                            current_info.embedded_faces.push(crate::ir::EmbeddedFontFace {
+                                                bold: local == "embedBold" || local == "embedBoldItalic",
+                                                italic: local == "embedItalic" || local == "embedBoldItalic",
+                                                data,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         "altName" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
@@ -1934,6 +1967,53 @@ impl OoxmlParser {
     ) -> Result<Vec<ParsedSection>, ParseError> {
         let xml = self.read_part("word/document.xml")?;
         parse_body(&xml, ctx, styles)
+    }
+}
+
+/// Word in compat <= 14 (or with no compatibilityMode): in a table whose style
+/// carries pPr/rPr, a cell paragraph whose size comes from a style chain at
+/// exactly 10.5pt (the Normal.dotm-written Normal size) takes the table
+/// style's size, else docDefaults' (unless that is absent or 10pt). A direct
+/// run size is kept. default ON, opt-out OXI_LEGACY_TBLSTYLE_NORMAL_SZ_DISABLE.
+fn legacy_tblstyle_normal_sz(blocks: &mut [Block], styles: &StyleSheet) {
+    let Some(normal_id) = styles.default_paragraph_style_id.as_deref() else { return };
+    let size_of = |id: &str| styles.styles.get(id)
+        .and_then(|d| d.paragraph.default_run_style.as_ref())
+        .and_then(|r| r.font_size);
+    let is_105 = |v: Option<f32>| v.map_or(false, |x| (x - 10.5).abs() < 0.01);
+    if !is_105(size_of(normal_id)) { return; }
+    let dd = styles.doc_default_run_style.as_ref().and_then(|r| r.font_size)
+        .filter(|fs| (fs - 10.0).abs() > 0.01);
+    for b in blocks.iter_mut() {
+        let Block::Table(t) = b else { continue };
+        let target = t.style.style_id.as_ref().and_then(|id| styles.table_styles.get(id))
+            .filter(|ts| ts.para_style.is_some() || ts.run_style.is_some() || ts.run_font_size.is_some())
+            .and_then(|ts| ts.run_font_size.or(dd));
+        for row in t.rows.iter_mut() {
+            for cell in row.cells.iter_mut() {
+                if let Some(fs) = target {
+                    for blk in cell.blocks.iter_mut() {
+                        let Block::Paragraph(p) = blk else { continue };
+                        let sid = p.style.style_id.clone().unwrap_or_else(|| normal_id.to_string());
+                        if p.style.heading_level.is_some() || !is_105(size_of(&sid)) { continue; }
+                        if let Some(d) = p.style.default_run_style.as_mut() {
+                            if is_105(d.font_size) { d.font_size = Some(fs); }
+                        }
+                        for r in p.runs.iter_mut() {
+                            if r.style.font_size_inherited && is_105(r.style.font_size) {
+                                r.style.font_size = Some(fs);
+                            }
+                        }
+                        if let Some(m) = p.style.ppr_rpr.as_mut() {
+                            if m.font_size_inherited && is_105(m.font_size) {
+                                m.font_size = Some(fs);
+                            }
+                        }
+                    }
+                }
+                legacy_tblstyle_normal_sz(&mut cell.blocks, styles);
+            }
+        }
     }
 }
 
@@ -4366,6 +4446,10 @@ fn parse_paragraph_with_inline_images_impl(
             style.font_size_from_doc_defaults = doc_rs.font_size.is_some();
         }
     }
+    // OXI_NUMIND_OVER_DOCDEFAULTS: remember which indents docDefaults (not a
+    // style) supplied -- they never beat a style-linked numbering level's ind.
+    let s_nd = std::env::var_os("OXI_NUMIND_OVER_DOCDEFAULTS_DISABLE").is_none();
+    let (mut dd_left, mut dd_first) = (false, false);
     if let Some(ref doc_para) = styles.doc_default_para_style {
         if !style.has_explicit_auto_space_de && doc_para.has_explicit_auto_space_de {
             style.auto_space_de = doc_para.auto_space_de;
@@ -4397,6 +4481,7 @@ fn parse_paragraph_with_inline_images_impl(
         if style.indent_left.is_none() && style.indent_left_chars.is_none() {
             style.indent_left = doc_para.indent_left;
             style.indent_left_chars = doc_para.indent_left_chars;
+            dd_left = style.indent_left.is_some() || style.indent_left_chars.is_some();
         }
         if style.indent_right.is_none() && style.indent_right_chars.is_none() {
             style.indent_right = doc_para.indent_right;
@@ -4405,6 +4490,7 @@ fn parse_paragraph_with_inline_images_impl(
         if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
             style.indent_first_line = doc_para.indent_first_line;
             style.indent_first_line_chars = doc_para.indent_first_line_chars;
+            dd_first = style.indent_first_line.is_some() || style.indent_first_line_chars.is_some();
         }
         // Only override widow_control from docDefaults if docDefaults explicitly
         // sets widowControl. When pPrDefault is empty, doc_para has the struct
@@ -4568,7 +4654,7 @@ fn parse_paragraph_with_inline_images_impl(
                 // Paragraph's explicit hanging indent overrides numbering level's hanging.
                 // COM-confirmed (LOD_Handbook P3: XML hanging=426tw=21.3pt overrides
                 // numbering hanging=720tw=36pt).
-                if let Some(first) = style.indent_first_line {
+                if let Some(first) = style.indent_first_line.filter(|_| !(s_nd && dd_first)) {
                     if first < 0.0 {
                         style.list_indent = Some(-first);
                     } else {
@@ -4581,7 +4667,7 @@ fn parse_paragraph_with_inline_images_impl(
                 // too -- without this the level's left (tokyoshugyo numId 3:
                 // 630) replaced the paragraph's 2 cells and the continuation
                 // lines of 「①　業務外の傷病による欠勤が…」 sat one cell too deep.
-                if style.indent_left.is_none() && style.indent_left_chars.is_none() {
+                if (style.indent_left.is_none() && style.indent_left_chars.is_none()) || (s_nd && dd_left) {
                     // S1011: a dangling numId has no level_indent to look up;
                     // use the recovered level_left (36pt) so the body indents.
                     let left = if dangling {
@@ -4621,7 +4707,8 @@ fn parse_paragraph_with_inline_images_impl(
             // 56 = Word (Exhibit boundaries aligned). framework neutral.
             // See [[english_corpus_bug_mine]].
             let s771_on = std::env::var("OXI_S771_DISABLE").is_err();
-            let s771_apply_num_ind = !s771_on || num_pr_is_direct || style.indent_left.is_none();
+            let s771_apply_num_ind = !s771_on || num_pr_is_direct || style.indent_left.is_none()
+                || (s_nd && dd_left);
             if !ppr_explicit_indent_left && s771_apply_num_ind {
                 if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
                     style.indent_left = Some(left);
@@ -4629,7 +4716,8 @@ fn parse_paragraph_with_inline_images_impl(
                 }
             }
             let s771_apply_num_hang =
-                !s771_on || num_pr_is_direct || style.indent_first_line.is_none();
+                !s771_on || num_pr_is_direct || style.indent_first_line.is_none()
+                    || (s_nd && dd_first);
             if !ppr_explicit_first_line && s771_apply_num_hang {
                 if let Some(hanging) = ctx.numbering.get_level_hanging(&npr.num_id, npr.ilvl) {
                     style.indent_first_line = Some(-hanging);
@@ -5055,7 +5143,11 @@ fn parse_paragraph_with_inline_images_impl(
     // color + bold + italic).
     if let Some(ref para_drs) = style.default_run_style {
         for run in runs.iter_mut() {
+            let had_size = run.style.font_size.is_some();
             super::styles::merge_run_style(&mut run.style, para_drs);
+            if !had_size && run.style.font_size.is_some() {
+                run.style.font_size_inherited = true;
+            }
         }
         // S1505: the paragraph MARK inherits the style's hidden flag too, so a
         // paragraph hidden by its style collapses entirely (S784/S673v).

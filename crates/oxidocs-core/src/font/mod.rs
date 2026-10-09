@@ -852,6 +852,50 @@ pub struct FontMetricsRegistry {
     vertical_metrics: HashMap<String, VerticalFontMetrics>,
 }
 
+/// Embedded families Word actually draws with: the face must carry the
+/// characters the document sets in that family. An embedded Noto Sans Symbols
+/// with no glyph for its bullets (●/▪) is not used -- Word falls back as if the
+/// font were absent (administrative__002dcbed: bullets not in the embedded face).
+pub(crate) fn usable_embedded_families(doc: &crate::ir::Document) -> std::collections::HashSet<String> {
+    use crate::ir::Block;
+    let mut used: std::collections::HashMap<String, Vec<char>> = Default::default();
+    fn add(used: &mut std::collections::HashMap<String, Vec<char>>, style: &crate::ir::RunStyle, text: &str) {
+        for fam in [&style.font_family, &style.font_family_cs, &style.font_family_east_asia].into_iter().flatten() {
+            used.entry(fam.to_lowercase()).or_default().extend(text.chars().filter(|c| !c.is_whitespace()));
+        }
+    }
+    fn walk(blocks: &[Block], used: &mut std::collections::HashMap<String, Vec<char>>) {
+        for b in blocks {
+            match b {
+                Block::Paragraph(p) => {
+                    for r in &p.runs { add(used, &r.style, &r.text); }
+                    if let (Some(m), Some(ms)) = (&p.style.list_marker, &p.style.list_marker_style) { add(used, ms, m); }
+                }
+                Block::Table(t) => for row in &t.rows { for cell in &row.cells { walk(&cell.blocks, used); } },
+                _ => {}
+            }
+        }
+    }
+    for page in &doc.pages { walk(&page.blocks, &mut used); }
+    let mut out = std::collections::HashSet::new();
+    for (family, info) in &doc.styles.font_table {
+        let Some(face) = info.embedded_faces.iter().find(|f| !f.bold && !f.italic).or(info.embedded_faces.first()) else { continue };
+        let Ok(font) = skrifa::FontRef::new(&face.data) else { continue };
+        use skrifa::MetadataProvider;
+        let cmap = font.charmap();
+        let chars = used.get(&family.to_lowercase()).cloned().unwrap_or_default();
+        let mut distinct = chars.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let covered = distinct.iter().filter(|&&c| cmap.map(c).is_some()).count();
+        // Most of what the document sets in the family must be in the face.
+        if !distinct.is_empty() && covered * 10 >= distinct.len() * 9 {
+            out.insert(family.to_lowercase());
+        }
+    }
+    out
+}
+
 impl FontMetricsRegistry {
     /// Load the embedded font metrics data, cached globally after first call.
     /// S1119 (2026-08-14): the face Word actually draws `c` with, when the run
@@ -881,6 +925,42 @@ impl FontMetricsRegistry {
             }
         }
         None
+    }
+
+    /// The shared registry plus the faces this document embeds (word/fonts/,
+    /// unobfuscated). default ON, opt-out OXI_EMBEDDED_FONTS_DISABLE.
+    pub(crate) fn for_document(doc: &crate::ir::Document) -> Self {
+        let mut registry = Self::load();
+        if std::env::var_os("OXI_EMBEDDED_FONTS_DISABLE").is_some() {
+            return registry;
+        }
+        let usable = usable_embedded_families(doc);
+        for (family, info) in &doc.styles.font_table {
+            if !usable.contains(&family.to_lowercase()) {
+                continue;
+            }
+            // Only a face this machine cannot otherwise resolve: a known family
+            // keeps its calibrated metrics (Zen Old Mincho, Noto Sans Symbols).
+            if info.embedded_faces.is_empty() || registry.supports_family(family)
+                || runtime::resolve(family, false, false).is_some()
+            {
+                continue;
+            }
+            for face in &info.embedded_faces {
+                if let Ok(font) = skrifa::FontRef::new(&face.data) {
+                    let name = match (face.bold, face.italic) {
+                        (true, true) => format!("{family} Bold Italic"),
+                        (true, false) => format!("{family} Bold"),
+                        (false, true) => format!("{family} Italic"),
+                        _ => family.clone(),
+                    };
+                    if let Some(metrics) = runtime::metrics_from(&font, &name) {
+                        registry.fonts.insert(name, metrics);
+                    }
+                }
+            }
+        }
+        registry
     }
 
     pub fn load() -> Self {

@@ -127,7 +127,7 @@ fn face_matches(font: &skrifa::FontRef, family: &str, bold: bool, italic: bool) 
 }
 
 /// Build the metrics the layout engine needs, straight out of the file.
-fn metrics_from(font: &skrifa::FontRef, family: &str) -> Option<FontMetrics> {
+pub(super) fn metrics_from(font: &skrifa::FontRef, family: &str) -> Option<FontMetrics> {
     use skrifa::raw::TableProvider;
     use skrifa::MetadataProvider;
 

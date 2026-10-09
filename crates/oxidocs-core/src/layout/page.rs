@@ -473,7 +473,12 @@ impl<'a> PageLayouter<'a> {
                         .unwrap_or(0.0)
                 };
         let legacy_notice_height = || -> f32 {
-            if self.compat_mode < 15 && self.fn_special_declared
+            // A document that declares no compatibilityMode keeps the legacy
+            // continuation-notice reserve (default ON, opt-out OXI_NOTICE_UNDECLARED_COMPAT_DISABLE).
+            let legacy = self.compat_mode < 15
+                || (!self.compat_mode_explicit
+                    && std::env::var_os("OXI_NOTICE_UNDECLARED_COMPAT_DISABLE").is_none());
+            if legacy && self.fn_special_declared
                 && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S833_DISABLE").is_err()
                 && special_footnote_height(u32::MAX) > 0.0 {

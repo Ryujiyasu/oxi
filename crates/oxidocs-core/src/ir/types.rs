@@ -558,6 +558,9 @@ pub struct RunStyle {
     /// Size inherited from document defaults, below table and named styles.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub font_size_from_defaults: bool,
+    /// Size filled in from the paragraph style chain (not direct / character style).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub font_size_inherited: bool,
     pub bold: bool,
     /// S976: `w:b` was EXPLICITLY set (the element is present, whatever its
     /// `w:val`) — distinguishes an explicit `<w:b w:val="0"/>`, which must beat
@@ -745,6 +748,7 @@ impl Default for RunStyle {
             latin_lang: None,
             font_size: None,
             font_size_from_defaults: false,
+            font_size_inherited: false,
             bold: false,
             has_explicit_bold: false,
             italic: false,
@@ -2435,6 +2439,9 @@ pub struct DocumentMetadata {
 /// Font information from fontTable.xml
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FontInfo {
+    /// Font faces supplied by this document, independent of installed fonts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_faces: Vec<EmbeddedFontFace>,
     /// Alternate family declared by word/fontTable.xml (w:altName) — the font
     /// Word substitutes when the primary family is unavailable (S1008).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2454,6 +2461,14 @@ pub struct FontInfo {
     /// Pitch: "fixed", "variable", "default"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pitch: Option<String>,
+}
+
+/// A font face carried by a document.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EmbeddedFontFace {
+    pub bold: bool,
+    pub italic: bool,
+    pub data: Vec<u8>,
 }
 
 /// A footnote or endnote
