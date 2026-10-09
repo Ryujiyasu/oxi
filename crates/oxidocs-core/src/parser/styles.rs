@@ -509,6 +509,9 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if parent.vanish && !child.vanish_off && std::env::var_os("OXI_S1505_DISABLE").is_none() {
         child.vanish = true;
     }
+    if child.font_family_cs_theme.is_none() {
+        child.font_family_cs_theme = parent.font_family_cs_theme.clone();
+    }
     if child.east_asia_lang.is_none() {
         child.east_asia_lang = parent.east_asia_lang.clone();
     }
@@ -651,6 +654,10 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                                 if let Some(f) = font {
                                     rs.font_family = Some(f);
                                 }
+                            }
+                        } else if key == "cstheme" {
+                            if rs.font_family_cs_theme.is_none() && std::env::var_os("OXI_CS_RUN_FLAG_DISABLE").is_none() {
+                                rs.font_family_cs_theme = theme.cs_theme_font(&String::from_utf8_lossy(&attr.value));
                             }
                         } else if key == "hint" {
                             rs.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
@@ -936,6 +943,10 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                             rs.font_family = Some(f);
                         }
                     }
+                } else if key == "cstheme" {
+                    if rs.font_family_cs_theme.is_none() && std::env::var_os("OXI_CS_RUN_FLAG_DISABLE").is_none() {
+                        rs.font_family_cs_theme = theme.cs_theme_font(&String::from_utf8_lossy(&attr.value));
+                    }
                 } else if key == "hint" {
                     rs.font_hint_east_asia = Some(attr.value.as_ref() == b"eastAsia");
                 } else if key == "eastAsia" {
@@ -1018,6 +1029,7 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
             }
         }
         "rtl" => rs.rtl = true,
+        "cs" => rs.cs_flag = !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val" && matches!(a.value.as_ref(), b"0" | b"false" | b"off")),
         "vanish" => rs.vanish = true,
         // w:webHidden is Web-Layout-only; print/PDF renders it (ToC page numbers).
         "webHidden" => {}

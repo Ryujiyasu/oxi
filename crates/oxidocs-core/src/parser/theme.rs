@@ -42,9 +42,57 @@ pub struct ThemeColors {
     pub major_font_bidi: Option<String>,
     /// Minor complex-script (Bidi) font.
     pub minor_font_bidi: Option<String>,
+    /// Script named by settings `themeFontLang bidi` (hi-IN -> "Deva", ar -> "Arab").
+    pub theme_bidi_script: Option<String>,
 }
 
 impl ThemeColors {
+    /// Read settings `themeFontLang bidi` into a script name.
+    pub fn capture_theme_bidi_script(&mut self, settings: &str) {
+        let mut reader = Reader::from_str(settings);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e) | Event::Empty(e))
+                    if local_name(e.name().as_ref()) == "themeFontLang" => {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "bidi" {
+                            let lang = String::from_utf8_lossy(&attr.value).to_lowercase();
+                            let script = match lang.split('-').next().unwrap_or("") {
+                                "hi" | "mr" | "ne" | "sa" => "Deva",
+                                "ar" | "fa" | "ur" => "Arab",
+                                "he" | "yi" => "Hebr",
+                                "th" => "Thai",
+                                "bn" => "Beng",
+                                "ta" => "Taml",
+                                "te" => "Telu",
+                                "gu" => "Gujr",
+                                "pa" => "Guru",
+                                _ => return,
+                            };
+                            self.theme_bidi_script = Some(script.to_string());
+                        }
+                    }
+                    return;
+                }
+                Ok(Event::Eof) | Err(_) => return,
+                _ => {}
+            }
+        }
+    }
+
+    /// `w:cstheme` -> the theme's complex-script face: the script face for
+    /// settings `themeFontLang bidi` (hi-IN -> Deva -> Mangal), else the Bidi face.
+    pub fn cs_theme_font(&self, val: &str) -> Option<String> {
+        let major = val.starts_with("major");
+        if let Some(script) = self.theme_bidi_script.as_deref() {
+            let map = if major { &self.major_script_fonts } else { &self.minor_script_fonts };
+            if let Some(f) = map.get(script).filter(|f| !f.is_empty()) {
+                return Some(f.clone());
+            }
+        }
+        if major { self.major_font_bidi.clone() } else { self.minor_font_bidi.clone() }
+    }
+
     /// S1496: read settings `themeFontLang eastAsia` into the script name
     /// ("Jpan" / "Hans" / "Hant" / "Hang") WITHOUT touching the EA font
     /// slots (that is `apply_font_language`, still opt-in).

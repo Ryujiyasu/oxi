@@ -3103,6 +3103,91 @@ pub(crate) fn ascdesc_mix_height<'a>(items: impl Iterator<Item = (&'a FontMetric
     a + d
 }
 
+/// `<w:cs/>` (run or paragraph-style rPr): Word draws every character of the
+/// run with its complex-script properties -- the cs font, szCs, bCs, iCs
+/// (igrsup_md_v16: ListParagraph szCs=20 under sz=22 -> Devanagari and the
+/// cs-flagged Courier spaces at 9.96pt; <w:b/> without <w:bCs/> draws regular).
+impl LayoutEngine {
+    /// OXI_AUM_DEVA_TAIL: in a `<w:cs/>` run sequence whose cs font is the
+    /// missing Arial Unicode MS (fontTable charset 80), a non-Devanagari
+    /// character after Devanagari (not space / tab / ZW joiners) makes the line
+    /// take a 1.3828em-above / 0.3828em-below box (igrsup_md_v5/v6: 21.24 at
+    /// 12pt; 10..24pt sweep 1.7656 +-0.002 em). Returns the extra height.
+    pub(crate) fn aum_deva_tail_extra(&self, line: &Line, para_style: &ParagraphStyle) -> f32 {
+        if !self.aum_charset_80 || crate::font::runtime::resolve("Arial Unicode MS", false, false).is_some() {
+            return 0.0;
+        }
+        let mut seen = false;
+        let mut trig = 0.0f32;
+        for f in &line.fragments {
+            let qualifies = f.style.cs_flag
+                && f.style.font_family_cs.as_deref() == Some("Arial Unicode MS");
+            if !qualifies {
+                seen = false;
+                continue;
+            }
+            for c in f.text.chars() {
+                if crate::font::is_complex_script(c) {
+                    seen = true;
+                } else if matches!(c, ' ' | '\t' | '\u{200B}'..='\u{200D}') {
+                    continue;
+                } else if seen {
+                    trig = trig.max(self.resolve_font_size(&f.style, para_style));
+                }
+            }
+        }
+        if trig <= 0.0 {
+            return 0.0;
+        }
+        let ms: Vec<(FontMetricsRef<'_>, f32)> = line.fragments.iter()
+            .filter(|f| !f.text.trim().is_empty())
+            .map(|f| (self.metrics_for_text(&f.text, &f.style, para_style), f.style.font_size.unwrap_or(trig)))
+            .collect();
+        let (mut asc, mut desc) = (0.0f32, 0.0f32);
+        for (m, fs) in &ms {
+            let d = m.win_descent * fs;
+            asc = asc.max(m.natural_line_height_hhea(*fs) - d);
+            desc = desc.max(d);
+        }
+        (asc.max(1.3828 * trig) + desc.max(0.3828 * trig) - (asc + desc)).max(0.0)
+    }
+}
+
+pub(crate) fn apply_cs_run_flag(runs: &mut [Run], para_style: &ParagraphStyle) {
+    apply_cs_run_flag_with(runs, para_style, None)
+}
+
+/// `dd` = docDefaults rPr, the end of the cs-face / szCs chain.
+pub(crate) fn apply_cs_run_flag_with(runs: &mut [Run], para_style: &ParagraphStyle, dd: Option<&RunStyle>) {
+    let drs = para_style.default_run_style.as_ref();
+    for run in runs.iter_mut() {
+        // Only a run that carries <w:cs/> itself (unitF bake: style-level flags do not apply).
+        if !run.style.cs_flag {
+            continue;
+        }
+        let st = &mut run.style;
+        if let Some(sz) = st.font_size_cs.or_else(|| drs.and_then(|d| d.font_size_cs)).or_else(|| dd.and_then(|d| d.font_size_cs)) {
+            st.font_size = Some(sz);
+            st.font_size_from_defaults = false;
+        }
+        st.bold = st.bold_cs || drs.map_or(false, |d| d.bold_cs);
+        st.has_explicit_bold = true;
+        st.italic = st.italic_cs || drs.map_or(false, |d| d.italic_cs);
+        // A literal w:cs wins; else w:cstheme (themeFontLang bidi script face).
+        if let Some(cs) = st.font_family_cs.clone()
+            .or_else(|| drs.and_then(|d| d.font_family_cs.clone()))
+            .or_else(|| st.font_family_cs_theme.clone())
+            .or_else(|| drs.and_then(|d| d.font_family_cs_theme.clone()))
+            .or_else(|| dd.and_then(|d| d.font_family_cs.clone().or_else(|| d.font_family_cs_theme.clone())))
+        {
+            st.font_family = Some(cs.clone());
+            st.font_family_east_asia = Some(cs.clone());
+            st.font_family_cs = Some(cs);
+            st.has_explicit_east_asia = true;
+        }
+    }
+}
+
 fn merge_split_deva_clusters(runs: &mut Vec<Run>) {
     let is_mark = |c: char| matches!(c as u32, 0x0900..=0x0903 | 0x093A..=0x094F | 0x0951..=0x0957 | 0x0962..=0x0963);
     let plain = |r: &Run| r.url.is_none() && r.footnote_ref.is_none() && r.endnote_ref.is_none()
@@ -3128,6 +3213,8 @@ pub struct LayoutEngine {
     field_language: FieldLanguage,
     /// Families that carry complex-script (Devanagari) text in this document.
     deva_font_families: std::collections::HashSet<String>,
+    /// fontTable declares Arial Unicode MS with charset 80 (Shift-JIS).
+    aum_charset_80: bool,
     default_font_size: f32,
     cell_end_style_id: Option<String>,
     cell_default_style_id: Option<String>,
@@ -3847,6 +3934,7 @@ impl LayoutEngine {
             doc_east_asia_lang_cjk: false,
             doc_latin_lang_cjk: false,
             deva_font_families: std::collections::HashSet::new(),
+            aum_charset_80: false,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
@@ -4055,6 +4143,9 @@ impl LayoutEngine {
             doc_east_asia_lang_cjk,
             doc_latin_lang_cjk,
             deva_font_families: document_deva_font_families(doc),
+            aum_charset_80: doc.styles.font_table.get("Arial Unicode MS")
+                .and_then(|f| f.charset.as_deref())
+                .map_or(false, |c| c.eq_ignore_ascii_case("80")),
             registry: FontMetricsRegistry::for_document(doc),
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),

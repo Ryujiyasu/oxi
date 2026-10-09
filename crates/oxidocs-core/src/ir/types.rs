@@ -610,6 +610,12 @@ pub struct RunStyle {
     /// Right-to-left text run (w:rtl)
     #[serde(default)]
     pub rtl: bool,
+    /// `<w:cs/>`: the run takes its complex-script properties for every character.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cs_flag: bool,
+    /// `w:cstheme` resolved face; used only by `<w:cs/>` runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family_cs_theme: Option<String>,
     /// Hidden text (w:vanish)
     #[serde(default)]
     pub vanish: bool,
@@ -749,6 +755,8 @@ impl Default for RunStyle {
             font_size: None,
             font_size_from_defaults: false,
             font_size_inherited: false,
+            cs_flag: false,
+            font_family_cs_theme: None,
             bold: false,
             has_explicit_bold: false,
             italic: false,

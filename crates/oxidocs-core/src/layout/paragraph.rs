@@ -2369,6 +2369,23 @@ impl<'a> ParagraphLayouter<'a> {
             }
         }
 
+        // OXI_AUM_DEVA_TAIL (default ON, opt-out _DISABLE): measured for single
+        // auto spacing without a typed grid only.
+        if std::env::var_os("OXI_AUM_DEVA_TAIL_DISABLE").is_none()
+            && (grid_pitch.is_none() || page.doc_grid_no_type)
+            && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+            && (para.style.line_spacing.unwrap_or(1.0) - 1.0).abs() < 0.01
+        {
+            for (li, line) in lines.iter().enumerate() {
+                let extra = self.aum_deva_tail_extra(line, &para.style);
+                if extra > 0.0 {
+                    line_heights[li] += extra;
+                    natural_line_heights[li] += extra;
+                    if li < ink_line_heights.len() { ink_line_heights[li] += extra; }
+                    if li < s779_win_heights.len() { s779_win_heights[li] += extra; }
+                }
+            }
+        }
             (line_heights, natural_line_heights, s779_win_heights,
                 ink_line_heights, text_only_line_heights, s1116_line0_target, story_image_leading)
         };

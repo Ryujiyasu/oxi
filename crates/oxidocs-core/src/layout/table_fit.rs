@@ -11449,7 +11449,52 @@ impl<'a> TableFitLayouter<'a> {
                         // like Word, but the split row's continuation closed 10pt
                         // below its last line (Word: MOSTI row at 172.6, Oxi
                         // 182.6) and the whole page ran one line long.
-                        let after_last = row
+                        // The continuation box closes with the after of the paragraph
+                        // that actually ENDS the fragment (default ON, opt-out
+                        // OXI_CONT_TAIL_LIVE_DISABLE): only cells with text in the
+                        // continuation count, and a nested table's S716 stub is not that
+                        // paragraph -- the nested table's last row supplies the after.
+                        // iiitg_fac_information row 13: Word tail 0, the finished
+                        // siblings' after=3 pushed p5 down 3pt (unitG repro A..H).
+                        fn tail_after(eng: &LayoutEngine, cell: &TableCell,
+                                      tps: Option<&ParagraphStyle>, grid: Option<f32>) -> f32 {
+                            let end = if eng.nested_table_stub_pos(cell).is_some() {
+                                cell.blocks.len().saturating_sub(1)
+                            } else {
+                                cell.blocks.len()
+                            };
+                            match cell.blocks[..end].last() {
+                                Some(Block::Paragraph(p)) => eng.cell_para_spacing(p, tps, grid).1,
+                                Some(Block::Table(t)) => t.rows.last().map_or(0.0, |r| {
+                                    r.cells.iter()
+                                        .map(|c| tail_after(eng, c, t.style.para_style.as_ref(), grid))
+                                        .fold(0.0_f32, f32::max)
+                                }),
+                                _ => 0.0,
+                            }
+                        }
+                        let live_cells: std::collections::HashSet<usize> = next_page_elems
+                            .iter()
+                            .filter(|e| matches!(e.content, LayoutContent::Text { .. }))
+                            .filter_map(|e| match e.cell_ancestor_path.first() {
+                                Some(&(r, c, _)) => (r == row_idx).then_some(c),
+                                None if e.cell_row_index == Some(row_idx) => e.cell_col_index,
+                                None => None,
+                            })
+                            .collect();
+                        let after_last = if std::env::var_os("OXI_CONT_TAIL_LIVE_DISABLE").is_none()
+                            && !live_cells.is_empty()
+                            && std::env::var_os("OXI_S1528_DISABLE").is_none()
+                        {
+                            let eng: &LayoutEngine = self;
+                            row.cells
+                                .iter()
+                                .enumerate()
+                                .filter(|(ci, _)| live_cells.contains(ci))
+                                .map(|(_, c)| tail_after(eng, c, table.style.para_style.as_ref(), table_grid_pitch))
+                                .fold(0.0_f32, f32::max)
+                        } else {
+                            row
                             .cells
                             .iter()
                             .filter_map(|c| {
@@ -11464,7 +11509,8 @@ impl<'a> TableFitLayouter<'a> {
                                     _ => None,
                                 })
                             })
-                            .fold(0.0_f32, f32::max);
+                            .fold(0.0_f32, f32::max)
+                        };
                         pad_b + after_last
                     } else {
                         0.0

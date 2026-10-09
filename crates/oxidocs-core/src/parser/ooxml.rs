@@ -520,6 +520,11 @@ impl OoxmlParser {
                 theme.capture_theme_font_lang_script(&settings);
             }
         }
+        if std::env::var_os("OXI_CS_RUN_FLAG_DISABLE").is_none() {
+            if let Ok(settings) = self.read_part("word/settings.xml") {
+                theme.capture_theme_bidi_script(&settings);
+            }
+        }
         let mut styles = match s1425_template.as_ref() {
             Some((_, tpl_styles_xml)) => {
                 let doc_xml = self.read_part("word/styles.xml").unwrap_or_default();
@@ -1306,6 +1311,12 @@ impl OoxmlParser {
         // S1008 (2026-07-26): resolve fontTable w:altName substitutions
         // (source unsupported → alternate supported). No-op for the vast
         // majority of docs (empty alias map → byte-identical).
+        // <w:cs/> runs take their complex-script properties BEFORE the
+        // fontTable altName pass, so a cs face like Akshar Unicode still
+        // falls to its declared alternate (Courier New), as Word draws it.
+        if std::env::var_os("OXI_CS_RUN_FLAG_DISABLE").is_none() {
+            apply_cs_run_flags_doc(&mut document);
+        }
         apply_font_table_aliases(&mut document);
         // Application font fallbacks belong to layout; retain authored defaults.
         // Glyph fallback is resolved once on the private layout copy.
@@ -10718,6 +10729,10 @@ fn parse_run_properties(
                         } else if key == "cs" {
                             style.font_family_cs =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
+                        } else if key == "cstheme" {
+                            if style.font_family_cs_theme.is_none() && std::env::var_os("OXI_CS_RUN_FLAG_DISABLE").is_none() {
+                                style.font_family_cs_theme = ctx.theme.cs_theme_font(&String::from_utf8_lossy(&attr.value));
+                            }
                         } else if key == "asciiTheme" || key == "hAnsiTheme" {
                             if style.font_family.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
@@ -10876,6 +10891,10 @@ fn parse_run_properties(
                             } else if key == "cs" {
                                 style.font_family_cs =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
+                            } else if key == "cstheme" {
+                                if style.font_family_cs_theme.is_none() && std::env::var_os("OXI_CS_RUN_FLAG_DISABLE").is_none() {
+                                    style.font_family_cs_theme = ctx.theme.cs_theme_font(&String::from_utf8_lossy(&attr.value));
+                                }
                             } else if key == "asciiTheme" || key == "hAnsiTheme" {
                                 if style.font_family.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
@@ -11042,6 +11061,10 @@ fn parse_run_properties(
                     }
                     "rtl" => {
                         style.rtl = true;
+                    }
+                    "cs" => {
+                        style.cs_flag = !e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "val"
+                            && matches!(a.value.as_ref(), b"0" | b"false" | b"off"));
                     }
                     // S1327: <w14:textFill><w14:noFill/></w14:textFill> = a run whose
                     // glyphs have no fill. Word paints nothing for it (1ec1's heading
@@ -14463,6 +14486,42 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
 /// The alias map is empty for the vast majority of docs (source-supported or
 /// no altName), so this is a no-op → byte-identical, everywhere except the few
 /// docs that genuinely use an unsupported primary with a supported alternate.
+fn apply_cs_run_flags_doc(document: &mut crate::ir::Document) {
+    let dd = document.styles.doc_default_run_style.clone();
+    fn walk(blocks: &mut [crate::ir::Block], dd: Option<&crate::ir::RunStyle>) {
+        for b in blocks.iter_mut() {
+            match b {
+                crate::ir::Block::Paragraph(p) => {
+                    let style = p.style.clone();
+                    crate::layout::apply_cs_run_flag_with(&mut p.runs, &style, dd);
+                }
+                crate::ir::Block::Table(t) => {
+                    for row in t.rows.iter_mut() {
+                        for cell in row.cells.iter_mut() {
+                            walk(&mut cell.blocks, dd);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let dd = dd.as_ref();
+    for page in &mut document.pages {
+        walk(&mut page.blocks, dd);
+        walk(&mut page.header, dd);
+        walk(&mut page.footer, dd);
+        walk(&mut page.header_first, dd);
+        walk(&mut page.footer_first, dd);
+        walk(&mut page.header_even, dd);
+        walk(&mut page.footer_even, dd);
+        for n in &mut page.footnotes { walk(&mut n.blocks, dd); }
+        for n in &mut page.endnotes { walk(&mut n.blocks, dd); }
+        for tb in &mut page.text_boxes { walk(&mut tb.blocks, dd); }
+        for sh in &mut page.shapes { walk(&mut sh.text_blocks, dd); }
+    }
+}
+
 fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     if std::env::var("OXI_S1008_DISABLE").is_ok() {
         return;
