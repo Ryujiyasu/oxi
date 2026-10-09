@@ -387,6 +387,11 @@ input[type="file"]{display:none}
 
 <script type="module">
 import { renderVerticalText } from '../docs/vertical-text.js';
+import { textBaseline } from '../docs/text-baseline.js';
+import { drawRegisteredText } from '../docs/runtime-font-glyph.js';
+import * as fontApi from './oxidocs_wasm.js';
+import { RuntimeFontLoader, showFontAccess } from '../docs/runtime-font-loader.js';
+const fontLoader = new RuntimeFontLoader(fontApi);
 // ---- i18n ----
 const I18N = {
   en: {
@@ -621,8 +626,9 @@ function applyI18n() {
 }
 
 // ---- WASM ----
-import init, { layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf } from './oxidocs_wasm.js';
+import init, { layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf, get_font_glyph_outline } from './oxidocs_wasm.js';
 await init();
+let fontRenderEpoch = 0;
 
 // Tauri headless render mode
 if (window.__TAURI__) {
@@ -634,7 +640,7 @@ if (window.__TAURI__) {
       const binary = atob(base64Data);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const layout = layout_document(bytes);
+      const layout = await fontLoader.resolveLayout(() => layout_document(bytes));
       const scale = dpi / 72;
       for (let pi = 0; pi < layout.pages.length; pi++) {
         const pg = layout.pages[pi];
@@ -655,7 +661,7 @@ if (window.__TAURI__) {
             ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
             ctx.fillStyle = el.color || '#000000';
             if (el.character_spacing) ctx.letterSpacing = `${el.character_spacing}px`;
-            ctx.fillText(el.text || '', el.x, el.y + fs * 0.85);
+            drawRegisteredText(ctx, el, textBaseline(el, fs), get_font_glyph_outline);
             if (el.character_spacing) ctx.letterSpacing = '0px';
           } else if (kind === 'shading') {
             const r = el.corner_radius || 0;
@@ -753,8 +759,8 @@ function renderText(ctx, elem) {
     ctx.letterSpacing = `${elem.character_spacing}px`;
   }
 
-  const baseline = elem.y + fontSize * 0.85;
-  ctx.fillText(elem.text || '', elem.x, baseline);
+  const baseline = textBaseline(elem, fontSize);
+  drawRegisteredText(ctx, elem, baseline, get_font_glyph_outline);
 
   if (elem.character_spacing && elem.character_spacing !== 0) {
     ctx.letterSpacing = '0px';
@@ -937,6 +943,8 @@ async function renderPage(page, index, scale) {
 
 // ---- Document rendering ----
 async function renderDocument(docxBytes) {
+  const fontEpoch = ++fontRenderEpoch;
+  window.__oxiRenderDone = false;
   // Remove empty state
   emptyState.style.display = 'none';
   clearSelection();
@@ -952,7 +960,10 @@ async function renderDocument(docxBytes) {
   const start = performance.now();
 
   try {
-    const result = layout_document(docxBytes);
+    let result = layout_document(docxBytes);
+    layoutResult = result;
+    result = await fontLoader.resolveLayout(() => layout_document(docxBytes), result, () => fontEpoch === fontRenderEpoch);
+    if (fontEpoch !== fontRenderEpoch) return;
     layoutResult = result;
     const layoutMs = Math.round(performance.now() - start);
 
@@ -986,7 +997,9 @@ async function renderDocument(docxBytes) {
     window.__oxiTotalMs = totalMs;
     window.__oxiPageCount = result.pages.length;
   } catch (e) {
-    loadingEl.textContent = `Error: ${e.message}`;
+    if (fontEpoch !== fontRenderEpoch) return;
+    if (e.fontAccessError) showFontAccess(loadingEl, fontLoader, e.fontLayout || layoutResult, () => renderDocument(currentDocx), e);
+    else loadingEl.textContent = `Error: ${e.message}`;
     console.error(e);
   }
 }
@@ -1327,7 +1340,10 @@ function scheduleRender() {
   if (renderTimer) clearTimeout(renderTimer);
   renderTimer = setTimeout(async () => {
     renderTimer = null;
+    const fontEpoch = ++fontRenderEpoch;
+    window.__oxiRenderDone = false;
     const start = performance.now();
+    const bytes = currentDocx;
     let result;
     try {
       if (pendingEdit) {
@@ -1342,6 +1358,18 @@ function scheduleRender() {
       result = layout_document(currentDocx);
       pendingEdit = null;
     }
+    layoutResult = result;
+    try {
+      result = await fontLoader.resolveLayout(() => layout_document(bytes), result, () => fontEpoch === fontRenderEpoch);
+    } catch (e) {
+      if (fontEpoch !== fontRenderEpoch) return;
+      const loading = document.createElement("div");
+      loading.className = "loading-state";
+      canvasArea.appendChild(loading);
+      showFontAccess(loading, fontLoader, e.fontLayout || result, () => renderDocument(currentDocx), e);
+      return;
+    }
+    if (fontEpoch !== fontRenderEpoch) return;
     layoutResult = result;
     const layoutMs = Math.round(performance.now() - start);
 
@@ -1731,6 +1759,7 @@ $('fileIn').addEventListener('change', async e => {
 });
 
 function doNew() {
+  fontRenderEpoch++;
   currentDocx = null;
   layoutResult = null;
   stopCursorBlink();
@@ -1770,13 +1799,19 @@ $('btnSave').addEventListener('click', () => {
   dl(currentDocx, (fileName || 'doc') + '.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 });
 
-function exportPdf() {
+async function exportPdf() {
   if (!currentDocx) return;
   try {
-    const pdf = docx_to_pdf(currentDocx);
+    const bytes = currentDocx;
+    await fontLoader.resolveLayout(() => layout_document(bytes));
+    const pdf = docx_to_pdf(bytes);
     dl(pdf, (fileName || 'doc') + '.pdf', 'application/pdf');
   } catch (e) {
-    alert(t('exportFailed') + ': ' + ((e && e.message) || e));
+    if (e.fontAccessError) {
+      const loading = document.createElement("div");
+      loading.className = "loading-state"; canvasArea.appendChild(loading);
+      showFontAccess(loading, fontLoader, layoutResult, exportPdf, e);
+    } else alert(t('exportFailed') + ': ' + ((e && e.message) || e));
   }
 }
 $('btnPdf').addEventListener('click', exportPdf);

@@ -21,27 +21,52 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-struct ShapeFace {
-    face: rustybuzz::Face<'static>,
+struct ShapeFace<'a> {
+    face: rustybuzz::Face<'a>,
     upm: f32,
+}
+
+#[derive(Default)]
+struct ShapeCache {
+    generation: usize,
+    faces: HashMap<(String, bool, bool), Option<ShapeFace<'static>>>,
 }
 
 thread_local! {
     // (family, bold, italic) -> the shapeable face, or None when this machine
     // has no such file. rustybuzz::Face is not Send, so the cache is per-thread;
     // layout runs one document on one thread.
-    static FACES: RefCell<HashMap<(String, bool, bool), Option<ShapeFace>>> =
-        RefCell::new(HashMap::new());
+    static FACES: RefCell<ShapeCache> = RefCell::new(ShapeCache::default());
 }
 
 fn with_face<R>(
     family: &str,
     bold: bool,
     italic: bool,
-    f: impl FnOnce(Option<&ShapeFace>) -> R,
+    f: impl FnOnce(Option<&ShapeFace<'_>>) -> R,
 ) -> R {
+    // Borrow a registered programme only within this shaping call. The Arc
+    // keeps the font alive through a concurrent clear or replacement, and no
+    // self-referential/static face retains superseded caller bytes.
+    let registered = super::runtime::registered_font_file_for(family, bold, italic)
+        .or_else(|| if bold || italic {
+            super::runtime::registered_font_file_for(family, false, false)
+        } else { None });
+    if let Some((bytes, index)) = registered {
+        let shaped = rustybuzz::Face::from_slice(&bytes, index).and_then(|face| {
+            let upm = face.units_per_em() as f32;
+            (upm > 0.0).then_some(ShapeFace { face, upm })
+        });
+        return f(shaped.as_ref());
+    }
     FACES.with(|c| {
-        let mut m = c.borrow_mut();
+        let mut cache = c.borrow_mut();
+        let generation = super::runtime::memory_font_generation();
+        if cache.generation != generation {
+            cache.faces.clear();
+            cache.generation = generation;
+        }
+        let m = &mut cache.faces;
         // Try the requested style; if the machine lacks that exact face, fall
         // back to the regular face of the same family rather than giving up
         // (a bold Devanagari run on a box with only the regular file still
@@ -56,7 +81,7 @@ fn with_face<R>(
     })
 }
 
-fn build_face(family: &str, bold: bool, italic: bool) -> Option<ShapeFace> {
+fn build_face(family: &str, bold: bool, italic: bool) -> Option<ShapeFace<'static>> {
     let (bytes, idx) = super::runtime::font_file_for(family, bold, italic)?;
     let face = rustybuzz::Face::from_slice(bytes, idx)?;
     let upm = face.units_per_em() as f32;

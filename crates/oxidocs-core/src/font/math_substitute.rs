@@ -210,3 +210,118 @@ mod tests {
         }
     }
 }
+
+/// Select the mathematical alphabet encoded by a run's script and style.
+/// Operators remain operators; already encoded mathematical characters are
+/// preserved. Glyph selection, width and ink lookup use this same result.
+pub fn math_run_substitute(c: char, style: &crate::ir::MathRunStyle) -> char {
+    use crate::ir::{MathScript as S, MathStyleVariant as V};
+    if style.literal { return c; }
+    let script = style.script.unwrap_or(S::Roman);
+    let variation = style.math_style.unwrap_or(V::Italic);
+    let bold = matches!(variation, V::Bold | V::BoldItalic);
+    let italic = matches!(variation, V::Italic | V::BoldItalic);
+    let (upper, lower, digits) = match script {
+        S::Roman => match variation {
+            V::Plain => (0, 0, 0),
+            V::Bold => (0x1d400, 0x1d41a, 0x1d7ce),
+            V::Italic => (0x1d434, 0x1d44e, 0),
+            V::BoldItalic => (0x1d468, 0x1d482, 0x1d7ce),
+        },
+        S::Script if bold => (0x1d4d0, 0x1d4ea, 0),
+        S::Script => (0x1d49c, 0x1d4b6, 0),
+        S::Fraktur if bold => (0x1d56c, 0x1d586, 0),
+        S::Fraktur => (0x1d504, 0x1d51e, 0),
+        S::DoubleStruck => (0x1d538, 0x1d552, 0x1d7d8),
+        S::SansSerif => match (bold, italic) {
+            (false, false) => (0x1d5a0, 0x1d5ba, 0x1d7e2),
+            (true, false) => (0x1d5d4, 0x1d5ee, 0x1d7ec),
+            (false, true) => (0x1d608, 0x1d622, 0x1d7e2),
+            (true, true) => (0x1d63c, 0x1d656, 0x1d7ec),
+        },
+        S::Monospace => (0x1d670, 0x1d68a, 0x1d7f6),
+    };
+    let cp = match c {
+        'A'..='Z' if upper != 0 => upper + c as u32 - 'A' as u32,
+        'a'..='z' if lower != 0 => lower + c as u32 - 'a' as u32,
+        '0'..='9' if digits != 0 => digits + c as u32 - '0' as u32,
+        _ => 0,
+    };
+    if cp != 0 {
+        // The holes in the supplementary alphabet are encoded in Letterlike
+        // Symbols. These are Unicode assignments, independent of font names.
+        let cp = match cp {
+            0x1d455 => 0x210e,
+            0x1d49d => 0x212c, 0x1d4a0 => 0x2130, 0x1d4a1 => 0x2131,
+            0x1d4a3 => 0x210b, 0x1d4a4 => 0x2110, 0x1d4a7 => 0x2112,
+            0x1d4a8 => 0x2133, 0x1d4ad => 0x211b, 0x1d4ba => 0x212f,
+            0x1d4bc => 0x210a, 0x1d4c4 => 0x2134,
+            0x1d506 => 0x212d, 0x1d50b => 0x210c, 0x1d50c => 0x2111,
+            0x1d515 => 0x211c, 0x1d51d => 0x2128,
+            0x1d53a => 0x2102, 0x1d53f => 0x210d, 0x1d545 => 0x2115,
+            0x1d547 => 0x2119, 0x1d548 => 0x211a, 0x1d549 => 0x211d,
+            0x1d551 => 0x2124,
+            _ => cp,
+        };
+        return char::from_u32(cp).unwrap_or(c);
+    }
+    let greek = match (script, variation) {
+        (S::Roman, V::Bold) => Some(0x1d6a8),
+        (S::Roman, V::Italic) => Some(0x1d6e2),
+        (S::Roman, V::BoldItalic) => Some(0x1d71c),
+        (S::SansSerif, V::Bold) => Some(0x1d756),
+        (S::SansSerif, V::BoldItalic) => Some(0x1d790),
+        _ => None,
+    };
+    if let Some(start) = greek {
+        let offset = match c as u32 {
+            0x391..=0x3a1 | 0x3a3..=0x3a9 => Some(c as u32 - 0x391),
+            0x3f4 => Some(17),
+            0x3b1..=0x3c9 => Some(26 + c as u32 - 0x3b1),
+            0x2207 => Some(25), 0x2202 => Some(51),
+            0x3f5 => Some(52), 0x3d1 => Some(53), 0x3f0 => Some(54),
+            0x3d5 => Some(55), 0x3f1 => Some(56), 0x3d6 => Some(57),
+            _ => None,
+        };
+        if let Some(offset) = offset { return char::from_u32(start + offset).unwrap_or(c); }
+    }
+    if c == '-' { '\u{2212}' } else { c }
+}
+
+#[cfg(test)]
+mod run_style_tests {
+    use super::*;
+    use crate::ir::{MathRunStyle, MathScript, MathStyleVariant};
+
+    #[test]
+    fn saved_word_run_alphabets_and_plain_width_inputs() {
+        let bold = MathRunStyle { math_style: Some(MathStyleVariant::Bold), ..Default::default() };
+        let bi = MathRunStyle { math_style: Some(MathStyleVariant::BoldItalic), ..Default::default() };
+        let plain = MathRunStyle { math_style: Some(MathStyleVariant::Plain), ..Default::default() };
+        assert_eq!(math_run_substitute('t', &bold) as u32, 119853);
+        assert_eq!(math_run_substitute('S', &bi) as u32, 119930);
+        assert_eq!(math_run_substitute('n', &bi) as u32, 119951);
+        assert_eq!(math_run_substitute('1', &bi) as u32, 120783);
+        assert_eq!(math_run_substitute('S', &plain), 'S');
+        assert_eq!(math_run_substitute('=', &bi), '=');
+        assert_eq!(math_run_substitute('-', &plain), '\u{2212}');
+    }
+
+    #[test]
+    fn letterlike_holes_literal_and_encoded_characters() {
+        for (script, input, expected) in [
+            (MathScript::Roman, 'h', '\u{210e}'),
+            (MathScript::Script, 'H', '\u{210b}'),
+            (MathScript::Script, 'e', '\u{212f}'),
+            (MathScript::Fraktur, 'C', '\u{212d}'),
+            (MathScript::DoubleStruck, 'R', '\u{211d}'),
+        ] {
+            let style = MathRunStyle { script: Some(script), ..Default::default() };
+            assert_eq!(math_run_substitute(input, &style), expected);
+        }
+        let literal = MathRunStyle { literal: true, math_style: Some(MathStyleVariant::Bold), ..Default::default() };
+        assert_eq!(math_run_substitute('t', &literal), 't');
+        assert_eq!(math_run_substitute('-', &literal), '-');
+        assert_eq!(math_run_substitute('\u{1d49a}', &MathRunStyle::default()), '\u{1d49a}');
+    }
+}

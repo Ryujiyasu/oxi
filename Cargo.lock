@@ -530,6 +530,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "ttf-parser",
  "wasm-bindgen",
 ]
 

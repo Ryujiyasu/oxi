@@ -106,6 +106,9 @@ pub struct Document {
     /// Preserve paragraph spacing between same-style neighbors inside cells.
     #[serde(default)]
     pub preserve_same_style_cell_spacing: bool,
+    /// Add neighboring paragraph spacing contributions instead of collapsing them.
+    #[serde(default)]
+    pub additive_paragraph_spacing: bool,
 }
 
 /// S1553: one merged continuous section's header/footer set (see
@@ -129,6 +132,18 @@ pub struct HeaderFooterRun {
     pub title_pg: bool,
     #[serde(default)]
     pub even_odd_hf: bool,
+}
+
+/// Grid settings belonging to a range of blocks in a continuous section.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SectionGridRun {
+    pub block_start: usize,
+    pub line_pitch: Option<f32>,
+    pub char_pitch: Option<f32>,
+    pub char_space_raw: Option<i32>,
+    pub char_width_ratio: Option<f32>,
+    pub no_type: bool,
+    pub lines_and_chars: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +308,9 @@ pub struct Page {
     /// {-1:10}). Parallel to `margin_runs`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grid_runs: Vec<(usize, Option<f32>)>,
+    /// Complete grid state for each merged section, with resolved character pitch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub section_grid_runs: Vec<SectionGridRun>,
     /// S1336 (2026-09-06): per-section CHARACTER grid run -- (first block
     /// index, raw w:charSpace) for every merged continuous section, parallel
     /// to `grid_runs`. reference__0ea3ec86 alternates charSpace 3194 / 2048
@@ -473,6 +491,8 @@ pub enum FieldType {
     /// The old code showed the raw instruction («DATE \@ "yyyy/MM/dd"») or a
     /// «[AUTHOR]» placeholder and DROPPED the cache → garbage text + shifted wrapping.
     Cached,
+    /// A literal note-reference marker, retained without automatic renumbering.
+    CustomNoteReference,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1031,9 +1051,31 @@ pub struct ImageCrop {
     pub left: f32,
 }
 
+/// Insertion point in the source paragraph's text flow. Character offsets
+/// count Unicode scalar values, matching the layout/editor source positions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FlowSourcePoint {
+    pub run_index: usize,
+    pub char_offset: usize,
+}
+
 /// Position for a floating (anchored) element
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FloatingPosition {
+    /// Actual source insertion point, independent of paragraph start and
+    /// explicit boundary counts. Older or programmatic IR may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_source: Option<FlowSourcePoint>,
+    /// Number of explicit page boundaries preceding the attachment in its
+    /// source paragraph. Objects on either side of a boundary have distinct
+    /// attachment pages even when they share the same paragraph.
+    #[serde(default)]
+    pub flow_page_offset: usize,
+    /// Number of explicit line, column and page controls before this source
+    /// attachment. Distinguishes an object before a leading control from
+    /// an object after it, independently of rendered glyphs or font choice.
+    #[serde(default)]
+    pub flow_boundary_offset: usize,
     /// Horizontal offset in points from anchor
     pub x: f32,
     /// Vertical offset in points from anchor
@@ -1091,6 +1133,10 @@ pub enum WrapType {
 /// A text box (from w:txbxContent or wps:txbx)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextBox {
+    /// Normalized contour used to exclude surrounding text; it can extend
+    /// outside the object's rectangle and does not resize painted content.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrap_polygon: Vec<(f32, f32)>,
     /// Inward text inset contributed by the outline, including an invisible outline.
     #[serde(default)]
     pub text_outline_inset: f32,
@@ -2363,6 +2409,9 @@ pub struct StyleDefinition {
     /// Human-readable style name, independent of its document-local ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// Alternative human-readable names for this style.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     /// Parent style ID (w:basedOn)
     #[serde(default)]
     pub based_on: Option<String>,
@@ -2410,8 +2459,14 @@ pub struct FontInfo {
 /// A footnote or endnote
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Footnote {
+    /// Whether the reference uses an automatically assigned sequence marker.
+    /// A custom marker remains literal text and does not consume a sequence.
+    #[serde(default = "default_true", skip_serializing_if = "note_marker_is_automatic")]
+    pub automatic_numbering: bool,
     /// Note number (1-based, matching the reference in the body)
     pub number: u32,
     /// Content paragraphs of the note
     pub blocks: Vec<Block>,
 }
+
+fn note_marker_is_automatic(value: &bool) -> bool { *value }

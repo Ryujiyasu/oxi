@@ -22,6 +22,8 @@ exist and be up to date with the layout code under test. Build with
 """
 from __future__ import annotations
 
+import collections
+import copy
 import json
 import os
 import subprocess
@@ -62,6 +64,82 @@ def doc_id_from_filename(fname: str) -> str:
     if os.path.exists(os.path.join(WORD_DIR, base + ".json")):
         return base
     return base.split("_")[0]
+
+
+def _project_source_paragraph_starts(pages, dump):
+    projected = copy.deepcopy(pages)
+    groups = collections.defaultdict(list)
+    local_identities = collections.defaultdict(set)
+    for page in dump['pages']:
+        page_number = int(page['page'])
+        for element in page['elements']:
+            if element.get('type') != 'text' or element.get('para_idx') is None:
+                continue
+            if any(element.get(k) is not None for k in ('cell_para_idx', 'cell_row_idx', 'cell_col_idx')):
+                continue
+            container = element.get('source_container_idx')
+            if container is None:
+                continue
+            identity = (container, element['para_idx'])
+            groups[identity].append((page_number, element))
+            local_identities[(page_number, element['para_idx'])].add(identity)
+
+    changes, skipped = [], []
+    for identity, elements in groups.items():
+        attachments = [(p, e) for p, e in elements if e.get('source_boundary_attachment')]
+        if not attachments:
+            continue
+        start_page, start = min(attachments, key=lambda item: (item[0], item[1]['y']))
+        prefix = start.get('source_paragraph_prefix')
+        controls = start.get('source_paragraph_controls')
+        if not isinstance(prefix, str) or not controls or not prefix.startswith((chr(12), chr(11))):
+            skipped.append(dict(identity=identity, reason='Source start is not an explicit leading flow control'))
+            continue
+        # The frozen Word collector itself applies S722/S1077 to short
+        # paragraphs (<=20 visible characters) and reports their moved end.
+        # This metric projection must preserve that existing convention.
+        # Source extents omit objects: >20 body characters is a sufficient
+        # condition to avoid that collector branch without guessing object
+        # character counts or looking at the Word answer.
+        source_chars = start.get('source_paragraph_chars')
+        if not isinstance(source_chars, int) or source_chars - controls <= 20:
+            skipped.append(dict(identity=identity, reason='Preserve existing Word collector short-paragraph end-page convention'))
+            continue
+        provenance = ('source_paragraph_prefix', 'source_paragraph_chars', 'source_paragraph_controls',
+                      'source_paragraph_column_controls')
+        if any(any(e.get(k) != start.get(k) for k in provenance) for _, e in elements):
+            skipped.append(dict(identity=identity, reason='Paragraph provenance inconsistent'))
+            continue
+        relevant_pages = sorted({p for p, _ in elements})
+        if any(len(local_identities[(p, identity[1])]) != 1 for p in relevant_pages):
+            skipped.append(dict(identity=identity, reason='Section-local index collision on a physical page'))
+            continue
+        records = []
+        for page_number in relevant_pages:
+            for record in projected.get(str(page_number), []):
+                if record['para_idx'] == identity[1] and all(record.get(k) is None for k in
+                       ('cell_para_idx', 'cell_row_idx', 'cell_col_idx')):
+                    records.append((page_number, record))
+        openers = [record for page_number, record in records if page_number == start_page and not record['text']]
+        continuations = [(page_number, record) for page_number, record in records
+                         if page_number > start_page and record['text'].strip()]
+        if len(openers) != 1 or not continuations:
+            skipped.append(dict(identity=identity, reason='No unique empty source opener with a later painted continuation'))
+            continue
+        # Paragraph-record text describes source identity; no painted element,
+        # source_text field, position, page count, or glyph is changed.
+        source_prefix = prefix.lstrip(' \t\r\n' + chr(11) + chr(12))[:30]
+        first_page, first_record = min(continuations, key=lambda item: (item[0], item[1]['y']))
+        if source_prefix != first_record['text']:
+            skipped.append(dict(identity=identity, reason='Painted continuation differs from preserved source prefix'))
+            continue
+        openers[0]['text'] = source_prefix
+        for page_number, record in continuations:
+            projected[str(page_number)].remove(record)
+        changes.append(dict(source_container_idx=identity[0], para_idx=identity[1],
+                            logical_start_page=start_page, painted_start_page=first_page,
+                            source_prefix=source_prefix, removed_continuations=len(continuations)))
+    return projected, changes, skipped
 
 
 def aggregate_dump(dump: dict) -> dict:
@@ -214,7 +292,7 @@ def aggregate_dump(dump: dict) -> dict:
                     rec["text"] = (rec["text"] + cont["text"])[:30]
                     del nxt[j]
                     break
-    return out
+    return _project_source_paragraph_starts(out, dump)[0]
 
 
 def measure_doc(docx_path: str) -> dict:

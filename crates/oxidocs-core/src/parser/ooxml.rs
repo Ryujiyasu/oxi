@@ -74,6 +74,44 @@ struct ParseField {
     result: bool,
 }
 
+/// Presentation state for visible complex fields. Nested result fields restore
+/// their parent's cache policy and style-reference continuation on exit.
+#[derive(Default)]
+struct ComplexFieldRuns {
+    kind: Option<FieldType>,
+    style_reference: Option<String>,
+    result: bool,
+    parents: Vec<(Option<FieldType>, Option<String>, bool)>,
+}
+
+impl ComplexFieldRuns {
+    fn consume(&mut self, run: &mut Run) {
+        for _ in 0..run.text.matches('\u{F0000}').count() {
+            self.parents.push((self.kind.take(), self.style_reference.take(), self.result));
+            self.result = false;
+        }
+        run.text = run.text.replace('\u{F0000}', "");
+        if run.field_type.is_some() {
+            self.kind = run.field_type.clone();
+            self.style_reference = run.style.styleref.clone();
+        }
+        if run.text.contains('\u{FFFE}') {
+            run.text = run.text.replace('\u{FFFE}', "");
+            self.result = true;
+        }
+        for _ in 0..run.text.matches('\u{FFFF}').count() {
+            (self.kind, self.style_reference, self.result) = self.parents.pop().unwrap_or_default();
+        }
+        run.text = run.text.replace('\u{FFFF}', "");
+        if self.result && run.field_type.is_none() {
+            run.style.styleref_cont = self.style_reference.is_some();
+            if !matches!(self.kind, Some(FieldType::CrossRef) | Some(FieldType::Cached)) {
+                run.text.clear();
+            }
+        }
+    }
+}
+
 impl ParseContext {
     fn in_toc_result(&self) -> bool {
         self.fields.borrow().iter().any(|f| f.result
@@ -95,7 +133,7 @@ impl ParseContext {
     /// noBreakHyphen and Oxi drew "‑1.  Short title" (Word PDF: "1.").
     fn in_field_code(&self) -> bool {
         std::env::var_os("OXI_S1524_DISABLE").is_none()
-            && self.fields.borrow().last().map_or(false, |f| !f.result)
+            && self.fields.borrow().iter().any(|f| !f.result)
     }
 
     fn field_control(&self, e: &quick_xml::events::BytesStart<'_>, text: &mut String) {
@@ -103,14 +141,18 @@ impl ParseContext {
             if local_name(attr.key.as_ref()) != "fldCharType" { continue; }
             let mut fields = self.fields.borrow_mut();
             match attr.value.as_ref() {
-                b"begin" => fields.push(ParseField::default()),
+                b"begin" => {
+                    if fields.iter().all(|f| f.result) { text.push('\u{F0000}'); }
+                    fields.push(ParseField::default());
+                }
                 b"separate" => {
                     if let Some(f) = fields.last_mut() { f.result = true; }
-                    text.push('\u{FFFE}');
+                    if fields.iter().all(|f| f.result) { text.push('\u{FFFE}'); }
                 }
                 b"end" => {
+                    let visible = fields.iter().take(fields.len().saturating_sub(1)).all(|f| f.result);
                     fields.pop();
-                    text.push('\u{FFFF}');
+                    if visible { text.push('\u{FFFF}'); }
                 }
                 _ => {}
             }
@@ -435,6 +477,8 @@ impl OoxmlParser {
     }
 
     pub fn parse(mut self) -> Result<Document, ParseError> {
+        let math_settings = self.read_part("word/settings.xml").ok();
+        let _fraction_settings = super::omml::fraction_settings(math_settings.as_deref());
         // S1425 (2026-09-16, default ON, opt-out OXI_S1425_DISABLE): a document
         // with `<w:linkStyles/>` and no `<w:attachedTemplate>` is updated from
         // the machine's Normal.dotm when Word opens it -- its docDefaults, every
@@ -745,12 +789,12 @@ impl OoxmlParser {
             // set Run.text = "[id]" which is wrong; rewrite it here to "[seq]".
             let mut fn_id_to_seq: std::collections::HashMap<u32, u32> =
                 std::collections::HashMap::new();
-            for (i, f) in footnotes_list.iter().enumerate() {
+            for (i, f) in footnotes_list.iter().filter(|note| note.automatic_numbering).enumerate() {
                 fn_id_to_seq.insert(f.number, (i as u32) + 1);
             }
             let mut en_id_to_seq: std::collections::HashMap<u32, u32> =
                 std::collections::HashMap::new();
-            for (i, f) in endnotes_list.iter().enumerate() {
+            for (i, f) in endnotes_list.iter().filter(|note| note.automatic_numbering).enumerate() {
                 en_id_to_seq.insert(f.number, (i as u32) + 1);
             }
             renumber_note_refs(&mut section.blocks, &fn_id_to_seq, &en_id_to_seq);
@@ -763,12 +807,14 @@ impl OoxmlParser {
             if !footnotes_list.is_empty() {
                 if let Some(blocks) = ctx.footnotes.get("__sep__") {
                     footnotes_list.push(Footnote {
+                        automatic_numbering: true,
                         number: u32::MAX,
                         blocks: blocks.clone(),
                     });
                 }
                 if let Some(blocks) = ctx.footnotes.get("__notice__") {
                     footnotes_list.push(Footnote {
+                        automatic_numbering: true,
                         number: u32::MAX - 1,
                         blocks: blocks.clone(),
                     });
@@ -780,6 +826,7 @@ impl OoxmlParser {
             if !endnotes_list.is_empty() {
                 if let Some(blocks) = ctx.endnotes.get("__contsep__") {
                     endnotes_list.push(Footnote {
+                        automatic_numbering: true,
                         number: u32::MAX - 2,
                         blocks: blocks.clone(),
                     });
@@ -880,6 +927,15 @@ impl OoxmlParser {
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
                 });
+                last.section_grid_runs.push(crate::ir::SectionGridRun {
+                        block_start: last.blocks.len(),
+                        line_pitch: section.properties.grid_line_pitch,
+                        char_pitch: section.properties.grid_char_pitch,
+                        char_space_raw: section.properties.grid_char_space_raw,
+                        char_width_ratio: None,
+                        no_type: section.properties.doc_grid_no_type,
+                        lines_and_chars: section.properties.doc_grid_lines_and_chars,
+                    });
                 // S735: parallel per-section grid pitch run.
                 last.grid_runs
                     .push((last.blocks.len(), section.properties.grid_line_pitch));
@@ -1050,6 +1106,15 @@ impl OoxmlParser {
                     vertical_runs,
                     header_runs,
                     grid_runs,
+                    section_grid_runs: vec![crate::ir::SectionGridRun {
+                        block_start: 0,
+                        line_pitch: section.properties.grid_line_pitch,
+                        char_pitch: section.properties.grid_char_pitch,
+                        char_space_raw: section.properties.grid_char_space_raw,
+                        char_width_ratio: None,
+                        no_type: section.properties.doc_grid_no_type,
+                        lines_and_chars: section.properties.doc_grid_lines_and_chars,
+                    }],
                     grid_char_runs,
                     grid_char_quantized_runs: vec![(0, section.properties.doc_grid_lines_and_chars.then_some(section.properties.grid_char_quantized))],
                     section_start_type: section.properties.section_type.clone(),
@@ -1118,6 +1183,26 @@ impl OoxmlParser {
             })
             .unwrap_or(10.5);
         for page in &mut pages {
+            // Resolve each section from the same document-default size used by
+            // the page-level grid, including a character grid introduced later.
+            for run in &mut page.section_grid_runs {
+                if run.char_pitch.is_some() {
+                    let raw = default_font_size + run.char_space_raw.unwrap_or(0) as f32 / 4096.0;
+                    let margins = page.margin_runs.iter().rev()
+                        .find(|r| r.0 <= run.block_start);
+                    let content_w = margins.map(|r| page.size.width - r.1 - r.2)
+                        .unwrap_or(page.size.width - page.margin.left - page.margin.right);
+                    if raw > 0.0 && content_w > 0.0 {
+                        let pitch = if std::env::var("OXI_S466_DISABLE").is_err() {
+                            raw
+                        } else {
+                            content_w / (content_w / raw).floor().max(1.0)
+                        };
+                        run.char_pitch = Some(pitch);
+                        run.char_width_ratio = Some(pitch / default_font_size);
+                    }
+                }
+            }
             if let Some(pitch) = page.grid_char_pitch {
                 // Recalculate: the pitch was computed with 10.5pt; redo with actual default size
                 let content_w = page.size.width - page.margin.left - page.margin.right;
@@ -1208,11 +1293,13 @@ impl OoxmlParser {
             balance_single_byte_double_byte_width,
             keep_floating_tables_together: self.parse_compat_bool_flag("doNotBreakWrappedTables"),
             preserve_same_style_cell_spacing: self.parse_compat_bool_flag("allowSpaceOfSameStyleInTable"),
+            additive_paragraph_spacing: self.parse_compat_bool_flag("doNotUseHTMLParagraphAutoSpacing"),
         };
         // S1008 (2026-07-26): resolve fontTable w:altName substitutions
         // (source unsupported → alternate supported). No-op for the vast
         // majority of docs (empty alias map → byte-identical).
         apply_font_table_aliases(&mut document);
+        // Application font fallbacks belong to layout; retain authored defaults.
         // Glyph fallback is resolved once on the private layout copy.
         Ok(document)
     }
@@ -1639,17 +1726,28 @@ impl OoxmlParser {
         DocumentMetadata::default()
     }
 
-    /// Parse word/settings.xml for adjustLineHeightInTable compatibility flag.
-    /// COM measurement (2026-03-27): Compatibility(12) = False for ALL tested documents,
-    /// regardless of whether <w:adjustLineHeightInTable/> is present in XML.
-    /// 151 documents tested across compatibilityMode 14 and 15.
-    /// Therefore: always return false (= table cells snap to grid like normal paragraphs).
+    /// Read the table line-height compatibility switch as an OOXML on/off value.
+    /// An explicit false value must not enable the setting merely by being present.
     fn parse_adjust_line_height_in_table(&mut self) -> bool {
         let xml = match self.read_part("word/settings.xml") {
             Ok(x) => x,
             Err(_) => return false,
         };
-        xml.contains("adjustLineHeightInTable")
+        let mut reader = Reader::from_str(&xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                    if local_name(e.name().as_ref()) == "adjustLineHeightInTable" =>
+                {
+                    return !e.attributes().flatten().any(|a| {
+                        local_name(a.key.as_ref()) == "val"
+                            && matches!(a.value.as_ref(), b"0" | b"false" | b"off")
+                    });
+                }
+                Ok(Event::Eof) | Err(_) => return false,
+                _ => {}
+            }
+        }
     }
 
     /// S755: settings.xml `<w:evenAndOddHeaders/>` (CT_OnOff: bare/omitted
@@ -1902,7 +2000,8 @@ fn parse_body(
     ctx: &ParseContext,
     styles: &StyleSheet,
 ) -> Result<Vec<ParsedSection>, ParseError> {
-    let mut reader = Reader::from_str(xml);
+    let xml = super::xml_space::materialize(xml)?;
+    let mut reader = Reader::from_str(&xml);
     let mut sections: Vec<ParsedSection> = Vec::new();
     let mut redundant_break_candidates: Vec<usize> = Vec::new();
     let mut current_blocks = Vec::new();
@@ -2225,6 +2324,9 @@ fn parse_body(
                             for b in pr.inline_images.drain(..) {
                                 if let Block::Image(mut img) = b {
                                     img.position = Some(crate::ir::FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
                                         x: fp.x,
                                         y: fp.y,
                                         h_relative: Some(
@@ -2854,6 +2956,73 @@ fn s1251_host(run: &Run, ws_host: bool) -> bool {
         || (ws_host && !run.text.is_empty() && !run.text.contains('\t'))
 }
 
+
+fn offset_drawing_attachment(drawing: &mut DrawingResult, page_offset: usize, boundary_offset: usize) {
+    for position in [
+        drawing.image.as_mut().and_then(|object| object.position.as_mut()),
+        drawing.shape.as_mut().and_then(|object| object.position.as_mut()),
+        drawing.text_box.as_mut().and_then(|object| object.position.as_mut()),
+    ].into_iter().flatten() {
+        position.flow_page_offset += page_offset;
+        position.flow_boundary_offset += boundary_offset;
+    }
+}
+
+fn bind_drawing_source_runs(drawing: &mut DrawingResult, first_run: usize) {
+    for position in [
+        drawing.image.as_mut().and_then(|object| object.position.as_mut()),
+        drawing.shape.as_mut().and_then(|object| object.position.as_mut()),
+        drawing.text_box.as_mut().and_then(|object| object.position.as_mut()),
+    ].into_iter().flatten() {
+        let point=position.flow_source.get_or_insert(FlowSourcePoint{run_index:0,char_offset:0});
+        point.run_index+=first_run;
+    }
+}
+
+fn remap_source_text(position:&mut FloatingPosition, run:usize, before:&str, after:&str) {
+    let Some(point)=position.flow_source.as_mut().filter(|point|point.run_index==run)else{return};
+    // ComplexFieldRuns removes private field controls and may suppress the
+    // cached run. Keep the insertion point on the surviving source text.
+    let prefix=before.chars().take(point.char_offset)
+        .filter(|ch|!matches!(ch,'\u{F0000}'|'\u{FFFE}'|'\u{FFFF}')).count();
+    point.char_offset=prefix.min(after.chars().count());
+}
+
+fn remap_drawing_source_text(drawing:Option<&mut DrawingResult>, before:&str, after:&str) {
+    let Some(drawing)=drawing else{return};
+    for position in [
+        drawing.image.as_mut().and_then(|object| object.position.as_mut()),
+        drawing.shape.as_mut().and_then(|object| object.position.as_mut()),
+        drawing.text_box.as_mut().and_then(|object| object.position.as_mut()),
+    ].into_iter().flatten(){remap_source_text(position,0,before,after);}
+}
+
+fn paragraph_flow_positions<'a>(images:&'a mut[Image], shapes:&'a mut[Shape], boxes:&'a mut[TextBox])
+    ->impl Iterator<Item=&'a mut FloatingPosition>{
+    images.iter_mut().filter_map(|object|object.position.as_mut())
+        .chain(shapes.iter_mut().filter_map(|object|object.position.as_mut()))
+        .chain(boxes.iter_mut().filter_map(|object|object.position.as_mut()))
+}
+
+fn remove_source_runs(images:&mut[Image], shapes:&mut[Shape], boxes:&mut[TextBox], removed:&[usize]){
+    for position in paragraph_flow_positions(images,shapes,boxes){
+        if let Some(point)=position.flow_source.as_mut(){
+            let old=point.run_index;
+            point.run_index-=removed.iter().filter(|index|**index<old).count();
+            if removed.contains(&old){point.char_offset=0;}
+        }
+    }
+}
+
+fn preceding_flow_boundaries(runs: &[Run]) -> usize {
+    runs.iter().flat_map(|run|run.text.chars())
+        .filter(|ch|matches!(ch,'\x0C'|'\x0B'|'\n'|'\r')).count()
+}
+
+fn preceding_page_boundaries(runs: &[Run]) -> usize {
+    runs.iter().flat_map(|run| run.text.chars()).filter(|ch| *ch == '\x0C').count()
+}
+
 fn parse_paragraph(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -2970,15 +3139,7 @@ fn parse_paragraph_with_inline_images_impl(
     let mut ppr_change: Option<PropertyChange> = None;
     let mut paragraph_mark_revision: Option<TrackedChange> = None;
     let mut depth = 0;
-    // Field state: tracks fldChar begin/separate/end across runs.
-    // Runs between "separate" and "end" contain cached field results
-    // that should be suppressed when the field is evaluated (e.g. PAGE).
-    let mut field_result_depth: i32 = 0; // >0 = inside field result region
-    let mut current_field_type: Option<FieldType> = None; // tracks the active field across its result runs
-    // S1174: STYLEREF style name from the instr run, waiting to be moved onto
-    // the field's first NON-EMPTY cached-result run (the separate/end marker
-    // runs are empty and carry the wrong rPr).
-    let mut pending_styleref: Option<String> = None;
+    let mut complex_fields = ComplexFieldRuns::default();
     let mut simple_fields: Vec<(usize, Option<FieldType>)> = Vec::new();
     // S1441: a `w:fldSimple` keeps its cached-result runs (a footer PAGE field
     // is ink that sizes the footer; body fields keep their text). Opt-out
@@ -3019,7 +3180,9 @@ fn parse_paragraph_with_inline_images_impl(
                     // display (<m:oMathPara>) are collected and emitted as
                     // sibling Block::Math after the paragraph closes.
                     "oMath" if depth == 0 => {
-                        let mb = crate::parser::omml::parse_omath_inline(reader)?;
+                        let mb = crate::parser::omml::parse_omath_inline_with_run_properties(reader, &mut |xml| {
+                            parse_math_run_properties(xml,ctx,styles)
+                        })?;
                         // S1253 (2026-08-29, default ON, opt-out
                         // OXI_S1253_DISABLE): the size the maths declared for
                         // ITSELF. Without it S880's flattened run inherited the
@@ -3197,69 +3360,21 @@ fn parse_paragraph_with_inline_images_impl(
                         }
                     }
                     "oMathPara" if depth == 0 => {
-                        let mb = crate::parser::omml::parse_omath_para(reader)?;
+                        let mb = crate::parser::omml::parse_omath_para_with_run_properties(reader, &mut |xml| {
+                            parse_math_run_properties(xml,ctx,styles)
+                        })?;
                         math_blocks.push(mb);
                     }
                     "r" if depth == 0 => {
                         let (parsed_runs, mut dr) =
                             parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                         for mut run in parsed_runs {
-                            let dr = dr.take();
-                            // Track field state: fldChar begin/separate/end spans across runs.
-                            // Remember a CrossRef field so its cached result run is KEPT.
-                            if run.field_type.is_some() {
-                                current_field_type = run.field_type.clone();
-                                // S1174: the INSTR run itself is the substitution
-                                // anchor (it always exists — a field whose cached
-                                // result is EMPTY has no result run to anchor on:
-                                // reference__0061531a's header Part line caches "" ).
-                                // The cached-result runs that follow are marked as
-                                // continuations so a successful resolution clears
-                                // them.
-                                if run.style.styleref.is_some() {
-                                    pending_styleref = run.style.styleref.clone();
-                                }
-                            }
-                            if run.text.contains('\u{FFFE}') {
-                                // Marker for fldChar separate (set in parse_run)
-                                run.text = run.text.replace('\u{FFFE}', "");
-                                field_result_depth += 1;
-                            }
-                            if run.text.contains('\u{FFFF}') {
-                                // Marker for fldChar end
-                                run.text = run.text.replace('\u{FFFF}', "");
-                                field_result_depth -= 1;
-                                if field_result_depth <= 0 {
-                                    current_field_type = None;
-                                    pending_styleref = None;
-                                }
-                            }
-                            // S1174: mark every cached-result run of the STYLEREF
-                            // field as a continuation — the INSTR run is the
-                            // substitution anchor, so a successful per-page
-                            // resolution places the text there and clears these.
-                            if field_result_depth > 0
-                                && run.field_type.is_none()
-                                && pending_styleref.is_some()
-                            {
-                                run.style.styleref_cont = true;
-                            }
-                            // Suppress cached field result text (between separate and end)
-                            // when the field was already evaluated (e.g. PAGE → "#"). KEEP the
-                            // cached result for CrossRef (REF/NOTEREF/PAGEREF) — Oxi can't
-                            // re-resolve the bookmark, so the cache («第１９条») is the display
-                            // value; dropping it (old "#") shifted wrapping doc-wide.
-                            // KEEP the cache for CrossRef (S685) and Cached (S708,
-                            // DATE/TIME/AUTHOR/…); only PAGE/NUMPAGES results are suppressed
-                            // (Oxi computes and substitutes those in the layout post-pass).
-                            if field_result_depth > 0
-                                && run.field_type.is_none()
-                                && !matches!(
-                                    current_field_type,
-                                    Some(FieldType::CrossRef) | Some(FieldType::Cached)
-                                )
-                            {
-                                run.text.clear();
+                            let mut dr = dr.take();
+                            let source_text=run.text.clone();
+                            complex_fields.consume(&mut run);
+                            remap_drawing_source_text(dr.as_mut(),&source_text,&run.text);
+                            for position in paragraph_flow_positions(&mut images,&mut found_shapes,&mut found_text_boxes){
+                                remap_source_text(position,runs.len(),&source_text,&run.text);
                             }
                             // S839: an INLINE visual vector group (wpg without
                             // txbxContent — hmrc's checkbox strips) marks its host
@@ -3280,8 +3395,13 @@ fn parse_paragraph_with_inline_images_impl(
                                     run.style.inline_object_extent = Some((tb.width, tb.height));
                                 }
                             }
+                            let drawing_source_page_offset = preceding_page_boundaries(&runs);
+                            let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
+                            let drawing_source_run_index = runs.len();
                             runs.push(run);
-                            if let Some(drawing) = dr {
+                            if let Some(mut drawing) = dr {
+                                offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
+                                bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
                                 if let Some(image) = drawing.image {
                                     // S854: record an INLINE (non-positioned) image with
                                     // its run index so ≥2-inline-image paragraphs can flow
@@ -3335,29 +3455,12 @@ fn parse_paragraph_with_inline_images_impl(
                         // and their cached result kept/suppressed correctly. Without
                         // this the ToC page numbers rendered with U+FFFE/U+FFFF tofu.
                         let s1184 = std::env::var("OXI_S1184_DISABLE").is_err();
-                        for (mut run, dr) in hyperlink_runs {
-                            if run.field_type.is_some() {
-                                current_field_type = run.field_type.clone();
-                            }
-                            if run.text.contains('\u{FFFE}') {
-                                run.text = run.text.replace('\u{FFFE}', "");
-                                field_result_depth += 1;
-                            }
-                            if run.text.contains('\u{FFFF}') {
-                                run.text = run.text.replace('\u{FFFF}', "");
-                                field_result_depth -= 1;
-                                if field_result_depth <= 0 {
-                                    current_field_type = None;
-                                }
-                            }
-                            if field_result_depth > 0
-                                && run.field_type.is_none()
-                                && !matches!(
-                                    current_field_type,
-                                    Some(FieldType::CrossRef) | Some(FieldType::Cached)
-                                )
-                            {
-                                run.text.clear();
+                        for (mut run, mut dr) in hyperlink_runs {
+                            let source_text=run.text.clone();
+                            complex_fields.consume(&mut run);
+                            remap_drawing_source_text(dr.as_mut(),&source_text,&run.text);
+                            for position in paragraph_flow_positions(&mut images,&mut found_shapes,&mut found_text_boxes){
+                                remap_source_text(position,runs.len(),&source_text,&run.text);
                             }
                             // S1184: hyperlink-wrapped drawings feed the SAME
                             // machinery as top-level runs (S839 extent mark,
@@ -3379,11 +3482,16 @@ fn parse_paragraph_with_inline_images_impl(
                                     }
                                 }
                             }
+                            let drawing_source_page_offset = preceding_page_boundaries(&runs);
+                            let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
+                            let drawing_source_run_index = runs.len();
                             runs.push(run);
                             if !s1184 {
                                 continue;
                             }
-                            if let Some(drawing) = dr {
+                            if let Some(mut drawing) = dr {
+                                offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
+                                bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
                                 if let Some(image) = drawing.image {
                                     if std::env::var("OXI_S854_DISABLE").is_err()
                                         && image.position.is_none()
@@ -3457,11 +3565,16 @@ fn parse_paragraph_with_inline_images_impl(
                             in_cell,
                         )?;
                         for (run, dr) in tracked_runs {
+                            let drawing_source_page_offset = preceding_page_boundaries(&runs);
+                            let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
+                            let drawing_source_run_index = runs.len();
                             runs.push(run);
                             if !s1383_keep {
                                 continue;
                             }
-                            if let Some(drawing) = dr {
+                            if let Some(mut drawing) = dr {
+                                offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
+                                bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
                                 if let Some(image) = drawing.image {
                                     if std::env::var("OXI_S854_DISABLE").is_err()
                                         && image.position.is_none()
@@ -3498,7 +3611,9 @@ fn parse_paragraph_with_inline_images_impl(
                                         in_fallback = true;
                                         ac_depth += 1;
                                     } else if in_choice && sl == "drawing" && ac_depth == 1 {
-                                        let dr = parse_drawing(reader, ctx, styles)?;
+                                        let mut dr = parse_drawing(reader, ctx, styles)?;
+                                        offset_drawing_attachment(&mut dr, preceding_page_boundaries(&runs), preceding_flow_boundaries(&runs));
+                                         bind_drawing_source_runs(&mut dr, runs.len());
                                         if let Some(image) = dr.image {
                                             images.push(image);
                                         }
@@ -3518,8 +3633,13 @@ fn parse_paragraph_with_inline_images_impl(
                                             allow_inline_flow,
                                             in_cell,
                                         )?;
+                                        let drawing_source_page_offset = preceding_page_boundaries(&runs);
+                            let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
+                            let drawing_source_run_index = runs.len();
                                         runs.extend(parsed_runs);
-                                        if let Some(drawing) = dr {
+                                        if let Some(mut drawing) = dr {
+                                offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
+                                bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
                                             if let Some(image) = drawing.image {
                                                 images.push(image);
                                             }
@@ -3598,8 +3718,13 @@ fn parse_paragraph_with_inline_images_impl(
                                                     allow_inline_flow,
                                                     in_cell,
                                                 )?;
-                                                runs.extend(parsed_runs);
-                                                if let Some(drawing) = dr {
+                                                let drawing_source_page_offset = preceding_page_boundaries(&runs);
+                            let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
+                            let drawing_source_run_index = runs.len();
+                                        runs.extend(parsed_runs);
+                                                if let Some(mut drawing) = dr {
+                                offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
+                                bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
                                                     if let Some(image) = drawing.image {
                                                         images.push(image);
                                                     }
@@ -3651,8 +3776,13 @@ fn parse_paragraph_with_inline_images_impl(
                                             allow_inline_flow,
                                             in_cell,
                                         )?;
+                                        let drawing_source_page_offset = preceding_page_boundaries(&runs);
+                            let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
+                            let drawing_source_run_index = runs.len();
                                         runs.extend(parsed_runs);
-                                        if let Some(drawing) = dr {
+                                        if let Some(mut drawing) = dr {
+                                offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
+                                bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
                                             if let Some(image) = drawing.image {
                                                 images.push(image);
                                             }
@@ -4551,7 +4681,10 @@ fn parse_paragraph_with_inline_images_impl(
     let lead_is_break = runs
         .first()
         .map_or(false, |first_run| first_run.text.trim() == "\x0C" || first_run.text == "\x0C");
-    if lead_is_break {
+    let has_source_attached_float = images.iter().any(|image| image.position.is_some())
+        || found_text_boxes.iter().any(|text_box| text_box.position.is_some())
+        || found_shapes.iter().any(|shape| shape.position.is_some());
+    if lead_is_break && (!has_source_attached_float || in_cell) {
         let only_br = runs.len() == 1 || runs.iter().skip(1).all(|r| r.text.is_empty());
         if only_br {
             style.page_break_after = true;
@@ -4564,6 +4697,7 @@ fn parse_paragraph_with_inline_images_impl(
         }
         // Remove the break-only run; `chars_unit_run_style` above already kept
         // its style, which is what Word measures the chars indents on (S1351).
+        remove_source_runs(&mut images,&mut found_shapes,&mut found_text_boxes,&[0]);
         runs.remove(0);
     }
 
@@ -4587,6 +4721,8 @@ fn parse_paragraph_with_inline_images_impl(
         } else {
             // No visible text: keep the block slots (they are in document
             // order) and drop the routed runs.
+            let removed:Vec<_>=runs.iter().enumerate().filter_map(|(index,run)|run.style.inline_math.is_some().then_some(index)).collect();
+            remove_source_runs(&mut images,&mut found_shapes,&mut found_text_boxes,&removed);
             runs.retain(|r| r.style.inline_math.is_none());
         }
     }
@@ -4989,6 +5125,14 @@ fn parse_paragraph_with_inline_images_impl(
         }
     }
 
+    // Late simple-field caches and inline-object routing may change a run's
+    // text. Run identity preserves all earlier text changes automatically.
+    for position in paragraph_flow_positions(&mut floating_imgs,&mut found_shapes,&mut found_text_boxes){
+        if let Some(point)=position.flow_source.as_mut(){
+            point.run_index=point.run_index.min(runs.len());
+            point.char_offset=point.char_offset.min(runs.get(point.run_index).map_or(0,|run|run.text.chars().count()));
+        }
+    }
     Ok(ParagraphResult {
         paragraph: Paragraph {
             runs,
@@ -6178,13 +6322,19 @@ fn parse_run(
     let mut symbol_spans = Vec::new();
     let mut style = RunStyle::default();
     let mut drawing_result: Option<DrawingResult> = None;
+    let mut drawing_page_offset = 0;
+    let mut drawing_boundary_offset = 0;
+    let mut drawing_source_text:Option<String> = None;
     let mut depth = 0;
     let mut in_text = false;
+    let mut preserve_text_whitespace = false;
     let mut toc_result_for_run = None;
     let mut in_instr_text = false;
+    let mut visible_instruction = false;
     let mut instr_text = String::new();
     let mut accumulated_instruction: Option<String> = None;
     let mut footnote_ref: Option<u32> = None;
+    let mut custom_note_reference = false;
     let mut endnote_ref: Option<u32> = None;
     let mut ruby: Option<Ruby> = None;
     let mut comment_references: Vec<String> = Vec::new();
@@ -6204,6 +6354,9 @@ fn parse_run(
                     }
                     "t" | "delText" if depth == 0 => {
                         in_text = true;
+                        preserve_text_whitespace = e.attributes().flatten().any(|attr| {
+                            attr.key.as_ref() == b"xml:space" && attr.value.as_ref() == b"preserve"
+                        });
                         toc_result_for_run.get_or_insert_with(||
                             ctx.in_toc_result() && (url.is_some() || ctx.in_hyperlink_result()));
                     }
@@ -6211,10 +6364,16 @@ fn parse_run(
                         in_instr_text = true;
                     }
                     "drawing" if depth == 0 => {
+                        drawing_page_offset = text.chars().filter(|ch| *ch == '\x0C').count();
+                        drawing_boundary_offset = text.chars().filter(|ch|matches!(ch,'\x0C'|'\x0B'|'\n'|'\r')).count();
+                        drawing_source_text=Some(if text.is_empty(){ruby.as_ref().map_or_else(String::new,|ruby|ruby.base.clone())}else{text.clone()});
                         drawing_result = Some(ctx.separate_story(|| parse_drawing(reader, ctx, styles))?);
                     }
                     // VML legacy picture/shape
                     "pict" if depth == 0 => {
+                        drawing_page_offset = text.chars().filter(|ch| *ch == '\x0C').count();
+                        drawing_boundary_offset = text.chars().filter(|ch|matches!(ch,'\x0C'|'\x0B'|'\n'|'\r')).count();
+                        drawing_source_text=Some(if text.is_empty(){ruby.as_ref().map_or_else(String::new,|ruby|ruby.base.clone())}else{text.clone()});
                         let vml = ctx.separate_story(|| parse_vml_pict(reader, ctx, styles))?;
                         if drawing_result.is_none() {
                             // S852: an inline horizontal rule (<v:rect o:hr="t"/>)
@@ -6256,6 +6415,9 @@ fn parse_run(
                     }
                     // mc:AlternateContent — prefer Choice (DrawingML)
                     "AlternateContent" if depth == 0 => {
+                        drawing_page_offset = text.chars().filter(|ch| *ch == '\x0C').count();
+                        drawing_boundary_offset = text.chars().filter(|ch|matches!(ch,'\x0C'|'\x0B'|'\n'|'\r')).count();
+                        drawing_source_text=Some(if text.is_empty(){ruby.as_ref().map_or_else(String::new,|ruby|ruby.base.clone())}else{text.clone()});
                         let ac = parse_alternate_content(reader, ctx, styles)?;
                         if let Some(sym) = ac.as_ref().and_then(|a| a.symbol_text.clone()) {
                             text.push_str(&sym); // S1643
@@ -6265,6 +6427,9 @@ fn parse_run(
                     }
                     // OLE object — extract preview image from embedded VML shape
                     "object" if depth == 0 => {
+                        drawing_page_offset = text.chars().filter(|ch| *ch == '\x0C').count();
+                        drawing_boundary_offset = text.chars().filter(|ch|matches!(ch,'\x0C'|'\x0B'|'\n'|'\r')).count();
+                        drawing_source_text=Some(if text.is_empty(){ruby.as_ref().map_or_else(String::new,|ruby|ruby.base.clone())}else{text.clone()});
                         let (ole, saw_ole, prog_id) = parse_ole_object(reader, ctx)?;
                         if drawing_result.is_none() {
                             // S851 (2026-07-14, default ON, opt-out OXI_S851_DISABLE):
@@ -6360,6 +6525,15 @@ fn parse_run(
                 if in_text && ctx.in_field_code() {
                     // S1524: a `<w:t>` inside the field CODE is not displayed.
                 } else if in_text {
+                    // Without xml:space="preserve", Word discards XML whitespace
+                    // at the text element's edges. A preserved styled space is
+                    // an applied character-style occurrence; a discarded space
+                    // cannot supply a style-reference result.
+                    let content = if preserve_text_whitespace {
+                        content
+                    } else {
+                        std::borrow::Cow::Owned(content.trim_matches([' ', '\t', '\r', '\n']).to_owned())
+                    };
                     // Literal XML newlines are spaces; explicit w:br/w:cr are
                     // handled separately and retain their line-break semantics.
                     let content = if std::env::var("OXI_LITERAL_TEXT_NEWLINES").is_ok()
@@ -6397,6 +6571,9 @@ fn parse_run(
                         text.push_str(&content);
                     }
                 } else if in_instr_text {
+                    let fields = ctx.fields.borrow();
+                    visible_instruction |= fields.iter().take(fields.len().saturating_sub(1)).all(|f| f.result);
+                    drop(fields);
                     instr_text.push_str(&content);
                     if let Some(f) = ctx.fields.borrow_mut().last_mut() {
                         if !f.result {
@@ -6488,6 +6665,9 @@ fn parse_run(
                     }
                     "fldChar" => ctx.field_control(&e, &mut text),
                     "footnoteReference" => {
+                        custom_note_reference = e.attributes().flatten().any(|attr|
+                            local_name(attr.key.as_ref()) == "customMarkFollows"
+                                && matches!(attr.value.as_ref(), b"1" | b"true" | b"on"));
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "id" {
@@ -6499,13 +6679,17 @@ fn parse_run(
                                         // Word renders just the number (e.g. "1"),
                                         // not "[1]". renumber_note_refs in parse_body
                                         // will rewrite this to the section-local seq.
-                                        text = format!("{}", id);
+                                        if custom_note_reference { text.clear(); }
+                                        else { text = format!("{}", id); }
                                     }
                                 }
                             }
                         }
                     }
                     "endnoteReference" => {
+                        custom_note_reference = e.attributes().flatten().any(|attr|
+                            local_name(attr.key.as_ref()) == "customMarkFollows"
+                                && matches!(attr.value.as_ref(), b"1" | b"true" | b"on"));
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "id" {
@@ -6513,7 +6697,8 @@ fn parse_run(
                                 if let Ok(id) = val.parse::<u32>() {
                                     if id > 0 {
                                         endnote_ref = Some(id);
-                                        text = format!("[{}]", id);
+                                        if custom_note_reference { text.clear(); }
+                                        else { text = format!("[{}]", id); }
                                     }
                                 }
                             }
@@ -6547,7 +6732,7 @@ fn parse_run(
 
     // If this run contains a field instruction, convert to placeholder text
     let mut field_type: Option<FieldType> = None;
-    if !instr_text.is_empty() {
+    if visible_instruction && !instr_text.is_empty() {
         let cached_instruction = accumulated_instruction.as_deref().filter(|instruction| {
             instruction.split_whitespace().next().map_or(false, |name|
                 name.eq_ignore_ascii_case("TOC") || name.eq_ignore_ascii_case("HYPERLINK"))
@@ -6558,6 +6743,7 @@ fn parse_run(
                 .is_some_and(|name| name.eq_ignore_ascii_case("ADDIN"))
         });
         let field = addin_instruction.or(cached_instruction).unwrap_or(&instr_text).trim();
+        let command = field.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
         if addin_cached && field.split_whitespace().next()
             .is_some_and(|name| name.eq_ignore_ascii_case("ADDIN"))
         {
@@ -6572,10 +6758,10 @@ fn parse_run(
             // 184,582円 / 45,651円 (the 差引 row) and administrative__0ed7739ee7
             // one 6,390 -- both in Word's truth; tests/fixtures/fieldcell.
             field_type = Some(FieldType::Cached);
-        } else if field.contains("PAGE") && !field.contains("NUMPAGES") && !field.contains("PAGEREF") {
+        } else if command.contains("PAGE") && !command.contains("NUMPAGES") && !command.contains("PAGEREF") {
             text = "#".to_string();
             field_type = Some(FieldType::Page);
-        } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
+        } else if command.contains("NUMPAGES") || command.contains("SECTIONPAGES") {
             text = "#".to_string();
             field_type = Some(FieldType::NumPages);
         } else if field
@@ -6598,7 +6784,7 @@ fn parse_run(
             // 4.562pt @9pt / 5.562 @10pt / 6.117 @11pt; the widest, reports' «Table 2»,
             // still ends at 339.457pt inside its line).
             // ★The first token is matched case-insensitively rather than
-            // `field.contains("SEQ")` so an instruction ARGUMENT or another field name
+            // `command.contains("SEQ")` so an instruction ARGUMENT or another field name
             // containing those letters cannot be captured.
             field_type = Some(FieldType::Cached);
         } else if field
@@ -6614,7 +6800,7 @@ fn parse_run(
             // of text and wrapped one line short (page 2 ran 34pt ahead by its
             // foot, 71 paragraphs a page early).
             field_type = Some(FieldType::Cached);
-        } else if field.contains("TOC") || field.contains("HYPERLINK") {
+        } else if command.contains("TOC") || command.contains("HYPERLINK") {
             // Table of contents / hyperlink fields — Oxi can't regenerate them, so
             // KEEP the cached result (Word's rendered ToC / link text). Marking the
             // field Cached stops the result-suppression pass from dropping the FIRST
@@ -6622,7 +6808,7 @@ fn parse_run(
             // any nested PAGEREF sets current_field_type (later entries survived only
             // because current_field_type stayed stuck at CrossRef).
             field_type = Some(FieldType::Cached);
-        } else if field.contains("STYLEREF") {
+        } else if field.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("STYLEREF")) {
             // S1174: must be tested BEFORE the generic REF arm — "STYLEREF"
             // contains "REF", so the CrossRef arm intercepted it and the
             // STYLEREF entry in the cached-field list below was dead code
@@ -6634,8 +6820,8 @@ fn parse_run(
             if std::env::var("OXI_FIELDCACHE_DISABLE").is_err() {
                 field_type = Some(FieldType::Cached);
                 if let Some(rest) = field
-                    .find("STYLEREF")
-                    .map(|i| field[i + "STYLEREF".len()..].trim_start())
+                    .split_whitespace().next()
+                    .map(|command| field[command.len()..].trim_start())
                 {
                     let name = if let Some(stripped) = rest.strip_prefix('"') {
                         stripped.split('"').next().unwrap_or("")
@@ -6649,7 +6835,7 @@ fn parse_run(
             } else if text.is_empty() {
                 text = format!("[{}]", field.split_whitespace().next().unwrap_or(field));
             }
-        } else if field.contains("REF") || field.contains("NOTEREF") || field.contains("PAGEREF") {
+        } else if command.contains("REF") || command.contains("NOTEREF") || command.contains("PAGEREF") {
             // S685 (2026-06-28, default ON, opt-out OXI_CROSSREF_DISABLE): cross-reference
             // fields render the CACHED RESULT (the run between fldChar separate and end),
             // NOT a "#" placeholder. The instruction run itself has no display text (leave
@@ -6661,18 +6847,22 @@ fn parse_run(
             } else if text.is_empty() {
                 text = "#".to_string();
             }
-        } else if field.contains("DATE")
-            || field.contains("TIME")
-            || field.contains("AUTHOR")
-            || field.contains("TITLE")
-            || field.contains("SUBJECT")
-            || field.contains("FILENAME")
-            || field.contains("DOCPROPERTY")
-            || field.contains("USERNAME")
-            || field.contains("LASTSAVEDBY")
-            || field.contains("COMMENTS")
-            || field.contains("KEYWORDS")
-            || field.contains("STYLEREF")
+        } else if field.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("IF")) {
+            // Conditional fields display the outer cached result. Operand fields
+            // are hidden by the enclosing code context and never paint here.
+            field_type = Some(FieldType::Cached);
+        } else if command.contains("DATE")
+            || command.contains("TIME")
+            || command.contains("AUTHOR")
+            || command.contains("TITLE")
+            || command.contains("SUBJECT")
+            || command.contains("FILENAME")
+            || command.contains("DOCPROPERTY")
+            || command.contains("USERNAME")
+            || command.contains("LASTSAVEDBY")
+            || command.contains("COMMENTS")
+            || command.contains("KEYWORDS")
+            || command.contains("STYLEREF")
         {
             // S708 (2026-06-30, default ON, opt-out OXI_FIELDCACHE_DISABLE): fields whose
             // value Word stores as a CACHED RESULT (the run between fldChar separate and
@@ -6697,6 +6887,7 @@ fn parse_run(
         }
     }
 
+    if custom_note_reference { field_type = Some(FieldType::CustomNoteReference); }
     let run = Run {
             text,
             style,
@@ -6714,7 +6905,30 @@ fn parse_run(
             field_type,
             has_last_rendered_page_break,
         };
-    Ok((split_symbol_runs(run, symbol_spans), drawing_result))
+    if let Some(drawing) = &mut drawing_result {
+        offset_drawing_attachment(drawing, drawing_page_offset, drawing_boundary_offset);
+    }
+    let source_offset=drawing_source_text.as_deref().map_or(0,|prefix|{
+        if run.text.starts_with(prefix){prefix.chars().count()}
+        else{prefix.chars().filter(|ch|!matches!(ch,'\u{F0000}'|'\u{FFFE}'|'\u{FFFF}')).count().min(run.text.chars().count())}
+    });
+    let parsed=split_symbol_runs(run,symbol_spans);
+    let mut remaining=source_offset;
+    let mut source_point=FlowSourcePoint{run_index:0,char_offset:0};
+    for (index,run)in parsed.iter().enumerate(){
+        let count=run.text.chars().count();
+        source_point=FlowSourcePoint{run_index:index,char_offset:remaining.min(count)};
+        if remaining<=count{break;}
+        remaining-=count;
+    }
+    if let Some(drawing)=drawing_result.as_mut(){
+        for position in [
+            drawing.image.as_mut().and_then(|object|object.position.as_mut()),
+            drawing.shape.as_mut().and_then(|object|object.position.as_mut()),
+            drawing.text_box.as_mut().and_then(|object|object.position.as_mut()),
+        ].into_iter().flatten(){position.flow_source=Some(source_point.clone());}
+    }
+    Ok((parsed,drawing_result))
 }
 
 /// Parse runs inside a w:hyperlink element
@@ -6772,7 +6986,8 @@ fn parse_notes_xml(
     styles: &StyleSheet,
     theme: &ThemeColors,
 ) -> Result<HashMap<String, Vec<Block>>, ParseError> {
-    let mut reader = Reader::from_str(xml);
+    let xml = super::xml_space::materialize(xml)?;
+    let mut reader = Reader::from_str(&xml);
     let mut notes: HashMap<String, Vec<Block>> = HashMap::new();
     let mut current_id: Option<String> = None;
     let mut current_type: Option<String> = None;
@@ -8579,6 +8794,9 @@ fn parse_drawing(
 
     let position = if is_anchor {
         Some(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
             x: pos_x,
             y: pos_y,
             h_relative,
@@ -8717,6 +8935,9 @@ fn parse_drawing(
     let tb_position = position.clone().or_else(|| {
         if inline_tb {
             Some(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
                 x: 0.0,
                 y: 0.0,
                 h_relative: Some("column".to_string()),
@@ -8744,6 +8965,7 @@ fn parse_drawing(
     }
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
+            wrap_polygon: wrapping_points.clone(),
             text_outline_inset: stroke_width_saved.unwrap_or(0.0) * 0.5,
             vertical_text: text_vertical,
             blocks: shape_text_blocks,
@@ -9536,6 +9758,9 @@ fn parse_vml_pict(
     let s1458 = std::env::var("OXI_S1458_DISABLE").is_err();
     let vml_position = if is_absolute && (margin_left != 0.0 || margin_top != 0.0) {
         Some(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
             x: margin_left,
             y: margin_top,
             h_relative: Some(
@@ -9557,6 +9782,9 @@ fn parse_vml_pict(
         })
     } else if s1006_zero_abs {
         Some(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
             x: margin_left,
             y: margin_top,
             h_relative: vml_h_relative.clone(),
@@ -9639,6 +9867,8 @@ fn parse_vml_pict(
         && std::env::var("OXI_S746_DISABLE").is_err();
     if s746_inline_txbx {
         let text_box = Some(TextBox {
+            wrap_polygon: shape_wrap_points.iter()
+                .map(|&(x,y)| (x / shape_coord_size.0, y / shape_coord_size.1)).collect(),
             text_outline_inset: 0.0,
             vertical_text: false,
             blocks: text_blocks,
@@ -9648,6 +9878,9 @@ fn parse_vml_pict(
             width,
             height,
             position: Some(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
                 x: 0.0,
                 y: 0.0,
                 h_relative: Some("column".to_string()),
@@ -9798,6 +10031,9 @@ fn parse_ole_object(
     let mut relative_height = 0u32;
     let mut behind_doc = false;
     let mut position = FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
         x: 0.0, y: 0.0, h_relative: Some("column".into()),
         v_relative: Some("paragraph".into()), h_align: None, v_align: None,
         dist_l: None, dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
@@ -9978,6 +10214,9 @@ fn parse_ole_object(
             content_type,
             position: if positioned_ole && absolute { Some(position) } else if s1389_abs && std::env::var("OXI_S1389_DISABLE").is_err() {
                 Some(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
                     x: s1389_ml,
                     y: s1389_mt,
                     h_relative: Some("text".to_string()),
@@ -10269,6 +10508,19 @@ fn parse_omml(reader: &mut Reader<&[u8]>, end_tag: &str) -> Result<String, Parse
 }
 
 /// Parse w:rPr (run properties)
+
+/// Resolve mathematical leaves through the same sparse property parser and
+/// paragraph-style merge used for ordinary runs. Character style application
+/// remains inside parse_run_properties; paragraph defaults fill only gaps.
+fn parse_math_run_properties(xml:&str,ctx:&ParseContext,styles:&StyleSheet)
+    -> Result<Option<RunStyle>,ParseError>
+{
+    let mut reader=Reader::from_str(xml);reader.read_event()?;
+    let (mut style,_change)=parse_run_properties(&mut reader,ctx,styles,true)?;
+    super::styles::merge_run_style(&mut style,&ctx.paragraph_base.borrow());
+    Ok(Some(style))
+}
+
 fn parse_run_properties(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -13433,7 +13685,8 @@ fn parse_header_footer_xml(
     ctx: &ParseContext,
     styles: &StyleSheet,
 ) -> Result<Vec<Block>, ParseError> {
-    let mut reader = Reader::from_str(xml);
+    let xml = super::xml_space::materialize(xml)?;
+    let mut reader = Reader::from_str(&xml);
     let mut blocks = Vec::new();
     let mut depth = 0;
     let mut in_root = false;
@@ -13602,6 +13855,7 @@ fn renumber_note_refs(
         match block {
             Block::Paragraph(para) => {
                 for run in para.runs.iter_mut() {
+                    if run.field_type == Some(FieldType::CustomNoteReference) { continue; }
                     if let Some(id) = run.footnote_ref {
                         if let Some(seq) = fn_map.get(&id) {
                             run.text = format!("{}", seq);
@@ -13642,6 +13896,7 @@ fn collect_note_refs(
                         if let Some(note_blocks) = ctx.footnotes.get(&id_str) {
                             if !footnotes.iter().any(|f| f.number == fn_id) {
                                 footnotes.push(Footnote {
+                                    automatic_numbering: run.field_type != Some(FieldType::CustomNoteReference),
                                     number: fn_id,
                                     blocks: note_blocks.clone(),
                                 });
@@ -13653,6 +13908,7 @@ fn collect_note_refs(
                         if let Some(note_blocks) = ctx.endnotes.get(&id_str) {
                             if !endnotes.iter().any(|f| f.number == en_id) {
                                 endnotes.push(Footnote {
+                                    automatic_numbering: run.field_type != Some(FieldType::CustomNoteReference),
                                     number: en_id,
                                     blocks: note_blocks.clone(),
                                 });
@@ -15519,4 +15775,177 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
             local_name(at.key.as_ref()) == "val"
                 && matches!(at.value.as_ref(), b"0" | b"false" | b"off")
         })
+
+}
+
+#[cfg(test)]
+#[test]
+    fn floating_attachment_keeps_source_side_of_inline_page_boundary() {
+        let mut ctx = ParseContext {
+            _rels: HashMap::new(), media: HashMap::new(),
+            media_types: HashMap::new(), hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
+            footnotes: HashMap::new(), endnotes: HashMap::new(),
+            comments: HashMap::new(), theme: ThemeColors::default(),
+        };
+        ctx.media.insert("rId1".into(), vec![1,2,3]);
+        let drawing = r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
+        let boundary = r#"<w:br w:type="page"/>"#;
+        for same_run in [false, true] {
+            for after in [false, true] {
+                let parts = if after { [boundary,drawing] } else { [drawing,boundary] };
+                let body = if same_run { format!("<w:r>{}{}</w:r>",parts[0],parts[1]) }
+                    else { format!("<w:r>{}</w:r><w:r>{}</w:r>",parts[0],parts[1]) };
+                let xml = format!("<w:p>{body}<w:r><w:t>TAIL</w:t></w:r></w:p>");
+                let mut reader=Reader::from_str(&xml);reader.read_event().unwrap();
+                let paragraph=parse_paragraph(&mut reader,&ctx,&StyleSheet::default(),true,false,None).unwrap();
+                assert_eq!(paragraph.floating_images.len(),1);
+                assert_eq!(paragraph.floating_images[0].position.as_ref().unwrap().flow_page_offset,usize::from(after));
+                assert!(!paragraph.paragraph.style.page_break_before);
+                assert!(paragraph.paragraph.runs.iter().any(|run| run.text.contains('\x0C')));
+            }
+        }
+    }
+
+
+#[cfg(test)]
+#[test]
+    fn floating_source_order_tracks_all_explicit_controls() {
+        let mut ctx = ParseContext {
+            _rels: HashMap::new(), media: HashMap::new(),
+            media_types: HashMap::new(), hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            fields: std::cell::RefCell::new(Vec::new()),
+            paragraph_base: std::cell::RefCell::new(RunStyle::default()),
+            footnotes: HashMap::new(), endnotes: HashMap::new(),
+            comments: HashMap::new(), theme: ThemeColors::default(),
+        };
+        ctx.media.insert("rId1".into(), vec![1,2,3]);
+        let drawing = r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
+        for (boundary,control) in [(r#"<w:br w:type="page"/>"#,'\x0C'),(r#"<w:br w:type="column"/>"#,'\x0B'),(r#"<w:br/>"#,'\n')] {
+        for same_run in [false, true] {
+            for after in [false, true] {
+                let parts = if after { [boundary,drawing] } else { [drawing,boundary] };
+                let body = if same_run { format!("<w:r>{}{}</w:r>",parts[0],parts[1]) }
+                    else { format!("<w:r>{}</w:r><w:r>{}</w:r>",parts[0],parts[1]) };
+                let xml = format!("<w:p>{body}<w:r><w:t>TAIL</w:t></w:r></w:p>");
+                let mut reader=Reader::from_str(&xml);reader.read_event().unwrap();
+                let paragraph=parse_paragraph(&mut reader,&ctx,&StyleSheet::default(),true,false,None).unwrap();
+                assert_eq!(paragraph.floating_images.len(),1);
+                assert_eq!(paragraph.floating_images[0].position.as_ref().unwrap().flow_boundary_offset,usize::from(after));
+                assert!(!paragraph.paragraph.style.page_break_before);
+                assert!(paragraph.paragraph.runs.iter().any(|run| run.text.contains(control)));
+            }
+        }
+    }
+        }
+
+
+#[cfg(test)]
+#[test]
+fn floating_source_point_survives_text_and_run_transformations(){
+    let mut ctx=ParseContext{
+        _rels:HashMap::new(),media:HashMap::new(),media_types:HashMap::new(),hyperlinks:HashMap::new(),
+        numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),
+        fields:std::cell::RefCell::new(Vec::new()),paragraph_base:std::cell::RefCell::new(RunStyle::default()),
+        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),
+    };
+    ctx.media.insert("rId1".into(),vec![1,2,3]);
+    let draw=r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
+    let wrappers=[("",""),("<w:hyperlink>","</w:hyperlink>"),("<w:ins w:author=\"A\">","</w:ins>"),
+        ("<w:sdt><w:sdtContent>","</w:sdtContent></w:sdt>"),("<mc:AlternateContent><mc:Choice>","</mc:Choice></mc:AlternateContent>")];
+    for (open,close)in wrappers{
+    for same in [false,true]{
+    for (br,extra)in [("",0),(r#"<w:br w:type="page"/>"#,1),(r#"<w:br w:type="column"/>"#,1),("<w:br/>",1)]{
+        let content=if same{format!("<w:r><w:t>あ😀Q</w:t>{br}{draw}<w:t>TAIL</w:t></w:r>")}
+            else{format!("<w:r><w:t>あ😀Q</w:t>{br}</w:r><w:r>{draw}<w:t>TAIL</w:t></w:r>")};
+        let xml=format!("<w:p><w:r><w:t>PRE</w:t></w:r>{open}{content}{close}</w:p>");
+        let mut reader=Reader::from_str(&xml);reader.read_event().unwrap();
+        let p=parse_paragraph(&mut reader,&ctx,&StyleSheet::default(),true,false,None).unwrap();
+        assert_eq!(p.floating_images.len(),1,"{xml}");
+        let point=p.floating_images[0].position.as_ref().unwrap().flow_source.as_ref().unwrap();
+        let flat=p.paragraph.runs[..point.run_index].iter().map(|run|run.text.chars().count()).sum::<usize>()+point.char_offset;
+        assert_eq!(flat,6+extra,"{xml}: {point:?}");
+        assert_eq!(p.paragraph.runs.iter().flat_map(|run|run.text.chars()).filter(|ch|!ch.is_control()).collect::<String>(),"PREあ😀QTAIL");
+    }}}
+    for (body,expected)in [
+        (format!("<w:r><w:t>あ😀</w:t><w:sym w:font=\"Wingdings\" w:char=\"F0FC\"/><w:t>Q</w:t>{draw}<w:t>TAIL</w:t></w:r>"),4),
+        (format!("<w:r><w:t>PRE</w:t></w:r><w:fldSimple w:instr=\"PAGE\"><w:r><w:t>99</w:t></w:r></w:fldSimple><w:r>{draw}<w:t>TAIL</w:t></w:r>"),4),
+        (format!("<w:r><w:t>PRE</w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/><w:instrText>DATE</w:instrText><w:fldChar w:fldCharType=\"separate\"/><w:t>VAL</w:t>{draw}<w:fldChar w:fldCharType=\"end\"/></w:r><w:r><w:t>TAIL</w:t></w:r>"),6),
+        (format!("<w:r><w:ruby><w:rt><w:r><w:t>ふり</w:t></w:r></w:rt><w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase></w:ruby>{draw}</w:r><w:r><w:t>TAIL</w:t></w:r>"),2),
+    ]{
+        let xml=format!("<w:p>{body}</w:p>");let mut reader=Reader::from_str(&xml);reader.read_event().unwrap();
+        let p=parse_paragraph(&mut reader,&ctx,&StyleSheet::default(),true,false,None).unwrap();
+        let point=p.floating_images[0].position.as_ref().unwrap().flow_source.as_ref().unwrap();
+        let flat=p.paragraph.runs[..point.run_index].iter().map(|run|run.text.chars().count()).sum::<usize>()+point.char_offset;
+        assert_eq!(flat,expected,"{xml}: {point:?}");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn math_run_properties_use_the_package_font_and_style_context() {
+    let ctx=ParseContext {
+        _rels:HashMap::new(),media:HashMap::new(),media_types:HashMap::new(),hyperlinks:HashMap::new(),
+        numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),
+        fields:std::cell::RefCell::new(Vec::new()),paragraph_base:std::cell::RefCell::new(RunStyle {
+            font_family_east_asia:Some("Inherited EA face".into()),
+            font_hint_east_asia:Some(true),font_size:Some(10.5), ..RunStyle::default()
+        }),
+        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),
+    };
+    let styles=StyleSheet::default();
+    for prefix in ["w", "ns7"] {
+        for explicit_ea in [false,true] {
+            let ea=if explicit_ea {format!("{prefix}:eastAsia=\"Explicit EA face\"")} else {String::new()};
+            let xml=format!(r#"<m:oMath><m:nary><m:sub><m:r><m:rPr><m:sty m:val="p"/></m:rPr><{prefix}:rPr><{prefix}:rFonts {prefix}:hAnsi="Cambria Math" {prefix}:ascii="Cambria Math" {ea} {prefix}:hint="eastAsia"/><{prefix}:sz {prefix}:val="21"/><{prefix}:szCs {prefix}:val="21"/><{prefix}:lang {prefix}:eastAsia="ja-JP"/></{prefix}:rPr><m:t>α</m:t></m:r></m:sub><m:e><m:r><m:t>x</m:t></m:r></m:e></m:nary></m:oMath>"#);
+            let mut reader=Reader::from_str(&xml);reader.read_event().unwrap();
+            let block=crate::parser::omml::parse_omath_inline_with_run_properties(&mut reader, &mut |properties| {
+                parse_math_run_properties(properties,&ctx,&styles)
+            }).unwrap();
+            let crate::ir::MathBlock::Inline(expressions)=block else {panic!("inline math")};
+            let crate::ir::MathExpr::Nary{sub:Some(sub),..}=&expressions[0] else {panic!("n-ary subscript")};
+            let crate::ir::MathExpr::Run{text,style}=sub.as_ref() else {panic!("styled math leaf")};
+            assert_eq!(text,"α");
+            assert_eq!(style.math_style,Some(crate::ir::MathStyleVariant::Plain));
+            let run=style.run_style.as_ref().expect("retained generic run properties");
+            assert_eq!(run.font_family.as_deref(),Some("Cambria Math"));
+            assert_eq!(run.font_family_east_asia.as_deref(),Some(if explicit_ea {"Explicit EA face"} else {"Inherited EA face"}));
+            assert_eq!(run.font_hint_east_asia,Some(true));
+            assert_eq!(run.font_size,Some(10.5));
+            assert_eq!(run.font_size_cs,Some(10.5));
+            assert_eq!(run.east_asia_lang.as_deref(),Some("ja-JP"));
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn math_operator_control_color_uses_package_context_without_coloring_leaves() {
+    let ctx = ParseContext {
+        _rels: HashMap::new(), media: HashMap::new(), media_types: HashMap::new(), hyperlinks: HashMap::new(),
+        numbering: NumberingDefinitions::default(), list_counters: std::cell::RefCell::new(HashMap::new()),
+        fields: std::cell::RefCell::new(Vec::new()), paragraph_base: std::cell::RefCell::new(RunStyle {
+            color: Some("00FF00".into()), ..RunStyle::default()
+        }), footnotes: HashMap::new(), endnotes: HashMap::new(), comments: HashMap::new(), theme: ThemeColors::default(),
+    };
+    for prefix in ["w", "ns7"] {
+        for (control, expected) in [(format!(r#"<m:ctrlPr><{prefix}:rPr><{prefix}:color {prefix}:val="FF0000"/></{prefix}:rPr></m:ctrlPr>"#), Some("FF0000")),
+            (format!("<m:ctrlPr><{prefix}:rPr/></m:ctrlPr>"), Some("00FF00")), (String::new(), None)] {
+            let xml = format!(r#"<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/>{control}</m:naryPr><m:e><m:r><{prefix}:rPr><{prefix}:color {prefix}:val="0000FF"/></{prefix}:rPr><m:t>x</m:t></m:r></m:e></m:nary></m:oMath>"#);
+            let mut reader = Reader::from_str(&xml); reader.read_event().unwrap();
+            let block = crate::parser::omml::parse_omath_inline_with_run_properties(&mut reader, &mut |properties| {
+                parse_math_run_properties(properties, &ctx, &StyleSheet::default())
+            }).unwrap();
+            let crate::ir::MathBlock::Inline(expressions) = block else { panic!("inline math") };
+            let crate::ir::MathExpr::Nary { operator_color, operand, .. } = &expressions[0] else { panic!("n-ary") };
+            assert_eq!(operator_color.as_deref(), expected);
+            let crate::ir::MathExpr::Run { style, .. } = operand.as_ref() else { panic!("styled operand") };
+            assert_eq!(style.run_style.as_ref().unwrap().color.as_deref(), Some("0000FF"));
+        }
+    }
 }

@@ -93,10 +93,11 @@ impl<'a> ParagraphLayouter<'a> {
         // fires and behavior is byte-identical for the whole 1-col corpus. The
         // final column the paragraph ended in is returned (3rd tuple element) so
         // the caller can keep its column state in sync. col_x_positions holds the
-        // per-column left-x; columns are equal-width so content_width is unchanged.
+        // per-column left-x and widths; a paragraph can enter a differently sized column.
         num_columns: usize,
         start_column: usize,
         col_x_positions: &[f32],
+        col_widths: &[f32],
         // S749 (2026-07-05): the vertical top of the current multi-column BAND
         // on the paragraph's first page. A continuous multi-col section that
         // starts MID-PAGE flows its columns from the section boundary — a
@@ -146,7 +147,7 @@ impl<'a> ParagraphLayouter<'a> {
         // see the s835_fn_relief derivation at the natural break test). Only
         // the body call site threads a real value; header/footer/footnote/
         // textbox/frame callers pass false (their bottoms are not fn areas).
-        fn_boundary_active: bool,
+        fn_boundary: FootnoteBoundary,
         // S900 (2026-07-17): the page's committed fn reserve from EARLIER
         // paragraphs (footnote_reserve_current), in pt. Needed to compute the
         // ABSOLUTE margin bottom (= effective bottom + reserve + this para's
@@ -178,6 +179,8 @@ impl<'a> ParagraphLayouter<'a> {
         s916_tail_split: bool,
         body_wrap_bands: Option<(&[(usize, f32, f32, f32, f32, bool, BodyWrapPolicy)], usize)>,
     ) -> (Vec<LayoutElement>, f32, usize) {
+        let fn_boundary_active = fn_boundary.active;
+
         // S1497: the band of a paragraph-relative wrapTopAndBottom float hosted
         // here starts at the block's entry cursor + posOffset (the S734
         // reservation point), whatever spacing is applied below.
@@ -716,7 +719,7 @@ impl<'a> ParagraphLayouter<'a> {
             let marker_font_size = self.resolve_font_size(marker_style, &para.style);
             // Symbol font bullets (•/●) have large glyphs relative to em-square.
             // No font size adjustment needed — use the paragraph's font size directly.
-            let marker_metrics = self.metrics_for(marker_style, &para.style);
+            let marker_metrics = &*self.metrics_for(marker_style, &para.style);
             if std::env::var("OXI_DBG_MARKER").is_ok() {
                 eprintln!("[MARKER] text={:?} style_fam={:?} style_sz={:?} -> resolved fam={:?} fs={:.2} | first_run_fam={:?} ppr_fam={:?} drs={:?}",
                     marker, marker_style.font_family, marker_style.font_size,
@@ -803,10 +806,13 @@ impl<'a> ParagraphLayouter<'a> {
 
             // Determine marker text including suffix
             let suff = para.style.list_suff.as_deref().unwrap_or("tab");
-            if suff == "nothing" && std::env::var("OXI_S776_DISABLE").is_err() {
-                // S776: number sits at the first-line position, text right after.
+            if matches!(suff, "nothing" | "space") && std::env::var("OXI_S776_DISABLE").is_err() {
+                // A non-tab suffix places text after the actual marker advance.
+                // Its space consumes line capacity just like the number itself.
                 marker_x = start_x + indent_left + first_line_indent;
-                s776_marker_extra = marker_width;
+                s776_marker_extra = marker_width + if suff == "space" {
+                    self.registry.char_width_pt_with_fallback(' ', marker_font_size, marker_metrics)
+                } else { 0.0 };
             }
             if s778_stop_extra > 0.0 {
                 // S778: the marker sits at the paragraph's first-line indent;
@@ -865,7 +871,7 @@ impl<'a> ParagraphLayouter<'a> {
                             // resolves to the ascii/hAnsi font (non-83/64) giving a 1-cell
                             // value, while the body uses the eastAsia 83/64 font (2 cells).
                             let nat_metrics =
-                                self.metrics_for_text(&marker_text, marker_style, &para.style);
+                                &*self.metrics_for_text(&marker_text, marker_style, &para.style);
                             let nat = nat_metrics.word_line_height_no_grid(marker_font_size);
                             let snapped = (((nat + p * 0.5) / p) + 0.5).floor().max(1.0) * p;
                             line_height.max(snapped)
@@ -889,7 +895,7 @@ impl<'a> ParagraphLayouter<'a> {
                 && para.style.snap_to_grid
                 && grid_pitch.map_or(false, |p| p > 0.0 && marker_break_h <= p * 1.5)
             {
-                let nat_metrics = self.metrics_for_text(&marker_text, marker_style, &para.style);
+                let nat_metrics = &*self.metrics_for_text(&marker_text, marker_style, &para.style);
                 nat_metrics
                     .word_line_height_no_grid(marker_font_size)
                     .min(marker_break_h)
@@ -917,7 +923,7 @@ impl<'a> ParagraphLayouter<'a> {
                 && !fn_boundary_active
                 && !footer_tight
             {
-                let nat_metrics = self.metrics_for_text(&marker_text, marker_style, &para.style);
+                let nat_metrics = &*self.metrics_for_text(&marker_text, marker_style, &para.style);
                 let mut marker_natural = if self.doc_body_has_real_cjk
                     && std::env::var("OXI_CJK_MARKER_FIT").is_ok()
                     && nat_metrics.is_cjk_83_64_font()
@@ -1207,8 +1213,8 @@ impl<'a> ParagraphLayouter<'a> {
                     .hps_halfpt
                     .map(|h| h as f32 / 2.0)
                     .unwrap_or(base_pt / 2.0);
-                let ruby_metrics = self.metrics_for_text(&ruby_ir.text, &run.style, &para.style);
-                let base_metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
+                let ruby_metrics = &*self.metrics_for_text(&ruby_ir.text, &run.style, &para.style);
+                let base_metrics = &*self.metrics_for_text(&run.text, &run.style, &para.style);
                 let ruby_w: f32 = ruby_ir
                     .text
                     .chars()
@@ -1482,12 +1488,29 @@ impl<'a> ParagraphLayouter<'a> {
         // Plan the text rows before deriving any metrics or footnote arrays.
         // A word that needs an emergency character break waits until the
         // wrapping object has ended; preceding rows stay beside the object.
+        // A picture can begin partway through its own anchor paragraph. Plan
+        // each remaining row against the registry, including entry into a band.
+        // The existing in-band planner is retained for paragraphs starting beside
+        // an object; the new entry path uses the same geometry and word-fit rules.
+        let future_wrap_band = if s758_band.is_none()
+            && std::env::var_os("OXI_FUTURE_WRAP_DISABLE").is_none()
+        {
+            body_wrap_bands.and_then(|(bands, entry_page)| bands.iter()
+                .filter(|b| (b.0 == entry_page && b.1 > cursor.cursor_y
+                    || b.0 > entry_page)
+                    && b.1 < page_top + content_height && b.2 > b.1
+                    && b.3 < start_x + content_width - 6.0 && b.4 > start_x + 6.0)
+                .map(|b| (b.2, 0.0, 0.0))
+                .max_by(|a,b| a.0.total_cmp(&b.0)))
+        } else { None };
         let mut word_fit_widths = Vec::new();
         let mut word_fit_floors: Vec<Option<f32>> = Vec::new();
+        let mut word_fit_segments: Vec<Option<(f32,f32,f32,f32)>> = Vec::new();
+        let mut word_fit_columns: Vec<usize> = Vec::new();
         if std::env::var("OXI_DBG_WF").is_ok() {
             eprintln!("[WF-GATE] cjk={} bpi={:?} two_seg={:?} clean={} band={:?} text={:?}",
                 self.doc_body_has_real_cjk, body_para_index, s758_two_seg,
-                fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\n' | '\r' | '\t' | '\u{FFFC}'))),
+                fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\t' | '\u{FFFC}'))),
                 s758_band,
                 para.runs.iter().map(|r| r.text.as_str()).collect::<String>()
                     .chars().take(22).collect::<String>());
@@ -1495,35 +1518,99 @@ impl<'a> ParagraphLayouter<'a> {
         if (std::env::var("OXI_WRAP_WORD_FIT").is_ok()
                 || std::env::var("OXI_S1472_DISABLE").is_err())
             && !self.doc_body_has_real_cjk && body_para_index.is_some()
-            && s758_two_seg.is_none()
-            && fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\n' | '\r' | '\t' | '\u{FFFC}')))
+            && fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\t' | '\u{FFFC}')))
         {
-            if let Some((bottom, reduction, shift)) = s758_band {
+            if let Some((bottom, reduction, shift)) = s758_band.or(future_wrap_band) {
+                // Requery current page/column bands even when this paragraph
+                // starts beside a float. Its continuation can have other lanes.
+                let dynamic_entry = body_wrap_bands.is_some();
+                let mut row_para = para.clone();
+                row_para.style.space_before = Some(0.0);
                 let mut remaining: Vec<_> = fragments.iter().map(|f|
                     (f.0.to_owned(), f.1.clone(), f.2.clone(), f.3, f.4)).collect();
                 let mut planned = Vec::new();
                 let mut widths = Vec::new();
                 let mut floors = Vec::new();
+                let mut segments = Vec::new();
+                let mut columns = Vec::new();
                 let mut y = cursor.cursor_y;
                 let mut column = start_column;
                 let mut active = y < bottom - 0.5;
                 let mut pending_floor = None;
                 let mut valid = true;
                 while !remaining.is_empty() {
-                    let red = if active { reduction } else { 0.0 };
-                    let sh = if active { shift } else { 0.0 };
-                    let width = if active { (s758_wrap_full - floor_wrap_reduction(red)).max(s758_lane_minimum) } else { s758_wrap_full };
+                    let mut row_bottom = bottom;
+                    let mut row_two = None;
+                    let (red, sh) = if dynamic_entry {
+                        let (bands, entry_page) = body_wrap_bands.unwrap();
+                        let row_column = column % num_columns.max(1);
+                        let row_page = entry_page + column / num_columns.max(1);
+                        let row_x = col_x_positions.get(row_column).copied().unwrap_or(start_x);
+                        let row_content_width = col_widths.get(row_column).copied().unwrap_or(content_width);
+                        row_para.runs = remaining.iter().filter_map(|f| {
+                            let mut run = para.runs.get(f.3)?.clone();
+                            run.text = f.0.clone();
+                            Some(run)
+                        }).collect();
+                        if !planned.is_empty() { row_para.style.indent_first_line = Some(0.0); }
+                        let (lane, two, advance) = self.body_paragraph_wrap_bands(
+                            &row_para, page, bands, row_page, y, row_x, row_content_width);
+                        row_two = two;
+                        if advance > 0.0 {
+                            y += advance;
+                            pending_floor = Some(y);
+                            continue;
+                        }
+                        active = lane.is_some();
+                        if let Some((bot, red, sh)) = lane {
+                            row_bottom = bot;
+                            if row_two.is_some() { (0.0,0.0) } else { (red,sh) }
+                        } else { (0.0, 0.0) }
+                    } else {
+                        (if active { reduction } else { 0.0 }, if active { shift } else { 0.0 })
+                    };
+                    let row_content_width = col_widths.get(column % num_columns.max(1))
+                        .copied().unwrap_or(content_width);
+                    let row_full = (self.s1211c_floor_body_width(
+                        para, row_content_width, effective_char_pitch, page.grid_char_cw_ratio)
+                        - indent_left - indent_right - ruby_total_overhang_pt).max(0.0);
+                    let row_reduction = if active {
+                        if red > 0.0 && (std::env::var("OXI_GRID_WRAP_WIDTH").is_ok()
+                            || std::env::var("OXI_S1457_DISABLE").is_err()) {
+                            let full = self.s1211c_floor_body_width(
+                                para, row_content_width, effective_char_pitch, page.grid_char_cw_ratio);
+                            let free = self.s1211c_floor_body_width(
+                                para, row_content_width - red, effective_char_pitch, page.grid_char_cw_ratio);
+                            (full - free).max(0.0)
+                        } else { red }
+                    } else { 0.0 };
+                    let width = if active { (row_full - row_reduction).max(s758_lane_minimum) } else { row_full };
                     let refs: Vec<_> = remaining.iter().map(|f|
                         (f.0.as_str(), &f.1, f.2.clone(), f.3, f.4)).collect();
-                    let mut broken = self.break_into_lines(&refs, width,
-                        if planned.is_empty() { effective_first_indent } else { 0.0 },
-                        &para.style, effective_char_pitch, effective_cw_ratio,
-                        page.doc_grid_lines_and_chars, true,
-                        matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
-                        page.doc_grid_no_type, para_has_lrpb, caps_active, false);
+                    let first_indent=if planned.is_empty() { effective_first_indent } else { 0.0 };
+                    self.s1636_lane_shift.set(sh);
+                    let mut broken = if let Some((_,left_width,_,right_width))=row_two {
+                        self.break_two_segment_lines(&refs,left_width,right_width,first_indent,
+                            &para.style,effective_char_pitch,effective_cw_ratio,
+                            page.doc_grid_lines_and_chars,true,
+                            matches!(para.alignment,Alignment::Justify|Alignment::Distribute),
+                            page.doc_grid_no_type,para_has_lrpb,caps_active)
+                    } else {
+                        self.break_into_lines(&refs, width,first_indent,
+                            &para.style, effective_char_pitch, effective_cw_ratio,
+                            page.doc_grid_lines_and_chars, true,
+                            matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
+                            page.doc_grid_no_type, para_has_lrpb, caps_active, false)
+                    };
+                    self.s1636_lane_shift.set(0.0);
                     let Some(first) = broken.first() else { valid = false; break; };
                     let natural = self.natural_line_height_for_line(first, &para.style, para_font_size);
-                    if y + natural > page_top + content_height && y > col_band_top + 0.01 {
+                    // Fit the same declared line box that advances this plan.
+                    // In particular, a nonempty exact-height row before a
+                    // column/page control cannot fit using smaller glyph ink.
+                    let row_height=self.line_height_for_line(first,&para.style,para_font_size,
+                        para.style.snap_to_grid,grid_pitch,page.doc_grid_no_type);
+                    if !first.fragments.is_empty() && y + row_height > page_top + content_height && y > col_band_top + 0.01 {
                         column += 1;
                         y = if column < num_columns { col_band_top } else { page_top };
                         active = false;
@@ -1537,19 +1624,28 @@ impl<'a> ParagraphLayouter<'a> {
                             && y + natural > b.1 && y < b.2 - 0.5
                             && b.3 < start_x + content_width && b.4 > start_x));
                     if active && first.emergency_word_break && !table_lane {
-                        y = y.max(bottom);
+                        y = y.max(row_bottom);
                         active = false;
-                        pending_floor = Some(bottom);
+                        pending_floor = Some(row_bottom);
                         continue;
                     }
-                    let next = broken.get(1).and_then(|line| line.fragments.first())
-                        .map(|f| (f.run_index, f.char_offset));
+                    let next = broken.get(1).and_then(Line::source_start);
                     let line = broken.remove(0);
                     y += self.line_height_for_line(&line, &para.style, para_font_size,
                         para.style.snap_to_grid, grid_pitch, page.doc_grid_no_type);
+                    let explicit_page = line.break_type == LineBreakType::PageBreak;
+                    let explicit_column = line.break_type == LineBreakType::ColumnBreak;
                     planned.push(line);
-                    widths.push((red, sh));
+                    widths.push((s758_wrap_full - row_full + row_reduction, sh));
                     floors.push(pending_floor.take());
+                    segments.push(row_two);
+                    columns.push(column);
+                    if dynamic_entry && (explicit_page || explicit_column) {
+                        column += if explicit_page { num_columns.max(1) - column % num_columns.max(1) } else { 1 };
+                        y = if column < num_columns { col_band_top } else { page_top };
+                        active = false;
+                        pending_floor = None;
+                    }
                     if y >= bottom - 0.5 { active = false; }
                     if let Some((ri, co)) = next {
                         let Some(index) = remaining.iter().position(|f| f.3 == ri && f.4 <= co
@@ -1571,8 +1667,60 @@ impl<'a> ParagraphLayouter<'a> {
                     lines = planned;
                     word_fit_widths = widths;
                     word_fit_floors = floors;
+                    word_fit_segments = segments;
+                    word_fit_columns = columns;
                 }
             }
+        }
+        // Finish explicit column reflow before deriving row metrics and note
+        // arrays. The retained prefix includes its source control; only the
+        // remaining source is broken against the newly entered column width.
+        // Word controls independently vary both widths and a soft/column break.
+        if num_columns > 1 && word_fit_columns.is_empty()
+            && col_widths.iter().any(|w| (*w - content_width).abs() > 0.1)
+            && lines.iter().any(|line| line.break_type == LineBreakType::ColumnBreak)
+        {
+            let mut remaining_lines = std::mem::take(&mut lines);
+            let mut column = start_column;
+            let mut planned = Vec::new();
+            let mut widths = Vec::new();
+            let mut columns = Vec::new();
+            let mut current_red = s758_band.map_or(0.0, |b| b.1);
+            let mut current_shift = s758_band.map_or(0.0, |b| b.2);
+            while !remaining_lines.is_empty() {
+                let boundary = remaining_lines.iter().position(|line|
+                    matches!(line.break_type, LineBreakType::ColumnBreak | LineBreakType::PageBreak));
+                let count = boundary.map_or(remaining_lines.len(), |i| i+1);
+                let break_type = remaining_lines[count-1].break_type;
+                for line in remaining_lines.drain(..count) {
+                    planned.push(line);
+                    widths.push((current_red, current_shift));
+                    columns.push(column);
+                }
+                if remaining_lines.is_empty() { break; }
+                column += if break_type == LineBreakType::PageBreak {
+                    num_columns - column % num_columns
+                } else { 1 };
+                let new_content_width = col_widths.get(column % num_columns)
+                    .copied().unwrap_or(content_width);
+                let new_wrap_width = (self.s1211c_floor_body_width(
+                    para, new_content_width, effective_char_pitch, page.grid_char_cw_ratio)
+                    - indent_left - indent_right - ruby_total_overhang_pt).max(0.0);
+                let fragments: Vec<_> = remaining_lines.iter().flat_map(Line::source_fragments).collect();
+                let refs: Vec<_> = fragments.iter().map(|(text,style,field,run,offset)|
+                    (text.as_str(), style, field.clone(), *run, *offset)).collect();
+                self.s1636_lane_shift.set(0.0);
+                remaining_lines = self.break_into_lines(&refs, new_wrap_width, 0.0,
+                    &para.style, effective_char_pitch, effective_cw_ratio,
+                    page.doc_grid_lines_and_chars, true,
+                    matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
+                    page.doc_grid_no_type, para_has_lrpb, caps_active, false);
+                current_red = s758_wrap_full - new_wrap_width;
+                current_shift = 0.0;
+            }
+            lines = planned;
+            word_fit_widths = widths;
+            word_fit_columns = columns;
         }
         let mut line_own_fn_ids: Vec<Vec<u32>> = vec![Vec::new(); lines.len()];
         // S900: note ids DEFERRED to the next page's area (excluded from this
@@ -1737,8 +1885,7 @@ impl<'a> ParagraphLayouter<'a> {
                         matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
                         page.doc_grid_no_type, para_has_lrpb, false, false);
                     if broken.is_empty() { valid = false; break; }
-                    let next = broken.get(1).and_then(|l| l.fragments.first())
-                        .map(|f| (f.run_index, f.char_offset));
+                    let next = broken.get(1).and_then(Line::source_start);
                     let line = broken.remove(0);
                     y += self.line_height_for_line(&line, &para.style, para_font_size,
                         para.style.snap_to_grid, grid_pitch, page.doc_grid_no_type);
@@ -1760,6 +1907,18 @@ impl<'a> ParagraphLayouter<'a> {
                 }
             }
         }
+        let s779_latin = (page.grid_line_pitch.is_none() || page.doc_grid_no_type)
+            && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S779_DISABLE").is_err();
+        let header_inline_geometry = is_header_footer
+            && (std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some()
+                || (para.style.line_spacing_rule.as_deref() == Some("exact")
+                    && para.runs.iter().any(|r| r.style.inline_object_image.is_some())));
+        let header_exact_inline = header_inline_geometry
+            && para.style.line_spacing_rule.as_deref() == Some("exact");
+        // Initial breaking and later band-exit reflow must use the same line
+        // boxes, including font unions, inline objects, occupied ink and leading.
+        let line_boxes = |lines: &[Line]| {
         let mut line_heights: Vec<f32> = lines
             .iter()
             .map(|line| {
@@ -1806,9 +1965,6 @@ impl<'a> ParagraphLayouter<'a> {
         // Scope includes NO-TYPE docGrid docs (nyserda linePitch=299 no-type):
         // the probe re-run WITH that docGrid flips at the same cbot window —
         // the rule is grid-independent for non-snapping (no-type/LM0) Latin.
-        let s779_latin = (page.grid_line_pitch.is_none() || page.doc_grid_no_type)
-            && !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S779_DISABLE").is_err();
         // S827 (2026-07-13, opt-out OXI_S827_DISABLE): the S779 floor was a
         // MIS-TRANSLATION of the derived rule. The derivation said "keep iff
         // baseline + win_descent <= content_bottom"; from the line TOP the
@@ -1830,7 +1986,7 @@ impl<'a> ParagraphLayouter<'a> {
                     let mut mx: f32 = 0.0;
                     for f in &line.fragments {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
-                        let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                         let h = if s827_hhea {
                             m.natural_line_height_hhea(fs)
                         } else {
@@ -1863,12 +2019,6 @@ impl<'a> ParagraphLayouter<'a> {
         // retaining that drawing as a run must not turn fixed spacing into
         // a minimum height. Use the shared fixed-line baseline and clipping
         // model for retained inline images under the default rules as well.
-        let header_inline_geometry = is_header_footer
-            && (std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some()
-                || (para.style.line_spacing_rule.as_deref() == Some("exact")
-                    && para.runs.iter().any(|r| r.style.inline_object_image.is_some())));
-        let header_exact_inline = header_inline_geometry
-            && para.style.line_spacing_rule.as_deref() == Some("exact");
         // Keep the text-only line box before inline objects enlarge it.
         // Visual group placement below composes the same object with this box.
         let text_only_line_heights = line_heights.clone();
@@ -1961,7 +2111,7 @@ impl<'a> ParagraphLayouter<'a> {
                                     .filter(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
                                     .map(|f| {
                                         let fs = f.style.font_size.unwrap_or(para_font_size);
-                                        let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                                         if m.is_cjk_83_64_font() {
                                             self.line_height_inner(fs, Some(1.0), Some("auto"), m, false, None, false)
                                         } else {
@@ -2152,9 +2302,34 @@ impl<'a> ParagraphLayouter<'a> {
                                 }))
                                 .fold((0.0f32, 0.0f32), |(a, d), (t, b)| (a.max(t), d.max(b)));
                             let ink = ink_t + ink_b;
-                            let occ = (ink + m).max(1.0);
+                            let font_boxes=line.fragments.iter().filter_map(|f|f.style.inline_math.as_ref().and_then(|mb| {
+                                crate::layout::math::inline_math_typographic_extent(mb,f.style.font_size.unwrap_or(para_font_size))
+                            })).fold(None,|boxes:Option<(f32,f32)>,(a,d)|Some(boxes.map_or((a,d),|(ba,bd)|(ba.max(a),bd.max(d)))));
+                            let occ=if let Some((a,d))=font_boxes {
+                                let (ha,hd)=line.fragments.iter().filter(|f|f.style.inline_math.is_none()
+                                    && f.style.inline_object_image.is_none() && f.style.hr_rule.is_none())
+                                    .map(|f|self.metrics_for_text(&f.text,&f.style,&para.style)
+                                        .design_font_box_pt(f.style.font_size.unwrap_or(para_font_size),true))
+                                    .fold((0.0_f32,0.0_f32),|(a,d),(fa,fd)|(a.max(fa),d.max(fd)));
+                                a.max(ink_t).max(ha)+d.max(ink_b).max(hd)
+                            }else {(ink+m).max(1.0)};
+                            // Replacing the math object's estimated grid box
+                            // must retain the typographic minimum of its host
+                            // text. Measure that text with the ordinary line
+                            // policy, excluding the math placeholder itself.
+                            let text_line = Line {
+                                fragments: line.fragments.iter()
+                                    .filter(|f| f.style.inline_math.is_none()).cloned().collect(),
+                                empty_break_style: line.empty_break_style.clone(),
+                                whitespace_paragraph: line.whitespace_paragraph,
+                                ..Line::default()
+                            };
+                            let text_floor = if text_line.fragments.is_empty() { 0.0 } else {
+                                self.line_height_for_line(&text_line, &para.style, para_font_size,
+                                    para.style.snap_to_grid, grid_pitch, page.doc_grid_no_type)
+                            };
                             grid_pitch.filter(|p| *p > 0.1)
-                                .map_or(target, |pitch| (occ / pitch).ceil().max(1.0) * pitch)
+                                .map_or(target, |pitch| ((occ / pitch).ceil().max(1.0) * pitch).max(text_floor))
                         } else {
                         grid_pitch.filter(|p| *p > 0.1)
                             .map_or(target, |pitch| ((occupied / pitch).ceil() * pitch).max(target))
@@ -2193,6 +2368,13 @@ impl<'a> ParagraphLayouter<'a> {
                 }
             }
         }
+
+            (line_heights, natural_line_heights, s779_win_heights,
+                ink_line_heights, text_only_line_heights, s1116_line0_target, story_image_leading)
+        };
+        let (mut line_heights, mut natural_line_heights, mut s779_win_heights,
+            mut ink_line_heights, mut text_only_line_heights, s1116_line0_target,
+            mut story_image_leading) = line_boxes(&lines);
 
         // S689 (2026-06-29, SHIPPED default ON, opt-out OXI_S689_DISABLE): a list
         // paragraph whose numbering marker is a SYMBOL-FONT bullet (\u{F0B7}) renders
@@ -2241,7 +2423,7 @@ impl<'a> ParagraphLayouter<'a> {
             let mut all_latin = true;
             for f in &lines[0].fragments {
                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                 if m.is_cjk_83_64_font() {
                     all_latin = false;
                 }
@@ -2389,7 +2571,7 @@ impl<'a> ParagraphLayouter<'a> {
             && !lines[0].fragments.is_empty()
             && !matches!(
                 para.style.line_spacing_rule.as_deref(),
-                Some("exact") | Some("atLeast")
+                Some("exact")
             )
             && (para
                 .style
@@ -2416,7 +2598,7 @@ impl<'a> ParagraphLayouter<'a> {
             let mut marker_growth_ok = true;
             for f in &lines[0].fragments {
                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                 asc = asc.max(m.win_ascent * fs);
                 desc = desc.max(m.win_descent * fs);
                 let win_sum = (m.win_ascent + m.win_descent) * fs;
@@ -2511,7 +2693,11 @@ impl<'a> ParagraphLayouter<'a> {
             // multiplied text line rather than multiplied with it. `ext` is
             // zeroed above when the marker drives the height (S820), so the
             // text's leading is recovered from `text_ext` for the box top.
-            let target = if std::env::var("OXI_S1112_DISABLE").is_err() {
+            let target = if para.style.line_spacing_rule.as_deref() == Some("atLeast") {
+                line_heights[0] + LayoutEngine::minimum_marker_entry_overflow(
+                    (marker_asc - asc - text_ext).max(0.0),
+                    asc + desc + text_ext, line_heights[0], Some("atLeast"))
+            } else if std::env::var("OXI_S1112_DISABLE").is_err() {
                 (asc + desc + text_ext) * factor + (marker_asc - asc - text_ext).max(0.0)
             } else {
                 target_nat * factor
@@ -2543,6 +2729,60 @@ impl<'a> ParagraphLayouter<'a> {
                         ink_line_heights[0] = target;
                     }
                     s795_line0_target = target;
+                }
+            }
+        }
+        // Compare marker and text box tops above their shared baseline.
+        // East Asian natural boxes distribute additional leading on both sides;
+        // a Latin box already has its external leading above the glyph ascent.
+        // Only the marker's overflow grows the line; its descent is not text.
+        // Typed grids quantize the expanded box and exact rules remain fixed.
+        if self.doc_body_has_real_cjk && !lines.is_empty()
+            && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+            && (grid_pitch.is_none() || !page.doc_grid_no_type)
+        {
+            if let Some(marker_style) = s1037_marker_style(para) {
+                let marker_fs = self.resolve_font_size(marker_style, &para.style);
+                let marker_metrics = &*self.metrics_for(marker_style, &para.style);
+                let box_top = |m: &FontMetrics, fs: f32| {
+                    let win = (m.win_ascent + m.win_descent) * fs;
+                    let leading = if m.is_cjk_83_64_font() {
+                        (LayoutEngine::s1367_cjk_box(m, fs) - win).max(0.0) * 0.5
+                    } else {
+                        (m.natural_line_height_hhea(fs) - win).max(0.0)
+                    };
+                    m.win_ascent * fs + leading
+                };
+                let body_ascent = lines[0].fragments.iter().filter(|f| !f.text.trim().is_empty())
+                    .map(|f| {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        box_top(&self.metrics_for_text(&f.text, &f.style, &para.style), fs)
+                    }).fold(0.0f32, f32::max);
+                let body_descent = lines[0].fragments.iter().filter(|f| !f.text.trim().is_empty())
+                    .map(|f| {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
+                        let total = if m.is_cjk_83_64_font() {
+                            LayoutEngine::s1367_cjk_box(m, fs)
+                        } else { m.natural_line_height_hhea(fs) };
+                        (total - box_top(m, fs)).max(0.0)
+                    }).fold(0.0f32, f32::max);
+                let extra = (box_top(marker_metrics, marker_fs) - body_ascent).max(0.0);
+                if body_ascent > 0.0 && extra > 0.0 {
+                    // Quantize the union of actual boxes, before device rounding.
+                    natural_line_heights[0] = (natural_line_heights[0] + extra)
+                        .max(body_ascent + body_descent + extra);
+                    let factor = para.style.line_spacing.unwrap_or(1.0);
+                    let target = if para.style.snap_to_grid {
+                        grid_pitch.filter(|pitch| *pitch > 0.0).map(|pitch| {
+                            let cells = ((natural_line_heights[0] * 20.0).round() / (pitch * 20.0)).ceil().max(1.0);
+                            pitch * cells.max(factor)
+                        }).unwrap_or(line_heights[0] + extra * factor)
+                    } else {
+                        line_heights[0] + extra * factor
+                    };
+                    line_heights[0] = line_heights[0].max(target);
+                    s795_line0_target = s795_line0_target.max(target);
                 }
             }
         }
@@ -2618,7 +2858,7 @@ impl<'a> ParagraphLayouter<'a> {
                         .filter(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
                         .map(|f| {
                             let fs = f.style.font_size.unwrap_or(para_font_size);
-                            let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                            let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                             m.win_ascent * fs
                         })
                         .fold(0.0f32, f32::max);
@@ -2793,7 +3033,7 @@ impl<'a> ParagraphLayouter<'a> {
                         || (page.doc_grid_no_type
                             && !self.doc_body_has_real_cjk
                             && std::env::var("OXI_S949_DISABLE").is_err());
-                    let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s949_ascii);
+                    let m = &*self.metrics_for_para_mark_g(&rpr_ref, &para.style, s949_ascii);
                     ma = m.word_ascent_pt(font_size);
                     md = m.word_descent_pt(font_size);
                 } else {
@@ -2807,7 +3047,7 @@ impl<'a> ParagraphLayouter<'a> {
                             continue;
                         }
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
-                        let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                        let m = &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         let border_pad = LayoutEngine::run_border_height_pad(&frag.style);
                         ma = ma.max(m.word_ascent_pt(fs) + border_pad);
                         md = md.max(m.word_descent_pt(fs) + border_pad);
@@ -2828,7 +3068,7 @@ impl<'a> ParagraphLayouter<'a> {
                             .map(|(_, f)| f)
                         {
                             let fs = frag.style.font_size.unwrap_or(para_font_size);
-                            let latin_m = self.metrics_for(&frag.style, &para.style);
+                            let latin_m = &*self.metrics_for(&frag.style, &para.style);
                             if latin_m.is_cjk_83_64_font() {
                                 let la = latin_m.word_ascent_pt(fs);
                                 let ld = latin_m.word_descent_pt(fs);
@@ -2884,7 +3124,7 @@ impl<'a> ParagraphLayouter<'a> {
                         let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                         // S707: this is the no_grid block (grid_pitch.is_none()); the
                         // empty-para line height is governed by the ASCII font.
-                        let m = self.metrics_for_para_mark_g(
+                        let m = &*self.metrics_for_para_mark_g(
                             &rpr_ref,
                             &para.style,
                             grid_pitch.is_none(),
@@ -2939,7 +3179,7 @@ impl<'a> ParagraphLayouter<'a> {
                         && first_line
                             .fragments
                             .iter()
-                            .all(|f| f.text.chars().all(|c| c.is_whitespace() && c != '\u{00a0}'))
+                            .all(|f| LayoutEngine::mark_spacing_only_text(&f.text))
                         && (!self.doc_body_has_real_cjk
                             || (first_line.whitespace_paragraph
                                 && std::env::var("OXI_CJK_WHITESPACE_MARK").is_ok()))
@@ -2965,7 +3205,7 @@ impl<'a> ParagraphLayouter<'a> {
                                 para_font_size
                             });
                         let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, true);
+                        let m = &*self.metrics_for_para_mark_g(&rpr_ref, &para.style, true);
                         if !m.is_cjk_83_64_font() {
                             s805_hhea_max = m.natural_line_height_hhea(font_size);
                         }
@@ -2981,7 +3221,7 @@ impl<'a> ParagraphLayouter<'a> {
                             continue;
                         }
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
-                        let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                        let m = &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         // S1119: pick the per-CHAR face FIRST. The fallback face
                         // REPLACES the run font for the chars it covers and can be
                         // SHORTER (Calibri black-square: Word 20.438 = Courier New,
@@ -2992,16 +3232,16 @@ impl<'a> ParagraphLayouter<'a> {
                         let s1119_on = !self.doc_body_has_real_cjk
                             && std::env::var("OXI_S1119_DISABLE").is_err()
                             && !frag.text.is_empty();
-                        let s1119_faces: Option<Vec<&crate::font::FontMetrics>> = if s1119_on
+                        let s1119_faces: Option<Vec<crate::font::FontMetricsRef<'_>>> = if s1119_on
                             && frag
                                 .text
                                 .chars()
-                                .any(|c| self.registry.symbol_fallback_face(c, m).is_some())
+                                .any(|c| self.registry.symbol_fallback_face(c, &m).is_some())
                         {
                             Some(
                                 frag.text
                                     .chars()
-                                    .map(|c| self.registry.symbol_fallback_face(c, m).unwrap_or(m))
+                                    .map(|c| self.registry.symbol_fallback_face(c, &m).unwrap_or_else(|| m.into()))
                                     .collect(),
                             )
                         } else {
@@ -3099,7 +3339,7 @@ impl<'a> ParagraphLayouter<'a> {
                     if has_latin {
                         if let Some(frag) = first_line.fragments.first() {
                             let fs = frag.style.font_size.unwrap_or(para_font_size);
-                            let latin_m = self.metrics_for(&frag.style, &para.style);
+                            let latin_m = &*self.metrics_for(&frag.style, &para.style);
                             if latin_m.is_cjk_83_64_font() {
                                 let h = latin_m.word_line_height_no_grid(fs);
                                 if h > no_grid_max {
@@ -3191,7 +3431,7 @@ impl<'a> ParagraphLayouter<'a> {
                     let mut md: f32 = 0.0;
                     for frag in &lines[0].fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
-                        let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                        let m = &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         if m.word_ascent_pt(fs) > ma {
                             ma = m.word_ascent_pt(fs);
                         }
@@ -3485,7 +3725,11 @@ impl<'a> ParagraphLayouter<'a> {
         // splice the remaining lines at a float-band exit (byte-identical
         // when no rebreak fires — same order, same borrows).
         let mut line_idx = 0usize;
-        let mut s758_rebroken = s758_band.is_none() || !region_line_widths.is_empty();
+        // A region-aware plan already covers the entire remaining source,
+        // including the float-band exit and page/column transitions. Rebreaking
+        // it again changes the lines without rebuilding their cached geometry.
+        let mut s758_rebroken = s758_band.is_none() || !region_line_widths.is_empty()
+            || !word_fit_columns.is_empty();
         let s758_entry_pages = pages.len();
         while line_idx < lines.len() {
             if std::env::var("OXI_DBG_WF").is_ok() && !word_fit_floors.is_empty() {
@@ -3493,7 +3737,10 @@ impl<'a> ParagraphLayouter<'a> {
                     line_idx, cursor.cursor_y, pages.len(), s758_entry_pages, cur_col,
                     start_column, word_fit_floors.get(line_idx));
             }
-            if pages.len() == s758_entry_pages && cur_col == start_column {
+            let actual_flow_column=(pages.len()-s758_entry_pages)*num_columns.max(1)+cur_col;
+            if word_fit_columns.get(line_idx).copied().map_or(
+                pages.len()==s758_entry_pages && cur_col==start_column,
+                |column|column==actual_flow_column) {
                 if let Some(Some(bottom)) = word_fit_floors.get(line_idx) {
                     if cursor.cursor_y < *bottom { cursor.set(*bottom); }
                 }
@@ -3516,17 +3763,7 @@ impl<'a> ParagraphLayouter<'a> {
                         let rem: Vec<(String, RunStyle, Option<FieldType>, usize, usize)> = lines
                             [line_idx..]
                             .iter()
-                            .flat_map(|l| {
-                                l.fragments.iter().map(|f| {
-                                    (
-                                        f.text.clone(),
-                                        f.style.clone(),
-                                        f.field_type.clone(),
-                                        f.run_index,
-                                        f.char_offset,
-                                    )
-                                })
-                            })
+.flat_map(Line::source_fragments)
                             .collect();
                         let refs: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = rem
                             .iter()
@@ -3548,6 +3785,31 @@ impl<'a> ParagraphLayouter<'a> {
                             caps_active,
                             false,
                         );
+                        let (mut advance, mut natural, mut latin_fit, mut ink,
+                            text_only, _, leading) = line_boxes(&nl);
+                        // A paragraph's first source row also carries marker/group
+                        // contributions applied after the common text/object fold.
+                        // Keep those contributions if reflow starts at source row zero.
+                        if line_idx == 0 && !nl.is_empty() {
+                            advance[0] = advance[0].max(line_heights[0]);
+                            natural[0] = natural[0].max(natural_line_heights[0]);
+                            ink[0] = ink[0].max(ink_line_heights[0]);
+                            if !latin_fit.is_empty() {
+                                latin_fit[0] = latin_fit[0].max(s779_win_heights[0]);
+                            }
+                        }
+                        line_heights.truncate(line_idx);
+                        line_heights.extend(advance);
+                        natural_line_heights.truncate(line_idx);
+                        natural_line_heights.extend(natural);
+                        s779_win_heights.truncate(line_idx);
+                        s779_win_heights.extend(latin_fit);
+                        ink_line_heights.truncate(line_idx);
+                        ink_line_heights.extend(ink);
+                        text_only_line_heights.truncate(line_idx);
+                        text_only_line_heights.extend(text_only);
+                        story_image_leading.truncate(line_idx);
+                        story_image_leading.extend(leading);
                         lines.truncate(line_idx);
                         lines.extend(nl);
                         if line_idx >= lines.len() {
@@ -3584,6 +3846,16 @@ impl<'a> ParagraphLayouter<'a> {
                         }
                     } else if cursor.cursor_y + line_height > bt + 0.01 && cursor.cursor_y < bb {
                         cursor.set(bb);
+                    }
+                }
+            }
+            // Full-width text frame below the anchor (see TEXT_FRAME_EXCLUSION).
+            if body_para_index.is_some() && pages.len() == s758_entry_pages {
+                if let (Some((pg, top, bottom)), Some((_, cur))) =
+                    (TEXT_FRAME_EXCLUSION.with(|c| c.get()), body_wrap_bands)
+                {
+                    if pg == cur && cursor.cursor_y + line_height > top + 0.01 && cursor.cursor_y < bottom {
+                        cursor.set(bottom);
                     }
                 }
             }
@@ -4090,7 +4362,24 @@ impl<'a> ParagraphLayouter<'a> {
                     else if s_tgfull { "s_tgfull" }
                     else if s651_multicell_head { "s651" }
                     else { "footer_tight" };
-                effective_lh
+                if footer_tight
+                    && !s548b_exact_full
+                    && !s603_typed_fullbox
+                    && !s605_line0_2
+                    && !s_tgfull
+                    && !s651_multicell_head
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && grid_pitch.is_some_and(|pitch| pitch > 0.0)
+                    && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                {
+                    // A grid line places half of its added leading below the
+                    // natural line box, including above an occupied footer.
+                    centered_box_is_threshold = true;
+                    effective_lh.min((effective_lh + natural_lh) / 2.0)
+                } else {
+                    effective_lh
+                }
             } else {
                 // S688 PROBE/SCAFFOLD (2026-06-28, default 0 = byte-identical, opt-in
                 // OXI_TGINK_K=<pt>): the typed-grid page-bottom break threshold (= natural_lh,
@@ -4484,7 +4773,28 @@ impl<'a> ParagraphLayouter<'a> {
                         _ => None,
                     }))
                     .is_some_and(|p| p.style.line_spacing_rule.as_deref() == Some("exact"));
+            // A typed line grid allocates complete body slots above notes.
+            // Its capacity is independent of the ink's centered position or
+            // the body's exact/atLeast/auto rule. Natural leading relief does
+            // not apply to this slot boundary.
+            let typed_grid_fn_boundary = s835_boundary_is_fn
+                && grid_pitch.is_some() && !page.doc_grid_no_type;
+            // Word's modern compatibility mode reserves the complete advance
+            // of a body paragraph following an already committed note area.
+            // Modes 12 and 14 retain the natural leading: a fresh 24-arm
+            // Word comparison changes only compatibility mode and grid presence.
+            // Reference-bearing paragraphs retain their own marker/box rule.
+            let modern_committed_note_slot = s835_boundary_is_fn
+                && fn_boundary.automatic_numbering
+                && para_fn_heights.is_empty()
+                && self.compat_mode >= 15 && self.compat_mode_explicit
+                && !self.doc_body_has_real_cjk
+                && std::env::var_os("OXI_MODERN_FN_CAPACITY_DISABLE").is_none();
             let s835_fn_relief = if s835_boundary_is_fn
+                && !modern_committed_note_slot
+                // Untyped stories retain their natural last-line leading.
+                // Typed grids allocate complete slots independently of ink.
+                && !typed_grid_fn_boundary
                 && !exact_fn_separator
                 && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S835_DISABLE").is_err()
@@ -4537,7 +4847,14 @@ impl<'a> ParagraphLayouter<'a> {
                 && lines[line_idx].fragments.iter().any(|fragment| {
                     fragment.text.chars().any(kinsoku::is_cjk_ideograph_or_kana)
                 });
-            let s967_tol = if std::env::var("OXI_S967_DISABLE").is_ok()
+            // Exact twip inputs still accumulate binary f32 subtraction noise.
+            // Absorb only a couple of coordinate ULPs, not a physical half-twip
+            // allowance: the measured automatic separator differs from an
+            // exact separator by much less than one twip and must still break.
+            let fn_coordinate_roundoff = 2.0 * f32::EPSILON * effective_break_bottom.abs();
+            let s967_tol = if typed_grid_fn_boundary {
+                fn_coordinate_roundoff
+            } else if std::env::var("OXI_S967_DISABLE").is_ok()
                 || cjk_exact_fit
                 || automatic_exact_fit
                 || multiple_exact_fit
@@ -4552,10 +4869,19 @@ impl<'a> ParagraphLayouter<'a> {
             // text box. Apply the same height and reservation to look-ahead.
             let footnote_fit_height = |idx: usize, threshold: f32| -> f32 {
                 let above_notes = committed_fn_delta_at_line.get(idx).copied().unwrap_or(0.0) > 0.0;
+                // Grid slots use the full advance. Without a typed grid,
+                // retain the natural last-line threshold, including its
+                // actual run metrics rather than imposing an extra body slot.
+                if (fn_boundary_active || above_notes)
+                    && (typed_grid_fn_boundary || modern_committed_note_slot) {
+                    return line_heights.get(idx).copied().unwrap_or(threshold);
+                }
                 if std::env::var("OXI_FOOTNOTE_REF_FIT_DISABLE").is_ok()
                     || !above_notes
                     || self.doc_body_has_real_cjk
-                    || page.grid_line_pitch.is_some()
+                    // A linePitch without a grid type is an untyped story:
+                    // use the natural font box and note reservation, as for noGrid.
+                    || (page.grid_line_pitch.is_some() && !page.doc_grid_no_type)
                 {
                     return threshold;
                 }
@@ -4566,12 +4892,18 @@ impl<'a> ParagraphLayouter<'a> {
                 let hhea = s779_win_heights.get(idx).copied().unwrap_or(threshold);
                 (hhea * factor).max(threshold)
             };
-            let break_threshold = footnote_fit_height(line_idx, break_threshold);
+            let break_threshold = if typed_grid_fn_boundary {
+                effective_lh
+            } else {
+                footnote_fit_height(line_idx, break_threshold)
+            };
             let footnote_fit_bottom = |idx: usize| -> f32 {
                 let bottom = page_top + content_height;
                 if std::env::var("OXI_FOOTNOTE_REF_FIT_DISABLE").is_ok()
                     || self.doc_body_has_real_cjk
-                    || page.grid_line_pitch.is_some()
+                    // A linePitch without a grid type is an untyped story:
+                    // use the natural font box and note reservation, as for noGrid.
+                    || (page.grid_line_pitch.is_some() && !page.doc_grid_no_type)
                 {
                     return bottom;
                 }
@@ -4628,7 +4960,11 @@ impl<'a> ParagraphLayouter<'a> {
                 && current_elements.is_empty()
                 && (cursor.cursor_y - page_top).abs() < 0.025
                 && effective_lh > effective_break_bottom - page_top + 0.025;
-            let mut natural_needs_page_break = if in_textbox || s832_trailing_empty || oversized_first_line {
+            // A source boundary without line content ends the current flow
+            // region. It does not first need room for an empty painted row.
+            let empty_hard_control=line.fragments.iter().all(|fragment|fragment.text.is_empty())
+                && matches!(line.break_type,LineBreakType::PageBreak|LineBreakType::ColumnBreak);
+            let mut natural_needs_page_break = if in_textbox || s832_trailing_empty || oversized_first_line || empty_hard_control {
                 false
             } else {
                 cursor.cursor_y + break_threshold + s1248_after - s835_fn_relief
@@ -5229,7 +5565,12 @@ impl<'a> ParagraphLayouter<'a> {
             };
             let mut widow_fit_offset = 0.0;
             let mut widow_fit_limit = page_top + content_height;
-            let widow_orphan_break = if !in_textbox && widow_effective && lines.len() >= 2 {
+            // The current row's explicit boundary already chooses where its
+            // continuation goes. Widow/orphan look-ahead must not pair that
+            // row with text in the next explicit flow region. An empty boundary
+            // itself cannot become a printed orphan.
+            let widow_orphan_break = if !in_textbox && widow_effective && lines.len() >= 2
+                && !matches!(line.break_type,LineBreakType::PageBreak|LineBreakType::ColumnBreak) {
                 if line_idx == 0 && !needs_page_break {
                     // Orphan: check if the next line would overflow — that would leave
                     // only 1 line on this page. Push entire paragraph to next page.
@@ -5282,7 +5623,9 @@ impl<'a> ParagraphLayouter<'a> {
                     // whole-move an otherwise splittable paragraph (legal
                     // wp102: +0.012pt). Half a twip is the round-to-nearest
                     // tolerance; larger physical overflows still push.
-                    let orphan_rounding_tolerance = if std::env::var("OXI_S926_DISABLE").is_err() && !automatic_exact_fit {
+                    let orphan_rounding_tolerance = if typed_grid_fn_boundary {
+                        fn_coordinate_roundoff
+                    } else if std::env::var("OXI_S926_DISABLE").is_err() && !automatic_exact_fit {
                         0.025
                     } else {
                         0.0
@@ -5291,7 +5634,14 @@ impl<'a> ParagraphLayouter<'a> {
                     widow_fit_limit = footnote_fit_bottom(1) + orphan_rounding_tolerance;
                     cursor.cursor_y + widow_fit_offset > widow_fit_limit
                         && !current_elements.is_empty()
-                } else if line_idx == lines.len() - 2 && !needs_page_break {
+                } else if (line_idx == lines.len() - 2
+                    // A column control closes this paragraph fragment. Its
+                    // last printed row is protected from becoming a widow
+                    // even when the paragraph continues after the control.
+                    || lines.get(line_idx+1).is_some_and(|next|
+                        matches!(next.break_type,LineBreakType::PageBreak|LineBreakType::ColumnBreak)
+                        && next.fragments.iter().any(|fragment|!fragment.text.trim().is_empty())))
+                    && !needs_page_break {
                     // Widow: if the last line would overflow to the next page alone,
                     // break BEFORE this line so at least 2 lines go to the next page.
                     // next line (line_idx+1) is the paragraph's LAST line → S608.
@@ -5309,7 +5659,19 @@ impl<'a> ParagraphLayouter<'a> {
                             l.fragments.iter().all(|f| f.text.trim().is_empty())
                         }) && !self.doc_body_has_real_cjk
                             && std::env::var("OXI_S891_DISABLE").is_err();
-                    if s891_next_is_trailing_br_empty {
+                    // When a three-row paragraph cannot fit even an empty
+                    // page, both endpoint constraints cannot be satisfied. The
+                    // first two printed rows stay together; moving the second
+                    // row would create an orphan or repeatedly move the whole
+                    // oversized paragraph. Word's exact-height controls retain
+                    // the first pair and let the final row continue separately.
+                    let first_pair_has_priority=lines.len()==3 && line_idx==1
+                        && !elements.is_empty()
+                        && lines.iter().all(|row|!matches!(row.break_type,
+                            LineBreakType::PageBreak|LineBreakType::ColumnBreak))
+                        && line_heights.iter().take(2).sum::<f32>()+last_line_fit_h(2)
+                            > footnote_fit_bottom(2)-page_top;
+                    if s891_next_is_trailing_br_empty || first_pair_has_priority {
                         false
                     } else {
                         let next_h = footnote_fit_height(
@@ -5320,7 +5682,8 @@ impl<'a> ParagraphLayouter<'a> {
                         // and kept here, and the paragraph splits 2+1 where
                         // widowControl forbids any split at all.
                         widow_fit_offset = line_height + next_h + s1248_next_after - s835_fn_relief;
-                        widow_fit_limit = footnote_fit_bottom(line_idx + 1);
+                        widow_fit_limit = footnote_fit_bottom(line_idx + 1)
+                            + if typed_grid_fn_boundary { fn_coordinate_roundoff } else { 0.0 };
                         cursor.cursor_y + widow_fit_offset > widow_fit_limit
                     }
                 } else {
@@ -5503,8 +5866,15 @@ impl<'a> ParagraphLayouter<'a> {
                 // docs) so the JP corpus is byte-identical while this is verified; the
                 // bug is Phase-1-INVISIBLE (page index is correct, only the within-page
                 // y is wrong) so JP passed 87/87 despite it. See [[english_corpus_bug_mine]].
-                if !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S770_DISABLE").is_err()
+                // CJK documents too (proposal 2026-10-05): the stale-y line is
+                // NOT Phase-1-invisible -- the cursor restarts at page_top
+                // beneath it, so the page runs one line early. legal__0f631d
+                // p187/188: a 3-line widowControl paragraph with two free rows
+                // (widow arm at line 1, an orphan split, so a whole move); Word
+                // starts all three lines at the next page top (faithful slice
+                // widow3_free1 y 99 / next paragraph 138), Oxi kept line 1 at
+                // 669.88 and the next paragraph began at 125.19.
+                if std::env::var("OXI_S770_DISABLE").is_err()
                     && !elements.is_empty()
                 {
                     let min_y = elements.iter().map(|e| e.y).fold(f32::INFINITY, f32::min);
@@ -5874,8 +6244,10 @@ impl<'a> ParagraphLayouter<'a> {
             // S-TWOSEG: a two-segment row starts at the left strip's own x, not
             // at the paragraph indent, and jumps to the right strip mid-row (the
             // fragment loop below does the jump at `seg2_at`).
-            let line_x = match (s758_two_seg, line.seg2_at) {
-                (Some((seg1_x, _, _, _)), Some(_)) if !s758_rebroken => seg1_x + extra_indent,
+            let row_two_segments=word_fit_segments.get(line_idx).copied()
+                .unwrap_or(if !s758_rebroken {s758_two_seg} else {None});
+            let line_x = match (row_two_segments, line.seg2_at) {
+                (Some((seg1_x, _, _, _)), Some(_)) => seg1_x + extra_indent,
                 _ => start_x + indent_left + extra_indent + s758_line_shift,
             };
 
@@ -6144,7 +6516,7 @@ impl<'a> ParagraphLayouter<'a> {
                                     continue;
                                 }
                                 let fs = frag.style.font_size.unwrap_or(para_font_size);
-                                let fm = self.metrics_for(&frag.style, &para.style);
+                                let fm = &*self.metrics_for(&frag.style, &para.style);
                                 let char_w = self.registry.char_width_pt_with_fallback(ch, fs, fm);
                                 // Skip if fragment.width is already below fullwidth
                                 // (break_into_lines already applied yakumono compression
@@ -6231,7 +6603,7 @@ impl<'a> ParagraphLayouter<'a> {
                             let fm_cjk = self.metrics_for_cjk(&frag.style, &para.style);
                             let fm = fm_cjk
                                 .unwrap_or_else(|| self.metrics_for(&frag.style, &para.style));
-                            let natural = self.registry.char_width_pt_with_fallback(ch, fs, fm);
+                            let natural = self.registry.char_width_pt_with_fallback(ch, fs, &fm);
                             let current = frag.width + frag_width_adjustments[fi];
                             if current < natural * 0.95 {
                                 compressed.push((fi, natural, current));
@@ -6439,9 +6811,10 @@ impl<'a> ParagraphLayouter<'a> {
                 && !line.fragments.is_empty()
                 && line.fragments.iter().all(|f| {
                     !f.text.chars().any(|c| {
-                        kinsoku::is_cjk(c)
-                            && !(s762_quote_ok
-                                && matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}'))
+                        crate::font::is_complex_script(c)
+                            || (kinsoku::is_cjk(c)
+                                && !(s762_quote_ok
+                                    && matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')))
                     }) && f.tab_alignment.is_none()
                         && f.field_type.is_none()
                 });
@@ -6460,7 +6833,7 @@ impl<'a> ParagraphLayouter<'a> {
                     .enumerate()
                     .map(|(fi, f)| {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
-                        let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                         let tw: f32 = f.text.chars().map(|c| m.char_width_em(c) * fs).sum();
                         (f.width + frag_width_adjustments[fi], tw)
                     })
@@ -6498,6 +6871,40 @@ impl<'a> ParagraphLayouter<'a> {
                 in_textbox,
                 page.doc_grid_no_type,
             );
+            // The grid capacity and the painted baseline use separate boxes.
+            // Center the composed host/math placement box on this actual line;
+            // retain established placement for other stories and MATH-only runs.
+            let text_y_off = if !in_textbox && !is_header_footer
+                && !page.doc_grid_no_type && para.style.snap_to_grid
+                && grid_pitch.is_some_and(|pitch| pitch > 0.1)
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                && !line.fragments.iter().any(|f| f.style.inline_object_image.is_some()
+                    || f.style.hr_rule.is_some())
+            {
+                let math_box = line.fragments.iter().filter_map(|f| {
+                    f.style.inline_math.as_ref().and_then(|block|
+                        crate::layout::math::inline_math_baseline_extent(block,
+                            f.style.font_size.unwrap_or(para_font_size)))
+                }).fold(None, |boxes: Option<(f32, f32)>, (a, d)|
+                    Some(boxes.map_or((a, d), |(ba, bd)| (ba.max(a), bd.max(d)))));
+                if let Some((a, d)) = math_box {
+                    let host_box = line.fragments.iter().filter(|f|
+                        f.text != "\u{FFFC}" && f.style.inline_math.is_none())
+                        .map(|f| self.metrics_for_text(&f.text, &f.style, &para.style)
+                            .design_font_box_pt(f.style.font_size.unwrap_or(para_font_size), true))
+                        .fold((0.0_f32, 0.0_f32), |(a, d), (fa, fd)| (a.max(fa), d.max(fd)));
+                    // Use the same host run as inline-math emission, so both
+                    // host glyphs and the formula keep one shared baseline.
+                    if let Some(host) = line.fragments.iter()
+                        .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                    {
+                        let size = host.style.font_size.unwrap_or(para_font_size);
+                        let metrics = &*self.metrics_for_text(&host.text, &host.style, &para.style);
+                        (line_height + a.max(host_box.0) - d.max(host_box.1)) * 0.5
+                            - metrics.win_ascent * size + 1.0
+                    } else { text_y_off }
+                } else { text_y_off }
+            } else { text_y_off };
             let text_y_off = if header_exact_inline
                 && line.fragments.iter().any(|f| f.style.inline_object_image.is_some())
             {
@@ -6507,7 +6914,7 @@ impl<'a> ParagraphLayouter<'a> {
                     .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
                     .map(|f| {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
-                        let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                         0.8 * line_height - m.win_ascent * fs + 1.0
                     })
                     .unwrap_or(text_y_off)
@@ -6535,7 +6942,7 @@ impl<'a> ParagraphLayouter<'a> {
                     .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
                 {
                     let fs = f.style.font_size.unwrap_or(para_font_size);
-                    let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                    let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                     off = s837_fired_cy - m.win_ascent * fs + 1.0;
                 }
                 off
@@ -6692,7 +7099,7 @@ impl<'a> ParagraphLayouter<'a> {
                 let text_ascent = line.fragments.iter()
                     .filter(|f| f.style.inline_object_image.is_none() && !f.text.trim().is_empty())
                     .map(|f| {
-                        let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                         let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
                         (m.win_ascent + leading) * f.style.font_size.unwrap_or(para_font_size)
                     })
@@ -6796,8 +7203,8 @@ impl<'a> ParagraphLayouter<'a> {
             let mut run_bdr_acc: Option<(f32, f32, BorderDef)> = None;
 
             // S-TWOSEG: where this row crosses the float, and to what x.
-            let two_seg_jump: Option<(usize, f32)> = match (s758_two_seg, line.seg2_at) {
-                (Some((_, _, seg2_x, _)), Some(at)) if !s758_rebroken && at > 0 => {
+            let two_seg_jump: Option<(usize, f32)> = match (row_two_segments, line.seg2_at) {
+                (Some((_, _, seg2_x, _)), Some(at)) if at > 0 => {
                     Some((at, seg2_x))
                 }
                 _ => None,
@@ -6819,7 +7226,7 @@ impl<'a> ParagraphLayouter<'a> {
                 });
             let body_baseline = if mixed_auto_baseline {
                 Some(line.fragments.iter().filter(|f| !f.text.trim().is_empty()).map(|f| {
-                    let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                    let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                     let size = f.style.font_size.unwrap_or(para_font_size);
                     let ascent = if m.is_cjk_83_64_font() {
                         let natural = (m.win_ascent + m.win_descent) * (83.0 / 64.0);
@@ -6844,7 +7251,7 @@ impl<'a> ParagraphLayouter<'a> {
                 let (ascent, descent) = line.fragments.iter()
                     .filter(|f| !f.text.trim().is_empty())
                     .fold((0.0_f32, 0.0_f32), |(a, d), f| {
-                        let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                         let size = f.style.font_size.unwrap_or(para_font_size);
                         (a.max(m.win_ascent * size), d.max(m.win_descent * size))
                     });
@@ -6863,7 +7270,7 @@ impl<'a> ParagraphLayouter<'a> {
                 })
             {
                 Some(line.fragments.iter().filter(|f| !f.text.trim().is_empty()).map(|f| {
-                    let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                    let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
                     let size = f.style.font_size.unwrap_or(para_font_size);
                     (m.win_ascent + (m.win_ascent + m.win_descent) * (83.0 / 64.0 - 1.0) * 0.5) * size
                 }).fold(0.0_f32, f32::max))
@@ -6932,7 +7339,7 @@ impl<'a> ParagraphLayouter<'a> {
 
                 // Per-fragment baseline alignment: shift fragments with smaller ascent
                 // so all share the same baseline (y + frag_ascent = cursor_y + text_y_off + line_max_ascent)
-                let frag_metrics = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                let frag_metrics = &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
                 let frag_ascent = frag_metrics.word_ascent_pt(resolved_font_size);
                 // COM-confirmed (2026-04-14, gen2_001): Word does NOT apply
                 // per-fragment baseline adjustment for body text. All fragments share
@@ -7213,7 +7620,7 @@ impl<'a> ParagraphLayouter<'a> {
                             .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
                         {
                             let tfs = tf.style.font_size.unwrap_or(para_font_size);
-                            let m = self.metrics_for_text(&tf.text, &tf.style, &para.style);
+                            let m = &*self.metrics_for_text(&tf.text, &tf.style, &para.style);
                             emit_y + text_y_off - 1.0 + m.win_ascent * tfs
                         } else {
                             // The maths WRAPPED alone onto this line, so there is
@@ -7223,7 +7630,7 @@ impl<'a> ParagraphLayouter<'a> {
                             // with its baseline at 513.05 against the line's own
                             // trailing-space span at 513.41. Falling back to
                             // `emit_y + line_height` dropped it ~2.6pt.
-                            let m = self.metrics_for_text(" ", &frag.style, &para.style);
+                            let m = &*self.metrics_for_text(" ", &frag.style, &para.style);
                             emit_y + text_y_off - 1.0 + m.win_ascent * fs
                         };
                         let (mut math_elems, _) = crate::layout::math::emit_math_block(
@@ -7259,7 +7666,7 @@ impl<'a> ParagraphLayouter<'a> {
                             .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
                         {
                             let fs = tf.style.font_size.unwrap_or(para_font_size);
-                            let m = self.metrics_for_text(&tf.text, &tf.style, &para.style);
+                            let m = &*self.metrics_for_text(&tf.text, &tf.style, &para.style);
                             emit_y + text_y_off - 1.0 + m.win_ascent * fs
                         } else if is_header_footer {
                             // Additional auto leading belongs below an image-only
@@ -7362,7 +7769,7 @@ impl<'a> ParagraphLayouter<'a> {
                             .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
                         {
                             let fs = tf.style.font_size.unwrap_or(para_font_size);
-                            let m = self.metrics_for_text(&tf.text, &tf.style, &para.style);
+                            let m = &*self.metrics_for_text(&tf.text, &tf.style, &para.style);
                             emit_y + text_y_off - 1.0 + m.win_ascent * fs
                         } else {
                             emit_y + line_height
@@ -7604,7 +8011,7 @@ impl<'a> ParagraphLayouter<'a> {
                             let mut ruby_run_style = frag.style.clone();
                             ruby_run_style.font_size = Some(hps_pt);
                             let ruby_metrics =
-                                self.metrics_for_text(ruby_text, &ruby_run_style, &para.style);
+                                &*self.metrics_for_text(ruby_text, &ruby_run_style, &para.style);
                             // Round 7.6: precise per-char widths via GDI metrics.
                             // Replaces the previous `chars × font_size` CJK
                             // monospace approximation; matches non-CJK ruby
@@ -7621,7 +8028,7 @@ impl<'a> ParagraphLayouter<'a> {
                                 })
                                 .sum();
                             let base_metrics =
-                                self.metrics_for_text(run.text.as_str(), &frag.style, &para.style);
+                                &*self.metrics_for_text(run.text.as_str(), &frag.style, &para.style);
                             let base_w: f32 = run
                                 .text
                                 .chars()
@@ -7644,7 +8051,7 @@ impl<'a> ParagraphLayouter<'a> {
                                         Some(r) if gi == frag.run_index || s1628_same(r, ruby_ir) => {}
                                         _ => break,
                                     }
-                                    let gm = self.metrics_for_text(gr.text.as_str(), &gr.style, &para.style);
+                                    let gm = &*self.metrics_for_text(gr.text.as_str(), &gr.style, &para.style);
                                     let gfs = gr.style.font_size.unwrap_or(base_pt);
                                     let n = gr.text.chars().count() as f32;
                                     w += gr.text.chars()
@@ -7668,7 +8075,7 @@ impl<'a> ParagraphLayouter<'a> {
                             let ruby_x = base_el_x + ruby_x_offset;
                             let ruby_ascent = ruby_metrics.word_ascent_pt(hps_pt);
                             let frag_metrics =
-                                self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                                &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
                             let base_ascent = frag_metrics.word_ascent_pt(base_pt);
                             // S1632 (2026-10-02, default ON, opt-out OXI_S1632_DISABLE):
                             // the annotation's BASELINE sits exactly hpsRaise above the
@@ -7755,10 +8162,10 @@ impl<'a> ParagraphLayouter<'a> {
                             let base_pt = frag.style.font_size.unwrap_or(para_font_size);
                             let mark_pt = base_pt * 0.5;
                             let base_metrics =
-                                self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                                &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
                             let mark_str = mark.to_string();
                             let mark_metrics =
-                                self.metrics_for_text(&mark_str, &frag.style, &para.style);
+                                &*self.metrics_for_text(&mark_str, &frag.style, &para.style);
                             let mark_w = self.registry.char_width_pt_with_fallback(
                                 mark,
                                 mark_pt,
@@ -7944,6 +8351,42 @@ impl<'a> ParagraphLayouter<'a> {
                     // Session 72 Phase A: populate text_y_off (y still includes it).
                     el.text_y_off = text_y_off;
                     el.paragraph_index = Some(pi);
+                    // An empty boundary row has no painted glyphs, but its
+                    // real source control is still an editable caret position.
+                    // Preserve only the character present at that source offset;
+                    // ordinary empty paragraphs retain an empty source string.
+                    if let Some((run,offset,_))=&line.break_source {
+                        if let Some(control)=para.runs.get(*run)
+                            .and_then(|source|source.text.chars().nth(*offset)) {
+                            if matches!(control,'\x0C'|'\x0B') {
+                                el.run_index=Some(*run);
+                                el.char_offset=Some(*offset);
+                                let boundaries_before=para.runs[..*run].iter()
+                                    .flat_map(|source|source.text.chars())
+                                    .chain(para.runs[*run].text.chars().take(*offset))
+                                    .filter(|ch|matches!(ch,'\x0C'|'\x0B'|'\n'|'\r')).count();
+                                // Only an earlier source object makes this the
+                                // paragraph's content start. Leading controls
+                                // retain editable caret indices without becoming
+                                // an extra source-text paragraph opener.
+                                let earlier=page.floating_images.iter()
+                                    .filter(|object|object.anchor_block_index==pi)
+                                    .filter_map(|object|object.position.as_ref())
+                                    .chain(page.text_boxes.iter()
+                                        .filter(|object|object.anchor_block_index==pi)
+                                        .filter_map(|object|object.position.as_ref()))
+                                    .chain(para.shapes.iter().filter_map(|object|object.position.as_ref()))
+                                    .any(|position|position.flow_boundary_offset<=boundaries_before);
+                                let prior_text=para.runs[..*run].iter()
+                                    .flat_map(|source|source.text.chars())
+                                    .chain(para.runs[*run].text.chars().take(*offset))
+                                    .any(|ch|!ch.is_whitespace());
+                                // Preserve the source attachment without inventing
+                                // a glyph-source fragment for an unpainted control.
+                                el.source_boundary_attachment = earlier && !prior_text;
+                            }
+                        }
+                    }
                     elements.push(el);
                 }
             }
@@ -8694,9 +9137,8 @@ impl<'a> ParagraphLayouter<'a> {
 
         let space_after = if para.style.after_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
-            // S895: style-sourced autospacing applies in Latin docs only
-            // (empty paragraphs included — see space_before).
-            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
+            // The style-derived body after spacing follows the same rule as
+            // direct spacing regardless of unrelated CJK text, like before.
         {
             // S675 (2026-06-26): w:afterAutospacing → flat auto-space (see
             // space_before; S901: 14.0 Latin / 13.75 JP-calibrated).

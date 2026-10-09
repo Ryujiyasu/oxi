@@ -10,15 +10,22 @@
 use crate::ir::*;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use std::io::Write;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::io::Write;
 
 /// Build a PDF file from a `PdfDocument` and return the bytes.
 pub fn write_pdf(doc: &PdfDocument) -> Vec<u8> {
+    write_pdf_checked(doc).expect("Invalid explicit PDF glyph encoding")
+}
+
+pub fn write_pdf_checked(
+    doc: &PdfDocument,
+) -> Result<Vec<u8>, crate::glyph_encoding::GlyphEncodingError> {
+    let encodings = crate::glyph_encoding::font_encodings(doc)?;
     let mut writer = PdfWriter::new();
-    writer.build(doc);
-    writer.finish()
+    writer.build(doc, &encodings);
+    Ok(writer.finish())
 }
 
 struct PdfWriter {
@@ -56,7 +63,7 @@ impl PdfWriter {
         write!(self.buf, "endobj\n").unwrap();
     }
 
-    fn build(&mut self, doc: &PdfDocument) {
+    fn build(&mut self, doc: &PdfDocument, encodings: &crate::glyph_encoding::FontEncodings) {
         // Header
         write!(
             self.buf,
@@ -65,7 +72,8 @@ impl PdfWriter {
         )
         .unwrap();
         // Binary comment to indicate this PDF contains binary data.
-        self.buf.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
+        self.buf
+            .extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
 
         // Pre-allocate object numbers.
         let catalog_num = self.alloc_obj(); // 1
@@ -76,7 +84,7 @@ impl PdfWriter {
         let mut all_font_names: Vec<String> = Vec::new();
         for page in &doc.pages {
             for el in &page.contents {
-                if let ContentElement::Text(span) = el {
+                if let Some(span) = el.text_span() {
                     let name = escape_name(&span.font_name);
                     if !all_font_names.contains(&name) {
                         all_font_names.push(name);
@@ -114,11 +122,7 @@ impl PdfWriter {
 
         // Write catalog.
         self.begin_obj(catalog_num);
-        write!(
-            self.buf,
-            "<< /Type /Catalog /Pages {pages_num} 0 R >>\n"
-        )
-        .unwrap();
+        write!(self.buf, "<< /Type /Catalog /Pages {pages_num} 0 R >>\n").unwrap();
         self.end_obj();
 
         // Write pages tree.
@@ -150,57 +154,16 @@ impl PdfWriter {
         .unwrap();
         self.end_obj();
 
-        // Determine which fonts need CIDFont (have non-ASCII text).
-        // Track used CID values (either GIDs from embedded font, or Unicode codepoints as fallback).
-        let mut cid_font_chars: std::collections::HashMap<String, std::collections::BTreeSet<u16>> =
-            std::collections::HashMap::new();
-        // For ToUnicode: CID → Unicode mapping (needed when CID ≠ Unicode, i.e. when using GID mapping)
-        let mut cid_to_unicode: std::collections::HashMap<String, std::collections::HashMap<u16, u16>> =
-            std::collections::HashMap::new();
-        for page in &doc.pages {
-            for el in &page.contents {
-                if let ContentElement::Text(span) = el {
-                    let name = escape_name(&span.font_name);
-                    // Check for embedded font with GID mapping
-                    let gid_map = doc.embedded_fonts.get(&span.font_name)
-                        .or_else(|| {
-                            doc.embedded_fonts.iter()
-                                .find(|(k, _)| escape_name(k) == name)
-                                .map(|(_, v)| v)
-                        });
-                    // Exactly the faces we hold font data for go out as
-                    // composite fonts, whatever their text says.
-                    //
-                    // Two rules used to be wrong here at once. Requiring a
-                    // non-ASCII character meant a pure-ASCII English run never
-                    // got its own font embedded — it went out as a bare /Type1
-                    // with no file and no /Widths, and the viewer chose both the
-                    // outlines and the advances. Accepting one meant a face with
-                    // no data still went out as /Identity-H, whose content
-                    // stream is raw glyph numbers with no font in the file to
-                    // interpret them: worse than a substituted /Type1, which at
-                    // least names something the viewer can look up.
-                    if gid_map.is_some() {
-                        let entry = cid_font_chars.entry(name.clone()).or_default();
-                        if let Some(ef) = gid_map {
-                            if !ef.unicode_to_gid.is_empty() {
-                                let tounicode = cid_to_unicode.entry(name).or_default();
-                                for ch in span.text.chars() {
-                                    let unicode = ch as u32;
-                                    let gid = ef.unicode_to_gid.get(&unicode).copied().unwrap_or(0);
-                                    entry.insert(gid);
-                                    tounicode.insert(gid, unicode as u16);
-                                }
-                                continue;
-                            }
-                        }
-                        for ch in span.text.chars() {
-                            entry.insert(ch as u16);
-                        }
-                    }
-                }
-            }
-        }
+        let cid_font_chars: std::collections::HashMap<String, std::collections::BTreeSet<u16>> =
+            encodings
+                .iter()
+                .map(|(name, e)| (name.clone(), e.cid_to_gid.keys().copied().collect()))
+                .collect();
+        let cid_to_unicode: std::collections::HashMap<String, std::collections::HashMap<u16, u32>> =
+            encodings
+                .iter()
+                .map(|(name, e)| (name.clone(), e.cid_to_unicode.clone()))
+                .collect();
 
         // Write font objects.
         for (name, obj_num) in &font_objs {
@@ -212,22 +175,21 @@ impl PdfWriter {
 
                 // Check for embedded font data.
                 // Look up by escaped name, then try original font names from spans.
-                let embedded = doc.embedded_fonts.get(name)
-                    .or_else(|| {
-                        // Try looking up by unescaped name
-                        for page in &doc.pages {
-                            for el in &page.contents {
-                                if let ContentElement::Text(span) = el {
-                                    if escape_name(&span.font_name) == *name {
-                                        if let Some(ef) = doc.embedded_fonts.get(&span.font_name) {
-                                            return Some(ef);
-                                        }
+                let embedded = doc.embedded_fonts.get(name).or_else(|| {
+                    // Try looking up by unescaped name
+                    for page in &doc.pages {
+                        for el in &page.contents {
+                            if let Some(span) = el.text_span() {
+                                if escape_name(&span.font_name) == *name {
+                                    if let Some(ef) = doc.embedded_fonts.get(&span.font_name) {
+                                        return Some(ef);
                                     }
                                 }
                             }
                         }
-                        None
-                    });
+                    }
+                    None
+                });
 
                 let font_file_num = if embedded.is_some() {
                     Some(self.alloc_obj())
@@ -235,9 +197,17 @@ impl PdfWriter {
                     None
                 };
                 // CIDToGIDMap only for TrueType-based CIDFonts (not CFF)
-                let cid_to_gid_num: Option<u32> = None;
+                let cid_to_gid_num = if embedded.map_or(false, |e| e.format == FontFormat::TrueType)
+                {
+                    Some(self.alloc_obj())
+                } else {
+                    None
+                };
 
-                let cid_subtype = if embedded.as_ref().map_or(false, |e| e.format == FontFormat::OpenTypeCff) {
+                let cid_subtype = if embedded
+                    .as_ref()
+                    .map_or(false, |e| e.format == FontFormat::OpenTypeCff)
+                {
                     "CIDFontType0"
                 } else {
                     "CIDFontType2"
@@ -245,7 +215,8 @@ impl PdfWriter {
 
                 // Type0 font dictionary
                 // Use PostScript name for BaseFont if available
-                let base_font_name = embedded.as_ref()
+                let base_font_name = embedded
+                    .as_ref()
                     .and_then(|e| e.ps_name.as_deref())
                     .map(|ps| escape_name(ps))
                     .unwrap_or_else(|| name.clone());
@@ -276,9 +247,12 @@ impl PdfWriter {
                 if let Some(ef) = &embedded {
                     if !ef.cid_widths.is_empty() {
                         // Collect CIDs that are actually used and have non-default widths
-                        let mut width_entries: Vec<(u16, u16)> = used_chars.iter()
+                        let mut width_entries: Vec<(u16, u16)> = used_chars
+                            .iter()
                             .filter_map(|cid| {
-                                ef.cid_widths.get(cid).map(|w| (*cid, *w))
+                                ef.cid_widths
+                                    .get(&encodings[name].cid_to_gid[cid])
+                                    .map(|w| (*cid, *w))
                             })
                             .filter(|(_, w)| *w != 1000) // Skip default-width glyphs
                             .collect();
@@ -359,8 +333,10 @@ impl PdfWriter {
                             write!(
                                 self.buf,
                                 "<< /Length {} /Length1 {} /Filter /FlateDecode >>\nstream\n",
-                                compressed.len(), ef.data.len()
-                            ).unwrap();
+                                compressed.len(),
+                                ef.data.len()
+                            )
+                            .unwrap();
                         }
                     }
                     self.buf.extend_from_slice(&compressed);
@@ -368,7 +344,19 @@ impl PdfWriter {
                     self.end_obj();
                 }
 
-                // CIDToGIDMap (reserved for future TrueType CIDFont support)
+                if let Some(gid_num) = cid_to_gid_num {
+                    let data = compress(&encodings[name].gid_stream());
+                    self.begin_obj(gid_num);
+                    write!(
+                        self.buf,
+                        "<< /Length {} /Filter /FlateDecode >>\nstream\n",
+                        data.len()
+                    )
+                    .unwrap();
+                    self.buf.extend_from_slice(&data);
+                    write!(self.buf, "\nendstream\n").unwrap();
+                    self.end_obj();
+                }
 
                 // ToUnicode CMap stream
                 // If we have a CID→Unicode mapping (from embedded font), use that;
@@ -437,7 +425,8 @@ impl PdfWriter {
             let (page_num, stream_num) = page_objs[i];
 
             // Build content stream data (with image references).
-            let content_data = build_content_stream_with_images(page, &page_images[i], &cid_font_chars, &doc.embedded_fonts);
+            let content_data =
+                build_content_stream_with_images(page, &page_images[i], &cid_font_chars, encodings);
             let compressed = compress(&content_data);
 
             // Write content stream object.
@@ -523,14 +512,15 @@ fn build_content_stream_with_images(
     page: &Page,
     images: &[(usize, u32)],
     cid_fonts: &std::collections::HashMap<String, std::collections::BTreeSet<u16>>,
-    embedded_fonts: &std::collections::HashMap<String, EmbeddedFont>,
+    encodings: &crate::glyph_encoding::FontEncodings,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut img_counter = 0usize;
 
     for (idx, element) in page.contents.iter().enumerate() {
         match element {
-            ContentElement::Text(span) => {
+            ContentElement::Text(_) | ContentElement::GlyphRun(_) => {
+                let span = element.text_span().unwrap();
                 let font_key = escape_name(&span.font_name);
                 write_color_op(&mut buf, &span.fill_color, false);
                 write!(buf, "BT\n").unwrap();
@@ -541,23 +531,12 @@ fn build_content_stream_with_images(
                 let pdf_y = page.height - span.y;
                 write!(buf, "{} {} Td\n", span.x, pdf_y).unwrap();
                 if cid_fonts.contains_key(&font_key) {
-                    // Look for embedded font with glyph ID mapping
-                    let gid_map = embedded_fonts.get(&span.font_name)
-                        .or_else(|| {
-                            embedded_fonts.iter()
-                                .find(|(k, _)| escape_name(k) == font_key)
-                                .map(|(_, v)| v)
-                        });
-                    if let Some(ef) = gid_map {
-                        if !ef.unicode_to_gid.is_empty() {
-                            // Encode using glyph IDs from font's cmap
-                            write!(buf, "<{}> Tj\n", encode_with_gid_map(&span.text, &ef.unicode_to_gid)).unwrap();
-                        } else {
-                            write!(buf, "<{}> Tj\n", encode_utf16be_hex(&span.text)).unwrap();
-                        }
-                    } else {
-                        write!(buf, "<{}> Tj\n", encode_utf16be_hex(&span.text)).unwrap();
-                    }
+                    write!(
+                        buf,
+                        "<{}> Tj\n",
+                        encodings[&font_key].encode(span, element.glyph_indices())
+                    )
+                    .unwrap();
                 } else {
                     write!(buf, "({}) Tj\n", escape_pdf_string(&span.text)).unwrap();
                 }
@@ -690,15 +669,27 @@ fn escape_pdf_string(s: &str) -> String {
     out
 }
 
-fn escape_name(s: &str) -> String {
+pub(crate) fn escape_name(s: &str) -> String {
     // PDF name escaping: strip leading '/', encode special chars with #XX.
     let s = s.strip_prefix('/').unwrap_or(s);
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
             // Characters that must be escaped in PDF name objects
-            b' ' | b'#' | b'(' | b')' | b'<' | b'>' | b'[' | b']'
-            | b'{' | b'}' | b'/' | b'%' | 0..=0x20 | 0x7F..=0xFF => {
+            b' '
+            | b'#'
+            | b'('
+            | b')'
+            | b'<'
+            | b'>'
+            | b'['
+            | b']'
+            | b'{'
+            | b'}'
+            | b'/'
+            | b'%'
+            | 0..=0x20
+            | 0x7F..=0xFF => {
                 out.push_str(&format!("#{:02X}", b));
             }
             _ => out.push(b as char),
@@ -714,8 +705,11 @@ fn build_tounicode_cmap(used_chars: &std::collections::BTreeSet<u16>) -> Vec<u8>
     write!(buf, "/CIDInit /ProcSet findresource begin\n").unwrap();
     write!(buf, "12 dict begin\n").unwrap();
     write!(buf, "begincmap\n").unwrap();
-    write!(buf, "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n")
-        .unwrap();
+    write!(
+        buf,
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+    )
+    .unwrap();
     write!(buf, "/CMapName /Adobe-Identity-UCS def\n").unwrap();
     write!(buf, "/CMapType 2 def\n").unwrap();
     write!(buf, "1 begincodespacerange\n").unwrap();
@@ -748,39 +742,37 @@ fn encode_utf16be_hex(s: &str) -> String {
     hex
 }
 
-/// Encode a string using glyph IDs from font's cmap table.
-/// Each character is mapped to its GID; unmapped chars map to GID 0 (.notdef).
-fn encode_with_gid_map(s: &str, unicode_to_gid: &std::collections::HashMap<u32, u16>) -> String {
-    let mut hex = String::new();
-    for ch in s.chars() {
-        let gid = unicode_to_gid.get(&(ch as u32)).copied().unwrap_or(0);
-        use std::fmt::Write;
-        write!(hex, "{:04X}", gid).unwrap();
-    }
-    hex
-}
-
 /// Build a ToUnicode CMap from an explicit CID→Unicode mapping.
 /// Used when CIDs are glyph IDs (not Unicode codepoints).
-fn build_tounicode_cmap_from_map(map: &std::collections::HashMap<u16, u16>) -> Vec<u8> {
+fn build_tounicode_cmap_from_map(map: &std::collections::HashMap<u16, u32>) -> Vec<u8> {
     let mut buf = Vec::new();
     write!(buf, "/CIDInit /ProcSet findresource begin\n").unwrap();
     write!(buf, "12 dict begin\n").unwrap();
     write!(buf, "begincmap\n").unwrap();
-    write!(buf, "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n")
-        .unwrap();
+    write!(
+        buf,
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+    )
+    .unwrap();
     write!(buf, "/CMapName /Adobe-Identity-UCS def\n").unwrap();
     write!(buf, "/CMapType 2 def\n").unwrap();
     write!(buf, "1 begincodespacerange\n").unwrap();
     write!(buf, "<0000> <FFFF>\n").unwrap();
     write!(buf, "endcodespacerange\n").unwrap();
 
-    let mut entries: Vec<(u16, u16)> = map.iter().map(|(&k, &v)| (k, v)).collect();
+    let mut entries: Vec<(u16, u32)> = map.iter().map(|(&k, &v)| (k, v)).collect();
     entries.sort();
     for chunk in entries.chunks(100) {
         write!(buf, "{} beginbfchar\n", chunk.len()).unwrap();
         for &(cid, unicode) in chunk {
-            write!(buf, "<{:04X}> <{:04X}>\n", cid, unicode).unwrap();
+            let ch = char::from_u32(unicode).expect("Unicode scalar from source text");
+            write!(
+                buf,
+                "<{:04X}> <{}>\n",
+                cid,
+                encode_utf16be_hex(&ch.to_string())
+            )
+            .unwrap();
         }
         write!(buf, "endbfchar\n").unwrap();
     }
@@ -825,7 +817,8 @@ mod tests {
                     text: "Hello, PDF!".into(),
                     font_name: "F1".into(),
                     font_size: 12.0,
-                    fill_color: Color::Gray(0.0), character_spacing: 0.0,
+                    fill_color: Color::Gray(0.0),
+                    character_spacing: 0.0,
                 })],
                 rotation: 0,
             }],
@@ -925,7 +918,12 @@ mod tests {
                 Page {
                     width: 612.0,
                     height: 792.0,
-                    media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                    media_box: Rectangle {
+                        llx: 0.0,
+                        lly: 0.0,
+                        urx: 612.0,
+                        ury: 792.0,
+                    },
                     crop_box: None,
                     contents: vec![],
                     rotation: 0,
@@ -933,7 +931,12 @@ mod tests {
                 Page {
                     width: 595.0,
                     height: 842.0,
-                    media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 595.0, ury: 842.0 },
+                    media_box: Rectangle {
+                        llx: 0.0,
+                        lly: 0.0,
+                        urx: 595.0,
+                        ury: 842.0,
+                    },
                     crop_box: None,
                     contents: vec![],
                     rotation: 0,
@@ -961,7 +964,12 @@ mod tests {
             pages: vec![Page {
                 width: 612.0,
                 height: 792.0,
-                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                media_box: Rectangle {
+                    llx: 0.0,
+                    lly: 0.0,
+                    urx: 612.0,
+                    ury: 792.0,
+                },
                 crop_box: None,
                 contents: vec![ContentElement::Image(ImageData {
                     x: 100.0,
@@ -1002,7 +1010,12 @@ mod tests {
             pages: vec![Page {
                 width: 595.0,
                 height: 842.0,
-                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 595.0, ury: 842.0 },
+                media_box: Rectangle {
+                    llx: 0.0,
+                    lly: 0.0,
+                    urx: 595.0,
+                    ury: 842.0,
+                },
                 crop_box: None,
                 contents: vec![ContentElement::Text(TextSpan {
                     x: 72.0,
@@ -1010,7 +1023,8 @@ mod tests {
                     text: "こんにちは世界".into(),
                     font_name: "MSGothic".into(),
                     font_size: 12.0,
-                    fill_color: Color::Gray(0.0), character_spacing: 0.0,
+                    fill_color: Color::Gray(0.0),
+                    character_spacing: 0.0,
                 })],
                 rotation: 0,
             }],
@@ -1044,9 +1058,18 @@ mod tests {
         let s = String::from_utf8_lossy(&bytes);
         // Should use Type0/CIDFont, not Type1
         assert!(s.contains("/Subtype /Type0"), "expected Type0 font");
-        assert!(s.contains("/FontFile2"), "a composite font must carry its program");
-        assert!(s.contains("/Encoding /Identity-H"), "expected Identity-H encoding");
-        assert!(s.contains("/Subtype /CIDFontType2"), "expected CIDFontType2");
+        assert!(
+            s.contains("/FontFile2"),
+            "a composite font must carry its program"
+        );
+        assert!(
+            s.contains("/Encoding /Identity-H"),
+            "expected Identity-H encoding"
+        );
+        assert!(
+            s.contains("/Subtype /CIDFontType2"),
+            "expected CIDFontType2"
+        );
         assert!(s.contains("/ToUnicode"), "expected ToUnicode reference");
         // Content stream should have hex string, not parenthesized string
         // Verify the PDF is structurally valid by parsing
@@ -1062,22 +1085,31 @@ mod tests {
             pages: vec![Page {
                 width: 612.0,
                 height: 792.0,
-                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                media_box: Rectangle {
+                    llx: 0.0,
+                    lly: 0.0,
+                    urx: 612.0,
+                    ury: 792.0,
+                },
                 crop_box: None,
                 contents: vec![
                     ContentElement::Text(TextSpan {
-                        x: 72.0, y: 72.0,
+                        x: 72.0,
+                        y: 72.0,
                         text: "Hello".into(),
                         font_name: "Helvetica".into(),
                         font_size: 12.0,
-                        fill_color: Color::Gray(0.0), character_spacing: 0.0,
+                        fill_color: Color::Gray(0.0),
+                        character_spacing: 0.0,
                     }),
                     ContentElement::Text(TextSpan {
-                        x: 72.0, y: 100.0,
+                        x: 72.0,
+                        y: 100.0,
                         text: "日本語テキスト".into(),
                         font_name: "MSGothic".into(),
                         font_size: 12.0,
-                        fill_color: Color::Gray(0.0), character_spacing: 0.0,
+                        fill_color: Color::Gray(0.0),
+                        character_spacing: 0.0,
                     }),
                 ],
                 rotation: 0,
@@ -1093,7 +1125,10 @@ mod tests {
         // writes raw glyph numbers, and with no font in the file to read them
         // the page is undecodable. A /Type1 naming "MSGothic" at least gives
         // the viewer something to substitute.
-        assert!(s.contains("/Subtype /Type1"), "expected Type1 for ASCII font");
+        assert!(
+            s.contains("/Subtype /Type1"),
+            "expected Type1 for ASCII font"
+        );
         assert!(
             !s.contains("/Subtype /Type0"),
             "a face with no font data must not go out as a composite font"
@@ -1142,7 +1177,12 @@ mod tests {
             pages: vec![Page {
                 width: 612.0,
                 height: 792.0,
-                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                media_box: Rectangle {
+                    llx: 0.0,
+                    lly: 0.0,
+                    urx: 612.0,
+                    ury: 792.0,
+                },
                 crop_box: None,
                 contents: vec![
                     span("あ", "HasData", 72.0),
@@ -1203,7 +1243,12 @@ mod tests {
             pages: vec![Page {
                 width: 612.0,
                 height: 792.0,
-                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                media_box: Rectangle {
+                    llx: 0.0,
+                    lly: 0.0,
+                    urx: 612.0,
+                    ury: 792.0,
+                },
                 crop_box: None,
                 contents: vec![ContentElement::Text(TextSpan {
                     x: 72.0,
@@ -1221,9 +1266,18 @@ mod tests {
         };
         let bytes = write_pdf(&doc);
         let s = String::from_utf8_lossy(&bytes);
-        assert!(s.contains("/Subtype /Type0"), "embedded ASCII face must be composite");
-        assert!(s.contains("/Subtype /CIDFontType2"), "expected a CIDFont descendant");
-        assert!(s.contains("/BaseFont /ArialMT"), "expected the face's PostScript name");
+        assert!(
+            s.contains("/Subtype /Type0"),
+            "embedded ASCII face must be composite"
+        );
+        assert!(
+            s.contains("/Subtype /CIDFontType2"),
+            "expected a CIDFont descendant"
+        );
+        assert!(
+            s.contains("/BaseFont /ArialMT"),
+            "expected the face's PostScript name"
+        );
         assert!(s.contains("/W ["), "expected a per-glyph width array");
         assert!(
             !s.contains("/Subtype /Type1"),

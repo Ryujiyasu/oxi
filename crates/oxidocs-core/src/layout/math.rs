@@ -25,7 +25,101 @@
 
 use crate::font::{MathTable, MathGlyphTables, math_substitute};
 use crate::ir::{MathBlock, MathExpr, MathStyle};
-use crate::layout::{LayoutElement, LayoutContent, TextEffects};
+use crate::layout::{LayoutElement, LayoutContent, TextEffects, FontGlyph};
+use crate::font::math_stretch::{StretchTable, StretchPlan, Direction};
+
+struct RadicalGeometry {
+    plan: StretchPlan,
+    advance: f32,
+    ink_top: f32,
+    ink_bottom: f32,
+    baseline_shift: f32,
+    rule_thickness: f32,
+}
+
+fn radical_geometry(radicand: &MathExpr, ctx: &MathLayoutContext) -> Option<RadicalGeometry> {
+    let data=StretchTable::cambria_math();
+    let table=MathTable::cambria_math();
+    let fs=ctx.effective_font_size();
+    if fs<=0.0 { return None; }
+    let scale=fs/data.upm as f32;
+    let (a,d)=ink_extent_word(radicand,ctx,true);
+    let gap_du = table.constants.RadicalRuleThickness;
+    let gap=gap_du as f32*scale;
+    let thickness=table.constants.RadicalRuleThickness as f32*scale;
+    let target=a+d+gap+thickness;
+    let construction=data.construction(Direction::Vert,'\u{221a}')?;
+    let plan=data.plan(construction,target as f64/scale as f64).ok()?;
+    let upper=plan.placements.iter().map(|p|p.advance_offset as f32+p.glyph.bounds[3] as f32)
+        .fold(f32::NEG_INFINITY,f32::max);
+    let lower=plan.placements.iter().map(|p|p.advance_offset as f32+p.glyph.bounds[1] as f32)
+        .fold(f32::INFINITY,f32::min);
+    let height=(upper-lower)*scale;
+    let extra=(height-target).max(0.0);
+    let top=-a-gap-thickness-extra*0.5;
+    let advance=plan.placements.iter().map(|p|p.glyph.advance_width as f32*scale).fold(0.0,f32::max);
+    Some(RadicalGeometry{plan,advance,ink_top:top,ink_bottom:top+height,
+        baseline_shift:top+upper*scale,rule_thickness:thickness})
+}
+
+fn radical_degree(degree: Option<&MathExpr>, ctx: &MathLayoutContext, shape: &RadicalGeometry)
+    -> (f32, Option<(f32,f32,MathLayoutContext)>) {
+    let Some(expr)=degree else{return (0.0,None)};
+    let table=MathTable::cambria_math();let fs=ctx.effective_font_size();
+    let dctx=ctx.descend_script().descend_script();let bb=layout_expr(expr,&dctx);
+    let before=table.du_to_pt(table.constants.RadicalKernBeforeDegree,fs);
+    let after=table.du_to_pt(table.constants.RadicalKernAfterDegree,fs);
+    let prefix=(before+bb.advance+after).max(0.0);
+    let (_,dd)=ink_extent_word(expr,&dctx,false);
+    let raise=(shape.ink_bottom-shape.ink_top)*table.constants.RadicalDegreeBottomRaisePercent as f32/100.0;
+    (prefix,Some((before,shape.ink_bottom-raise-dd,dctx)))
+}
+
+/// Painted font ink, distinct from the text line box or assembly advance.
+pub(crate) fn painted_element_ink(e: &LayoutElement) -> (f32,f32) {
+    if let LayoutContent::Text{text,font_size,..}=&e.content {
+        let baseline=e.y+e.baseline_offset.unwrap_or(e.height*(2.0/3.0));
+        if let Some(g)=e.font_glyph {
+            return (baseline-g.bounds_em[3]*font_size,baseline-g.bounds_em[1]*font_size);
+        }
+        let extents:Vec<_>=text.chars().filter_map(glyph_ink_du).collect();
+        if !extents.is_empty() {
+            return (extents.iter().map(|(a,_)|baseline-a*font_size).fold(f32::INFINITY,f32::min),
+                    extents.iter().map(|(_,d)|baseline+d*font_size).fold(f32::NEG_INFINITY,f32::max));
+        }
+    }
+    (e.y,e.y+e.height)
+}
+
+/// Painted extents plus structural whitespace reserved by OpenType MATH.
+/// The radical's extra ascender is space, so it is absent from glyph bounds.
+/// An assembly is a contiguous group at one x origin; reserve above its whole
+/// construction, including the uppermost extender and end glyph.
+pub(crate) fn reserved_line_extents(elements: &[LayoutElement]) -> (f32, f32) {
+    let mut top=f32::INFINITY;
+    let mut bottom=f32::NEG_INFINITY;
+    let table=MathTable::cambria_math();
+    for (index,e) in elements.iter().enumerate() {
+        let (a,d)=painted_element_ink(e);
+        top=top.min(a);bottom=bottom.max(d);
+        if is_fallback_font_element(e) {
+            top=top.min(e.y);bottom=bottom.max(e.y+e.height);
+        }
+        if let LayoutContent::Text{text,font_size,..}=&e.content {
+            if e.font_glyph.is_some() && text == "\u{221a}" {
+                let mut construction_top=a;
+                for component in &elements[index+1..] {
+                    let same_size=matches!(&component.content,
+                        LayoutContent::Text{font_size:size,..} if size == font_size);
+                    if component.font_glyph.is_none() || component.x != e.x || !same_size { break; }
+                    construction_top=construction_top.min(painted_element_ink(component).0);
+                }
+                top=top.min(construction_top-table.du_to_pt(table.constants.RadicalExtraAscender,*font_size));
+            }
+        }
+    }
+    (top,bottom)
+}
 
 /// Bounding box for a math fragment. All values in points, relative to
 /// a math baseline at y=0. Width extends rightward from origin x=0.
@@ -81,7 +175,28 @@ pub struct MathLayoutContext {
 impl MathLayoutContext {
     /// Effective font size at this style level.
     pub fn effective_font_size(&self) -> f32 {
-        self.font_size * self.style.scale_factor()
+        let constants = &MathTable::cambria_math().constants;
+        let percent = match self.style {
+            MathStyle::Script => constants.ScriptPercentScaleDown,
+            MathStyle::ScriptScript => constants.ScriptScriptPercentScaleDown,
+            _ => return self.font_size,
+        };
+        // Script size is expressed in half-point units after scaling.
+        // Word's 10-size sweep fits 73/60 percent with this quantization;
+        // the PDF's separate 600dpi rounding belongs to the renderer.
+        ((self.font_size * percent as f32 / 100.0 * 2.0).floor() / 2.0).max(0.5)
+    }
+
+    /// Fractions use compact shifts below the outer display fraction.
+    /// Font-size reduction is a separate policy from selecting those shifts.
+    pub fn descend_fraction(&self) -> MathLayoutContext {
+        let style = match self.style {
+            MathStyle::Display => MathStyle::CompactFullSize,
+            MathStyle::DisplayReducedFractions => MathStyle::Text,
+            MathStyle::CompactFullSize => MathStyle::CompactFullSize,
+            _ => self.style.script_style(),
+        };
+        MathLayoutContext { font_size: self.font_size, style }
     }
 
     /// Descend into script style (sub/sup).
@@ -130,25 +245,682 @@ pub fn glyph_advance_em(c: char) -> f32 {
     }
 }
 
-pub fn leaf_char_bbox(c: char, ctx: &MathLayoutContext) -> MathBBox {
-    let eff = ctx.effective_font_size();
-    let sub = math_substitute(c);
-    let tables = MathGlyphTables::cambria_math();
-    let table = MathTable::cambria_math();
-    let italic_corr = tables.italic_correction(sub)
-        .map(|du| table.du_to_pt(du, eff))
-        .unwrap_or(0.0);
-    MathBBox {
-        advance: eff * glyph_advance_em(c),
-        ascent: eff * 0.7,
-        descent: eff * 0.2,
-        italic_correction: italic_corr,
+/// Advance of the selected codepoint. Do not italicize an upright run again.
+fn painted_glyph_advance_em(c: char) -> f32 {
+    crate::font::math_glyphs::MathAdvances::cambria_math().advance_em(c)
+        .unwrap_or_else(|| glyph_advance_em(c))
+}
+
+/// Select the glyph shape at the math style depth, independently of size.
+fn script_level(ctx: &MathLayoutContext) -> u8 {
+    match ctx.style { MathStyle::Script => 1, MathStyle::ScriptScript => 2, _ => 0 }
+}
+
+fn script_glyph(c: char, level: u8) -> Option<crate::font::math_script_glyphs::ScriptGlyph> {
+    crate::font::math_script_glyphs::MathScriptGlyphs::cambria_math().alternate(c,level)
+}
+
+fn selected_advance_em(c: char, level: u8) -> f32 {
+    script_glyph(c,level).map_or_else(||painted_glyph_advance_em(c),|g|g.advance_em)
+}
+
+fn selected_italic_correction(c: char, level: u8, fs: f32) -> f32 {
+    if let Some(g)=script_glyph(c,level) { return g.italic_correction_em*fs; }
+    let table=MathTable::cambria_math();
+    MathGlyphTables::cambria_math().italic_correction(c)
+        .map(|du|table.du_to_pt(du,fs)).unwrap_or(0.0)
+}
+
+fn selected_ink_em(c: char, level: u8) -> (f32,f32) {
+    script_glyph(c,level).map(|g|(g.bounds_em[3],-g.bounds_em[1]))
+        .or_else(||glyph_ink_du(c)).unwrap_or((0.7,0.2))
+}
+
+/// Literal runs retain ordinary text shaping; `ssty` belongs to math runs.
+fn run_script_level(style: &crate::ir::MathRunStyle, ctx: &MathLayoutContext) -> u8 {
+    if style.literal { 0 } else { script_level(ctx) }
+}
+
+fn space_after_script(ctx: &MathLayoutContext) -> f32 {
+    let table=MathTable::cambria_math();
+    table.du_to_pt(table.constants.SpaceAfterScript,ctx.effective_font_size())
+}
+
+fn kern_leaf_gid(expr: &MathExpr,ctx: &MathLayoutContext) -> Option<u16> {
+    let c=match expr {
+        MathExpr::Text(text) => {
+            let mut chars=text.chars();let c=chars.next()?;
+            if chars.next().is_some(){return None;}math_substitute(c)
+        }
+        MathExpr::Run{text,style} if !style.literal => {
+            let mut chars=text.chars();let c=chars.next()?;
+            if chars.next().is_some(){return None;}
+            crate::font::math_substitute::math_run_substitute(c,style)
+        }
+        MathExpr::Seq(children) if children.len()==1 => return kern_leaf_gid(&children[0],ctx),
+        _ => return None,
+    };
+    script_glyph(c,script_level(ctx)).map(|g|g.index)
+        .or_else(||crate::font::math_kern::MathKerns::cambria_math().ordinary_gid(c))
+}
+
+/// OpenType MATH: evaluate both contact heights and use the smaller sum.
+/// A compound box has zero corner kerning; adjacent glyphs retain their own
+/// corner kerning and font size. Missing font tables contribute zero.
+fn script_kern(base: &MathExpr,script: &MathExpr,ctx: &MathLayoutContext,
+               shift: f32,superscript: bool) -> f32 {
+    use crate::font::math_kern::Corner;
+    let script_ctx=ctx.descend_script();
+    let(ba,bd)=ink_extent_word(base,ctx,false);
+    let(sa,sd)=ink_extent_word(script,&script_ctx,false);
+    if superscript {
+        let at_script_bottom=math_contact_kern(base,ctx,Corner::TopRight,shift-sd)
+            +math_contact_kern(script,&script_ctx,Corner::BottomLeft,-sd);
+        let at_base_top=math_contact_kern(base,ctx,Corner::TopRight,ba)
+            +math_contact_kern(script,&script_ctx,Corner::BottomLeft,ba-shift);
+        at_script_bottom.min(at_base_top)
+    } else {
+        let at_script_top=math_contact_kern(base,ctx,Corner::BottomRight,sa-shift)
+            +math_contact_kern(script,&script_ctx,Corner::TopLeft,sa);
+        let at_base_bottom=math_contact_kern(base,ctx,Corner::BottomRight,-bd)
+            +math_contact_kern(script,&script_ctx,Corner::TopLeft,shift-bd);
+        at_script_top.min(at_base_bottom)
     }
+}
+
+/// Separate combined scripts using the font's minimum ink gap. Raise the
+/// superscript up to its allowed bottom height, then lower the subscript for
+/// any remaining deficit. Both scripts retain their actual style and size.
+fn combined_script_shifts(
+    sub: &MathExpr,
+    sup: &MathExpr,
+    ctx: &MathLayoutContext,
+    cramped: bool,
+) -> (f32, f32) {
+    let table = MathTable::cambria_math();
+    let fs = ctx.effective_font_size();
+    let script_ctx = ctx.descend_script();
+    let (sub_ascent, _) = ink_extent_word(sub, &script_ctx, true);
+    let (_, sup_descent) = ink_extent_word(sup, &script_ctx, cramped);
+    let up_constant = if cramped {
+        table.constants.SuperscriptShiftUpCramped
+    } else {
+        table.constants.SuperscriptShiftUp
+    };
+    let mut up = table.du_to_pt(up_constant, fs);
+    let mut down = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+    let gap = up + down - sup_descent - sub_ascent;
+    let minimum = table.du_to_pt(table.constants.SubSuperscriptGapMin, fs);
+    if gap < minimum {
+        let limit = table.du_to_pt(table.constants.SuperscriptBottomMaxWithSubscript, fs);
+        let raise = (limit - (up - sup_descent)).max(0.0).min(minimum - gap);
+        up += raise;
+        down += (minimum - gap - raise).max(0.0);
+    }
+    (up, down)
+}
+
+struct DelimiterGeometry {
+    plan: StretchPlan,
+    advance: f32,
+    baseline_shift: f32,
+    ink_top: f32,
+    ink_bottom: f32,
+}
+
+fn delimiter_geometry(chr: char, content: &MathExpr, ctx: &MathLayoutContext,
+                      cramped: bool) -> Option<DelimiterGeometry> {
+    let data = StretchTable::cambria_math();
+    let fs = ctx.effective_font_size();
+    if fs <= 0.0 { return None; }
+    let construction = data.construction(Direction::Vert, chr)?;
+    let scale = fs / data.upm as f32;
+    let (a, d) = ink_extent_word(content, ctx, cramped);
+    let plan = data.plan(construction, (a + d) as f64 / scale as f64).ok()?;
+    let upper = plan.placements.iter().map(|p| p.advance_offset as f32 + p.glyph.bounds[3] as f32)
+        .fold(f32::NEG_INFINITY, f32::max) * scale;
+    let lower = plan.placements.iter().map(|p| p.advance_offset as f32 + p.glyph.bounds[1] as f32)
+        .fold(f32::INFINITY, f32::min) * scale;
+    let table = MathTable::cambria_math();
+    let baseline_shift = (upper + lower) * 0.5 - table.du_to_pt(table.constants.AxisHeight, fs);
+    let advance = plan.placements.iter().map(|p| p.glyph.advance_width as f32 * scale)
+        .fold(0.0, f32::max);
+    Some(DelimiterGeometry { plan, advance, baseline_shift,
+        ink_top: baseline_shift - upper, ink_bottom: baseline_shift - lower })
+}
+
+fn delimiter_width(chr: char, content: &MathExpr, ctx: &MathLayoutContext) -> f32 {
+    if chr == '\0' { return 0.0; }
+    delimiter_geometry(chr, content, ctx, false).map_or_else(
+        || ctx.effective_font_size() * painted_glyph_advance_em(chr), |g| g.advance)
+}
+
+fn delimiter_ink(chr: char, content: &MathExpr, ctx: &MathLayoutContext,
+                 cramped: bool) -> (f32, f32) {
+    if chr == '\0' { return (0.0, 0.0); }
+    if let Some(g) = delimiter_geometry(chr, content, ctx, cramped) {
+        return ((-g.ink_top).max(0.0), g.ink_bottom.max(0.0));
+    }
+    let (a, d) = glyph_ink_du(chr).unwrap_or((0.7, 0.2));
+    (a * ctx.effective_font_size(), d * ctx.effective_font_size())
+}
+
+fn emit_delimiter_glyph(chr: char, content: &MathExpr, x: f32, baseline: f32,
+                        ctx: &MathLayoutContext) -> Vec<LayoutElement> {
+    if chr == '\0' { return Vec::new(); }
+    let fs = ctx.effective_font_size();
+    if let Some(g) = delimiter_geometry(chr, content, ctx, false) {
+        let data = StretchTable::cambria_math();
+        let scale = fs / data.upm as f32;
+        return g.plan.placements.iter().enumerate().map(|(i, p)| {
+            let mut e = emit_text_at(if i == 0 { chr.to_string() } else { String::new() }, x,
+                baseline + g.baseline_shift - p.advance_offset as f32 * scale, fs);
+            e.width = p.glyph.advance_width as f32 * scale;
+            e.font_glyph = Some(FontGlyph { index: p.glyph.gid,
+                bounds_em: p.glyph.bounds.map(|v| v as f32 / data.upm as f32) });
+            e
+        }).collect();
+    }
+    vec![emit_text_at(chr.to_string(), x, baseline, fs)]
+}
+
+struct AccentGeometry {
+    plan: StretchPlan,
+    baseline_shift: f32,
+    x_shift: f32,
+    ink_top: f32,
+    ink_bottom: f32,
+}
+
+fn accent_geometry(accent: char,base: &MathExpr,ctx: &MathLayoutContext) -> Option<AccentGeometry> {
+    let data=StretchTable::cambria_math();let fs=ctx.effective_font_size();
+    if fs<=0.0{return None;}
+    let construction=data.construction(Direction::Horiz,accent)?;
+    let bbox=layout_expr(base,ctx);let scale=fs/data.upm as f32;
+    let plan=data.plan(construction,bbox.advance as f64/scale as f64).ok()?;
+    let(ba,_)=ink_extent_word(base,ctx,false);
+    let table=MathTable::cambria_math();
+    let baseline_shift=-(ba-table.du_to_pt(table.constants.AccentBaseHeight,fs)).max(0.0);
+    let x_shift=(bbox.advance-plan.advance_measurement as f32*scale)/2.0;
+    let ink_top=plan.placements.iter().map(|p|baseline_shift-p.glyph.bounds[3]as f32*scale)
+        .fold(f32::INFINITY,f32::min);
+    let ink_bottom=plan.placements.iter().map(|p|baseline_shift-p.glyph.bounds[1]as f32*scale)
+        .fold(f32::NEG_INFINITY,f32::max);
+    Some(AccentGeometry{plan,baseline_shift,x_shift,ink_top,ink_bottom})
+}
+
+/// A nested fraction argument includes space outside its own rule. The
+/// enclosing fraction uses that width to center both arguments and draw its
+/// rule; the inner rule keeps its tight content width. Singleton rows and
+/// transparent boxes retain the structural argument.
+fn fraction_argument_side_space(expr: &MathExpr, ctx: &MathLayoutContext) -> f32 {
+    match expr {
+        MathExpr::Fraction { .. } => ctx.effective_font_size() * 0.1,
+        MathExpr::Seq(children) if children.len() == 1 => fraction_argument_side_space(&children[0], ctx),
+        MathExpr::BoxExpr(inner) | MathExpr::Phantom(inner) => fraction_argument_side_space(inner, ctx),
+        _ => 0.0,
+    }
+}
+
+/// A structural radical reserves the font's extra ascender inside its parent
+/// fraction. A row retains this space too; it cannot disappear next to text.
+/// Corner kerning and optical measurements still use tight glyph ink.
+fn fraction_child_extents(expr: &MathExpr,ctx: &MathLayoutContext,cramped: bool)->(f32,f32) {
+    match expr {
+        MathExpr::Radical{..}=>{
+            let(a,d)=ink_extent_word(expr,ctx,cramped);let table=MathTable::cambria_math();
+            (a+table.du_to_pt(table.constants.RadicalExtraAscender,ctx.effective_font_size()),d)
+        }
+        MathExpr::Seq(children)=>children.iter().map(|e|fraction_child_extents(e,ctx,cramped))
+            .fold((0.0f32,0.0f32),|(a,d),(ca,cd)|(a.max(ca),d.max(cd))),
+        MathExpr::BoxExpr(inner)|MathExpr::Phantom(inner)=>fraction_child_extents(inner,ctx,cramped),
+        _=>ink_extent_word(expr,ctx,cramped),
+    }
+}
+
+struct NaryGeometry {
+    plan: StretchPlan,
+    scale: f32,
+    operator_baseline: f32,
+    operator_x: f32,
+    sub_position: Option<(f32, f32)>,
+    sup_position: Option<(f32, f32)>,
+    operand_x: f32,
+    bbox: MathBBox,
+    ink_top: f32,
+    ink_bottom: f32,
+}
+
+/// The same selected glyph and positions are used by measurement, ink
+/// accounting and emission. Coordinates are relative to the operand baseline.
+fn nary_geometry(
+    op: char, sub: Option<&MathExpr>, sup: Option<&MathExpr>, operand: &MathExpr,
+    lim_loc: crate::ir::LimLoc, grow: bool, ctx: &MathLayoutContext, cramped: bool,
+) -> Option<NaryGeometry> {
+    use crate::font::math_stretch::Placement;
+    use crate::ir::LimLoc;
+    let data = StretchTable::cambria_math();
+    let table = MathTable::cambria_math();
+    let fs = ctx.effective_font_size();
+    if fs <= 0.0 { return None; }
+    let construction = data.construction(Direction::Vert, op)?;
+    let scale = fs / data.upm as f32;
+    let axis = table.du_to_pt(table.constants.AxisHeight, fs);
+    let (pa, pd) = ink_extent_word(operand, ctx, cramped);
+    let target = 2.0 * (pa - axis).max(pd + axis).max(0.0);
+    let target = if ctx.style.is_display() {
+        target.max(table.du_to_pt(table.constants.DisplayOperatorMinHeight, fs))
+    } else { target };
+    let plan = if grow || ctx.style.is_display() {
+        data.plan(construction, target as f64 / scale as f64).ok()?
+    } else {
+        StretchPlan { direction: Direction::Vert,
+            advance_measurement: (construction.base.bounds[3] - construction.base.bounds[1]) as f64,
+            italic_correction: construction.base.italic_correction.unwrap_or(0),
+            placements: vec![Placement { glyph: construction.base.clone(), advance_offset: 0.0 }],
+            assembled: false }
+    };
+    let upper = plan.placements.iter()
+        .map(|p| p.advance_offset as f32 + p.glyph.bounds[3] as f32)
+        .fold(f32::NEG_INFINITY, f32::max) * scale;
+    let lower = plan.placements.iter()
+        .map(|p| p.advance_offset as f32 + p.glyph.bounds[1] as f32)
+        .fold(f32::INFINITY, f32::min) * scale;
+    let operator_baseline = (upper + lower) * 0.5 - axis;
+    let advance = plan.placements.iter().map(|p| p.glyph.advance_width as f32 * scale)
+        .fold(0.0, f32::max);
+    // A variant has its own correction. The assembly correction belongs only
+    // to a connected assembly, not to every ready-made operator glyph.
+    let italic = if plan.assembled { plan.italic_correction as f32 * scale }
+        else { plan.placements[0].glyph.italic_correction.unwrap_or(0) as f32 * scale };
+    let stacked = matches!(lim_loc, LimLoc::UndOvr)
+        || (ctx.style.is_display() && !('\u{222b}'..='\u{2233}').contains(&op));
+    let script_ctx = ctx.descend_script();
+    let sub_box = sub.map(|expr| layout_expr(expr, &script_ctx));
+    let sup_box = sup.map(|expr| layout_expr(expr, &script_ctx));
+    let mut operator_x = 0.0;
+    let mut sub_position = None;
+    let mut sup_position = None;
+    let limits_right;
+    let mut ink_top = operator_baseline - upper;
+    let mut ink_bottom = operator_baseline - lower;
+    if stacked {
+        let width = advance.max(sub_box.as_ref().map_or(0.0, |b| b.advance))
+            .max(sup_box.as_ref().map_or(0.0, |b| b.advance));
+        operator_x = (width - advance) * 0.5;
+        if let (Some(expr), Some(bbox)) = (sup, sup_box.as_ref()) {
+            let (a,d) = ink_extent_word(expr,&script_ctx,cramped);
+            let up = table.du_to_pt(table.constants.UpperLimitBaselineRiseMin, fs)
+                .max(-ink_top + table.du_to_pt(table.constants.UpperLimitGapMin, fs) + d);
+            sup_position = Some(((width - bbox.advance) * 0.5, -up));
+            ink_top = ink_top.min(-up - a);
+            ink_bottom = ink_bottom.max(-up + d);
+        }
+        if let (Some(expr), Some(bbox)) = (sub, sub_box.as_ref()) {
+            let (a,d) = ink_extent_word(expr,&script_ctx,true);
+            let down = table.du_to_pt(table.constants.LowerLimitBaselineDropMin, fs)
+                .max(operator_baseline - lower + table.du_to_pt(table.constants.LowerLimitGapMin, fs) + a);
+            sub_position = Some(((width - bbox.advance) * 0.5, down));
+            ink_top = ink_top.min(down - a);
+            ink_bottom = ink_bottom.max(down + d);
+        }
+        limits_right = width;
+    } else {
+        let (sup_ascent,sup_descent)=sup.map_or((0.0,0.0),|expr|script_position_extents(expr,&script_ctx,cramped));
+        let (sub_ascent,sub_descent)=sub.map_or((0.0,0.0),|expr|script_position_extents(expr,&script_ctx,true));
+        let extended=plan.assembled || plan.placements.iter().any(|p|p.glyph.extended_shape);
+        let mut up = table.du_to_pt(if cramped { table.constants.SuperscriptShiftUpCramped }
+            else { table.constants.SuperscriptShiftUp }, fs);
+        let mut down = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+        if sup.is_some() {
+            up=up.max(sup_descent+table.du_to_pt(table.constants.SuperscriptBottomMin,fs));
+            if extended {up=up.max(-ink_top-table.du_to_pt(table.constants.SuperscriptBaselineDropMax,fs));}
+        }
+        if sub.is_some() {
+            down=down.max(sub_ascent-table.du_to_pt(table.constants.SubscriptTopMax,fs));
+            if extended {down=down.max(ink_bottom+table.du_to_pt(table.constants.SubscriptBaselineDropMin,fs));}
+        }
+        if sub.is_some() && sup.is_some() {
+            let minimum_gap = if !extended {
+                match (
+                    ordinary_fallback_rule_gap(sub.expect("joint lower limit"), &script_ctx),
+                    ordinary_fallback_rule_gap(sup.expect("joint upper limit"), &script_ctx),
+                ) {
+                    (Some(lower), Some(upper)) => lower.max(upper),
+                    _ => table.du_to_pt(table.constants.SubSuperscriptGapMin, fs),
+                }
+            } else {
+                table.du_to_pt(table.constants.SubSuperscriptGapMin, fs)
+            };
+            let deficit=(minimum_gap
+                -(up+down-sub_ascent-sup_descent)).max(0.0);
+            let upper_bottom_limit = table.du_to_pt(
+                table.constants.SuperscriptBottomMaxWithSubscript, fs) + sup_descent;
+            // An extended operator has already placed its upper limit beyond
+            // the ordinary-base threshold. Balance additional joint clearance
+            // around that placement instead of sending it all below the axis.
+            let raised = if extended && up >= upper_bottom_limit {
+                deficit * 0.5
+            } else {
+                deficit.min((upper_bottom_limit - up).max(0.0))
+            };
+            up+=raised;down+=deficit-raised;
+        }
+        // Ascent of the upper and descent of the lower affect the reserved
+        // box, while the opposite sides constrain collision clearance.
+        let _=(sup_ascent,sub_descent);
+        let mut right = advance;
+        if let (Some(expr), Some(bbox)) = (sup, sup_box.as_ref()) {
+            let (a,d) = ink_extent_word(expr,&script_ctx,cramped);
+            sup_position = Some((advance,-up));
+            right = right.max(advance+bbox.advance);
+            ink_top = ink_top.min(-up-a);
+            ink_bottom = ink_bottom.max(-up+d);
+        }
+        if let (Some(expr), Some(bbox)) = (sub, sub_box.as_ref()) {
+            let (a,d) = ink_extent_word(expr,&script_ctx,true);
+            let x = advance-italic;
+            sub_position = Some((x,down));
+            right = right.max(x+bbox.advance);
+            ink_top = ink_top.min(down-a);
+            ink_bottom = ink_bottom.max(down+d);
+        }
+        limits_right = right;
+    }
+    // Preserve the existing operand spacing policy while isolating the
+    // glyph/anchor correction. Its remaining Word residual is measured separately.
+    let operand_x = limits_right + fs * 0.1;
+    let operand_box = layout_expr(operand,ctx);
+    ink_top = ink_top.min(-pa);
+    ink_bottom = ink_bottom.max(pd);
+    let mut line_top=ink_top;let mut line_bottom=ink_bottom;
+    for (expr,position) in [(sub,sub_position),(sup,sup_position)] {
+        if let (Some(expr),Some((dx,dy)))=(expr,position) {
+            let (elements,_)=emit_expr(expr,dx,dy,&script_ctx);
+            for element in &elements {
+                if is_fallback_font_element(element) {
+                    line_top=line_top.min(element.y);line_bottom=line_bottom.max(element.y+element.height);
+                }
+            }
+        }
+    }
+    let bbox = MathBBox { advance: operand_x + operand_box.advance,
+        ascent: (-line_top).max(operand_box.ascent),
+        descent: line_bottom.max(operand_box.descent), italic_correction: operand_box.italic_correction };
+    Some(NaryGeometry { plan, scale, operator_baseline, operator_x,
+        sub_position, sup_position, operand_x, bbox, ink_top, ink_bottom })
+}
+
+fn emit_nary_geometry(
+    op: char, sub: Option<&MathExpr>, sup: Option<&MathExpr>, operand: &MathExpr,
+    lim_loc: crate::ir::LimLoc, grow: bool, x: f32, baseline: f32, ctx: &MathLayoutContext,
+    operator_color: Option<&str>,
+) -> Option<(Vec<LayoutElement>, MathBBox)> {
+    let shape=nary_geometry(op,sub,sup,operand,lim_loc,grow,ctx,false)?;
+    let fs=ctx.effective_font_size();
+    let mut elements=Vec::new();
+    for placement in &shape.plan.placements {
+        let glyph_baseline = baseline + shape.operator_baseline
+            - placement.advance_offset as f32 * shape.scale;
+        let mut element = emit_text_at(op.to_string(), x + shape.operator_x, glyph_baseline, fs);
+        if let LayoutContent::Text { color, .. } = &mut element.content {
+            *color = operator_color.map(str::to_owned);
+        }
+        element.width = placement.glyph.advance_width as f32 * shape.scale;
+        element.font_glyph = Some(FontGlyph { index: placement.glyph.gid,
+            bounds_em: placement.glyph.bounds.map(|v| v as f32 / StretchTable::cambria_math().upm as f32) });
+        elements.push(element);
+    }
+    let script_ctx=ctx.descend_script();
+    if let (Some(expr),Some((dx,dy)))=(sup,shape.sup_position) {
+        elements.extend(emit_expr(expr,x+dx,baseline+dy,&script_ctx).0);
+    }
+    if let (Some(expr),Some((dx,dy)))=(sub,shape.sub_position) {
+        elements.extend(emit_expr(expr,x+dx,baseline+dy,&script_ctx).0);
+    }
+    elements.extend(emit_expr(operand,x+shape.operand_x,baseline,ctx).0);
+    Some((elements,shape.bbox))
+}
+
+struct ResolvedRunGlyph {
+    character: char,
+    metrics: crate::font::CatalogGlyphMetrics,
+}
+
+fn math_contact_kern(expr:&MathExpr,ctx:&MathLayoutContext,corner:crate::font::math_kern::Corner,height:f32)->f32 {
+    if let MathExpr::Seq(children)=expr {
+        if children.len()==1 {return math_contact_kern(&children[0],ctx,corner,height);}
+    }
+    if let MathExpr::Run {text,style}=expr {
+        if let Some(run)=style.run_style.as_ref().filter(|run|run.font_family.is_some()) {
+            if let Some(glyphs)=resolved_run_glyphs(text,style,ctx) {
+                if glyphs.len()==1 {
+                    return crate::font::catalog_glyph_corner_kern(run.font_family.as_deref().unwrap(),run.bold,run.italic,
+                        glyphs[0].metrics.index,corner,height,resolved_run_context(style,ctx).effective_font_size());
+                }
+            }
+            return 0.0;
+        }
+    }
+    crate::font::math_kern::MathKerns::cambria_math().value(kern_leaf_gid(expr,ctx),corner,height,ctx.effective_font_size())
+}
+
+fn resolved_run_context(style: &crate::ir::MathRunStyle, ctx: &MathLayoutContext) -> MathLayoutContext {
+    let size = style.run_style.as_ref().and_then(|run|run.font_size)
+        .filter(|size|size.is_finite() && *size > 0.0).unwrap_or(ctx.font_size);
+    MathLayoutContext { font_size: size, style: ctx.style }
+}
+
+fn resolved_run_glyphs(text: &str, style: &crate::ir::MathRunStyle, ctx: &MathLayoutContext)
+    -> Option<Vec<ResolvedRunGlyph>>
+{
+    let run = style.run_style.as_ref()?;
+    let family = run.font_family.as_deref()?;
+    let level = run_script_level(style, ctx);
+    text.chars().map(|c| {
+        let original = crate::font::catalog_glyph_metrics(family, run.bold, run.italic, c, 0)?;
+        let character = if original.has_math {
+            crate::font::math_substitute::math_run_substitute(c, style)
+        } else { c };
+        let metrics = crate::font::catalog_glyph_metrics(family, run.bold, run.italic, character, level)?;
+        Some(ResolvedRunGlyph { character, metrics })
+    }).collect()
+}
+
+/// Non-MATH leaves have a font box independent of their painted outline.
+/// Limit positioning uses the effective script size and external leading;
+/// line reservation retains the source size without that leading.
+fn fallback_run_font_box(
+    glyphs: &[ResolvedRunGlyph], style: &crate::ir::MathRunStyle,
+    ctx: &MathLayoutContext, nominal: bool, leading: bool,
+) -> Option<(f32, f32)> {
+    if glyphs.is_empty() || glyphs.iter().all(|g| g.metrics.has_math) { return None; }
+    let run=style.run_style.as_ref()?;
+    let metrics=crate::font::catalog_glyph_face_metrics(run.font_family.as_deref()?,run.bold,run.italic)?;
+    let context=resolved_run_context(style,ctx);
+    // A nominal-size reservation applies when the argument is actually
+    // reduced. Full-size leaves in fractions keep their painted ink box.
+    if nominal && context.effective_font_size()>=context.font_size {return None;}
+    let size=if nominal {context.font_size} else {context.effective_font_size()};
+    Some(metrics.design_font_box_pt(size,leading))
+}
+
+fn script_position_extents(expr:&MathExpr,ctx:&MathLayoutContext,cramped:bool)->(f32,f32) {
+    match expr {
+        MathExpr::Run {text,style}=> {
+            if let Some(glyphs)=resolved_run_glyphs(text,style,ctx) {
+                if let Some(extents)=fallback_run_font_box(&glyphs,style,ctx,false,true) {return extents;}
+            }
+        },
+        MathExpr::Seq(children)=> {
+            return children.iter().map(|child|script_position_extents(child,ctx,cramped))
+                .fold((0.0_f32,0.0_f32),|(a,d),(ca,cd)|(a.max(ca),d.max(cd)));
+        },
+        MathExpr::BoxExpr(child)|MathExpr::Phantom(child)=>return script_position_extents(child,ctx,cramped),
+        _=>{},
+    }
+    ink_extent_word(expr,ctx,cramped)
+}
+
+fn is_fallback_font_element(element:&LayoutElement)->bool {
+    if element.font_glyph.is_none() {return false;}
+    let LayoutContent::Text {text,font_family:Some(family),bold,italic,..}=&element.content else{return false;};
+    let non_math=text.chars().next().and_then(|c|crate::font::catalog_glyph_metrics(family,*bold,*italic,c,0))
+        .is_some_and(|glyph|!glyph.has_math);
+    if !non_math {return false;}
+    let (ink_top,ink_bottom)=painted_element_ink(element);
+    // A font reservation contributes space outside the glyph outline.
+    // Exact ink rectangles on full-size leaves do not select this policy.
+    element.y<ink_top-0.0001 || element.y+element.height>ink_bottom+0.0001
+}
+
+/// A script's font box can exceed its ink even though the glyph is small.
+/// Preserve the established ink policy when all leaves use MATH faces.
+pub(crate) fn inline_math_typographic_extent(block:&MathBlock,font_size:f32)->Option<(f32,f32)> {
+    let (elements,bbox)=emit_math_block(block,0.0,0.0,font_size);
+    if !elements.iter().any(is_fallback_font_element) {return None;}
+    let baseline=bbox.ascent.max(font_size*0.8);
+    let (top,bottom)=reserved_line_extents(&elements);
+    if !top.is_finite() || !bottom.is_finite() {return None;}
+    let (ia,id)=inline_math_ink_extent(block,font_size);
+    Some(((baseline-top).max(ia).max(0.0),(bottom-baseline).max(id).max(0.0)))
+}
+
+
+/// Placement extents are distinct from the nominal font box used to count
+/// grid cells. A reduced fallback leaf retains its source ascent reservation,
+/// while its effective font descent includes that face's external leading.
+/// MATH-only expressions keep their existing placement policy.
+pub(crate) fn inline_math_baseline_extent(block: &MathBlock, font_size: f32)
+    -> Option<(f32, f32)>
+{
+    let (elements, bbox) = emit_math_block(block, 0.0, 0.0, font_size);
+    if !elements.iter().any(is_fallback_font_element) { return None; }
+    let baseline = bbox.ascent.max(font_size * 0.8);
+    let (top, mut bottom) = reserved_line_extents(&elements);
+    for element in elements.iter().filter(|e| is_fallback_font_element(e)) {
+        if let LayoutContent::Text {font_family: Some(family), font_size: size,
+            bold, italic, ..} = &element.content
+        {
+            if let Some(metrics) = crate::font::catalog_glyph_face_metrics(family, *bold, *italic) {
+                let (_, descent) = metrics.design_font_box_pt(*size, true);
+                if let Some(offset) = element.baseline_offset {
+                    bottom = bottom.max(element.y + offset + descent);
+                }
+            }
+        }
+    }
+    if !top.is_finite() || !bottom.is_finite() { return None; }
+    let (ink_ascent, ink_descent) = inline_math_ink_extent(block, font_size);
+    Some(((baseline - top).max(ink_ascent).max(0.0),
+        (bottom - baseline).max(ink_descent).max(0.0)))
+}
+
+fn resolved_run_bbox(glyphs: &[ResolvedRunGlyph], style: &crate::ir::MathRunStyle, ctx: &MathLayoutContext) -> MathBBox {
+    let fs=resolved_run_context(style,ctx).effective_font_size();
+    glyphs.iter().map(|g|MathBBox { advance:g.metrics.advance_em*fs,
+        ascent:g.metrics.bounds_em[3].max(0.0)*fs,
+        descent:(-g.metrics.bounds_em[1]).max(0.0)*fs,
+        italic_correction:g.metrics.italic_correction_em*fs })
+        .fold(MathBBox::default(),|a,b|a.hstack(&b))
+}
+
+fn emit_resolved_run(glyphs: &[ResolvedRunGlyph], style: &crate::ir::MathRunStyle,
+    x:f32, baseline:f32, ctx:&MathLayoutContext) -> Vec<LayoutElement>
+{
+    let run=style.run_style.as_ref().expect("resolved run has a generic style");
+    let fs=resolved_run_context(style,ctx).effective_font_size();
+    let mut pen=x;
+    glyphs.iter().map(|g| {
+        let mut element=emit_text_at(g.character.to_string(),pen,baseline,fs);
+        element.width=g.metrics.advance_em*fs;
+        if let Some((ascent,descent))=fallback_run_font_box(glyphs,style,ctx,true,false) {
+            element.y=baseline-ascent; element.height=ascent+descent;
+            element.baseline_offset=Some(ascent);
+        }else if !g.metrics.has_math {
+            // Exact ink boxes apply to full-size fallback leaves. Preserve
+            // the established MATH-font element geometry used by fractions.
+            let ascent=g.metrics.bounds_em[3]*fs;
+            let descent=-g.metrics.bounds_em[1]*fs;
+            element.y=baseline-ascent;element.height=(ascent+descent).max(0.0);
+            element.baseline_offset=Some(ascent);
+        }
+        element.font_glyph=Some(FontGlyph { index:g.metrics.index, bounds_em:g.metrics.bounds_em });
+        if let LayoutContent::Text { font_family,bold,italic,color,underline,strikethrough,double_strikethrough,.. }=&mut element.content {
+            *font_family=run.font_family.clone(); *bold=run.bold; *italic=run.italic;
+            *color=run.color.clone(); *underline=run.underline; *strikethrough=run.strikethrough;
+            *double_strikethrough=run.double_strikethrough;
+        }
+        pen+=element.width;
+        element
+    }).collect()
+}
+
+/// Transform every run in every primitive; the author document remains
+/// separate from the layout copy that receives resolved font families.
+pub(super) fn map_math_runs(block:&mut MathBlock,
+    mapper:&mut impl FnMut(&str,&crate::ir::MathRunStyle)->Vec<MathExpr>)
+{
+    fn visit(expr:&mut MathExpr, mapper:&mut impl FnMut(&str,&crate::ir::MathRunStyle)->Vec<MathExpr>) {
+        match expr {
+            MathExpr::Run {text,style}=> {
+                let mut replacement=mapper(text,style);
+                *expr=if replacement.len()==1 { replacement.remove(0) }else{MathExpr::Seq(replacement)};
+            }
+            MathExpr::Text(_)=>{},
+            MathExpr::Seq(children)|MathExpr::EqArray(children)=>for child in children { visit(child,mapper); },
+            MathExpr::Fraction {num,den,..}=> {visit(num,mapper);visit(den,mapper);},
+            MathExpr::Superscript {base,sup}=> {visit(base,mapper);visit(sup,mapper);},
+            MathExpr::Subscript {base,sub}=> {visit(base,mapper);visit(sub,mapper);},
+            MathExpr::SubSuperscript {base,sub,sup}|MathExpr::PreScript {base,sub,sup}=> {visit(base,mapper);visit(sub,mapper);visit(sup,mapper);},
+            MathExpr::Radical {degree,radicand}=> {if let Some(degree)=degree {visit(degree,mapper);}visit(radicand,mapper);},
+            MathExpr::Nary {sub,sup,operand,..}=> {if let Some(sub)=sub {visit(sub,mapper);}if let Some(sup)=sup {visit(sup,mapper);}visit(operand,mapper);},
+            MathExpr::Delimiter {content,..}=>visit(content,mapper),
+            MathExpr::Function {name,arg}=> {visit(name,mapper);visit(arg,mapper);},
+            MathExpr::Matrix {rows,..}=>for row in rows {for cell in row {visit(cell,mapper);}},
+            MathExpr::Accent {base,..}|MathExpr::Bar {base,..}|MathExpr::GroupChar {base,..}|MathExpr::BorderBox {base,..}=>visit(base,mapper),
+            MathExpr::Limit {base,lim,..}=> {visit(base,mapper);visit(lim,mapper);},
+            MathExpr::BoxExpr(base)|MathExpr::Phantom(base)=>visit(base,mapper),
+        }
+    }
+    let content=match block { MathBlock::Inline(content)|MathBlock::Display {content,..}=>content };
+    for expr in content {visit(expr,mapper);}
+}
+
+fn run_text_bbox(text: &str, style: &crate::ir::MathRunStyle, ctx: &MathLayoutContext) -> MathBBox {
+    if let Some(glyphs)=resolved_run_glyphs(text,style,ctx) {return resolved_run_bbox(&glyphs,style,ctx);}
+    let eff=ctx.effective_font_size();let level=run_script_level(style,ctx);
+    text.chars().map(|c| {
+        let cp=crate::font::math_substitute::math_run_substitute(c,style);
+        MathBBox { advance:eff*selected_advance_em(cp,level),
+            ascent:eff*0.7,descent:eff*0.2,
+            italic_correction:selected_italic_correction(cp,level,eff) }
+    }).fold(MathBBox::default(),|a,b|a.hstack(&b))
+}
+
+fn run_ink(text: &str, style: &crate::ir::MathRunStyle, ctx: &MathLayoutContext) -> (f32,f32) {
+    if let Some(glyphs)=resolved_run_glyphs(text,style,ctx) {let bbox=resolved_run_bbox(&glyphs,style,ctx);return (bbox.ascent,bbox.descent);}
+    let eff=ctx.effective_font_size();let level=run_script_level(style,ctx);
+    text.chars().map(|c| {
+        let cp=crate::font::math_substitute::math_run_substitute(c,style);
+        let(a,d)=selected_ink_em(cp,level);(a*eff,d*eff)
+    }).fold((0.0f32,0.0f32),|(a,d),(ca,cd)|(a.max(ca),d.max(cd)))
+}
+
+pub fn leaf_char_bbox(c: char, ctx: &MathLayoutContext) -> MathBBox {
+    let eff=ctx.effective_font_size();let cp=math_substitute(c);let level=script_level(ctx);
+    MathBBox { advance:eff*selected_advance_em(cp,level),
+        ascent:eff*0.7,descent:eff*0.2,
+        italic_correction:selected_italic_correction(cp,level,eff) }
 }
 
 /// S1596 (2026-09-29): Cambria Math glyph ink extents (design units), for the
 /// fraction gap test below. Extracted from the installed face's outlines.
 fn glyph_ink_du(c: char) -> Option<(f32, f32)> {
+    if crate::font::runtime::resolve_registered("Cambria Math", false, false).is_some() {
+        return crate::font::runtime::registered_glyph("Cambria Math", false, false, c, 0)
+            .map(|g| (g.bounds_em[3], -g.bounds_em[1]));
+    }
     static T: std::sync::OnceLock<(f32, std::collections::HashMap<u32, (f32, f32)>)> = std::sync::OnceLock::new();
     let (upm, map) = T.get_or_init(|| {
         let v: serde_json::Value = serde_json::from_str(include_str!("../font/data/cambria_math_glyph_heights.json"))
@@ -175,12 +947,13 @@ fn glyph_ink_du(c: char) -> Option<(f32, f32)> {
 fn ink_extent(expr: &MathExpr, ctx: &MathLayoutContext) -> (f32, f32) {
     let table = MathTable::cambria_math();
     match expr {
-        MathExpr::Text(t) | MathExpr::Run { text: t, .. } => {
+        MathExpr::Run { text, style } => run_ink(text, style, ctx),
+        MathExpr::Text(t) => {
             let eff = ctx.effective_font_size();
             let mut a = 0.0f32;
             let mut d = 0.0f32;
             for c in t.chars() {
-                let (ga, gd) = glyph_ink_du(math_substitute(c)).or_else(|| glyph_ink_du(c)).unwrap_or((0.7, 0.2));
+                let (ga, gd) = selected_ink_em(math_substitute(c),script_level(ctx));
                 a = a.max(ga * eff);
                 d = d.max(gd * eff);
             }
@@ -189,7 +962,7 @@ fn ink_extent(expr: &MathExpr, ctx: &MathLayoutContext) -> (f32, f32) {
         MathExpr::Seq(children) => children.iter().map(|c| ink_extent(c, ctx))
             .fold((0.0f32, 0.0f32), |(a, d), (ca, cd)| (a.max(ca), d.max(cd))),
         MathExpr::Fraction { num, den, .. } => {
-            let sub_ctx = if ctx.style.is_display() { *ctx } else { ctx.descend_script() };
+            let sub_ctx = ctx.descend_fraction();
             let fs = ctx.font_size;
             let (up_du, down_du) = if ctx.style.is_display() {
                 (table.constants.FractionNumeratorDisplayStyleShiftUp, table.constants.FractionDenominatorDisplayStyleShiftDown)
@@ -205,7 +978,7 @@ fn ink_extent(expr: &MathExpr, ctx: &MathLayoutContext) -> (f32, f32) {
         MathExpr::Radical { radicand, .. } => {
             let (ra, rd) = ink_extent(radicand, ctx);
             let fs = ctx.font_size;
-            let gap_du = if ctx.style.is_display() { table.constants.RadicalDisplayStyleVerticalGap } else { table.constants.RadicalVerticalGap };
+            let gap_du = table.constants.RadicalRuleThickness;
             let gap = table.du_to_pt(gap_du, fs);
             let thk = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
             (ra + gap + thk, rd)
@@ -213,13 +986,13 @@ fn ink_extent(expr: &MathExpr, ctx: &MathLayoutContext) -> (f32, f32) {
         MathExpr::Superscript { base, sup } => {
             let (ba, bd) = ink_extent(base, ctx);
             let (sa, _) = ink_extent(sup, &ctx.descend_script());
-            let up = table.du_to_pt(table.constants.SuperscriptShiftUp, ctx.font_size);
+            let up = table.du_to_pt(table.constants.SuperscriptShiftUp, ctx.effective_font_size());
             (ba.max(sa + up), bd)
         }
         MathExpr::Subscript { base, sub } => {
             let (ba, bd) = ink_extent(base, ctx);
             let (_, sd) = ink_extent(sub, &ctx.descend_script());
-            let dn = table.du_to_pt(table.constants.SubscriptShiftDown, ctx.font_size);
+            let dn = table.du_to_pt(table.constants.SubscriptShiftDown, ctx.effective_font_size());
             (ba, bd.max(sd + dn))
         }
         _ => {
@@ -253,8 +1026,11 @@ fn fraction_shifts(table: &MathTable, fs: f32, display: bool, up: f32, down: f32
     };
     let num_gap = table.du_to_pt(num_gap, fs);
     let den_gap = table.du_to_pt(den_gap, fs);
-    let (_, nd) = ink_extent(num, sub_ctx);
-    let (da, _) = ink_extent(den, sub_ctx);
+    // Fraction gaps are measured against glyph ink, including nested
+    // delimiters and scripts. Layout boxes reserve additional space and
+    // must not inflate the numerator drop or denominator rise.
+    let (_, nd) = fraction_child_extents(num, sub_ctx, false);
+    let (da, _) = fraction_child_extents(den, sub_ctx, true);
     (up.max(axis + half + num_gap + nd), down.max(den_gap + da - (axis - half)))
 }
 
@@ -282,6 +1058,8 @@ pub fn layout_math_block(block: &MathBlock, font_size: f32) -> MathBBox {
         MathBlock::Inline(xs) => xs,
         MathBlock::Display { content, .. } => content,
     };
+    let row = math_row_atoms(exprs);
+    let exprs = row.as_ref();
     let gaps = atom_gaps(exprs, font_size); // S527 inter-atom math-class spacing
     let mut acc = MathBBox::default();
     for (i, e) in exprs.iter().enumerate() {
@@ -356,13 +1134,64 @@ fn atom_gaps(children: &[MathExpr], fs: f32) -> Vec<f32> {
     gaps
 }
 
+/// A run boundary is formatting, not a mathematical operator boundary.
+/// Keep ordinary identifiers together for shaping, and expose operators and
+/// punctuation so row spacing sees both sides even in a run such as "+(".
+fn math_run_atoms(expr: &MathExpr) -> Option<Vec<MathExpr>> {
+    let (text, style) = match expr {
+        MathExpr::Text(text) => (text.as_str(), None),
+        MathExpr::Run { text, style } if !style.literal => (text.as_str(), Some(style)),
+        _ => return None,
+    };
+    if text.chars().count() < 2 || !text.chars().any(|c| classify_math_char(c) != AClass::Ord) {
+        return None;
+    }
+    let leaf = |text: String| match style {
+        Some(style) => MathExpr::Run { text, style: style.clone() },
+        None => MathExpr::Text(text),
+    };
+    let mut atoms = Vec::new();
+    let mut identifier = String::new();
+    for c in text.chars() {
+        if classify_math_char(c) == AClass::Ord {
+            identifier.push(c);
+        } else {
+            if !identifier.is_empty() {
+                atoms.push(leaf(std::mem::take(&mut identifier)));
+            }
+            atoms.push(leaf(c.to_string()));
+        }
+    }
+    if !identifier.is_empty() { atoms.push(leaf(identifier)); }
+    Some(atoms)
+}
+
+fn math_row_atoms(children: &[MathExpr]) -> std::borrow::Cow<'_, [MathExpr]> {
+    if !children.iter().any(|e| math_run_atoms(e).is_some()) {
+        return std::borrow::Cow::Borrowed(children);
+    }
+    let mut atoms = Vec::new();
+    for child in children {
+        match math_run_atoms(child) {
+            Some(parts) => atoms.extend(parts),
+            None => atoms.push(child.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(atoms)
+}
+
 /// Dispatch bbox computation by MathExpr variant. Phase 2 implements
 /// only leaf cases; Phase 3 adds the full primitive set.
 pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
+    if let Some(atoms) = math_run_atoms(expr) {
+        return layout_expr(&MathExpr::Seq(atoms), ctx);
+    }
     match expr {
         MathExpr::Text(s) => leaf_text_bbox(s, ctx),
-        MathExpr::Run { text, .. } => leaf_text_bbox(text, ctx),
+        MathExpr::Run { text, style } => run_text_bbox(text, style, ctx),
         MathExpr::Seq(children) => {
+            let row = math_row_atoms(children);
+            let children = row.as_ref();
             let gaps = atom_gaps(children, ctx.font_size);
             let mut acc = MathBBox::default();
             for (i, c) in children.iter().enumerate() {
@@ -373,7 +1202,7 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
         }
         // Phase 3: full recursive layout for these primitives.
         MathExpr::Fraction { num, den, .. } => {
-            let sub_ctx = if ctx.style.is_display() { *ctx } else { ctx.descend_script() };
+            let sub_ctx = ctx.descend_fraction();
             let nb = layout_expr(num, &sub_ctx);
             let db = layout_expr(den, &sub_ctx);
             let table = MathTable::cambria_math();
@@ -389,7 +1218,8 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 &table, fs, ctx.style.is_display(),
                 table.du_to_pt(num_shift_du, fs), table.du_to_pt(den_shift_du, fs), num, den, &sub_ctx);
             MathBBox {
-                advance: nb.advance.max(db.advance),
+                advance: (nb.advance + 2.0 * fraction_argument_side_space(num, ctx))
+                    .max(db.advance + 2.0 * fraction_argument_side_space(den, ctx)),
                 ascent: num_shift_up + nb.ascent,
                 descent: den_shift_down + db.descent,
                 italic_correction: 0.0,
@@ -399,9 +1229,9 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let bb = layout_expr(base, ctx);
             let sb = layout_expr(sup, &ctx.descend_script());
             let table = MathTable::cambria_math();
-            let shift_up = table.du_to_pt(table.constants.SuperscriptShiftUp, ctx.font_size);
+            let shift_up = table.du_to_pt(table.constants.SuperscriptShiftUp, ctx.effective_font_size());
             MathBBox {
-                advance: bb.advance + bb.italic_correction + sb.advance,
+                advance: bb.advance + bb.italic_correction + script_kern(base,sup,ctx,shift_up,true) + sb.advance + space_after_script(ctx),
                 ascent: bb.ascent.max(sb.height() + shift_up),
                 descent: bb.descent,
                 italic_correction: sb.italic_correction,
@@ -411,9 +1241,9 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let bb = layout_expr(base, ctx);
             let sb = layout_expr(sub, &ctx.descend_script());
             let table = MathTable::cambria_math();
-            let shift_down = table.du_to_pt(table.constants.SubscriptShiftDown, ctx.font_size);
+            let shift_down = table.du_to_pt(table.constants.SubscriptShiftDown, ctx.effective_font_size());
             MathBBox {
-                advance: bb.advance + sb.advance,
+                advance: bb.advance + script_kern(base,sub,ctx,shift_down,false) + sb.advance + space_after_script(ctx),
                 ascent: bb.ascent,
                 descent: bb.descent.max(sb.height() + shift_down),
                 italic_correction: sb.italic_correction,
@@ -423,26 +1253,32 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let bb = layout_expr(base, ctx);
             let super_b = layout_expr(sup, &ctx.descend_script());
             let sub_b = layout_expr(sub, &ctx.descend_script());
-            let table = MathTable::cambria_math();
-            let sup_shift = table.du_to_pt(table.constants.SuperscriptShiftUp, ctx.font_size);
-            let sub_shift = table.du_to_pt(table.constants.SubscriptShiftDown, ctx.font_size);
+            let (sup_shift, sub_shift) = combined_script_shifts(sub, sup, ctx, false);
             MathBBox {
                 advance: bb.advance + bb.italic_correction
-                    + super_b.advance.max(sub_b.advance),
+                    + (super_b.advance+script_kern(base,sup,ctx,sup_shift,true))
+                        .max(sub_b.advance+script_kern(base,sub,ctx,sub_shift,false)) + space_after_script(ctx),
                 ascent: bb.ascent.max(super_b.height() + sup_shift),
                 descent: bb.descent.max(sub_b.height() + sub_shift),
                 italic_correction: 0.0,
             }
         }
-        MathExpr::Radical { radicand, .. } => {
+        MathExpr::Radical { degree, radicand } => {
             let rb = layout_expr(radicand, ctx);
+            if let Some(shape)=radical_geometry(radicand,ctx) {
+                let (prefix,placement)=radical_degree(degree.as_deref(),ctx,&shape);
+                let mut top=shape.ink_top;
+                let mut bottom=shape.ink_bottom;
+                if let (Some(expr),Some((_,baseline,dctx)))=(degree.as_deref(),placement) {
+                    let(a,d)=ink_extent_word(expr,&dctx,false);top=top.min(baseline-a);bottom=bottom.max(baseline+d);
+                }
+                let extra=MathTable::cambria_math().du_to_pt(MathTable::cambria_math().constants.RadicalExtraAscender,ctx.effective_font_size());
+                return MathBBox{advance:prefix+shape.advance+rb.advance,
+                    ascent:(-top).max(0.0)+extra,descent:bottom.max(0.0),italic_correction:0.0};
+            }
             let table = MathTable::cambria_math();
             let fs = ctx.font_size;
-            let gap_du = if ctx.style.is_display() {
-                table.constants.RadicalDisplayStyleVerticalGap
-            } else {
-                table.constants.RadicalVerticalGap
-            };
+            let gap_du = table.constants.RadicalRuleThickness;
             let gap = table.du_to_pt(gap_du, fs);
             let thk = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
             let extra = table.du_to_pt(table.constants.RadicalExtraAscender, fs);
@@ -456,14 +1292,14 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 italic_correction: 0.0,
             }
         }
-        MathExpr::Delimiter { content, .. } => {
+        MathExpr::Delimiter { beg, end, content, .. } => {
             let cb = layout_expr(content, ctx);
-            let fs = ctx.font_size;
-            let delim_w = fs * 0.45;
+            let (la, ld) = delimiter_ink(*beg, content, ctx, false);
+            let (ra, rd) = delimiter_ink(*end, content, ctx, false);
             MathBBox {
-                advance: cb.advance + 2.0 * delim_w,
-                ascent: cb.ascent.max(fs * 0.8),
-                descent: cb.descent.max(fs * 0.2),
+                advance: cb.advance + delimiter_width(*beg, content, ctx) + delimiter_width(*end, content, ctx),
+                ascent: cb.ascent.max(la).max(ra),
+                descent: cb.descent.max(ld).max(rd),
                 italic_correction: 0.0,
             }
         }
@@ -490,7 +1326,13 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             }
             bbox
         }
-        MathExpr::Accent { base, .. } => {
+        MathExpr::Accent { accent, base } => {
+            if let Some(shape)=accent_geometry(*accent,base,ctx) {
+                let mut bbox=layout_expr(base,ctx);
+                bbox.ascent=bbox.ascent.max(-shape.ink_top);
+                bbox.descent=bbox.descent.max(shape.ink_bottom);
+                return bbox;
+            }
             let bb = layout_expr(base, ctx);
             let table = MathTable::cambria_math();
             let fs = ctx.font_size;
@@ -563,7 +1405,10 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 italic_correction: 0.0,
             }
         }
-        MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
+        MathExpr::Nary { op, sub, sup, operand, lim_loc, grow, .. } => {
+            if let Some(shape)=nary_geometry(*op,sub.as_deref(),sup.as_deref(),operand,*lim_loc,*grow,ctx,false) {
+                return shape.bbox;
+            }
             let fs = ctx.font_size;
             let op_is_integral = ('\u{222B}'..='\u{2233}').contains(op);
             // S653 (coverage): a DISPLAY integral sign is drawn EXTRA-tall —
@@ -685,9 +1530,9 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let bb = layout_expr(base, ctx);
             let sb = layout_expr(sub, &s_ctx);
             let pb = layout_expr(sup, &s_ctx);
-            let pre_w = sb.advance.max(pb.advance);
+            let pre_w = sb.advance.max(pb.advance)+space_after_script(ctx);
             let table = MathTable::cambria_math();
-            let fs = ctx.font_size;
+            let fs = ctx.effective_font_size();
             let sup_shift = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
             let sub_shift = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
             MathBBox {
@@ -729,8 +1574,11 @@ pub fn extract_flat_text(expr: &MathExpr) -> String {
 
 fn append_flat(out: &mut String, expr: &MathExpr) {
     match expr {
-        MathExpr::Text(s) | MathExpr::Run { text: s, .. } => {
+        MathExpr::Text(s) => {
             for c in s.chars() { out.push(math_substitute(c)); }
+        }
+        MathExpr::Run { text, style } => {
+            for c in text.chars() { out.push(crate::font::math_substitute::math_run_substitute(c, style)); }
         }
         MathExpr::Seq(children) => {
             for c in children { append_flat(out, c); }
@@ -872,11 +1720,11 @@ fn emit_text_at(
     // Word's 239.9. The table (see `MathAdvances`) sums the SUBSTITUTED
     // glyphs, which is what is drawn, and predicts 238.5.
     let approx_width: f32 = if std::env::var("OXI_S1258_DISABLE").is_err() {
-        text.chars().map(|c| font_size * glyph_advance_em(c)).sum()
+        text.chars().map(|c| font_size * painted_glyph_advance_em(c)).sum()
     } else {
         text.chars().count() as f32 * font_size * 0.55
     };
-    LayoutElement::new(
+    let mut element=LayoutElement::new(
         x,
         top,
         approx_width,
@@ -898,7 +1746,30 @@ fn emit_text_at(
             text_scale: 100.0,
             is_vertical: false, effects: TextEffects::default(),
         },
-    )
+    );
+    element.baseline_offset=Some(ascent_approx);
+    element
+}
+
+/// Emit the selected `ssty` glyphs, keeping Unicode text and nominal size.
+/// Runs with no alternates preserve normal shaping and do not get split.
+fn emit_selected_text(text: String, x: f32, baseline: f32,
+                      ctx: &MathLayoutContext, level: u8) -> Vec<LayoutElement> {
+    let fs=ctx.effective_font_size();
+    if !text.chars().any(|c|script_glyph(c,level).is_some()) {
+        return vec![emit_text_at(text,x,baseline,fs)];
+    }
+    let mut elements=Vec::new();let mut pen=x;
+    for c in text.chars() {
+        let advance=selected_advance_em(c,level)*fs;
+        let mut e=emit_text_at(c.to_string(),pen,baseline,fs);
+        e.width=advance;
+        if let Some(g)=script_glyph(c,level) {
+            e.font_glyph=Some(FontGlyph{index:g.index,bounds_em:g.bounds_em});
+        }
+        elements.push(e);pen+=advance;
+    }
+    elements
 }
 
 /// Emit positioned LayoutElements for a single math expression.
@@ -912,19 +1783,34 @@ pub fn emit_expr(
     baseline_y: f32,
     ctx: &MathLayoutContext,
 ) -> (Vec<LayoutElement>, MathBBox) {
+    if let Some(atoms) = math_run_atoms(expr) {
+        return emit_expr(&MathExpr::Seq(atoms), x, baseline_y, ctx);
+    }
     let eff_size = ctx.effective_font_size();
     match expr {
-        MathExpr::Text(s) | MathExpr::Run { text: s, .. } => {
+        MathExpr::Run { text, style } => {
+            if text.is_empty() { return (vec![], MathBBox::default()); }
+            if let Some(glyphs)=resolved_run_glyphs(text,style,ctx) {
+                return (emit_resolved_run(&glyphs,style,x,baseline_y,ctx),resolved_run_bbox(&glyphs,style,ctx));
+            }
+            let selected: String = text.chars().map(|c| crate::font::math_substitute::math_run_substitute(c, style)).collect();
+            let bbox = run_text_bbox(text, style, ctx);
+            let elements=emit_selected_text(selected,x,baseline_y,ctx,run_script_level(style,ctx));
+            (elements,bbox)
+        }
+        MathExpr::Text(s) => {
             if s.is_empty() {
                 return (vec![], MathBBox::default());
             }
             // Apply italic-math substitution per-char.
             let subbed: String = s.chars().map(math_substitute).collect();
             let bbox = leaf_text_bbox(s, ctx);
-            let el = emit_text_at(subbed, x, baseline_y, eff_size);
-            (vec![el], bbox)
+            let elements=emit_selected_text(subbed,x,baseline_y,ctx,script_level(ctx));
+            (elements,bbox)
         }
         MathExpr::Seq(children) => {
+            let row = math_row_atoms(children);
+            let children = row.as_ref();
             let gaps = atom_gaps(children, ctx.font_size);
             let mut elems = Vec::new();
             let mut cur_x = x;
@@ -969,8 +1855,11 @@ pub fn emit_expr(
         MathExpr::Limit { base, lim, pos } => {
             emit_limit(base, lim, *pos, x, baseline_y, ctx)
         }
-        MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
-            emit_nary(*op, sub.as_deref(), sup.as_deref(), operand, *lim_loc, x, baseline_y, ctx)
+        MathExpr::Nary { op, operator_color, sub, sup, operand, lim_loc, grow } => {
+            if let Some(result)=emit_nary_geometry(*op,sub.as_deref(),sup.as_deref(),operand,*lim_loc,*grow,x,baseline_y,ctx,operator_color.as_deref()) {
+                return result;
+            }
+            emit_nary(*op, sub.as_deref(), sup.as_deref(), operand, *lim_loc, x, baseline_y, ctx, operator_color.as_deref())
         }
         MathExpr::Function { name, arg } => {
             emit_function(name, arg, x, baseline_y, ctx)
@@ -1040,7 +1929,7 @@ fn emit_fraction(
 
     // Scale sub-expressions at script style if this is an inline fraction.
     // (Display style keeps parent size for num/den.)
-    let sub_ctx = if ctx.style.is_display() { *ctx } else { ctx.descend_script() };
+    let sub_ctx = ctx.descend_fraction();
 
     // Compute num and den bboxes without emission first.
     let num_bbox = layout_expr(num, &sub_ctx);
@@ -1067,7 +1956,8 @@ fn emit_fraction(
     let axis_height = table.du_to_pt(table.constants.AxisHeight, fs);
 
     // Common width: max of num and den advances.
-    let common_w = num_bbox.advance.max(den_bbox.advance);
+    let common_w = (num_bbox.advance + 2.0 * fraction_argument_side_space(num, ctx))
+        .max(den_bbox.advance + 2.0 * fraction_argument_side_space(den, ctx));
     let num_x = x + (common_w - num_bbox.advance) / 2.0;
     let den_x = x + (common_w - den_bbox.advance) / 2.0;
 
@@ -1119,18 +2009,19 @@ fn emit_superscript(
     ctx: &MathLayoutContext,
 ) -> (Vec<LayoutElement>, MathBBox) {
     let table = MathTable::cambria_math();
-    let fs = ctx.font_size;
+    let fs = ctx.effective_font_size();
     let (mut base_elems, base_bbox) = emit_expr(base, x, baseline_y, ctx);
 
     let sup_ctx = ctx.descend_script();
     let shift_up = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
-    let sup_x = x + base_bbox.advance + base_bbox.italic_correction;
+    let kern=script_kern(base,sup,ctx,shift_up,true);
+    let sup_x = x + base_bbox.advance + base_bbox.italic_correction + kern;
     let sup_baseline = baseline_y - shift_up;
     let (sup_elems, sup_bbox) = emit_expr(sup, sup_x, sup_baseline, &sup_ctx);
 
     base_elems.extend(sup_elems);
     let bbox = MathBBox {
-        advance: base_bbox.advance + base_bbox.italic_correction + sup_bbox.advance,
+        advance: base_bbox.advance + base_bbox.italic_correction + kern + sup_bbox.advance + space_after_script(ctx),
         ascent: base_bbox.ascent.max(shift_up + sup_bbox.ascent),
         descent: base_bbox.descent,
         italic_correction: sup_bbox.italic_correction,
@@ -1147,18 +2038,19 @@ fn emit_subscript(
     ctx: &MathLayoutContext,
 ) -> (Vec<LayoutElement>, MathBBox) {
     let table = MathTable::cambria_math();
-    let fs = ctx.font_size;
+    let fs = ctx.effective_font_size();
     let (mut base_elems, base_bbox) = emit_expr(base, x, baseline_y, ctx);
 
     let sub_ctx = ctx.descend_script();
     let shift_down = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
-    let sub_x = x + base_bbox.advance;
+    let kern=script_kern(base,sub,ctx,shift_down,false);
+    let sub_x = x + base_bbox.advance + kern;
     let sub_baseline = baseline_y + shift_down;
     let (sub_elems, sub_bbox) = emit_expr(sub, sub_x, sub_baseline, &sub_ctx);
 
     base_elems.extend(sub_elems);
     let bbox = MathBBox {
-        advance: base_bbox.advance + sub_bbox.advance,
+        advance: base_bbox.advance + kern + sub_bbox.advance + space_after_script(ctx),
         ascent: base_bbox.ascent,
         descent: base_bbox.descent.max(shift_down + sub_bbox.descent),
         italic_correction: sub_bbox.italic_correction,
@@ -1174,6 +2066,31 @@ fn emit_radical(
     baseline_y: f32,
     ctx: &MathLayoutContext,
 ) -> (Vec<LayoutElement>, MathBBox) {
+    if let Some(shape)=radical_geometry(radicand,ctx) {
+        let fs=ctx.effective_font_size();let scale=fs/StretchTable::cambria_math().upm as f32;
+        let (prefix,degree_placement)=radical_degree(degree,ctx,&shape);
+        let root_x=x+prefix;let radicand_x=root_x+shape.advance;
+        let mut elements=Vec::new();
+        for (i,p) in shape.plan.placements.iter().enumerate() {
+            let mut e=emit_text_at(if i==0{"\u{221a}".to_string()}else{String::new()},root_x,
+                baseline_y+shape.baseline_shift-p.advance_offset as f32*scale,fs);
+            e.width=p.glyph.advance_width as f32*scale;
+            e.font_glyph=Some(FontGlyph{index:p.glyph.gid,
+                bounds_em:p.glyph.bounds.map(|v|v as f32/StretchTable::cambria_math().upm as f32)});
+            elements.push(e);
+        }
+        elements.extend(emit_expr(radicand,radicand_x,baseline_y,ctx).0);
+        let width=layout_expr(radicand,ctx).advance;
+        let bar_top=baseline_y+shape.ink_top;let bar_center=bar_top+shape.rule_thickness/2.0;
+        elements.push(LayoutElement::new(radicand_x,bar_top,width,shape.rule_thickness,
+            LayoutContent::TableBorder{x1:radicand_x,y1:bar_center,x2:radicand_x+width,y2:bar_center,
+                color:None,width:shape.rule_thickness,style:None}));
+        if let (Some(expr),Some((dx,dy,dctx)))=(degree,degree_placement) {
+            elements.extend(emit_expr(expr,x+dx,baseline_y+dy,&dctx).0);
+        }
+        let expression=MathExpr::Radical{degree:degree.map(|d|Box::new(d.clone())),radicand:Box::new(radicand.clone())};
+        return (elements,layout_expr(&expression,ctx));
+    }
     let table = MathTable::cambria_math();
     let fs = ctx.font_size;
 
@@ -1181,11 +2098,7 @@ fn emit_radical(
     let rad_bbox = layout_expr(radicand, ctx);
 
     // MATH constants (select display vs inline gap).
-    let v_gap_du = if ctx.style.is_display() {
-        table.constants.RadicalDisplayStyleVerticalGap
-    } else {
-        table.constants.RadicalVerticalGap
-    };
+    let v_gap_du = table.constants.RadicalRuleThickness;
     let v_gap = table.du_to_pt(v_gap_du, fs);
     let rule_thick = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
     let extra_asc = table.du_to_pt(table.constants.RadicalExtraAscender, fs);
@@ -1388,6 +2301,7 @@ fn emit_nary(
     x: f32,
     baseline_y: f32,
     ctx: &MathLayoutContext,
+    operator_color: Option<&str>,
 ) -> (Vec<LayoutElement>, MathBBox) {
     use crate::ir::LimLoc;
     let table = MathTable::cambria_math();
@@ -1438,7 +2352,11 @@ fn emit_nary(
                 .max(sub_bbox.as_ref().map(|b| b.advance).unwrap_or(0.0))
                 .max(sup_bbox.as_ref().map(|b| b.advance).unwrap_or(0.0));
             let op_x = cur_x + (common_w - op_w) / 2.0;
-            elems.push(emit_text_at(op.to_string(), op_x, baseline_y, op_size));
+            let mut operator = emit_text_at(op.to_string(), op_x, baseline_y, op_size);
+            if let LayoutContent::Text { color, .. } = &mut operator.content {
+                *color = operator_color.map(str::to_owned);
+            }
+            elems.push(operator);
 
             if let (Some(s_expr), Some(s_bb)) = (sup, sup_bbox.as_ref()) {
                 let sup_x = cur_x + (common_w - s_bb.advance) / 2.0;
@@ -1460,7 +2378,11 @@ fn emit_nary(
         }
         LimLoc::SubSup => {
             // Operator at baseline, sub/sup as regular scripts to the right.
-            elems.push(emit_text_at(op.to_string(), cur_x, baseline_y, op_size));
+            let mut operator = emit_text_at(op.to_string(), cur_x, baseline_y, op_size);
+            if let LayoutContent::Text { color, .. } = &mut operator.content {
+                *color = operator_color.map(str::to_owned);
+            }
+            elems.push(operator);
             cur_x += op_w;
             if let (Some(s_expr), Some(s_bb)) = (sup, sup_bbox.as_ref()) {
                 let sup_x = cur_x;
@@ -1607,12 +2529,12 @@ fn emit_prescript(
     ctx: &MathLayoutContext,
 ) -> (Vec<LayoutElement>, MathBBox) {
     let table = MathTable::cambria_math();
-    let fs = ctx.font_size;
+    let fs = ctx.effective_font_size();
     let s_ctx = ctx.descend_script();
     let sub_bbox = layout_expr(sub, &s_ctx);
     let sup_bbox = layout_expr(sup, &s_ctx);
 
-    let pre_w = sub_bbox.advance.max(sup_bbox.advance);
+    let pre_w = sub_bbox.advance.max(sup_bbox.advance)+space_after_script(ctx);
     let sup_shift = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
     let sub_shift = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
 
@@ -1706,6 +2628,19 @@ fn emit_accent(
     baseline_y: f32,
     ctx: &MathLayoutContext,
 ) -> (Vec<LayoutElement>, MathBBox) {
+    if let Some(shape)=accent_geometry(accent,base,ctx) {
+        let fs=ctx.effective_font_size();let data=StretchTable::cambria_math();let scale=fs/data.upm as f32;
+        let(mut elements,bbox)=emit_expr(base,x,baseline_y,ctx);
+        for(i,p)in shape.plan.placements.iter().enumerate() {
+            let mut e=emit_text_at(if i==0{accent.to_string()}else{String::new()},
+                x+shape.x_shift+p.advance_offset as f32*scale,baseline_y+shape.baseline_shift,fs);
+            e.width=p.glyph.advance_width as f32*scale;
+            e.font_glyph=Some(FontGlyph{index:p.glyph.gid,bounds_em:p.glyph.bounds.map(|v|v as f32/data.upm as f32)});
+            elements.push(e);
+        }
+        return(elements,MathBBox{ascent:bbox.ascent.max(-shape.ink_top),
+            descent:bbox.descent.max(shape.ink_bottom),..bbox});
+    }
     let table = MathTable::cambria_math();
     let glyphs = MathGlyphTables::cambria_math();
     let fs = ctx.font_size;
@@ -1824,42 +2759,19 @@ fn emit_limit(
     (elems, bbox)
 }
 
-/// Emit delimiter: begChr on left, content, endChr on right.
-/// Delimiter glyphs render at the base font size (not stretched yet —
-/// Phase 3 later adds MATH vertical_variants for grow).
-fn emit_delimiter(
-    beg: char,
-    end: char,
-    content: &MathExpr,
-    x: f32,
-    baseline_y: f32,
-    ctx: &MathLayoutContext,
-) -> (Vec<LayoutElement>, MathBBox) {
-    let fs = ctx.font_size;
-    let mut elems = Vec::new();
-
-    // Left delimiter char.
-    let left_w = fs * 0.45;
-    elems.push(emit_text_at(beg.to_string(), x, baseline_y, fs));
-
-    // Content bbox to determine overall advance.
-    let content_bbox = layout_expr(content, ctx);
-    let content_x = x + left_w;
-    let (content_elems, _) = emit_expr(content, content_x, baseline_y, ctx);
-    elems.extend(content_elems);
-
-    // Right delimiter char.
-    let right_x = content_x + content_bbox.advance;
-    let right_w = fs * 0.45;
-    elems.push(emit_text_at(end.to_string(), right_x, baseline_y, fs));
-
-    let bbox = MathBBox {
-        advance: left_w + content_bbox.advance + right_w,
-        ascent: content_bbox.ascent.max(fs * 0.8),
-        descent: content_bbox.descent.max(fs * 0.2),
-        italic_correction: 0.0,
-    };
-    (elems, bbox)
+/// Emit a pair of delimiters selected for the content's ink height.
+fn emit_delimiter(beg: char, end: char, content: &MathExpr, x: f32,
+                  baseline_y: f32, ctx: &MathLayoutContext) -> (Vec<LayoutElement>, MathBBox) {
+    let cb = layout_expr(content, ctx);
+    let lw = delimiter_width(beg, content, ctx);
+    let rw = delimiter_width(end, content, ctx);
+    let mut elements = emit_delimiter_glyph(beg, content, x, baseline_y, ctx);
+    elements.extend(emit_expr(content, x + lw, baseline_y, ctx).0);
+    elements.extend(emit_delimiter_glyph(end, content, x + lw + cb.advance, baseline_y, ctx));
+    let (la, ld) = delimiter_ink(beg, content, ctx, false);
+    let (ra, rd) = delimiter_ink(end, content, ctx, false);
+    (elements, MathBBox { advance: lw + cb.advance + rw,
+        ascent: cb.ascent.max(la).max(ra), descent: cb.descent.max(ld).max(rd), italic_correction: 0.0 })
 }
 
 /// Emit combined sub+superscript: base with sub below and sup above at same x.
@@ -1871,23 +2783,22 @@ fn emit_subsuperscript(
     baseline_y: f32,
     ctx: &MathLayoutContext,
 ) -> (Vec<LayoutElement>, MathBBox) {
-    let table = MathTable::cambria_math();
-    let fs = ctx.font_size;
     let (mut base_elems, base_bbox) = emit_expr(base, x, baseline_y, ctx);
 
     let s_ctx = ctx.descend_script();
-    let sup_shift = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
-    let sub_shift = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+    let (sup_shift, sub_shift) = combined_script_shifts(sub, sup, ctx, false);
 
     let script_x = x + base_bbox.advance + base_bbox.italic_correction;
-    let (sup_e, sup_b) = emit_expr(sup, script_x, baseline_y - sup_shift, &s_ctx);
-    let (sub_e, sub_b) = emit_expr(sub, script_x, baseline_y + sub_shift, &s_ctx);
+    let sup_kern=script_kern(base,sup,ctx,sup_shift,true);
+    let sub_kern=script_kern(base,sub,ctx,sub_shift,false);
+    let (sup_e, sup_b) = emit_expr(sup, script_x+sup_kern, baseline_y - sup_shift, &s_ctx);
+    let (sub_e, sub_b) = emit_expr(sub, script_x+sub_kern, baseline_y + sub_shift, &s_ctx);
     base_elems.extend(sup_e);
     base_elems.extend(sub_e);
 
     let bbox = MathBBox {
         advance: base_bbox.advance + base_bbox.italic_correction
-            + sup_b.advance.max(sub_b.advance),
+            + (sup_b.advance+sup_kern).max(sub_b.advance+sub_kern)+space_after_script(ctx),
         ascent: base_bbox.ascent.max(sup_shift + sup_b.ascent),
         descent: base_bbox.descent.max(sub_shift + sub_b.descent),
         italic_correction: 0.0,
@@ -1912,6 +2823,8 @@ pub fn emit_math_block(
         MathBlock::Display { content, .. } => content,
     };
     // S527 inter-atom math-class spacing applied to the top-level content too.
+    let row = math_row_atoms(exprs);
+    let exprs = row.as_ref();
     let gaps = atom_gaps(exprs, font_size);
     // Pre-compute baseline: first pass finds needed ascent.
     let mut total_bbox = MathBBox::default();
@@ -1930,6 +2843,23 @@ pub fn emit_math_block(
         let (ee, b) = emit_expr(e, cur_x, baseline_y, &ctx);
         elems.extend(ee);
         cur_x += b.advance;
+    }
+    if matches!(block,MathBlock::Display{..}) && !elems.is_empty()
+        && std::env::var("OXI_S652_DISABLE").is_err() {
+        let (top,bottom)=reserved_line_extents(&elems);
+        if top.is_finite() && bottom >= top {
+            let table=MathTable::cambria_math();
+            let leading=table.du_to_pt(table.constants.MathLeading,font_size);
+            let shift=cursor_y+leading-top;
+            for e in &mut elems {
+                e.y += shift;
+                if let LayoutContent::TableBorder{y1,y2,..}=&mut e.content {
+                    *y1 += shift;*y2 += shift;
+                }
+            }
+            total_bbox.ascent=baseline_y+shift-cursor_y;
+            total_bbox.descent=(bottom-baseline_y).max(0.0);
+        }
     }
     (elems, total_bbox)
 }
@@ -1983,6 +2913,7 @@ mod tests {
         let block = MathBlock::Display {
             content: vec![MathExpr::Text("a".to_string())],
             host: None,
+            reduce_fraction_size: false,
             jc: MathAlignment::Center,
         };
         let b = layout_math_block(&block, 12.0);
@@ -2020,9 +2951,11 @@ mod tests {
     fn script_context_scales_down() {
         let ctx = MathLayoutContext { font_size: 10.5, style: MathStyle::Text };
         let ctx_s = ctx.descend_script();
-        assert!((ctx_s.effective_font_size() - 10.5 * 0.73).abs() < 0.01);
+        // Word 10.5pt control: nominal7.5pt, PDF7.56 after device rounding.
+        assert!((ctx_s.effective_font_size() - 7.5).abs() < 0.01);
         let ctx_ss = ctx_s.descend_script();
-        assert!((ctx_ss.effective_font_size() - 10.5 * 0.60).abs() < 0.01);
+        // Same control's second script level: Word/PDF6.0pt.
+        assert!((ctx_ss.effective_font_size() - 6.0).abs() < 0.01);
     }
 
     #[test]
@@ -2070,6 +3003,7 @@ mod tests {
                 MathExpr::Text("mc".to_string()),
             ],
             host: None,
+            reduce_fraction_size: false,
             jc: MathAlignment::Center,
         };
         let t = extract_flat_text_block(&block);
@@ -2117,28 +3051,13 @@ fn ink_extent_word(expr: &MathExpr, ctx: &MathLayoutContext, cramped: bool) -> (
     let table = MathTable::cambria_math();
     let eff = ctx.effective_font_size();
     match expr {
-        // An upright run (`m:sty p`/`b`, or `m:nor`) draws the upright glyph:
-        // `1/x` in educational__20d9968b has x on the baseline (956/0du), where
-        // the italic 𝑥 dips 16du and tipped the line into a second cell.
-        MathExpr::Run { text, style }
-            if style.literal || matches!(style.math_style,
-                Some(crate::ir::MathStyleVariant::Plain) | Some(crate::ir::MathStyleVariant::Bold)) =>
-        {
-            let mut a = 0.0f32;
-            let mut d = 0.0f32;
-            for c in text.chars() {
-                let (ga, gd) = glyph_ink_du(c).unwrap_or((0.7, 0.2));
-                a = a.max(ga * eff);
-                d = d.max(gd * eff);
-            }
-            (a, d)
-        }
-        MathExpr::Text(_) | MathExpr::Run { .. } => ink_extent(expr, ctx),
+        MathExpr::Run { text, style } => run_ink(text, style, ctx),
+        MathExpr::Text(_) => ink_extent(expr, ctx),
         MathExpr::Seq(children) => children.iter().map(|c| ink_extent_word(c, ctx, cramped))
             .fold((0.0f32, 0.0f32), |(a, d), (ca, cd)| (a.max(ca), d.max(cd))),
         MathExpr::Fraction { num, den, .. } => {
             let display = ctx.style.is_display();
-            let sub_ctx = if display { *ctx } else { ctx.descend_script() };
+            let sub_ctx = ctx.descend_fraction();
             let (up_du, down_du, ng, dg) = if display {
                 (table.constants.FractionNumeratorDisplayStyleShiftUp, table.constants.FractionDenominatorDisplayStyleShiftDown,
                  table.constants.FractionNumDisplayStyleGapMin, table.constants.FractionDenomDisplayStyleGapMin)
@@ -2154,9 +3073,17 @@ fn ink_extent_word(expr: &MathExpr, ctx: &MathLayoutContext, cramped: bool) -> (
             let down = table.du_to_pt(down_du, eff).max(table.du_to_pt(dg, eff) + da - (axis - half));
             (up + na, down + dd)
         }
-        MathExpr::Radical { radicand, .. } => {
+        MathExpr::Radical { degree, radicand } => {
+            if let Some(shape)=radical_geometry(radicand,ctx) {
+                let mut top=shape.ink_top;let mut bottom=shape.ink_bottom;
+                let (_,placement)=radical_degree(degree.as_deref(),ctx,&shape);
+                if let (Some(expr),Some((_,baseline,dctx)))=(degree.as_deref(),placement) {
+                    let(a,d)=ink_extent_word(expr,&dctx,false);top=top.min(baseline-a);bottom=bottom.max(baseline+d);
+                }
+                return ((-top).max(0.0),bottom.max(0.0));
+            }
             let (ra, rd) = ink_extent_word(radicand, ctx, true);
-            let gap_du = if ctx.style.is_display() { table.constants.RadicalDisplayStyleVerticalGap } else { table.constants.RadicalVerticalGap };
+            let gap_du = table.constants.RadicalRuleThickness;
             (ra + table.du_to_pt(gap_du, eff) + table.du_to_pt(table.constants.RadicalRuleThickness, eff), rd)
         }
         MathExpr::Superscript { base, sup } => {
@@ -2174,9 +3101,24 @@ fn ink_extent_word(expr: &MathExpr, ctx: &MathLayoutContext, cramped: bool) -> (
             let (ba, bd) = ink_extent_word(base, ctx, cramped);
             let (sa, _) = ink_extent_word(sup, &ctx.descend_script(), cramped);
             let (_, sd) = ink_extent_word(sub, &ctx.descend_script(), true);
-            let up_du = if cramped { table.constants.SuperscriptShiftUpCramped } else { table.constants.SuperscriptShiftUp };
-            (ba.max(sa + table.du_to_pt(up_du, eff)),
-             bd.max(sd + table.du_to_pt(table.constants.SubscriptShiftDown, eff)))
+            let (up, down) = combined_script_shifts(sub, sup, ctx, cramped);
+            (ba.max(sa + up), bd.max(sd + down))
+        }
+        // Compose the accent glyph with its base ink on the common baseline.
+        // The base's subscript depth stays its ink depth; a loose layout box
+        // must not leak back into the fraction's numerator gap through Accent.
+        MathExpr::Accent { accent, base } => {
+            if let Some(shape)=accent_geometry(*accent,base,ctx) {
+                let(a,d)=ink_extent_word(base,ctx,cramped);
+                return(a.max(-shape.ink_top),d.max(shape.ink_bottom));
+            }
+            let (ba, bd) = ink_extent_word(base, ctx, cramped);
+            let paint_fs = ctx.font_size;
+            let accent_fs = paint_fs * 0.6;
+            let gap = table.du_to_pt(table.constants.OverbarVerticalGap, paint_fs);
+            let offset = -layout_expr(base, ctx).ascent - gap + accent_fs * 0.55;
+            let (aa, ad) = glyph_ink_du(*accent).unwrap_or((0.7, 0.2));
+            (ba.max(aa * accent_fs - offset), bd.max(ad * accent_fs + offset))
         }
         // A function name and its argument share the baseline.
         MathExpr::Function { name, arg } => {
@@ -2191,10 +3133,9 @@ fn ink_extent_word(expr: &MathExpr, ctx: &MathLayoutContext, cramped: bool) -> (
             let mut a = ca;
             let mut d = cd;
             for c in [*beg, *end] {
-                if let Some((ga, gd)) = glyph_ink_du(c) {
-                    a = a.max(ga * eff);
-                    d = d.max(gd * eff);
-                }
+                let (ga, gd) = delimiter_ink(c, content, ctx, cramped);
+                a = a.max(ga);
+                d = d.max(gd);
             }
             (a, d)
         }
@@ -2203,7 +3144,10 @@ fn ink_extent_word(expr: &MathExpr, ctx: &MathLayoutContext, cramped: bool) -> (
         // and the operand on the shared baseline. reports__5823d5a8 p4: a
         // fraction of two ∑_{i=1}^{n} terms takes 2 cells in Word; the layout-box
         // fallback read it as 36/30pt and gave 4.
-        MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
+        MathExpr::Nary { op, sub, sup, operand, lim_loc, grow, .. } => {
+            if let Some(shape)=nary_geometry(*op,sub.as_deref(),sup.as_deref(),operand,*lim_loc,*grow,ctx,cramped) {
+                return (-shape.ink_top,shape.ink_bottom);
+            }
             let (ga, gd) = glyph_ink_du(*op).unwrap_or((0.8, 0.3));
             let (oa, od) = (ga * eff, gd * eff);
             let sctx = ctx.descend_script();
@@ -2285,19 +3229,7 @@ pub fn inline_math_ink(block: &MathBlock, font_size: f32) -> (f32, f32, f32) {
     let mut ink_top = f32::INFINITY;
     let mut ink_bot = f32::NEG_INFINITY;
     for e in &elems {
-        let (lo, hi) = match &e.content {
-            LayoutContent::Text { text, .. } => {
-                let fs = e.height / 1.2;
-                let b = e.y + e.height * (2.0 / 3.0);
-                let is_integral = text.chars().any(|c| ('\u{222B}'..='\u{2233}').contains(&c));
-                if is_integral {
-                    (e.y, e.y + e.height)
-                } else {
-                    (b - asc_r * fs, b + desc_r * fs)
-                }
-            }
-            _ => (e.y, e.y + e.height),
-        };
+        let (lo,hi)=painted_element_ink(e);
         ink_top = ink_top.min(lo);
         ink_bot = ink_bot.max(hi);
     }
@@ -2305,5 +3237,549 @@ pub fn inline_math_ink(block: &MathBlock, font_size: f32) -> (f32, f32, f32) {
         (bbox.advance, (baseline - ink_top).max(0.0), (ink_bot - baseline).max(0.0))
     } else {
         (bbox.advance, bbox.ascent, bbox.descent)
+    }
+}
+
+#[cfg(test)]
+mod combined_script_gap_tests {
+    use super::*;
+    use crate::ir::{MathRunStyle, MathStyleVariant};
+
+    fn bold(text: &str) -> MathExpr {
+        MathExpr::Run {
+            text: text.to_owned(),
+            style: MathRunStyle { math_style: Some(MathStyleVariant::Bold), ..Default::default() },
+        }
+    }
+
+    #[test]
+    fn combined_scripts_match_word_relative_baselines() {
+        let base = bold("S");
+        let sub = bold("1");
+        let sup = bold("2");
+        let expr = MathExpr::SubSuperscript {
+            base: Box::new(base), sub: Box::new(sub), sup: Box::new(sup),
+        };
+        let ctx = MathLayoutContext { font_size: 12.0, style: MathStyle::Display };
+        let (elements, _) = emit_expr(&expr, 0.0, 100.0, &ctx);
+        let baseline = |e: &LayoutElement| e.y + e.baseline_offset.unwrap();
+        // Saved Word PDF controls: base117.50 / sup113.06 / sub120.74.
+        assert!((100.0 - baseline(&elements[1]) - 4.44).abs() <= 0.35);
+        assert!((baseline(&elements[2]) - 100.0 - 3.24).abs() <= 0.35);
+    }
+
+    #[test]
+    fn combined_scripts_keep_minimum_ink_gap_across_styles() {
+        for size in [8.0, 10.5, 12.0, 18.0, 20.0] {
+            for style in [MathStyle::Display, MathStyle::CompactFullSize, MathStyle::Text,
+                          MathStyle::Script, MathStyle::ScriptScript] {
+                for cramped in [false, true] {
+                    for (sub, sup) in [(bold("1"), bold("2")),
+                                      (MathExpr::Text("p".into()), MathExpr::Text("g".into())),
+                                      (MathExpr::Text("".into()), MathExpr::Text("".into()))] {
+                        let ctx = MathLayoutContext { font_size: size, style };
+                        let (up, down) = combined_script_shifts(&sub, &sup, &ctx, cramped);
+                        let (a, _) = ink_extent_word(&sub, &ctx.descend_script(), true);
+                        let (_, d) = ink_extent_word(&sup, &ctx.descend_script(), cramped);
+                        let table = MathTable::cambria_math();
+                        let required = table.du_to_pt(table.constants.SubSuperscriptGapMin, ctx.effective_font_size());
+                        assert!(up + down - a - d + 0.0001 >= required);
+                        assert!(up.is_finite() && down.is_finite() && up >= 0.0 && down >= 0.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod delimiter_geometry_tests {
+    use super::*;
+    use crate::ir::{FracBarType, MathRunStyle, MathStyleVariant};
+
+    #[test]
+    fn structural_parentheses_match_word_axis_and_advance() {
+        let run = |text: &str| MathExpr::Run { text: text.to_owned(),
+            style: MathRunStyle { math_style: Some(MathStyleVariant::BoldItalic), ..Default::default() } };
+        let content = MathExpr::Seq(vec![MathExpr::Subscript {
+            base: Box::new(run("n")), sub: Box::new(run("1")),
+        }, run("-"), run("1")]);
+        let expr = MathExpr::Delimiter { beg: '(', end: ')', sep: None, content: Box::new(content) };
+        let ctx = MathLayoutContext { font_size: 12.0, style: MathStyle::Display };
+        let (elements, _) = emit_expr(&expr, 0.0, 100.0, &ctx);
+        let left = &elements[0];
+        assert_eq!(left.font_glyph.unwrap().index, 4666);
+        assert!((left.y + left.baseline_offset.unwrap() - 99.52).abs() <= 0.35);
+        assert!((elements[1].x - 5.04).abs() <= 0.35);
+    }
+
+    #[test]
+    fn literal_parentheses_retain_the_text_baseline() {
+        let expr = MathExpr::Run { text: "(n1)".into(),
+            style: MathRunStyle { literal: true, ..Default::default() } };
+        let ctx = MathLayoutContext { font_size: 12.0, style: MathStyle::Display };
+        let (elements, _) = emit_expr(&expr, 0.0, 100.0, &ctx);
+        assert!(!elements.is_empty());
+        assert!(elements.iter().all(|e| (e.y + e.baseline_offset.unwrap() - 100.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn delimiter_plans_cover_content_and_agree_with_emitted_widths() {
+        let frac = MathExpr::Fraction { num: Box::new(MathExpr::Text("a".into())),
+            den: Box::new(MathExpr::Text("b".into())), bar_type: FracBarType::Bar };
+        let nested = MathExpr::Fraction { num: Box::new(frac.clone()), den: Box::new(frac.clone()),
+            bar_type: FracBarType::Bar };
+        for size in [8.0, 12.0, 18.0] {
+            for style in [MathStyle::Display, MathStyle::Text, MathStyle::Script] {
+                for (beg, end) in [('(', ')'), ('[', ']'), ('{', '}')] {
+                    for content in [&frac, &nested] {
+                        let ctx = MathLayoutContext { font_size: size, style };
+                        let (a, d) = ink_extent_word(content, &ctx, false);
+                        let shape = delimiter_geometry(beg, content, &ctx, false).unwrap();
+                        assert!(shape.ink_bottom - shape.ink_top + 0.01 >= a + d);
+                        let axis = MathTable::cambria_math().du_to_pt(
+                            MathTable::cambria_math().constants.AxisHeight, ctx.effective_font_size());
+                        assert!(((shape.ink_top + shape.ink_bottom) * 0.5 + axis).abs() < 0.001);
+                        let expr = MathExpr::Delimiter { beg, end, sep: None, content: Box::new(content.clone()) };
+                        let layout = layout_expr(&expr, &ctx);
+                        let (_, emitted) = emit_expr(&expr, 0.0, 100.0, &ctx);
+                        assert!((layout.advance - emitted.advance).abs() < 0.001);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod radical_rule_gap_tests {
+    use super::*;
+    use crate::ir::FracBarType;
+
+    #[test]
+    fn fraction_in_radical_matches_word_relative_baselines() {
+        let fraction = MathExpr::Fraction { num: Box::new(MathExpr::Text("1".into())),
+            den: Box::new(MathExpr::Subscript { base: Box::new(MathExpr::Text("n".into())),
+                sub: Box::new(MathExpr::Text("1".into())) }), bar_type: FracBarType::Bar };
+        let expr = MathExpr::Radical { degree: None, radicand: Box::new(fraction) };
+        for (size, expected) in [(12.0, [-8.88, 8.28, 10.68]), (18.0, [-13.32, 12.48, 16.08])] {
+            let ctx = MathLayoutContext { font_size: size, style: MathStyle::Display };
+            let (elements, _) = emit_expr(&expr, 0.0, 100.0, &ctx);
+            let baseline = |e: &LayoutElement| e.y + e.baseline_offset.unwrap();
+            let root = baseline(&elements[0]);
+            for (element, reference) in elements[1..4].iter().zip(expected) {
+                assert!((baseline(element) - root - reference).abs() <= 0.35);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod row_token_regression_tests {
+    use super::*;
+    use crate::ir::{MathRunStyle, MathStyleVariant};
+
+    fn run(text: &str, style: &MathRunStyle) -> MathExpr {
+        MathExpr::Run { text: text.into(), style: style.clone() }
+    }
+
+    fn emitted_origins(expr: &MathExpr, ctx: &MathLayoutContext) -> (Vec<(String, f32, f32)>, f32) {
+        let (elements, bbox) = emit_expr(expr, 20.0, 100.0, ctx);
+        let origins = elements.iter().filter_map(|e| match &e.content {
+            LayoutContent::Text { text, .. } => Some((text.clone(), e.x, e.y + e.baseline_offset.unwrap())),
+            _ => None,
+        }).collect();
+        (origins, bbox.advance)
+    }
+
+    #[test]
+    fn equation_spacing_is_independent_of_operator_run_boundaries() {
+        for fs in [8.0, 12.0, 18.0] {
+            for math_style in [None, Some(MathStyleVariant::BoldItalic), Some(MathStyleVariant::Plain)] {
+                let style = MathRunStyle { math_style, ..Default::default() };
+                for context_style in [MathStyle::Display, MathStyle::Text, MathStyle::Script] {
+                    let ctx = MathLayoutContext { font_size: fs, style: context_style };
+                    let grouped = run("a+(b)", &style);
+                    let split = MathExpr::Seq(["a", "+", "(", "b", ")"].iter()
+                        .map(|s| run(s, &style)).collect());
+                    let a = emitted_origins(&grouped, &ctx);
+                    let b = emitted_origins(&split, &ctx);
+                    assert_eq!(a.0, b.0);
+                    assert!((a.1 - b.1).abs() < 0.001);
+                    assert!((layout_expr(&grouped, &ctx).advance - a.1).abs() < 0.001);
+                    for xs in [vec![grouped.clone()], vec![split.clone()]] {
+                        let block = MathBlock::Inline(xs);
+                        let (_, emitted) = emit_math_block(&block, 20.0, 100.0, fs);
+                        assert!((layout_math_block(&block, fs).advance - emitted.advance).abs() < 0.001);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn normal_text_and_identifiers_keep_their_shaping_runs() {
+        let literal = MathRunStyle { literal: true, ..Default::default() };
+        let normal = MathRunStyle::default();
+        let ctx = MathLayoutContext { font_size: 12.0, style: MathStyle::Text };
+        for expr in [run("a+(b)", &literal), run("alpha", &normal), MathExpr::Text("alpha".into())] {
+            assert!(math_run_atoms(&expr).is_none());
+            let (e, _) = emit_expr(&expr, 20.0, 100.0, &ctx);
+            assert_eq!(e.len(), 1);
+        }
+    }
+
+    #[test]
+    fn grouped_binary_operator_restores_both_word_measured_gaps() {
+        // Word's saved display controls place the grouped '+' 2.67pt after
+        // the preceding operand and '(' a further 2.67pt after the operator
+        // advance at 12pt. The previous row omitted both 4/18-em gaps.
+        let style = MathRunStyle::default();
+        let ctx = MathLayoutContext { font_size: 12.0, style: MathStyle::Text };
+        let row = MathExpr::Seq(vec![run("x", &style), run("+(", &style), run("y", &style)]);
+        let (elements, _) = emit_expr(&row, 20.0, 100.0, &ctx);
+        let plus = &elements[1];
+        let open = &elements[2];
+        let x_advance = layout_expr(&run("x", &style), &ctx).advance;
+        let plus_advance = layout_expr(&run("+", &style), &ctx).advance;
+        assert!((plus.x - (20.0 + x_advance) - 2.67).abs() < 0.01);
+        assert!((open.x - (plus.x + plus_advance) - 2.67).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod nary_glyph_geometry_regression_tests {
+    use super::*;
+    fn leaf(text:&str)->MathExpr {
+        MathExpr::Run{text:text.into(),style:crate::ir::MathRunStyle{
+            math_style:Some(crate::ir::MathStyleVariant::Plain),..Default::default()}}
+    }
+    #[test]
+    fn lower_only_limit_keeps_the_measured_right_side_anchor() {
+        for (op,expected_x) in [('\u{222b}',99.744),('\u{2211}',103.10)] {
+            let expr=MathExpr::Nary{operator_color: None, op,sub:Some(Box::new(leaf("α"))),sup:None,
+                operand:Box::new(MathExpr::Text("f(x)".into())),lim_loc:crate::ir::LimLoc::SubSup,grow:false};
+            let ctx=MathLayoutContext{font_size:10.5,style:MathStyle::Text};
+            let (elements,emitted)=emit_expr(&expr,95.664,140.0,&ctx);
+            let lower=elements.iter().find(|e|matches!(&e.content,LayoutContent::Text{text,..}if text=="α")).unwrap();
+            assert!((lower.x-expected_x).abs()<0.35,"operator {op}: {} vs {expected_x}",lower.x);
+            assert!((layout_expr(&expr,&ctx).advance-emitted.advance).abs()<0.001);
+        }
+    }
+    #[test]
+    fn grown_operator_emits_the_font_variant_at_its_nominal_size() {
+        let ctx=MathLayoutContext{font_size:10.5,style:MathStyle::Text};
+        let make=|grow|MathExpr::Nary{operator_color: None, op:'\u{2211}',sub:Some(Box::new(leaf("α"))),sup:Some(Box::new(leaf("β"))),
+            operand:Box::new(MathExpr::Text("f(x)g(x)dx".into())),lim_loc:crate::ir::LimLoc::SubSup,grow};
+        for (grow,gid) in [(false,963),(true,3532)] {
+            let expr=make(grow);let (elements,emitted)=emit_expr(&expr,0.0,100.0,&ctx);
+            let operator=&elements[0];assert_eq!(operator.font_glyph.unwrap().index,gid);
+            assert!(matches!(&operator.content,LayoutContent::Text{font_size,..}if (*font_size-10.5).abs()<0.001));
+            assert!((layout_expr(&expr,&ctx).advance-emitted.advance).abs()<0.001);
+        }
+    }
+}
+
+#[cfg(test)]
+mod resolved_math_font_regression_tests {
+    use super::*;
+    #[test]
+    fn fallback_greek_has_word_face_ink_and_an_em_advance() {
+        let style=crate::ir::MathRunStyle {math_style:Some(crate::ir::MathStyleVariant::Plain),
+            run_style:Some(crate::ir::RunStyle {font_family:Some("MS Mincho".into()),font_size:Some(10.5),..Default::default()}),..Default::default()};
+        let ctx=MathLayoutContext {font_size:10.5,style:MathStyle::Script};
+        let glyphs=resolved_run_glyphs("α",&style,&ctx).expect("portable real face geometry");
+        let bbox=resolved_run_bbox(&glyphs,&style,&ctx);
+        assert!((bbox.advance-7.5).abs()<0.001);
+        assert_eq!(glyphs[0].metrics.bounds_em,[0.2421875,-0.0078125,0.76953125,0.42578125]);
+        let elements=emit_resolved_run(&glyphs,&style,99.744,132.74,&ctx);
+        assert!(matches!(&elements[0].content,LayoutContent::Text {font_family:Some(f),font_size,..}if f=="MS Mincho" && (*font_size-7.5).abs()<0.001));
+        assert!((elements[0].width-bbox.advance).abs()<0.001);
+        assert!((elements[0].y+elements[0].baseline_offset.unwrap()-132.74).abs()<0.001);
+    }
+}
+
+
+#[cfg(test)]
+mod fallback_typographic_geometry_regression_tests {
+    use super::*;
+    fn leaf(text:&str)->MathExpr {
+        MathExpr::Run {text:text.into(),style:crate::ir::MathRunStyle {
+            math_style:Some(crate::ir::MathStyleVariant::Plain),run_style:Some(crate::ir::RunStyle {
+                font_family:Some("MS Mincho".into()),font_size:Some(10.5),..Default::default()}),..Default::default()}}
+    }
+    #[test]
+    fn font_signature_reserves_both_sides_without_a_family_exception() {
+        let original=crate::font::catalog_glyph_face_metrics("MS Mincho",false,false).unwrap();
+        let mut renamed=(*original).clone();renamed.family="arbitrary face name".into();
+        assert_eq!(original.design_font_box_pt(7.5,true),renamed.design_font_box_pt(7.5,true));
+        let (a,d)=renamed.design_font_box_pt(7.5,true);
+        assert!((a-258.0/256.0*7.5).abs()<0.001);
+        assert!((d-74.0/256.0*7.5).abs()<0.001);
+    }
+    #[test]
+    fn script_capacity_preserves_nominal_box_and_the_actual_paint_baseline() {
+        let expr=leaf("β");let ctx=MathLayoutContext{font_size:10.5,style:MathStyle::Script};
+        let (elements,_)=emit_expr(&expr,100.0,135.26,&ctx);let e=&elements[0];
+        assert!((e.y+e.baseline_offset.unwrap()-135.26).abs()<0.001);
+        assert!((e.height-10.5).abs()<0.001);
+        assert!(matches!(&e.content,LayoutContent::Text{font_size,..}if (*font_size-7.5).abs()<0.001));
+        let (top,bottom)=painted_element_ink(e);
+        assert!((bottom-top-0.828125*7.5).abs()<0.001);
+    }
+    #[test]
+    fn upper_limits_use_the_selected_operator_shape() {
+        let ctx=MathLayoutContext{font_size:10.5,style:MathStyle::Text};
+        for (op,grow,expected) in [('∫',false,-6.2399902),('∑',false,-3.8400269)] {
+            let expr=MathExpr::Nary {operator_color: None, op,sub:None,sup:Some(Box::new(leaf("β"))),
+                operand:Box::new(MathExpr::Text("f(x)g(x)dx".into())),lim_loc:crate::ir::LimLoc::SubSup,grow};
+            let (elements,_)=emit_expr(&expr,0.0,0.0,&ctx);
+            let upper=elements.iter().find(|e|matches!(&e.content,LayoutContent::Text{text,..}if text=="β")).unwrap();
+            assert!((upper.y+upper.baseline_offset.unwrap()-expected).abs()<0.35);
+        }
+    }
+    #[test]
+    fn integral_upper_limit_counts_the_word_grid_capacity() {
+        let font=crate::font::catalog_glyph_face_metrics("MS Mincho",false,false).unwrap();
+        for (size,pitch,expected) in [(10.5,18.0,54.0),(14.0,12.0,60.0)] {
+            let mut upper=leaf("β");
+            if let MathExpr::Run{style,..}=&mut upper {style.run_style.as_mut().unwrap().font_size=Some(size);}
+            let block=MathBlock::Inline(vec![MathExpr::Nary {operator_color: None, op:'∫',sub:None,sup:Some(Box::new(upper)),
+                operand:Box::new(MathExpr::Text("f(x)g(x)dx".into())),lim_loc:crate::ir::LimLoc::SubSup,grow:false}]);
+            let (a,d)=inline_math_typographic_extent(&block,size).unwrap();let (ha,hd)=font.design_font_box_pt(size,true);
+            let marker_span=((ha+hd)/pitch).ceil()*pitch+((a.max(ha)+d.max(hd))/pitch).ceil()*pitch;
+            assert!((marker_span-expected).abs()<0.001,"size {size}, pitch {pitch}: {marker_span}");
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn full_size_foreign_math_leaf_retains_its_painted_box() {
+    let style=crate::ir::MathRunStyle {math_style:Some(crate::ir::MathStyleVariant::Plain),
+        run_style:Some(crate::ir::RunStyle {font_family:Some("Times New Roman".into()),font_size:Some(12.0),
+            ..Default::default()}),..Default::default()};
+    let expr=MathExpr::Run {text:"-".into(),style};
+    let ctx=MathLayoutContext {font_size:12.0,style:MathStyle::CompactFullSize};
+    let (elements,_)=emit_expr(&expr,10.0,100.0,&ctx);let element=&elements[0];
+    let (top,bottom)=painted_element_ink(element);
+    assert!((element.y-top).abs()<0.001 && (element.y+element.height-bottom).abs()<0.001);
+    assert!((element.y+element.baseline_offset.unwrap()-100.0).abs()<0.001);
+    assert!(!is_fallback_font_element(element));
+}
+
+
+#[cfg(test)]
+mod shared_math_line_baseline_regression_tests {
+    use super::*;
+
+    fn limit(text: &str, size: f32) -> MathExpr {
+        MathExpr::Run {text: text.into(), style: crate::ir::MathRunStyle {
+            math_style: Some(crate::ir::MathStyleVariant::Plain),
+            run_style: Some(crate::ir::RunStyle {font_family: Some("MS Mincho".into()),
+                font_size: Some(size), ..Default::default()}), ..Default::default()}}
+    }
+
+    #[test]
+    fn composed_baseline_matches_saved_word_operand_origins() {
+        // Saved Word PDF operand baselines relative to the measured grid-line
+        // origin. Both limits, two sizes, grown/base shapes and two pitches.
+        for (op, sub, sup, grow, size, height, expected) in [
+            ('\u{222b}', true, false, false, 10.5, 24.0, 14.0499878),
+            ('\u{222b}', true, false, false, 14.0, 24.0, 14.7699585),
+            ('\u{2211}', false, true, false, 10.5, 18.0, 14.0499878),
+            ('\u{2211}', true, true, true, 10.5, 24.0, 16.4500122),
+        ] {
+            let block = MathBlock::Inline(vec![MathExpr::Nary {operator_color: None, op,
+                sub: sub.then(|| Box::new(limit("\u{03b1}", size))),
+                sup: sup.then(|| Box::new(limit("\u{03b2}", size))),
+                operand: Box::new(MathExpr::Text("f(x)g(x)dx".into())),
+                lim_loc: crate::ir::LimLoc::SubSup, grow}]);
+            let capacity_before = inline_math_typographic_extent(&block, size).unwrap();
+            let (a, d) = inline_math_baseline_extent(&block, size).unwrap();
+            let host = crate::font::catalog_glyph_face_metrics("MS Mincho", false, false).unwrap();
+            let (ha, hd) = host.design_font_box_pt(size, true);
+            let actual = (height + a.max(ha) - d.max(hd)) * 0.5;
+            assert!((actual - expected).abs() <= 0.35,
+                "op {op}, size {size}, sub {sub}, sup {sup}, grow {grow}: {actual} vs {expected}");
+            assert_eq!(capacity_before, inline_math_typographic_extent(&block, size).unwrap());
+        }
+    }
+
+    #[test]
+    fn math_face_only_expression_retains_its_baseline_policy() {
+        let block = MathBlock::Inline(vec![MathExpr::Nary {operator_color: None, op: '\u{222b}',
+            sub: Some(Box::new(MathExpr::Text("a".into()))), sup: None,
+            operand: Box::new(MathExpr::Text("f(x)".into())),
+            lim_loc: crate::ir::LimLoc::SubSup, grow: false}]);
+        assert!(inline_math_baseline_extent(&block, 10.5).is_none());
+    }
+}
+
+
+#[cfg(test)]
+mod extended_joint_limit_baseline_regression_tests {
+    use super::*;
+
+    #[test]
+    fn jointly_placed_limits_retain_saved_word_host_baselines() {
+        for (op, grow, size, line_height, expected) in [
+            ('\u{222b}', false, 10.5, 24.0, 16.4500122),
+            ('\u{222b}', false, 14.0, 36.0, 24.0100098),
+            ('\u{2211}', true, 10.5, 24.0, 16.4500122),
+            ('\u{2211}', true, 14.0, 36.0, 24.0100098),
+        ] {
+            let limit = |text: &str| MathExpr::Run { text: text.into(),
+                style: crate::ir::MathRunStyle {
+                    math_style: Some(crate::ir::MathStyleVariant::Plain),
+                    run_style: Some(crate::ir::RunStyle {
+                        font_family: Some("MS Mincho".into()), font_size: Some(size),
+                        ..Default::default()
+                    }), ..Default::default()
+                }
+            };
+            let block = MathBlock::Inline(vec![MathExpr::Nary {operator_color: None,  op,
+                sub: Some(Box::new(limit("\u{03b1}"))),
+                sup: Some(Box::new(limit("\u{03b2}"))),
+                operand: Box::new(MathExpr::Text("f(x)g(x)dx".into())),
+                lim_loc: crate::ir::LimLoc::SubSup, grow
+            }]);
+            let (a, d) = inline_math_baseline_extent(&block, size).unwrap();
+            let host = crate::font::catalog_glyph_face_metrics("MS Mincho", false, false).unwrap();
+            let (ha, hd) = host.design_font_box_pt(size, true);
+            let baseline = (line_height + a.max(ha) - d.max(hd)) * 0.5;
+            assert!((baseline - expected).abs() <= 0.35,
+                "op {op}, size {size}: {baseline} vs {expected}");
+        }
+    }
+}
+
+
+/// A legacy leaf has no MATH constants. Its measured rule thickness supplies
+/// clearance for ordinary joint limits; MATH leaves keep their own policy.
+fn ordinary_fallback_rule_gap(expr: &MathExpr, ctx: &MathLayoutContext) -> Option<f32> {
+    match expr {
+        MathExpr::Run { text, style } => {
+            let glyphs = resolved_run_glyphs(text, style, ctx)?;
+            if glyphs.is_empty() || glyphs.iter().any(|g| g.metrics.has_math) { return None; }
+            let run = style.run_style.as_ref()?;
+            let thickness = crate::font::catalog_glyph_rule_thickness(
+                run.font_family.as_deref()?, run.bold, run.italic)?;
+            let nominal_size = resolved_run_context(style, ctx).font_size;
+            (nominal_size.is_finite() && nominal_size > 0.0)
+                .then_some(4.0 * thickness * nominal_size)
+        }
+        MathExpr::Seq(children) => {
+            let gaps: Option<Vec<f32>> = children.iter()
+                .map(|child| ordinary_fallback_rule_gap(child, ctx)).collect();
+            gaps?.into_iter().reduce(f32::max)
+        }
+        MathExpr::BoxExpr(child) | MathExpr::Phantom(child) => ordinary_fallback_rule_gap(child, ctx),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod ordinary_joint_limit_relative_position_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_joint_limits_retain_saved_relative_positions_at_two_sizes() {
+        for (size, expected_lower, expected_upper) in [
+            (10.5, 5.5200195, -6.1199951),
+            (14.0, 7.4400024, -8.1600342),
+        ] {
+            let limit = |text: &str| MathExpr::Run { text: text.into(),
+                style: crate::ir::MathRunStyle {
+                    math_style: Some(crate::ir::MathStyleVariant::Plain),
+                    run_style: Some(crate::ir::RunStyle {
+                        font_family: Some("MS Mincho".into()), font_size: Some(size),
+                        ..Default::default()
+                    }), ..Default::default()
+                }
+            };
+            let block = MathBlock::Inline(vec![MathExpr::Nary {operator_color: None,
+                op: '\u{2211}', sub: Some(Box::new(limit("\u{03b1}"))),
+                sup: Some(Box::new(limit("\u{03b2}"))),
+                operand: Box::new(MathExpr::Text("f(x)g(x)dx".into())),
+                lim_loc: crate::ir::LimLoc::SubSup, grow: false,
+            }]);
+            let (elements, _) = emit_math_block(&block, 0.0, 0.0, size);
+            let baseline = |text: &str| {
+                let e = elements.iter().find(|e| matches!(&e.content,
+                    LayoutContent::Text { text: value, .. } if value == text)).unwrap();
+                e.y + e.baseline_offset.unwrap()
+            };
+            // The legacy Text leaf substitutes mathematical italic letters.
+            // It may remain one shaping run or emit selected glyphs separately;
+            // both carry the same operand baseline. Match its actual first f.
+            let operand_element = elements.iter().find(|e| matches!(&e.content,
+                LayoutContent::Text { text, .. }
+                    if text.starts_with(math_substitute('f'))))
+                .expect("emitted mathematical f operand");
+            let operand = operand_element.y + operand_element.baseline_offset
+                .expect("emitted math operand baseline");
+            assert!((baseline("\u{03b1}") - operand - expected_lower).abs() <= 0.15);
+            assert!((baseline("\u{03b2}") - operand - expected_upper).abs() <= 0.15);
+        }
+    }
+}
+
+#[cfg(test)]
+mod operator_color_regression_tests {
+    use super::*;
+
+    #[test]
+    fn nary_operator_color_is_independent_of_operand_and_limits() {
+        let leaf = |text: &str, color: &str| MathExpr::Run { text: text.into(),
+            style: crate::ir::MathRunStyle { run_style: Some(crate::ir::RunStyle {
+                font_family: Some("Cambria Math".into()), color: Some(color.into()),
+                ..crate::ir::RunStyle::default()
+            }), ..crate::ir::MathRunStyle::default() } };
+        // '+' exercises the non-MATH-table fallback as well as the real stretch plans.
+        for op in ['∑', '∫', '+'] {
+            for style in [MathStyle::Display, MathStyle::Text] {
+                let expr = MathExpr::Nary { op, operator_color: Some("#FF0000".into()),
+                    sub: Some(Box::new(leaf("n", "#00FF00"))), sup: None,
+                    operand: Box::new(leaf("x", "#0000FF")), lim_loc: crate::ir::LimLoc::SubSup, grow: true };
+                let ctx = MathLayoutContext { font_size: 14.0, style };
+                let (elements, bounds) = emit_expr(&expr, 12.0, 100.0, &ctx);
+                let mut operators = 0;
+                for e in &elements {
+                    if let LayoutContent::Text { text, color, .. } = &e.content {
+                        let expected = if text == &op.to_string() { operators += 1; "#FF0000" }
+                            else if text == "n" || text == "𝑛" { "#00FF00" } else { "#0000FF" };
+                        assert_eq!(color.as_deref(), Some(expected), "{op}: {text}");
+                    }
+                }
+                assert!(operators > 0);
+                let mut uncolored = expr.clone();
+                if let MathExpr::Nary { operator_color, .. } = &mut uncolored { *operator_color = None; }
+                let (before, before_bounds) = emit_expr(&uncolored, 12.0, 100.0, &ctx);
+                assert_eq!(elements.len(), before.len());
+                assert_eq!((bounds.advance,bounds.ascent,bounds.descent,bounds.italic_correction),
+                    (before_bounds.advance,before_bounds.ascent,before_bounds.descent,before_bounds.italic_correction));
+                for (after, mut before) in elements.iter().zip(before) {
+                    if let LayoutContent::Text { text, color, .. } = &mut before.content {
+                        if text == &op.to_string() { *color = Some("#FF0000".into()); }
+                    }
+                    assert_eq!((after.x, after.y, after.width, after.height, after.text_y_off, after.baseline_offset),
+                        (before.x, before.y, before.width, before.height, before.text_y_off, before.baseline_offset));
+                    assert_eq!(after.font_glyph.as_ref().map(|g| (g.index, g.bounds_em)),
+                        before.font_glyph.as_ref().map(|g| (g.index, g.bounds_em)));
+                    assert_eq!(std::mem::discriminant(&after.content), std::mem::discriminant(&before.content));
+                    if let (LayoutContent::Text { text: a, color: ac, font_size: afs, font_family: aff, .. },
+                        LayoutContent::Text { text: b, color: bc, font_size: bfs, font_family: bff, .. }) = (&after.content, &before.content) {
+                        assert_eq!((a, ac, afs, aff), (b, bc, bfs, bff));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn older_nary_ir_without_operator_color_remains_readable() {
+        let expr: MathExpr = serde_json::from_str(r#"{"Nary":{"op":"∑","sub":null,"sup":null,"operand":{"Text":"x"},"lim_loc":"SubSup","grow":false}}"#).unwrap();
+        assert!(matches!(expr, MathExpr::Nary { operator_color: None, .. }));
     }
 }

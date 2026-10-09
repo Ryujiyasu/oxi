@@ -201,17 +201,16 @@ fn hex_to_unicode_string(hex: &str) -> Option<String> {
     if hex.is_empty() {
         return None;
     }
-    // Each 4 hex digits = one UTF-16 code unit.
-    let mut result = String::new();
+    // Decode the complete UTF-16 sequence so a surrogate pair remains one scalar.
+    let mut units = Vec::new();
     let mut i = 0;
     while i + 3 < hex.len() {
-        if let Ok(code) = u16::from_str_radix(&hex[i..i + 4], 16) {
-            if let Some(c) = char::from_u32(code as u32) {
-                result.push(c);
-            }
-        }
+        units.push(u16::from_str_radix(&hex[i..i + 4], 16).ok()?);
         i += 4;
     }
+    let mut result: String = char::decode_utf16(units)
+        .collect::<Result<String, _>>()
+        .ok()?;
     // Handle remaining 2 hex digits (single byte).
     if i + 1 < hex.len() && i + 2 <= hex.len() {
         if let Ok(code) = u8::from_str_radix(&hex[i..i + 2], 16) {
@@ -293,5 +292,22 @@ endbfrange
     fn test_empty_cmap() {
         let cmap = parse_cmap(b"some random data");
         assert_eq!(cmap.decode(0x0041), None);
+    }
+}
+
+#[cfg(test)]
+mod surrogate_unicode_tests {
+    use super::hex_to_unicode_string;
+    #[test]
+    fn supplemental_scalar_and_bmp_text_remain_in_order() {
+        assert_eq!(
+            hex_to_unicode_string("0041D835DC4E3042"),
+            Some("A\u{1d44e}\u{3042}".to_owned())
+        );
+    }
+    #[test]
+    fn unpaired_surrogates_are_not_silently_discarded() {
+        assert_eq!(hex_to_unicode_string("D8350041"), None);
+        assert_eq!(hex_to_unicode_string("DC4E"), None);
     }
 }

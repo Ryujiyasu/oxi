@@ -82,12 +82,14 @@ fn extract_page_text(page: &Page) -> Vec<TextPosition> {
     page.contents
         .iter()
         .filter_map(|el| match el {
-            ContentElement::Text(span) => Some(TextPosition {
-                x: span.x,
-                y: span.y,
-                text: span.text.clone(),
-                font_size: span.font_size,
-            }),
+            ContentElement::Text(span) | ContentElement::GlyphRun(GlyphRun { span, .. }) => {
+                Some(TextPosition {
+                    x: span.x,
+                    y: span.y,
+                    text: span.text.clone(),
+                    font_size: span.font_size,
+                })
+            }
             _ => None,
         })
         .collect()
@@ -119,7 +121,12 @@ mod tests {
             pages: vec![Page {
                 width: 612.0,
                 height: 792.0,
-                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                media_box: Rectangle {
+                    llx: 0.0,
+                    lly: 0.0,
+                    urx: 612.0,
+                    ury: 792.0,
+                },
                 crop_box: None,
                 contents,
                 rotation: 0,
@@ -138,10 +145,7 @@ mod tests {
 
     #[test]
     fn test_extract_multi_line() {
-        let doc = make_doc_with_text(vec![
-            ("Line 1", 72.0, 72.0),
-            ("Line 2", 72.0, 90.0),
-        ]);
+        let doc = make_doc_with_text(vec![("Line 1", 72.0, 72.0), ("Line 2", 72.0, 90.0)]);
         let text = extract_text_string(&doc);
         assert!(text.contains("Line 1"));
         assert!(text.contains("Line 2"));
@@ -150,10 +154,7 @@ mod tests {
 
     #[test]
     fn test_extract_same_line() {
-        let doc = make_doc_with_text(vec![
-            ("Hello", 72.0, 72.0),
-            ("World", 120.0, 72.0),
-        ]);
+        let doc = make_doc_with_text(vec![("Hello", 72.0, 72.0), ("World", 120.0, 72.0)]);
         let text = extract_text_string(&doc);
         assert_eq!(text, "Hello World");
     }
@@ -166,7 +167,12 @@ mod tests {
             pages: vec![Page {
                 width: 612.0,
                 height: 792.0,
-                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                media_box: Rectangle {
+                    llx: 0.0,
+                    lly: 0.0,
+                    urx: 612.0,
+                    ury: 792.0,
+                },
                 crop_box: None,
                 contents: vec![],
                 rotation: 0,
@@ -187,10 +193,16 @@ mod tests {
                 Page {
                     width: 612.0,
                     height: 792.0,
-                    media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                    media_box: Rectangle {
+                        llx: 0.0,
+                        lly: 0.0,
+                        urx: 612.0,
+                        ury: 792.0,
+                    },
                     crop_box: None,
                     contents: vec![ContentElement::Text(TextSpan {
-                        x: 72.0, y: 72.0,
+                        x: 72.0,
+                        y: 72.0,
                         text: "Page 1".into(),
                         font_name: "F1".into(),
                         font_size: 12.0,
@@ -202,10 +214,16 @@ mod tests {
                 Page {
                     width: 612.0,
                     height: 792.0,
-                    media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                    media_box: Rectangle {
+                        llx: 0.0,
+                        lly: 0.0,
+                        urx: 612.0,
+                        ury: 792.0,
+                    },
                     crop_box: None,
                     contents: vec![ContentElement::Text(TextSpan {
-                        x: 72.0, y: 72.0,
+                        x: 72.0,
+                        y: 72.0,
                         text: "Page 2".into(),
                         font_name: "F1".into(),
                         font_size: 12.0,

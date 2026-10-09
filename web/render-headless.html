@@ -4,7 +4,12 @@
 <div id="status">Initializing...</div>
 <script type="module">
 import { renderVerticalText } from '../docs/vertical-text.js';
-import init, { layout_document } from './oxidocs_wasm.js';
+import { textBaseline } from '../docs/text-baseline.js';
+import { drawRegisteredText } from '../docs/runtime-font-glyph.js';
+import * as fontApi from './oxidocs_wasm.js';
+import { RuntimeFontLoader, showFontAccess } from '../docs/runtime-font-loader.js';
+const fontLoader = new RuntimeFontLoader(fontApi);
+import init, { layout_document, get_font_glyph_outline } from './oxidocs_wasm.js';
 
 const statusEl = document.getElementById('status');
 
@@ -43,7 +48,7 @@ async function main() {
   const docxBytes = new Uint8Array(await response.arrayBuffer());
 
   // Layout
-  const layout = layout_document(docxBytes);
+  const layout = await fontLoader.resolveLayout(() => layout_document(docxBytes));
   const scale = dpi / 72;
 
   // Render each page
@@ -71,13 +76,14 @@ async function main() {
         ctx.font = `${italic}${bold}${fs}px ${family}`;
         ctx.fillStyle = el.color || '#000000';
         if (el.character_spacing) ctx.letterSpacing = `${el.character_spacing}px`;
-        ctx.fillText(el.text || '', el.x, el.y + fs * 0.85);
+        const baseline = textBaseline(el, fs);
+        drawRegisteredText(ctx, el, baseline, get_font_glyph_outline);
         if (el.character_spacing) ctx.letterSpacing = '0px';
         if (el.underline) {
           ctx.beginPath();
           ctx.strokeStyle = el.color || '#000000';
           ctx.lineWidth = fs * 0.05;
-          const baseline = el.y + fs * 0.85;
+
           ctx.moveTo(el.x, baseline + fs * 0.15);
           ctx.lineTo(el.x + el.width, baseline + fs * 0.15);
           ctx.stroke();

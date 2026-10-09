@@ -37,6 +37,9 @@ pub enum MathBlock {
     /// Display math, standalone paragraph. Uses Display style.
     Display {
         content: Vec<MathExpr>,
+        /// Reduce nested fraction arguments to script sizes.
+        #[serde(default)]
+        reduce_fraction_size: bool,
         /// Horizontal alignment of the display equation within its paragraph.
         /// COM-verified: defaults to "center" if `<m:oMathParaPr>/<m:jc>` absent.
         jc: MathAlignment,
@@ -132,6 +135,9 @@ pub enum MathExpr {
     Nary {
         /// Operator character (e.g., '∑', '∫', '∏'). Parsed from `<m:chr>`.
         op: char,
+        /// Resolved color of the operator, independent of its limits and operand.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operator_color: Option<String>,
         /// Lower limit (sub or under, depending on `lim_loc`).
         sub: Option<Box<MathExpr>>,
         /// Upper limit (sup or over).
@@ -339,6 +345,10 @@ pub enum MathStyleVariant {
 pub enum MathStyle {
     /// Display-style: `<m:oMathPara>` top-level. Uses *DisplayStyle* MATH constants.
     Display,
+    /// Display constants with reduced nested fraction sizes.
+    DisplayReducedFractions,
+    /// Compact fraction constants while retaining the base text size.
+    CompactFullSize,
     /// Text/inline-style: `<m:oMath>` in running text. Uses base MATH constants.
     Text,
     /// Script-level: subscripts, superscripts, limits. Scale = 73% (ScriptPercentScaleDown).
@@ -352,7 +362,7 @@ impl MathStyle {
     /// From Cambria Math: ScriptPercentScaleDown=73, ScriptScriptPercentScaleDown=60.
     pub fn scale_factor(&self) -> f32 {
         match self {
-            MathStyle::Display | MathStyle::Text => 1.0,
+            MathStyle::Display | MathStyle::DisplayReducedFractions | MathStyle::CompactFullSize | MathStyle::Text => 1.0,
             MathStyle::Script => 0.73,
             MathStyle::ScriptScript => 0.60,
         }
@@ -362,7 +372,7 @@ impl MathStyle {
     /// Script → ScriptScript → ScriptScript (doesn't descend further).
     pub fn script_style(&self) -> MathStyle {
         match self {
-            MathStyle::Display | MathStyle::Text => MathStyle::Script,
+            MathStyle::Display | MathStyle::DisplayReducedFractions | MathStyle::CompactFullSize | MathStyle::Text => MathStyle::Script,
             MathStyle::Script => MathStyle::ScriptScript,
             MathStyle::ScriptScript => MathStyle::ScriptScript,
         }
@@ -370,13 +380,14 @@ impl MathStyle {
 
     /// Whether this is display-style (selects DisplayStyle* constants).
     pub fn is_display(&self) -> bool {
-        matches!(self, MathStyle::Display)
+        matches!(self, MathStyle::Display | MathStyle::DisplayReducedFractions)
     }
 
     /// Initial style from MathBlock container.
     pub fn from_block(block: &MathBlock) -> MathStyle {
         match block {
             MathBlock::Inline(_) => MathStyle::Text,
+            MathBlock::Display { reduce_fraction_size: true, .. } => MathStyle::DisplayReducedFractions,
             MathBlock::Display { .. } => MathStyle::Display,
         }
     }
@@ -408,7 +419,7 @@ mod tests {
     #[test]
     fn mathblock_initial_style() {
         let inline = MathBlock::Inline(vec![]);
-        let display = MathBlock::Display { content: vec![], jc: MathAlignment::Center, host: None };
+        let display = MathBlock::Display { content: vec![], jc: MathAlignment::Center, host: None, reduce_fraction_size: false };
         assert_eq!(MathStyle::from_block(&inline), MathStyle::Text);
         assert_eq!(MathStyle::from_block(&display), MathStyle::Display);
     }

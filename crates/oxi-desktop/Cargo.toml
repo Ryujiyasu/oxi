@@ -6,6 +6,7 @@ license = "MPL-2.0"
 description = "Oxi Desktop — Document viewer & editor (Windows/macOS/Linux)"
 
 [dependencies]
+oxidocs-font-provider = { path = "font-provider" }
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
@@ -14,3 +15,7 @@ serde_json = "1"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[workspace]
+members = ["font-provider"]
+resolver = "2"

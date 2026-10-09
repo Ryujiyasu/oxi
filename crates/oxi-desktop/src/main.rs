@@ -9,8 +9,11 @@ use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_updater::UpdaterExt;
 
+mod runtime_fonts;
+
 fn main() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![runtime_fonts::load_font_program])
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .menu(build_menu)

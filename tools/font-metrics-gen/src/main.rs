@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -8,6 +12,8 @@ use ttf_parser::Face;
 struct FontMetricsData {
     family: String,
     units_per_em: u16,
+    /// Positive OS/2 xAvgCharWidth, in font units.
+    average_width: Option<i16>,
     ascender: i16,
     descender: i16,
     line_gap: i16,
@@ -151,6 +157,10 @@ fn chars_to_measure() -> Vec<char> {
 
 fn extract_face(face: &Face, name: &str) -> FontMetricsData {
     let units_per_em = face.units_per_em();
+    let average_width = face.raw_face().table(ttf_parser::Tag::from_bytes(b"OS/2"))
+        .and_then(|data| data.get(2..4))
+        .map(|bytes| i16::from_be_bytes([bytes[0], bytes[1]]))
+        .filter(|width| *width > 0);
     let ascender = face.ascender();
     let descender = face.descender();
     let line_gap = face.line_gap();
@@ -182,6 +192,7 @@ fn extract_face(face: &Face, name: &str) -> FontMetricsData {
     FontMetricsData {
         family: name.to_string(),
         units_per_em,
+        average_width,
         ascender,
         descender,
         line_gap,

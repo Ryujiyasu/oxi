@@ -162,13 +162,14 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                                 styles.default_table_style_id = Some(id.clone());
                             }
                             if typ == "paragraph" || typ == "character" {
-                                let (pstyle, based_on, align, display_name) = parse_style_definition(&mut reader, theme)?;
+                                let (pstyle, based_on, align, display_name, aliases) = parse_style_definition(&mut reader, theme)?;
                                 styles.styles.insert(
                                     id.clone(),
                                     StyleDefinition {
                                         is_custom,
                                         style_id: id,
                                         display_name,
+                                        aliases,
                                         based_on,
                                         paragraph: pstyle,
                                         alignment: align,
@@ -1360,12 +1361,13 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
 fn parse_style_definition(
     reader: &mut Reader<&[u8]>,
     theme: &ThemeColors,
-) -> Result<(ParagraphStyle, Option<String>, Option<Alignment>, Option<String>), ParseError> {
+) -> Result<(ParagraphStyle, Option<String>, Option<Alignment>, Option<String>, Vec<String>), ParseError> {
     let mut style = ParagraphStyle::default();
     let mut run_style = RunStyle::default();
     let mut has_run_style = false;
     let mut based_on: Option<String> = None;
     let mut display_name = None;
+    let mut aliases = Vec::new();
     let mut alignment: Option<Alignment> = None;
     let mut depth = 0;
     let mut in_rpr = false;
@@ -1379,6 +1381,15 @@ fn parse_style_definition(
                     for attr in e.attributes().flatten() {
                         if local_name(attr.key.as_ref()) == "val" {
                             display_name = Some(attr.unescape_value().unwrap_or_default().into_owned());
+                        }
+                    }
+                }
+                if depth == 0 && local == "aliases" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let value = attr.unescape_value().unwrap_or_default();
+                            aliases.extend(value.split(',').map(str::trim)
+                                .filter(|name| !name.is_empty()).map(str::to_owned));
                         }
                     }
                 }
@@ -1485,6 +1496,15 @@ fn parse_style_definition(
                     for attr in e.attributes().flatten() {
                         if local_name(attr.key.as_ref()) == "val" {
                             display_name = Some(attr.unescape_value().unwrap_or_default().into_owned());
+                        }
+                    }
+                }
+                if depth == 0 && local == "aliases" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let value = attr.unescape_value().unwrap_or_default();
+                            aliases.extend(value.split(',').map(str::trim)
+                                .filter(|name| !name.is_empty()).map(str::to_owned));
                         }
                     }
                 }
@@ -2065,7 +2085,7 @@ fn parse_style_definition(
         style.default_run_style = Some(run_style);
     }
 
-    Ok((style, based_on, alignment, display_name))
+    Ok((style, based_on, alignment, display_name, aliases))
 }
 
 /// Resolve table style basedOn chains.

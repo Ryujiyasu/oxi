@@ -20,6 +20,28 @@ impl<'a> std::ops::Deref for LineBreaker<'a> {
 }
 
 impl<'a> LineBreaker<'a> {
+    // Word's quarter-em automatic gap follows the preceding visible glyph's
+    // size. With a 10pt ideograph followed by an 8/10/12pt Latin glyph, Word
+    // PDF measures the same 2.52pt leading gap in all three arms.
+    fn autospace_after_style(&self, ch: char, style: &RunStyle, para: &ParagraphStyle) -> f32 {
+        let size = self.resolve_font_size(style, para);
+        let size = if std::env::var("OXI_S899_DISABLE").is_err()
+            && style.font_size.is_some()
+            && matches!(style.vertical_align,
+                Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript))
+        {
+            LayoutEngine::vertical_align_font_size(size)
+        } else {
+            size
+        };
+        let cs = if style.fit_text.is_some() || style.ruby_spread {
+            style.character_spacing.unwrap_or(0.0)
+        } else {
+            snap_character_spacing(style.character_spacing.unwrap_or(0.0))
+        };
+        self.natural_autospace_after(ch, style, para, size, cs)
+    }
+
     pub(super) fn break_into_lines_with_grid(
         &self,
         fragments: &[(&str, &RunStyle, Option<FieldType>, usize, usize)],
@@ -94,6 +116,7 @@ impl<'a> LineBreaker<'a> {
 
         let mut lines = Vec::new();
         let mut current_line = Line {
+            empty_break_style: None,
             seg2_at: None,
             fragments: vec![],
             ..Default::default()
@@ -124,6 +147,7 @@ impl<'a> LineBreaker<'a> {
         // together for line-break decisions.
         let mut word = String::new();
         let mut word_width: f32 = 0.0;
+        let mut word_first_width_tw: i32 = 0;
         let mut word_natural_width: f32 = 0.0; // 2-pass wrap: natural (pre-compression) width
                                                // S809 (2026-07-13, default ON, opt-out OXI_S809_DISABLE): Latin
                                                // trailing-punctuation hang (overflowPunct). LEGACY (compat<=14)
@@ -195,6 +219,15 @@ impl<'a> LineBreaker<'a> {
                 s809_hang, s809_legacy, is_justified, self.compat_mode,
                 self.compat_mode_explicit, self.doc_body_has_real_cjk, s929_right_fence);
         }
+        // Mixed CJK/Latin justified body text can place a final ASCII period
+        // beyond the content edge too. Keep that terminal glyph advance separate
+        // from the earlier punctuation compression pool: spending it twice would
+        // accept words that Word moves to the next line. This branch deliberately
+        // leaves commas and quotes under their existing Latin-only policy.
+        let cjk_latin_period_hang = self.doc_body_has_real_cjk
+            && self.compat_mode >= 15 && self.compat_mode_explicit
+            && is_justified && s476_body && !vertical
+            && grid_char_pitch.is_none() && !s929_right_fence;
         let mut word_trail_hang_w: f32 = 0.0;
         // S245 (2026-05-24): removed dead variable `word_grid_extra`
         // (assigned/incremented at 3 sites but never read after S243
@@ -638,6 +671,51 @@ impl<'a> LineBreaker<'a> {
         let s1585_gap_part = |g: usize, fs: f32| -> f32 {
             if g == 0 { 0.0 } else { 1.5 * (fs / 4.0) * g as f32 / (g as f32 + 2.0) }
         };
+        // Legacy gap squeeze (proposal 2026-10-05, opt-out
+        // OXI_LEGACY_GAP_SQUEEZE_DISABLE): a compat-14 compressPunctuation body
+        // line keeps its overflowing last unit by squeezing its CJK<->Latin
+        // autoSpace gaps, left-aligned or justified alike. Faithful slices of
+        // legal__0f631d468773aee2 (MS Mincho + Century 12pt, 1-twip right-indent
+        // sweeps, left and justified flips identical, PDF advances):
+        //   each gap gives at most half of its fs/4 (G=2/4/6: 3.00/5.88/8.88);
+        //   an overflowing CJK char is kept while the overflow is within
+        //   min(fs/2, the gap floor) (12 gaps, no ')': 6.00);
+        //   a following line-start-prohibited ')' rides on the floor alone
+        //   (12 gaps with ')': 10.08; 10.5pt: 8.76 = 5.25 + 3.47).
+        // doNotCompress (flip at natural) and compat 15 jc=left (flip at
+        // natural) do not squeeze; compat-15 justified lines are S1585's.
+        let legacy_gap_on = std::env::var_os("OXI_LEGACY_GAP_SQUEEZE_DISABLE").is_none()
+            && self.compress_punctuation
+            && self.compat_mode <= 14
+            && s476_body
+            && !vertical
+            && !lines_and_chars
+            && grid_char_pitch.is_none();
+        let legacy_gap_floor = |chars: &[char], fs: f32| -> f32 {
+            let is_lat = |c: char| {
+                (c.is_ascii_alphabetic() && para_style.auto_space_de)
+                    || (c.is_ascii_digit() && para_style.auto_space_dn)
+            };
+            let mut gaps = 0usize;
+            let mut island_from_start = chars.first().map_or(false, |&c| is_lat(c));
+            for w in chars.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let a_cjk = kinsoku::is_cjk_ideograph_or_kana(a);
+                let b_cjk = kinsoku::is_cjk_ideograph_or_kana(b);
+                if a_cjk && is_lat(b) {
+                    gaps += 1;
+                    island_from_start = false;
+                } else if is_lat(a) && b_cjk {
+                    if !island_from_start {
+                        gaps += 1;
+                    }
+                    island_from_start = false;
+                } else if !is_lat(b) {
+                    island_from_start = false;
+                }
+            }
+            gaps as f32 * fs / 8.0
+        };
         let ideographic_closing_spacing = s476_body && is_justified && self.compress_punctuation
             && grid_char_pitch.is_none() && !vertical;
         let mut ideographic_closing_lines = std::collections::BTreeSet::new();
@@ -653,7 +731,23 @@ impl<'a> LineBreaker<'a> {
                     // S1346: the regime's elective half-cell for a Latin word when
                     // the line already holds a compressible mark.
                     let s1346_credit_tw: i32 = {
-                        let c = s1346_regime_credit.get();
+                        // Legacy no-character-grid Word admits the first Latin
+                        // glyph at natural width before considering a whole word
+                        // against punctuation capacity. Controlled Word sweeps
+                        // distinguish 5pt Mincho letters from 2.22pt Arial i;
+                        // modern justified Word instead admits the complete word.
+                        // The first-glyph admission test is an elective word
+                        // wrapping rule. A single line-start-prohibited closing
+                        // character instead retains the kinsoku allowance.
+                        // Word's faithful paragraph controls keep the final ')'
+                        // with the preceding Japanese sentence on the same line.
+                        let legacy_closing = word.chars().count() == 1
+                            && word.chars().next().is_some_and(kinsoku::is_line_start_prohibited);
+                        let legacy_first_fits = !word_full_punctuation_credit.get()
+                            || self.compat_mode >= 15
+                            || legacy_closing
+                            || current_width_tw + word_first_width_tw <= available_tw;
+                        let c = if legacy_first_fits { s1346_regime_credit.get() } else { 0 };
                         let latin = c > 0 && word.chars().all(|ch| (ch as u32) < 0x2E80 || ch as u32 == 0xFFE5);
                         // elective halves on the line: a lone mark gives one, a run of k
                         // adjacent marks k - 1 (the first member of a pair is natural)
@@ -710,6 +804,16 @@ impl<'a> LineBreaker<'a> {
                         let sp_cap = 0.25 * mid_sp as f32 * fs + gap_part;
                         let last = 0.31 * (word_width + if gap_before { fs / 4.0 } else { 0.0 });
                         pt_to_tw(sp_cap.min(gap_part.max(last)))
+                    } else { 0 });
+                    let s1346_credit_tw = s1346_credit_tw.max(if legacy_gap_on
+                        && IN_TABLE_LAYOUT.with(|c| c.get()) == 0
+                        && word.chars().count() == 1
+                        && word.chars().next().is_some_and(kinsoku::is_line_start_prohibited)
+                    {
+                        let fs = $style.font_size.unwrap_or(self.default_font_size);
+                        let line_chars: Vec<char> = current_line.fragments.iter()
+                            .flat_map(|f| f.text.chars()).chain(word.chars()).collect();
+                        pt_to_tw(legacy_gap_floor(&line_chars, fs))
                     } else { 0 });
                     if dbg_flush {
                         eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} curw_f={:.4} ww_f={:.4} avail={} spcred={} tabslack={} line_n={} just={} s799={} s1346+1585={} s1585_on={}",
@@ -1325,7 +1429,7 @@ impl<'a> LineBreaker<'a> {
                                     .char_width_pt_with_fallback(
                                         '-',
                                         self.resolve_font_size(&ws, para_style),
-                                        self.metrics_for(&ws, para_style),
+                                        &self.metrics_for(&ws, para_style),
                                     );
                                 let room = gap - hyphen_w;
                                 // char widths of the pending word, cumulative
@@ -1334,7 +1438,7 @@ impl<'a> LineBreaker<'a> {
                                 let mut cum = 0.0f32;
                                 let mut upto: Vec<(usize, f32)> = Vec::new();
                                 for (bi, ch) in word.char_indices() {
-                                    cum += self.registry.char_width_pt_with_fallback(ch, fs, m);
+                                    cum += self.registry.char_width_pt_with_fallback(ch, fs, &m);
                                     upto.push((bi + ch.len_utf8(), cum));
                                 }
                                 let mut best: Option<(usize, f32)> = None;
@@ -1452,6 +1556,17 @@ impl<'a> LineBreaker<'a> {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1.3);
+        // Styling boundaries do not split a prohibited-start punctuation unit.
+        // Keep paragraph character coordinates for reservations, while keeping
+        // the original fragments and their metrics for measurement and painting.
+        let punctuation_chars: Vec<char> = fragments.iter().flat_map(|f| f.0.chars()).collect();
+        let mut punctuation_offsets = Vec::with_capacity(fragments.len());
+        let mut punctuation_offset = 0;
+        for fragment in fragments {
+            punctuation_offsets.push(punctuation_offset);
+            punctuation_offset += fragment.0.chars().count();
+        }
+        let mut accepted_punctuation_unit: Option<(usize, usize)> = None;
         for (frag_outer_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in
             fragments.iter().enumerate()
         {
@@ -1501,7 +1616,9 @@ impl<'a> LineBreaker<'a> {
                     && previous_style.vertical_align == style.vertical_align
                     && matches!(style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
                     && previous_style.font_size != style.font_size;
-                let metric_style_boundary = std::env::var_os("OXI_RUN_STYLE_SEGMENTS").is_some()
+                // Preserve each source run's metrics, including a note reference
+                // whose inherited size differs inside an unbroken word.
+                let metric_style_boundary = std::env::var_os("OXI_RUN_STYLE_SEGMENTS_DISABLE").is_none()
                     && (previous_style.font_size != style.font_size
                         || previous_style.font_family != style.font_family
                         || previous_style.font_family_east_asia != style.font_family_east_asia
@@ -1607,7 +1724,7 @@ impl<'a> LineBreaker<'a> {
                 let m_field = self.metrics_for_text(text, style, para_style);
                 let cw: f32 = text
                     .chars()
-                    .map(|c| self.registry.char_width_pt_with_fallback(c, font_size, m_field) + cs_field)
+                    .map(|c| self.registry.char_width_pt_with_fallback(c, font_size, &m_field) + cs_field)
                     .sum();
                 let cw_tw = pt_to_tw(cw);
                 if (if vertical { current_capw_tw } else { current_width_tw }) + cw_tw > available_tw
@@ -1825,15 +1942,18 @@ impl<'a> LineBreaker<'a> {
 
             // Pre-resolve font metrics and GDI width maps for this fragment.
             // Avoids repeated font family resolution and HashMap lookups per character.
-            let latin_metrics = self.metrics_for(style, para_style);
-            let cjk_metrics = self.metrics_for_cjk(style, para_style);
+            let latin_metric_owner = self.metrics_for(style, para_style);
+            let latin_metrics = &*latin_metric_owner;
+            let cjk_metric_owner = self.metrics_for_cjk(style, para_style);
+            let cjk_metrics = cjk_metric_owner.as_deref();
             // Break widths follow the substituted face used to draw CJK glyphs.
-            let substitute_metrics = if (std::env::var_os("OXI_CJK_SUBSTITUTE_METRICS_DISABLE").is_none()
+            let substitute_metric_owner = if (std::env::var_os("OXI_CJK_SUBSTITUTE_METRICS_DISABLE").is_none()
                     || std::env::var_os("OXI_CJK_SUBSTITUTE_METRICS").is_some()) {
                 self.metrics_for_cjk_script(style, para_style, true)
             } else {
-                cjk_metrics
+                cjk_metric_owner.clone()
             };
+            let substitute_metrics = substitute_metric_owner.as_deref();
             let substitute_gdi_map = substitute_metrics
                 .and_then(|m| self.registry.get_gdi_char_widths(&m.family, font_size));
             let latin_gdi_map = self
@@ -2686,6 +2806,30 @@ impl<'a> LineBreaker<'a> {
             // spaces that follow belong to that line, not to a new one.
             let mut s1488_after_hang = false;
             for (char_index, ch) in chars_vec.iter().copied().enumerate() {
+                // Voicing marks are part of the preceding glyph cluster. They
+                // neither consume a grid cell nor create a new break/gap. Keep
+                // source text and character offsets, including across runs.
+                if crate::font::is_nonspacing_kana_mark(ch)
+                    && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+                {
+                    flush_word!(style);
+                    if let Some(last) = current_line.fragments.last_mut().filter(|last|
+                        last.run_index == frag_run_index && last.field_type == frag_field_type)
+                    {
+                        last.text.push(ch);
+                    } else {
+                        current_line.fragments.push(LineFragment {
+                            auto_space_shrink: 0.0,
+                            text: char_to_string(ch), width: 0.0, natural_width: 0.0,
+                            style: style.clone(), tab_alignment: None, tab_position: None,
+                            field_type: frag_field_type, run_index: frag_run_index,
+                            char_offset: char_pos_in_run,
+                        });
+                    }
+                    char_pos_in_run += 1;
+                    continue;
+                }
+
                 if s1488_after_hang && std::env::var_os("OXI_S1488_DISABLE").is_none() {
                     if ch == ' ' && current_line.fragments.is_empty() {
                         if let Some(prev) = lines.last_mut() {
@@ -2847,7 +2991,7 @@ impl<'a> LineBreaker<'a> {
                 };
                 let mut char_width =
                     self.registry
-                        .char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map);
+                        .char_width_pt_with_gdi_map(ch, font_size, &char_metrics, gdi_map);
                 // KERNBREAK (2026-07-07, ★default ON, opt-out
                 // OXI_KERNBREAK_DISABLE): a
                 // KERN-ACTIVE Latin char (w:kern set, fs >= threshold —
@@ -3148,7 +3292,11 @@ impl<'a> LineBreaker<'a> {
                 // belong to the preceding or following text fragment.
                 let s1333_balance = self.balance_single_byte_double_byte_width
                     && std::env::var("OXI_S1333_DISABLE").is_err();
-                if ch == ' ' && s1333_balance {
+                // NBSP keeps its non-breaking semantics and Latin font slot,
+                // but shares the balanced space advance next to CJK. Saved
+                // Word controls measure 6pt at 12pt for both space characters;
+                // disabling balance restores their natural space advance.
+                if matches!(ch, ' ' | '\u{00a0}') && s1333_balance {
                     let prev_is_cjk = chars_vec
                         .get(char_index.wrapping_sub(1))
                         .copied()
@@ -3387,7 +3535,7 @@ impl<'a> LineBreaker<'a> {
                                 font_size * pitch / default_fs
                             } else if std::env::var_os("OXI_S1510_DISABLE").is_none()
                                 && std::env::var_os("OXI_S1592_DISABLE").is_none()
-                                && face_has_proportional_kana(char_metrics, &self.registry, font_size)
+                                && face_has_proportional_kana(&char_metrics, &self.registry, font_size)
                             {
                                 // S1592: on a proportional face the increment is by CLASS
                                 // (see grid_half_increment_class): half for kana / U+30FC /
@@ -3646,7 +3794,11 @@ impl<'a> LineBreaker<'a> {
                             '\n' => LineBreakType::SoftBreak,
                             _ => LineBreakType::Normal,
                         };
+                        if ch == '\n' && current_line.fragments.is_empty() {
+                            current_line.empty_break_style = Some((*style).clone());
+                        }
                         current_line.break_type = break_type;
+                        current_line.break_source = Some((frag_run_index, char_pos_in_run, (*style).clone()));
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0;
                         current_width_tw = 0;
@@ -4258,6 +4410,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // already carries the `!doc_body_has_real_cjk` gate).
                     // Include them in the current word, flush, and allow a break.
                     if word_style.is_none() {
+                        word_first_width_tw = pt_to_tw(char_width);
                         word_style = Some(style.clone());
                         word_field_type = frag_field_type;
                         word_run_index = frag_run_index;
@@ -4276,11 +4429,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         word_char_ws.push(word_width);
                     } // S1059
                     word_natural_width += char_width + yakumono_saved;
-                    if s809_hang {
-                        // S1262: the closing quotes hang too.
+                    if s809_hang || cjk_latin_period_hang {
+                        // Existing Latin policy also admits comma/closing quotes;
+                        // the separately measured mixed-text policy admits period.
                         word_trail_hang_w = if ch == '.'
-                            || (ch == ',' && !s1630_no_comma)
-                            || (s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
+                            || (s809_hang && ch == ',' && !s1630_no_comma)
+                            || (s809_hang && s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
                         {
                             char_width
                         } else {
@@ -4400,11 +4554,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             || (prev_is_digit && para_style.auto_space_dn))
                     {
                         // S546: gap = fs/4 true-space (old per-fontSize table = paint artifact).
-                        let extra = s546_autospace_extra(font_size);
+                        let extra = current_line.fragments.last()
+                            .map(|last| self.autospace_after_style(last.text.chars().last().unwrap_or(' '), &last.style, para_style))
+                            .unwrap_or_else(|| s546_autospace_extra(font_size));
                         if let Some(last) = current_line.fragments.last_mut() {
                             last.width += extra;
                             last.natural_width += extra;
-                            if std::env::var_os("OXI_CJK_AUTOSPACE_COMPRESSION").is_some() {
+                            if legacy_gap_on || std::env::var_os("OXI_CJK_AUTOSPACE_COMPRESSION").is_some() {
                                 last.auto_space_shrink += extra * 0.5;
                             }
                         }
@@ -4579,7 +4735,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let em = s1167_em_ref(
                                 &self.registry,
                                 font_size,
-                                char_metrics,
+                                &char_metrics,
                                 gdi_map,
                             );
                             if std::env::var("OXI_DBG1167").is_ok()
@@ -4798,12 +4954,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // ：； (JIS 中点類) do not count: technical__978ec9c102290205 wraps
                     // a 0.58-cell overflow with 「：、」 on the line.
                     let s1490_colons = current_line.fragments.iter().flat_map(|f| f.text.chars()).filter(|&c| c == '：' || c == '；').count();
+                    let punctuation_index = punctuation_offsets[frag_outer_idx] + char_index;
+                    let following_punctuation = &punctuation_chars[punctuation_index + 1..];
+                    let next_mark_compressed = yakumono_compressed
+                        .get(char_index + 1).copied().unwrap_or_else(||
+                            yakumono_pair_enabled && following_punctuation.first()
+                                .copied().is_some_and(kinsoku::is_yakumono_closing)
+                                && following_punctuation.get(1).copied()
+                                    .is_some_and(kinsoku::is_yakumono_trigger));
                     let s1490_cap = |k: usize, unit: bool| -> i32 {
                         LayoutEngine::modern_punctuation_capacity_tw(
                             current_line.fragments.iter().map(|f| f.text.chars().count()).sum(),
                             k.saturating_sub(s1490_colons), s1318_one_cell_tw, unit,
                             ((japanese_language_oikomi && !unit) || (unit
-                                && chars_vec[char_index + 1..].iter().take_while(|&&nc|
+                                && following_punctuation.iter().take_while(|&&nc|
                                     matches!(nc as u32, 0x3001 | 0x3002 | 0xFF0C | 0xFF0E | 0xFF1A | 0xFF1B | 0x30FB)
                                         || kinsoku::is_yakumono_closing(nc)).count() >= 2
                                 && style.east_asia_lang.as_deref().is_some_and(|lang|
@@ -4828,7 +4992,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // S1346: ・ is a line-final mark too -- 0ea3ec86 「どに入院・入所中の
                     // 児童・生徒のために病院・」 holds 21 with the ・ hanging (the normal
                     // branch refused it and 追い出し took 院 down with it).
-                    let s1318_next_mark = chars_vec.get(char_index + 1).map_or(false, |&nc| {
+                    let s1318_next_mark = following_punctuation.first().map_or(false, |&nc| {
                         matches!(nc, '、' | '。' | '，' | '．' | '：' | '；' | '・') || kinsoku::is_yakumono_closing(nc)
                     });
                     let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．' | '：' | '；' | '・')
@@ -4860,11 +5024,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // opens the next line -- ー and small kana are not line-start
                     // prohibited here).
                     let s1318_next_joined: Option<char> = {
-                        let mut it = chars_vec[char_index + 1..]
+                        let mut it = following_punctuation
                             .iter()
                             .copied()
-                            .chain(fragments.get(frag_outer_idx + 1).map(|f| f.0.chars()).into_iter().flatten())
-                            .chain(fragments.get(frag_outer_idx + 2).map(|f| f.0.chars()).into_iter().flatten());
+;
                         match it.next() {
                             Some('\u{200D}') => it.find(|c| !s1318_zw(*c)),
                             _ => None,
@@ -4944,20 +5107,42 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // compressed half cell (technical__978ec9c102290205 p3
                         // 「…ご注意願いま|す。）」: す fits by 0.44 cell, yet Word wraps
                         // the unit す。） because the ） cannot hang behind the 。).
-                        let s1490_extra_marks = chars_vec[char_index + 1..]
+                        let s1490_extra_marks = following_punctuation
                             .iter()
                             .take_while(|&&nc| {
                                 matches!(nc, '、' | '。' | '，' | '．' | '：' | '；' | '・') || kinsoku::is_yakumono_closing(nc)
                             })
                             .count()
                             .saturating_sub(1) as i32;
+                        // Reserve the complete compressed unit before accepting
+                        // its character. Structural pair compression does not make
+                        // the remaining marks free. A period-led group may hang
+                        // its last half-cell; a bracket-led group remains inside.
+                        // Marks earlier on the line supply the final-mark pool,
+                        // separately from the ordinary-character pull-in limit.
+                        let paired_unit = next_mark_compressed && s1490_extra_marks > 0;
+                        let unit_reserve = if paired_unit {
+                            let count = s1490_extra_marks + 1;
+                            let hang = following_punctuation.first().is_some_and(|c|
+                                matches!(*c as u32, 0x3001 | 0x3002 | 0xFF0C | 0xFF0E));
+                            count * s1318_half_cell_tw - if hang { s1318_half_cell_tw } else { 0 }
+                        } else { s1490_extra_marks * s1318_half_cell_tw };
+                        let unit_pool = if paired_unit {
+                            (s1318_n_solo as i32 * s1318_half_cell_tw).min(2 * s1318_one_cell_tw)
+                        } else { s1490_cap(s1318_n_solo, true) };
                         s1490_unit_refused = s1490_regime && s1490_extra_marks > 0
-                            && over + s1490_extra_marks * s1318_half_cell_tw > s1490_cap(s1318_n_solo, true).max(S1318_TOL_TW);
+                            && over + unit_reserve > unit_pool.max(S1318_TOL_TW);
                         let fit = if s1490_regime {
                             !s1490_unit_refused && over <= s1490_cap(s1318_n_solo, true).max(S1318_TOL_TW)
                         } else {
                             over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW)
                         };
+                        if s1490_regime && fit && paired_unit {
+                            let count = following_punctuation.iter().take_while(|&&nc|
+                                matches!(nc as u32, 0x3001 | 0x3002 | 0xFF0C | 0xFF0E | 0xFF1A | 0xFF1B | 0x30FB)
+                                    || kinsoku::is_yakumono_closing(nc)).count();
+                            accepted_punctuation_unit = Some((lines.len(), punctuation_index + count));
+                        }
                         (fit, !fit)
                     } else {
                         let over = s1318_natural_over_tw;
@@ -4968,6 +5153,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         };
                         (fit, !fit)
                     };
+                    // A reserved unit stays atomic while its marks are placed.
+                    // A new line invalidates the reservation automatically.
+                    if s1490_regime && s1318_ch_mark
+                        && accepted_punctuation_unit.is_some_and(|(line, end)|
+                            line == lines.len() && punctuation_index <= end) {
+                        s1318_force_fit = true;
+                        s1318_refuse_here = false;
+                    }
                     // A closing mark can consume internal blank space after its
                     // preceding word has already passed the word-fit decision.
                     if !s1318_force_fit && !s1490_unit_refused && s1318_regime
@@ -5269,6 +5462,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             eprintln!("[S1499] ch={:?} over_tw={} gaps={} credit_tw={}", ch, overflow_tw, gaps, credit_tw);
                         }
                         overflow_tw -= credit_tw;
+                    }
+                    // Legacy gap squeeze (see legacy_gap_on): a CJK char within
+                    // min(fs/2, floor), a line-start-prohibited char within the floor.
+                    if overflow_tw > 0
+                        && legacy_gap_on
+                        && IN_TABLE_LAYOUT.with(|c| c.get()) == 0
+                        && (kinsoku::is_cjk_ideograph_or_kana(ch) || kinsoku::is_line_start_prohibited(ch))
+                    {
+                        let line_chars: Vec<char> = current_line
+                            .fragments
+                            .iter()
+                            .flat_map(|f| f.text.chars())
+                            .chain(word.chars())
+                            .chain(std::iter::once(ch))
+                            .collect();
+                        let floor = legacy_gap_floor(&line_chars, font_size);
+                        let credit = if kinsoku::is_line_start_prohibited(ch) {
+                            floor
+                        } else {
+                            floor.min(font_size / 2.0)
+                        };
+                        overflow_tw -= pt_to_tw(credit);
                     }
                     if overflow_tw > 0 && s476_body && is_justified
                         && !vertical && !lines_and_chars
@@ -5816,6 +6031,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else if s472_absorb {
                         true
                     } else if !s474_natural
+                        // Preserve the explicit refusal from unit admission.
+                        && !s1318_force_wrap
                         && !s475_break
                         && overflow_tw > 0
                         && overflow_tw <= 50
@@ -6079,7 +6296,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             s1167_em_ref(
                                                 &self.registry,
                                                 font_size,
-                                                char_metrics,
+                                                &char_metrics,
                                                 gdi_map,
                                             ),
                                         ),
@@ -6140,11 +6357,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         });
                         if prev_is_cjk_ideo {
                             // S546: gap = fs/4 true-space (old per-fontSize table = paint artifact).
-                            let extra = s546_autospace_extra(font_size);
+                            let extra = current_line.fragments.last()
+                            .map(|last| self.autospace_after_style(last.text.chars().last().unwrap_or(' '), &last.style, para_style))
+                            .unwrap_or_else(|| s546_autospace_extra(font_size));
                             if let Some(last) = current_line.fragments.last_mut() {
                                 last.width += extra;
                                 last.natural_width += extra;
-                            if std::env::var_os("OXI_CJK_AUTOSPACE_COMPRESSION").is_some() {
+                            if legacy_gap_on || std::env::var_os("OXI_CJK_AUTOSPACE_COMPRESSION").is_some() {
                                 last.auto_space_shrink += extra * 0.5;
                             }
                             }
@@ -6160,6 +6379,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                     }
                     if word_style.is_none() {
+                        word_first_width_tw = pt_to_tw(char_width);
                         word_style = Some(style.clone());
                         word_field_type = frag_field_type;
                         word_run_index = frag_run_index;
@@ -6198,11 +6418,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                     }
                     word_natural_width += char_width + yakumono_saved;
-                    if s809_hang {
-                        // S1262: the closing quotes hang too.
+                    if s809_hang || cjk_latin_period_hang {
+                        // Existing Latin policy also admits comma/closing quotes;
+                        // the separately measured mixed-text policy admits period.
                         word_trail_hang_w = if ch == '.'
-                            || (ch == ',' && !s1630_no_comma)
-                            || (s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
+                            || (s809_hang && ch == ',' && !s1630_no_comma)
+                            || (s809_hang && s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
                         {
                             char_width
                         } else {
@@ -6264,6 +6485,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // Ensure at least one empty line for empty paragraphs
         if lines.is_empty() {
             lines.push(Line {
+            empty_break_style: None,
                 seg2_at: None,
                 fragments: vec![],
                 ..Default::default()
@@ -6427,6 +6649,42 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             }
         }
 
+        // A line admitted by the legacy auto-space capacity must also paint
+        // with those narrower gaps. Apply only the remaining demand AFTER
+        // punctuation reconciliation; glyph advances and source/style metadata
+        // stay intact. Capacity is recorded from each actual inserted gap,
+        // so mixed run sizes do not turn into one paragraph-wide estimate.
+        if legacy_gap_on && IN_TABLE_LAYOUT.with(|c| c.get()) == 0 {
+            let is_lat = |c: char| {
+                (c.is_ascii_alphabetic() && para_style.auto_space_de)
+                    || (c.is_ascii_digit() && para_style.auto_space_dn)
+            };
+            for (line_index, line) in lines.iter_mut().enumerate() {
+                let target = available_width
+                    - if line_index == 0 { first_line_indent } else { 0.0 };
+                let needed = (line.fragments.iter().map(|f| f.width).sum::<f32>() - target).max(0.0);
+                if needed <= 0.0 { continue; }
+                // A Latin island touching line start has no shrinkable return
+                // gap, matching the boundary model used to admit this line.
+                let mut initial_island = line.fragments.iter()
+                    .flat_map(|f| f.text.chars()).next().is_some_and(is_lat);
+                let capacities: Vec<f32> = line.fragments.iter().map(|f| {
+                    if f.text.chars().any(|c| !is_lat(c)) { initial_island = false; }
+                    if initial_island { 0.0 } else { f.auto_space_shrink.max(0.0) }
+                }).collect();
+                let capacity: f32 = capacities.iter().sum();
+                if capacity <= 0.0 { continue; }
+                let fraction = (needed / capacity).min(1.0);
+                for (fragment, cap) in line.fragments.iter_mut().zip(capacities) {
+                    let reduction = cap * fraction;
+                    fragment.width -= reduction;
+                    fragment.natural_width -= reduction;
+                    fragment.auto_space_shrink -= reduction;
+                }
+                line.natural_total_width = line.fragments.iter().map(|f| f.natural_width).sum();
+            }
+        }
+
         // Post-process: adjust tab fragment widths for Center/Right/Decimal alignment.
         // ECMA-376 §17.3.1.38: Center tabs center the following segment on the tab position,
         // Right tabs right-align, Decimal tabs align at the decimal point.
@@ -6468,7 +6726,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     break;
                                 }
                                 char_offset +=
-                                    self.registry.char_width_pt_with_fallback(ch, fs, metrics);
+                                    self.registry.char_width_pt_with_fallback(ch, fs, &metrics);
                             }
                         }
                         segment_width += line.fragments[j].width;
@@ -6627,6 +6885,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let nat: f32 = frags.iter().map(|f| f.natural_width).sum();
                         let comp: f32 = frags.iter().map(|f| f.width).sum();
                         new_lines.push(Line {
+            break_source: None,
+            empty_break_style: None,
                             seg2_at: None,
                             whitespace_paragraph: para_all_whitespace,
                             emergency_word_break: false,

@@ -198,6 +198,15 @@ fn parse_hex_rgb(s: &str) -> (u8, u8, u8) {
 }
 
 #[cfg(windows)]
+unsafe fn draw_gdi_text(dc: windows::Win32::Graphics::Gdi::HDC, indexed: bool,
+    x:i32,y:i32,text:&[u16]) {
+    use windows::Win32::Graphics::Gdi::*;
+    if indexed {
+        assert!(ExtTextOutW(dc,x,y,ETO_GLYPH_INDEX,None,windows::core::PCWSTR(text.as_ptr()),text.len() as u32,None).as_bool());
+    } else { TextOutW(dc,x,y,text); }
+}
+
+#[cfg(windows)]
 /// S1264: the ascent Word puts above a baseline, for the glyph-origin fix in
 /// the text branch. Loaded once — the layout keeps its own copy privately.
 fn font_registry() -> &'static oxidocs_core::font::FontMetricsRegistry {
@@ -397,7 +406,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         }
 
                         // Draw text
-                        let text_wide: Vec<u16> = text.encode_utf16().collect();
+                        let text_wide: Vec<u16> = elem.font_glyph.map(|g|vec![g.index])
+                            .unwrap_or_else(||text.encode_utf16().collect());
                         if s489_upright {
                             // S489: upright CJK vertical writing — each full-width
                             // glyph centred in the cell column [x, x+ew], stacked
@@ -426,7 +436,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             // via SetTextColor, restored to `rgb` afterward.
                             let off = (scale.max(1.0)).round() as i32;
                             // S1330: zero-width format characters leave no ink.
-                            if text.chars().all(oxidocs_core::font::is_zero_width_char)
+                            if elem.font_glyph.is_none() && text.chars().all(oxidocs_core::font::is_zero_width_char)
                                 && std::env::var("OXI_S1330_DISABLE").is_err()
                             {
                                 continue;
@@ -438,22 +448,22 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             }
                             if effects.shadow {
                                 SetTextColor(mem_dc, COLORREF(0x00808080));
-                                TextOutW(mem_dc, x_draw + off, y_draw + off, &text_wide);
+                                draw_gdi_text(mem_dc, elem.font_glyph.is_some(), x_draw + off, y_draw + off, &text_wide);
                                 SetTextColor(mem_dc, rgb);
                             }
                             if effects.emboss || effects.imprint {
                                 let d = if effects.emboss { off } else { -off };
                                 SetTextColor(mem_dc, COLORREF(0x00606060));
-                                TextOutW(mem_dc, x_draw + d, y_draw + d, &text_wide);
+                                draw_gdi_text(mem_dc, elem.font_glyph.is_some(), x_draw + d, y_draw + d, &text_wide);
                                 SetTextColor(mem_dc, COLORREF(0x00C8C8C8)); // light fill
                             }
                             if effects.outline {
                                 for (dx, dy) in [(-off,0),(off,0),(0,-off),(0,off),(-off,-off),(off,-off),(-off,off),(off,off)] {
-                                    TextOutW(mem_dc, x_draw + dx, y_draw + dy, &text_wide);
+                                    draw_gdi_text(mem_dc, elem.font_glyph.is_some(), x_draw + dx, y_draw + dy, &text_wide);
                                 }
                                 SetTextColor(mem_dc, COLORREF(0x00FFFFFF)); // white interior
                             }
-                            TextOutW(mem_dc, x_draw, y_draw, &text_wide);
+                            draw_gdi_text(mem_dc, elem.font_glyph.is_some(), x_draw, y_draw, &text_wide);
                             if effects.emboss || effects.imprint || effects.outline {
                                 SetTextColor(mem_dc, rgb); // restore for subsequent glyphs
                             }
@@ -1208,6 +1218,10 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                pi + 1, page.width, page.height).unwrap();
         let mut first = true;
         for el in &page.elements {
+            let font_identity_json=match &el.content {
+                LayoutContent::Text {font_family,bold,italic,..}=>format!(", \"font_family\": {}, \"bold\": {}, \"italic\": {}",serde_json::to_string(font_family).unwrap(),bold,italic),
+                _=>String::new(),
+            };
             // OXI_DUMP_CS=1: also emit each text element's character_spacing
             // (off by default so dumps of different versions stay comparable).
             let cs_json = match &el.content {
@@ -1215,6 +1229,8 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                     format!(", \"cs\": {:.3}", character_spacing),
                 _ => String::new(),
             };
+            let cs_json = format!("{}{}{}",cs_json,font_identity_json, el.font_glyph.map(|g|
+                format!(", \"font_glyph\": {}",serde_json::to_string(&g).unwrap())).unwrap_or_default());
             let (kind, text_json, font_size, vert) = match &el.content {
                 LayoutContent::Text { text, font_size, is_vertical, .. } => {
                     let mut esc = String::with_capacity(text.len());
@@ -1271,13 +1287,30 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                     .map(|(r, c, b)| format!("[{},{},{}]", r, c, b)).collect();
                 format!(", \"cell_path\": [{}]", parts.join(","))
             };
-            let source_json = el.source_text.as_ref().map(|text| {
+            let mut source_json = el.source_text.as_ref().map(|text| {
                 format!(", \"source_text\": {}, \"source_char_len\": {}",
                     serde_json::to_string(text).unwrap(), el.source_char_len.unwrap_or(0))
             }).unwrap_or_default();
+            if let Some(container) = el.source_container_index {
+                source_json.push_str(&format!(", \"source_container_idx\": {}", container));
+            }
+            if let Some((count, controls)) = el.source_paragraph_extent {
+                source_json.push_str(&format!(", \"source_paragraph_chars\": {}, \"source_paragraph_controls\": {}", count, controls));
+            }
+            if let Some(columns) = el.source_paragraph_column_controls {
+                source_json.push_str(&format!(", \"source_paragraph_column_controls\": {}", columns));
+            }
+            if let Some(prefix) = &el.source_paragraph_prefix {
+                source_json.push_str(&format!(", \"source_paragraph_prefix\": {}", serde_json::to_string(prefix).unwrap()));
+            }
+            if el.source_boundary_attachment {
+                source_json.push_str(", \"source_boundary_attachment\": true");
+            }
+            let baseline_json = el.baseline_offset
+                .map(|b| format!(", \"baseline_offset\": {:.6}", b)).unwrap_or_default();
             write!(&mut out,
                 "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}{}{}{}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json, path_json, cs_json).unwrap();
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json, path_json, format!("{}{}", cs_json, baseline_json)).unwrap();
         }
         out.push_str("\n    ]}");
     }

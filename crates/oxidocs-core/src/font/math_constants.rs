@@ -123,15 +123,18 @@ pub struct MathTable {
 impl MathTable {
     /// Load the bundled Cambria Math constants. Parses at first call.
     /// Uses `include_str!` so the JSON is baked into the binary at build.
-    pub fn cambria_math() -> &'static Self {
-        use std::sync::OnceLock;
-        static TABLE: OnceLock<MathTable> = OnceLock::new();
+    pub fn cambria_math() -> std::sync::Arc<Self> {
+        if let Some(program) = super::runtime::registered_math("Cambria Math") {
+            return program.constants.clone();
+        }
+        use std::sync::{Arc, OnceLock};
+        static TABLE: OnceLock<Arc<MathTable>> = OnceLock::new();
         TABLE.get_or_init(|| {
             let json = include_str!("data/cambria_math_constants.json");
             let file: MathConstantsFile = serde_json::from_str(json)
                 .expect("cambria_math_constants.json parse");
-            MathTable { upm: file.upm, constants: file.math_constants }
-        })
+            Arc::new(MathTable { upm: file.upm, constants: file.math_constants })
+        }).clone()
     }
 
     /// Convert a design-unit value to points at the given font size.

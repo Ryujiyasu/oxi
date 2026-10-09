@@ -470,7 +470,7 @@ unsafe fn render_page_elements(
                     (el.x / 0.75).round() * 0.75
                 } else { el.x };
                 // S1330: zero-width format characters leave no ink.
-                if text.chars().all(oxidocs_core::font::is_zero_width_char)
+                if el.font_glyph.is_none() && text.chars().all(oxidocs_core::font::is_zero_width_char)
                     && std::env::var("OXI_S1330_DISABLE").is_err()
                 {
                     continue;
@@ -478,6 +478,11 @@ unsafe fn render_page_elements(
                 // S1327: a no-fill run paints nothing (Word's transparent
                 // Text Fill); it already took its advance.
                 if effects.no_fill && std::env::var("OXI_S1327_DISABLE").is_err() {
+                    continue;
+                }
+                if let Some(glyph)=el.font_glyph {
+                    render_font_glyph(rt,dwrite_factory,el.x,el.y+el.baseline_offset.unwrap_or(0.0),
+                        glyph.index,el.width,*font_size,fam,*bold,*italic,color.as_deref())?;
                     continue;
                 }
                 render_text(
@@ -1321,6 +1326,38 @@ unsafe fn font_underline_ratios(
     }
 }
 
+unsafe fn render_font_glyph(
+    rt:&windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
+    factory:&windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    x:f32,baseline:f32,index:u16,advance:f32,size:f32,family:&str,bold:bool,italic:bool,color:Option<&str>
+) -> windows::core::Result<()> {
+    use windows::Win32::Graphics::DirectWrite::*;
+    use windows::Win32::Graphics::Direct2D::Common::*;
+    use windows::Win32::Foundation::{BOOL,E_FAIL};
+    use windows::core::PCWSTR;
+    let mut collection=None;factory.GetSystemFontCollection(&mut collection,BOOL(0))?;
+    let collection=collection.ok_or_else(||windows::core::Error::from_hresult(E_FAIL))?;
+    let name:Vec<u16>=family.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut position=0;let mut exists=BOOL(0);
+    collection.FindFamilyName(PCWSTR(name.as_ptr()),&mut position,&mut exists)?;
+    if !exists.as_bool(){return Err(windows::core::Error::from_hresult(E_FAIL));}
+    let family=collection.GetFontFamily(position)?;
+    let font=family.GetFirstMatchingFont(if bold{DWRITE_FONT_WEIGHT_BOLD}else{DWRITE_FONT_WEIGHT_NORMAL},
+        DWRITE_FONT_STRETCH_NORMAL,if italic{DWRITE_FONT_STYLE_ITALIC}else{DWRITE_FONT_STYLE_NORMAL})?;
+    let face=font.CreateFontFace()?;
+    let value=color.unwrap_or("000000").trim_start_matches('#');
+    let rgb=u32::from_str_radix(value,16).unwrap_or(0);
+    let brush=rt.CreateSolidColorBrush(&D2D1_COLOR_F{r:((rgb>>16)&255) as f32/255.0,
+        g:((rgb>>8)&255) as f32/255.0,b:(rgb&255) as f32/255.0,a:1.0},None)?;
+    let advance=advance*PT_TO_DIP;
+    let mut run=DWRITE_GLYPH_RUN{fontFace:std::mem::ManuallyDrop::new(Some(face)),
+        fontEmSize:size*PT_TO_DIP,glyphCount:1,glyphIndices:&index,glyphAdvances:&advance,
+        glyphOffsets:std::ptr::null(),isSideways:BOOL(0),bidiLevel:0};
+    rt.DrawGlyphRun(D2D_POINT_2F{x:x*PT_TO_DIP,y:baseline*PT_TO_DIP},&run,&brush,DWRITE_MEASURING_MODE_NATURAL);
+    std::mem::ManuallyDrop::drop(&mut run.fontFace);
+    Ok(())
+}
+
 unsafe fn render_text(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
@@ -2067,6 +2104,10 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                pi + 1, page.width, page.height).unwrap();
         let mut first = true;
         for el in &page.elements {
+            let font_identity_json=match &el.content {
+                LayoutContent::Text {font_family,bold,italic,..}=>format!(", \"font_family\": {}, \"bold\": {}, \"italic\": {}",serde_json::to_string(font_family).unwrap(),bold,italic),
+                _=>String::new(),
+            };
             let (kind, text_json, font_size, vert) = match &el.content {
                 LayoutContent::Text { text, font_size, is_vertical, .. } => {
                     let mut esc = String::with_capacity(text.len());
@@ -2103,10 +2144,27 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             // See memory/session71_y_convention_refactor_design.md.
             // S724: emit "vert": true for vertical text (see GDI dump).
             let vert_json = if vert { ", \"vert\": true" } else { "" };
-            let source_json = el.source_text.as_ref().map(|text| {
+            let mut source_json = el.source_text.as_ref().map(|text| {
                 format!(", \"source_text\": {}, \"source_char_len\": {}",
                     serde_json::to_string(text).unwrap(), el.source_char_len.unwrap_or(0))
             }).unwrap_or_default();
+            if let Some(container) = el.source_container_index {
+                source_json.push_str(&format!(", \"source_container_idx\": {}", container));
+            }
+            if let Some((count, controls)) = el.source_paragraph_extent {
+                source_json.push_str(&format!(", \"source_paragraph_chars\": {}, \"source_paragraph_controls\": {}", count, controls));
+            }
+            if let Some(columns) = el.source_paragraph_column_controls {
+                source_json.push_str(&format!(", \"source_paragraph_column_controls\": {}", columns));
+            }
+            if let Some(prefix) = &el.source_paragraph_prefix {
+                source_json.push_str(&format!(", \"source_paragraph_prefix\": {}", serde_json::to_string(prefix).unwrap()));
+            }
+            if el.source_boundary_attachment {
+                source_json.push_str(", \"source_boundary_attachment\": true");
+            }
+            let source_json = format!("{}{}{}",source_json,font_identity_json,el.font_glyph.map(|g|
+                format!(", \"font_glyph\": {}, \"baseline_offset\": {:.6}",serde_json::to_string(&g).unwrap(),el.baseline_offset.unwrap_or(0.0))).unwrap_or_default());
             write!(&mut out,
                 "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}{}}}",
                 kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json, source_json).unwrap();

@@ -20,7 +20,8 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "plugins": {
     "updater": {
@@ -45,10 +46,16 @@
     ],
     "windows": {
       "wix": {
-        "language": ["en-US", "ja-JP"]
+        "language": [
+          "en-US",
+          "ja-JP"
+        ]
       },
       "nsis": {
-        "languages": ["English", "Japanese"],
+        "languages": [
+          "English",
+          "Japanese"
+        ],
         "displayLanguageSelector": true
       }
     },
@@ -57,7 +64,10 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-dev", "libgtk-3-0"]
+        "depends": [
+          "libwebkit2gtk-4.1-dev",
+          "libgtk-3-0"
+        ]
       }
     }
   }

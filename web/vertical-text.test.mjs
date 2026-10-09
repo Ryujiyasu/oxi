@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { renderVerticalText } from '../docs/vertical-text.js';
+import { textBaseline } from '../docs/text-baseline.js';
+import { drawRegisteredText } from '../docs/runtime-font-glyph.js';
 
 function canvas() {
   const calls = [];
@@ -90,7 +92,10 @@ for (const [file, entry] of [
       body = html.slice(start, end) + (entry === 'renderText'
         ? '\nrenderText(ctx, elem);' : '\nrenderPageToCanvas(ctx, { elements: [elem] });');
     }
-    const draw = new Function('ctx', 'elem', 'renderVerticalText', body);
+    const drawEntry = new Function('ctx', 'elem', 'renderVerticalText',
+      'textBaseline', 'drawRegisteredText', 'get_font_glyph_outline', body);
+    const draw = (ctx, elem, vertical) => drawEntry(ctx, elem, vertical,
+      textBaseline, drawRegisteredText, () => assert.fail('Plain text requested a font outline'));
     const ctx = canvas();
     draw(ctx, { ...column, kind: 'text', text: '日本' }, renderVerticalText);
     assert.deepEqual(ctx.calls, [['fillText', '日', 24, 38.5], ['fillText', '本', 24, 48.5]]);

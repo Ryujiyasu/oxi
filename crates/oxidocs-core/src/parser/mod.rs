@@ -4,6 +4,7 @@
 
 pub(crate) mod numbering;
 mod ooxml;
+mod xml_space;
 pub mod omml;
 pub mod relationships;
 mod styles;

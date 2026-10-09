@@ -120,6 +120,8 @@ impl Rectangle {
 #[derive(Debug, Clone, Serialize)]
 pub enum ContentElement {
     Text(TextSpan),
+    /// A shaped run with explicit font glyph indices and original Unicode text.
+    GlyphRun(GlyphRun),
     Path(PathData),
     Image(ImageData),
     /// Set a clipping region (intersects with current clip).
@@ -128,6 +130,28 @@ pub enum ContentElement {
     SaveState,
     /// Restore graphics state (corresponds to PDF `Q` operator).
     RestoreState,
+}
+
+impl ContentElement {
+    pub fn text_span(&self) -> Option<&TextSpan> {
+        match self {
+            Self::Text(span) => Some(span),
+            Self::GlyphRun(run) => Some(&run.span),
+            _ => None,
+        }
+    }
+    pub fn glyph_indices(&self) -> Option<&[u16]> {
+        match self {
+            Self::GlyphRun(run) => Some(&run.glyph_indices),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlyphRun {
+    pub span: TextSpan,
+    pub glyph_indices: Vec<u16>,
 }
 
 /// A span of text with position and style.

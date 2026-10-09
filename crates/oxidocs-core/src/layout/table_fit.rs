@@ -500,6 +500,10 @@ impl<'a> TableFitLayouter<'a> {
         // continuation page (set by the table restart below, 0 otherwise).
         let mut s1621_lift: f32;
         for (row_idx, row) in table.rows.iter().enumerate() {
+            // Resolve vertical defaults once for this row, before both height
+            // estimation and emission. Explicit cell margins still win.
+            let (row_default_pad_t, row_default_pad_b) =
+                LayoutEngine::row_vertical_padding_defaults(row, default_pad_t, default_pad_b);
             let inherited_outer_page_before_row = pages.len();
             let mut row_declared_top_edges = Vec::new();
             s1621_lift = 0.0;
@@ -673,12 +677,12 @@ impl<'a> TableFitLayouter<'a> {
                     .margins
                     .as_ref()
                     .and_then(|m| m.top)
-                    .unwrap_or(default_pad_t);
+                    .unwrap_or(row_default_pad_t);
                 let pad_b = cell
                     .margins
                     .as_ref()
                     .and_then(|m| m.bottom)
-                    .unwrap_or(default_pad_b);
+                    .unwrap_or(row_default_pad_b);
                 // S1575 (2026-09-26, default ON, opt-out OXI_S1575_DISABLE): a cell's
                 // top/bottom margin is ROW-wide -- every cell of the row takes the
                 // row's largest. reference__009644b1: only the label cells carry tcMar
@@ -686,8 +690,8 @@ impl<'a> TableFitLayouter<'a> {
                 // baseline (PDF 256.13 both) and the 3-line row is 5 + 43.92 + 5,
                 // Oxi's content cell had no margin (43.9) and page 2 ran ~50pt short.
                 let (pad_t, pad_b) = if std::env::var_os("OXI_S1575_DISABLE").is_none() {
-                    let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t)).fold(pad_t, f32::max);
-                    let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b)).fold(pad_b, f32::max);
+                    let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(row_default_pad_t)).fold(pad_t, f32::max);
+                    let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b)).fold(pad_b, f32::max);
                     (mt, mb)
                 } else { (pad_t, pad_b) };
                 #[allow(unused_mut)]
@@ -850,6 +854,11 @@ impl<'a> TableFitLayouter<'a> {
                 // the empty paragraph a full line (probeqhidemk2 {+1:1}).
                 // Cells with real text are untouched (the corpus's hideMark
                 // rows are all trHeight-bound mixed rows -> byte-identical).
+                let hidden_tail_para = cell.blocks.last().and_then(|block| match block {
+                    Block::Paragraph(para) if LayoutEngine::hidden_cell_final_line(cell, cell.blocks.len() - 1, para) =>
+                        Some(LayoutEngine::without_hidden_cell_after(para)),
+                    _ => None,
+                });
                 let s1311_tail = self.s1311_hidemark_tail_pos(cell);
                 let s751_hide_empty = cell.hide_mark
                     && std::env::var("OXI_S751_DISABLE").is_err()
@@ -911,6 +920,9 @@ impl<'a> TableFitLayouter<'a> {
                     }
                     match block {
                         Block::Paragraph(para) => {
+                            let hidden_final_mark = !vert_writing_active
+                                && LayoutEngine::hidden_cell_final_line(cell, block_pos, para);
+                                                        let para = if hidden_final_mark { hidden_tail_para.as_ref().unwrap() } else { para };
                             let (mut para_h, mut para_h_visual, mut para_h_center) = if vert_writing_active {
                                 let h = if s753_vert {
                                     if s753_first_done {
@@ -1010,6 +1022,13 @@ impl<'a> TableFitLayouter<'a> {
                                         table.style.para_style.as_ref(), grid_char_pitch, grid_char_cw_ratio,
                                         true, true, render_top, &obstacles).0
                                 } else { para_h_visual };
+                            }
+                            if hidden_final_mark {
+                                let credit = self.hidden_cell_final_mark_height(para,
+                                    table.style.para_style.as_ref(), row_line_pitch);
+                                para_h = (para_h - credit).max(0.0);
+                                para_h_visual = (para_h_visual - credit).max(0.0);
+                                para_h_center = (para_h_center - credit).max(0.0);
                             }
                             center_extra += para_h_center - para_h_visual;
                             // Day 33 part 17 (2026-05-10): subtract space_before for first
@@ -1529,7 +1548,7 @@ impl<'a> TableFitLayouter<'a> {
             }
 
             if row_height == 0.0 {
-                let metrics = self.doc_default_metrics();
+                let metrics = &*self.doc_default_metrics();
                 row_height = self.line_height_inner(
                     self.default_font_size,
                     None,
@@ -2759,12 +2778,12 @@ impl<'a> TableFitLayouter<'a> {
                     .margins
                     .as_ref()
                     .and_then(|m| m.top)
-                    .unwrap_or(default_pad_t);
+                    .unwrap_or(row_default_pad_t);
                 let pad_b = cell
                     .margins
                     .as_ref()
                     .and_then(|m| m.bottom)
-                    .unwrap_or(default_pad_b);
+                    .unwrap_or(row_default_pad_b);
                 // S1575 (2026-09-26, default ON, opt-out OXI_S1575_DISABLE): a cell's
                 // top/bottom margin is ROW-wide -- every cell of the row takes the
                 // row's largest. reference__009644b1: only the label cells carry tcMar
@@ -2772,8 +2791,8 @@ impl<'a> TableFitLayouter<'a> {
                 // baseline (PDF 256.13 both) and the 3-line row is 5 + 43.92 + 5,
                 // Oxi's content cell had no margin (43.9) and page 2 ran ~50pt short.
                 let (pad_t, pad_b) = if std::env::var_os("OXI_S1575_DISABLE").is_none() {
-                    let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t)).fold(pad_t, f32::max);
-                    let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b)).fold(pad_b, f32::max);
+                    let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(row_default_pad_t)).fold(pad_t, f32::max);
+                    let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b)).fold(pad_b, f32::max);
                     (mt, mb)
                 } else { (pad_t, pad_b) };
                 #[allow(unused_mut)]
@@ -3124,6 +3143,11 @@ impl<'a> TableFitLayouter<'a> {
                     // pre-pass zero-height; without this the placement pass grew
                     // max_actual_cell_h back and the S648 correction re-inflated
                     // the row).
+                    let hidden_tail_para = cell.blocks.last().and_then(|block| match block {
+                        Block::Paragraph(para) if LayoutEngine::hidden_cell_final_line(cell, cell.blocks.len() - 1, para) =>
+                            Some(LayoutEngine::without_hidden_cell_after(para)),
+                        _ => None,
+                    });
                     let s1311_tail_render = self.s1311_hidemark_tail_pos(cell);
                     let s751_hide_render = cell.hide_mark
                         && std::env::var("OXI_S751_DISABLE").is_err()
@@ -3137,6 +3161,28 @@ impl<'a> TableFitLayouter<'a> {
                     // flag above). Reset to false once a content-bearing paragraph is
                     // placed so subsequent empties in the same cell render normally.
                     let mut s1067_skip_empties = s1067_row_at_page_top;
+                    // An exact row clips an ordinary cell, but a restart cell
+                    // owns the full vertical merge. Use its complete fixed
+                    // height; an automatic continuation can grow for content.
+                    let mut exact_cell_limit = is_exact.then_some(row_height);
+                    if cell.v_merge.as_deref() == Some("restart") && is_exact {
+                        for next_row in &table.rows[row_idx + 1..] {
+                            let mut next_grid = next_row.grid_before as usize;
+                            let continuation = next_row.cells.iter().find(|next_cell| {
+                                let at_start = next_grid == cell_start_grid;
+                                next_grid += next_cell.grid_span.max(1) as usize;
+                                at_start
+                            });
+                            let continues = continuation.is_some_and(|next_cell|
+                                next_cell.grid_span.max(1) == cell.grid_span.max(1)
+                                    && matches!(next_cell.v_merge.as_deref(), Some("continue") | Some("")));
+                            if !continues { break; }
+                            exact_cell_limit = match (exact_cell_limit, next_row.height, next_row.height_rule.as_deref()) {
+                                (Some(total), Some(height), Some("exact")) => Some(total + height),
+                                _ => None,
+                            };
+                        }
+                    }
                     for (block_pos, block) in cell.blocks.iter().enumerate() {
                         // S488: snapshot this block's content_h-relative top (aligns with
                         // block_pos via enumerate; pushed before the exact-clip break so
@@ -3144,7 +3190,7 @@ impl<'a> TableFitLayouter<'a> {
                         debug_assert_eq!(cell_block_tops.len(), block_pos);
                         cell_block_tops.push(content_h);
                         // Clip content that overflows exact row height
-                        if is_exact && content_h + pad_t >= row_height {
+                        if exact_cell_limit.is_some_and(|limit| content_h + pad_t >= limit) {
                             break;
                         }
                         if Some(block_pos) == s716_stub_render || Some(block_pos) == s1311_tail_render {
@@ -3242,7 +3288,9 @@ impl<'a> TableFitLayouter<'a> {
                                 s1075_prev_r = None;
                             }
                             Block::Paragraph(para) => {
-                                let para = para;
+                                let hidden_final_mark = !self.is_vert_writing_active(cell)
+                                    && LayoutEngine::hidden_cell_final_line(cell, block_pos, para);
+                                                                let para = if hidden_final_mark { hidden_tail_para.as_ref().unwrap() } else { para };
                                 // Session 131 (2026-05-20): vertical writing early-exit.
                                 // For tbRlV cells, emit one Text element per paragraph at
                                 // relative_y=0 (Word's COM Information(6) on a vert-cell
@@ -3660,6 +3708,24 @@ impl<'a> TableFitLayouter<'a> {
                                         content_h -= psa.min(effective_space_before);
                                     }
                                 }
+                                // A split continuation carries the paragraph's resolved
+                                // before spacing, after same-style contextual suppression.
+                                // Keep adjacency before updating the previous-style state.
+                                let carry_space_before = if !self.preserve_same_style_cell_spacing
+                                    && !self.doc_body_has_real_cjk
+                                    && std::env::var("OXI_S939_DISABLE").is_err()
+                                    && prev_cell_sa.is_some()
+                                    && para.style.contextual_spacing
+                                    && s939_prev_r.is_some_and(|p| para.style.style_id.as_deref() == p.1)
+                                { 0.0 } else {
+                                    // The previous after spacing already owns its part
+                                    // of the collapsed boundary. Only the remaining
+                                    // before spacing travels with a fresh paragraph.
+                                    let previous_credit = if s427_collapse {
+                                        prev_cell_sa.map_or(0.0, |after| after.min(effective_space_before))
+                                    } else { 0.0 };
+                                    (effective_space_before - previous_credit).max(0.0)
+                                };
                                 // S939: layered contextualSpacing collapse inside the cell.
                                 content_h -= self.s939_cell_ctx_credit(
                                     prev_cell_sa,
@@ -3685,7 +3751,7 @@ impl<'a> TableFitLayouter<'a> {
                                     para.style.num_id.as_deref(),
                                 ));
                                 content_h += effective_space_before;
-                                s1431_cell_para_sb.insert((cell_idx, cell_para_counter), effective_space_before);
+                                s1431_cell_para_sb.insert((cell_idx, cell_para_counter), carry_space_before);
                                 if cell_float_flow {
                                     let floor = float_replay.and_then(|r| r.origins.get(&(row_idx, cell_idx, block_pos)))
                                         .copied().unwrap_or(0.0);
@@ -4395,7 +4461,7 @@ impl<'a> TableFitLayouter<'a> {
                                             let marker_fs =
                                                 self.resolve_font_size(&marker_style, &para.style);
                                             let marker_metrics =
-                                                self.metrics_for(&marker_style, &para.style);
+                                                &*self.metrics_for(&marker_style, &para.style);
                                             // S692 (2026-06-29, SHIPPED default ON, opt-out OXI_MARKERCJK_DISABLE): a CELL numbered-list
                                             // label that is CJK/full-width (「第３４条」, the tokyoshugyo 賃金
                                             // regulation article markers) had its WIDTH computed with metrics_for
@@ -4647,6 +4713,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // <w:cr>: "dropping it collapsed a genuine
                                     // trailing empty line").
                                     let mut s1169_trailing_break = false;
+                                    let mut explicit_break_lines = std::collections::HashSet::new();
                                     // R7.51 (2026-05-13): autoSpaceDE state for CJK↔Latin transitions.
                                     // Tracks the last emitted character across runs/buffers so we can
                                     // detect transitions and add Word's 2.5pt (10.5pt font) gap. The
@@ -4656,6 +4723,7 @@ impl<'a> TableFitLayouter<'a> {
                                     let mut cell_edge_tab_nowrap = false;
                                     let mut cell_tab_char_pack = false;
                                     let mut prev_char_emitted: Option<char> = None;
+        let mut prev_char_gap: Option<f32> = None;
                                     let mut prev_char_ruby = false; // S1316: the emitted char came from a ruby field
                                     // S443: the widened oikomi must fire ONLY on tab-bearing
                                     // (list-marker) paragraphs. 3a4f has hanging-indent paras
@@ -4949,7 +5017,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 && (!current_line.is_empty() || !buf.is_empty())
                                                 && self.cell_tab_word_overflows(para, s586_run_offset + s586_ci,
                                                     line_x + buf_w + if is_first_line { (p_indent_left + p_first_line_indent).max(0.0) } else { p_indent_left },
-                                                    wrap_w + p_indent_left);
+                                                    wrap_w + p_indent_left, p_indent_left, p_first_line_indent);
                                             if tab_break && std::env::var("OXI_CELL_TAB_CHAR_PACK_DISABLE").is_err() { cell_tab_char_pack = true; }
                                             if ch == '\n' || ch == '\x0B' || ch == '\x0C' || tab_break {
                                                 if !buf.is_empty() {
@@ -4991,6 +5059,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         cs, run.style.text_scale.unwrap_or(100.0), false,
                                                         run.style.font_family_east_asia.clone(), false, run.style.clone()));
                                                 }
+                                                if !tab_break { explicit_break_lines.insert(lines.len()); }
                                                 lines.push(std::mem::take(&mut current_line));
                                                 s1169_trailing_break = true;
                                                 cell_edge_tab_nowrap = false;
@@ -4998,6 +5067,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 current_line_chars.clear();
                                                 is_first_line = false;
                                                 prev_char_emitted = None;
+                prev_char_gap = None;
                                                 prev_char_ruby = false;
                                                 if !tab_break { continue; }
                                             }
@@ -5025,23 +5095,8 @@ impl<'a> TableFitLayouter<'a> {
                                                     p_indent_left
                                                 };
                                                 let abs_pos = line_x + buf_w + indent_off;
-                                                let next_pos = if !para.style.tab_stops.is_empty() {
-                                                    para.style
-                                                        .tab_stops
-                                                        .iter()
-                                                        .find(|ts| ts.position > abs_pos + 0.01)
-                                                        .map(|ts| ts.position)
-                                                        .unwrap_or_else(|| {
-                                                            ((abs_pos / self.default_tab_stop)
-                                                                .floor()
-                                                                + 1.0)
-                                                                * self.default_tab_stop
-                                                        })
-                                                } else {
-                                                    ((abs_pos / self.default_tab_stop).floor()
-                                                        + 1.0)
-                                                        * self.default_tab_stop
-                                                };
+                                                let (next_pos, _) = self.cell_next_tab_stop(
+                                                    para, abs_pos, p_indent_left, p_first_line_indent);
                                                 if std::env::var("OXI_CELL_EDGE_TAB_DISABLE").is_err()
                                                     && !self.doc_body_has_real_cjk
                                                     && (next_pos * 20.0).round() >= ((wrap_w + p_indent_left) * 20.0).round()
@@ -5049,9 +5104,37 @@ impl<'a> TableFitLayouter<'a> {
                                                     cell_edge_tab_nowrap = true;
                                                 }
                                                 let tab_w = (next_pos - abs_pos).max(0.0);
-                                                buf.push(ch);
-                                                buf_w += tab_w;
-                                                buf_chars.push(
+                                                // A tab is a positioned control, not a glyph.
+                                                // Keep its source text and measured advance in
+                                                // its own fragment so every renderer starts the
+                                                // next visible fragment at the tab stop. The
+                                                // wrapper already used this width for capacity.
+                                                if !buf.is_empty() {
+                                                    current_line.push((buf.clone(), font_size, buf_w, bold,
+                                                        run.style.italic, run.style.underline,
+                                                        run.style.underline_style.clone(), run.style.strikethrough,
+                                                        font_family.clone(), run.style.color.clone(),
+                                                        run.style.highlight.clone().or_else(|| run.style.shading.clone()),
+                                                        cs, run.style.text_scale.unwrap_or(100.0),
+                                                        std::mem::take(&mut s993_lrpb_pending),
+                                                        run.style.font_family_east_asia.clone(), run.ruby.is_some(),
+                                                        run.style.clone()));
+                                                    line_x += buf_w;
+                                                    buf.clear();
+                                                    buf_w = 0.0;
+                                                    current_line_chars.extend(buf_chars.drain(..));
+                                                }
+                                                current_line.push(("\t".to_string(), font_size, tab_w, bold,
+                                                    run.style.italic, run.style.underline,
+                                                    run.style.underline_style.clone(), run.style.strikethrough,
+                                                    font_family.clone(), run.style.color.clone(),
+                                                    run.style.highlight.clone().or_else(|| run.style.shading.clone()),
+                                                    cs, run.style.text_scale.unwrap_or(100.0),
+                                                    std::mem::take(&mut s993_lrpb_pending),
+                                                    run.style.font_family_east_asia.clone(), run.ruby.is_some(),
+                                                    run.style.clone()));
+                                                line_x += tab_w;
+                                                current_line_chars.push(
                                                     crate::layout::jc_both_compress::CharContext {
                                                         ch,
                                                         natural_advance: tab_w,
@@ -5059,12 +5142,13 @@ impl<'a> TableFitLayouter<'a> {
                                                     },
                                                 );
                                                 prev_char_emitted = Some(ch);
+                prev_char_gap = Some(self.natural_autospace_after(ch, &run.style, &para.style, font_size, cs));
                                                 prev_char_ruby = run.style.ruby_field;
                                                 continue;
                                             }
                                             // S763: metrics keep the legacy quote class, EXCEPT for
                                             // S1052 (a curly quote glued to ASCII text = Latin).
-                                            let cm = self.metrics_for_char_in(
+                                            let cm = &*self.metrics_for_char_in(
                                                 ch,
                                                 !self.s1052_cell_latin_quote(
                                                     &s586_run_chars,
@@ -5463,7 +5547,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     && ((de_boundary && para.style.auto_space_de)
                                                         || (dn_boundary && para.style.auto_space_dn))
                                                 {
-                                                    if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
+                                                    if let Some(gap) = prev_char_gap { gap } else if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
                                                     {
                                                         s1175_autospace(
                                                             font_size,
@@ -5935,7 +6019,8 @@ impl<'a> TableFitLayouter<'a> {
                                                     std::env::var("OXI_S1209_DISABLE").is_err();
                                                 let mut s1216_n_a = 0.0f32;
                                                 let mut s1216_sum_a = 0.0f32;
-                                                let yaku = if s1174_yakucomp {
+                                                let punctuation_unit = self.cell_punctuation_unit(para, font_size, grid_char_pitch, grid_char_cw_ratio);
+                    let yaku = if s1174_yakucomp {
                                                     let mut has_a = false;
                                                     let mut b = 0.0f32;
                                                     let mut last_a = false;
@@ -6012,23 +6097,23 @@ impl<'a> TableFitLayouter<'a> {
                                                         || last_ch.map_or(false, kinsoku::cell_yaku_type_b);
                                                     if !s1209 {
                                                         if s1208 && last_ch == Some('\u{3000}') {
-                                                            (0.5 * font_size * n_a).min(1.5 * font_size) + b
+                                                            (0.5 * punctuation_unit * n_a).min(1.5 * punctuation_unit) + b
                                                         } else if s1198 {
                                                             if !saw_mark {
                                                                 0.0
                                                             } else if last_a {
-                                                                0.5 * font_size
+                                                                0.5 * punctuation_unit
                                                             } else {
-                                                                (b + if has_a { 0.5 * font_size } else { 0.0 })
+                                                                (b + if has_a { 0.5 * punctuation_unit } else { 0.0 })
                                                                     .min(font_size)
                                                             }
                                                         } else {
-                                                            (if has_a { 0.5 * font_size } else { 0.0 }) + b
+                                                            (if has_a { 0.5 * punctuation_unit } else { 0.0 }) + b
                                                         }
                                                     } else if released {
-                                                        (0.5 * font_size * n_marks).min(1.5 * font_size)
+                                                        (0.5 * punctuation_unit * n_marks).min(1.5 * punctuation_unit)
                                                     } else if n_marks > 0.0 {
-                                                        0.5 * font_size
+                                                        0.5 * punctuation_unit
                                                     } else {
                                                         0.0
                                                     }
@@ -7001,6 +7086,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     }
                                                     if consumed {
                                                         prev_char_emitted = Some(ch);
+                prev_char_gap = Some(self.natural_autospace_after(ch, &run.style, &para.style, font_size, cs));
                                                         prev_char_ruby = run.style.ruby_field;
                                                         continue;
                                                     }
@@ -7085,6 +7171,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         run.style.clone(),
                                                     ));
                                                     prev_char_emitted = Some(ch);
+                prev_char_gap = Some(self.natural_autospace_after(ch, &run.style, &para.style, font_size, cs));
                                                     prev_char_ruby = run.style.ruby_field;
                                                     continue;
                                                 }
@@ -7099,6 +7186,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 },
                                             );
                                             prev_char_emitted = Some(ch);
+                prev_char_gap = Some(self.natural_autospace_after(ch, &run.style, &para.style, font_size, cs));
                                             prev_char_ruby = run.style.ruby_field;
                                         }
                                         if !buf.is_empty() {
@@ -7172,222 +7260,8 @@ impl<'a> TableFitLayouter<'a> {
                                         // <0.5pt per paragraph and accumulate to >18pt at the
                                         // boundary. Needs per-paragraph y-trace COM measurement
                                         // vs Oxi to locate the drift source.
-                                        let pprrpr_fs =
-                                            para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
-                                        // S1376 (2026-09-13, default ON, opt-out OXI_S1376_DISABLE):
-                                        // the mark's own rFonts decide an empty cell line in a
-                                        // Japanese document too. forms__00830ac053a2c57a: five
-                                        // empties per answer box carry rFonts BIZ UDP明朝 (no
-                                        // w:sz) -- Word sets each at one 16.25 cell (COM: BIZ
-                                        // UDP明朝 10.5, adjustLineHeightInTable); the CJK gate
-                                        // sent them to the document default 游明朝 (17.57 > pitch
-                                        // -> two cells), 213.5pt boxes against Word's 114.
-                                        // Probe: 游明朝 10.5 empties in such a cell ARE two cells
-                                        // in Word (32.46), so it is the mark's face that counts.
-                                        // S1376b: the mark is priced in its ASCII face (the S1300
-                                        // law), not the inherited eastAsia face. 1636d28e2c46: five
-                                        // marks carry rFonts ascii=Century with eastAsia inherited
-                                        // (ＭＳ 明朝); Word (COM Font.Name Century 10.5) sets each at
-                                        // one 13.6 cell, the eastAsia reading is 13.62 -> two cells.
-                                        let s1376_mark = pprrpr_fs.is_none()
-                                            && std::env::var("OXI_EMPTY_MARK_FAMILY_DISABLE").is_err()
-                                            && (!self.doc_body_has_real_cjk
-                                                || std::env::var("OXI_S1376_DISABLE").is_err())
-                                            && para.style.ppr_rpr.as_ref().is_some_and(|r| r.font_family.is_some());
-                                        let pprrpr_fs = pprrpr_fs.or_else(|| {
-                                            if s1376_mark {
-                                                Some(self.resolve_font_size(&RunStyle::default(), &para.style))
-                                            } else { None }
-                                        });
-                                        let empty_lh = if let Some(empty_fs) = pprrpr_fs {
-                                            let rpr_ref = para
-                                                .style
-                                                .ppr_rpr
-                                                .as_ref()
-                                                .cloned()
-                                                .unwrap_or_default();
-                                            // S989 (2026-07-23, default ON, opt-out OXI_S989_DISABLE):
-                                            // mirror S940E (the estimate) in the ACTUAL cell-empty
-                                            // consumer. The estimate resolves a Latin cell ¶ mark in
-                                            // the ASCII font (Arial hhea 11.499 for fs=10), but this
-                                            // actual path used metrics_for_para_mark (prefer_ascii=
-                                            // false), resolving the eastAsia CJK 83/64 box (12.969 =
-                                            // 10 × 83/64) — +1.47pt per empty cell. reports__0020157f:
-                                            // the first table's 28 empty cells add ~+41pt, pushing the
-                                            // pre-break empty paragraph into a spurious page (Oxi 6 vs
-                                            // Word 4). line_height_inner's S815 branch returns hhea for
-                                            // the ASCII (non-CJK) metrics, matching the estimate exactly.
-                                            // Narrow discriminator = the estimate's effective-change set
-                                            // AND excludes the calibrated gen2/golden inherited-font
-                                            // cells: explicit ASCII rFonts, no explicit eastAsia,
-                                            // single/auto rule, Latin body.
-                                            // S1382 (2026-09-13, default ON, opt-out OXI_S1382_DISABLE):
-                                            // the mark's EXPLICIT eastAsia face does not change the
-                                            // line either. MEASURED (`_pb_markea_latin_gen.py`, Word
-                                            // COM, an empty Arial-10 paragraph in the body and in a
-                                            // cell, mark eastAsia = Times New Roman / ＭＳ 明朝 /
-                                            // Yu Mincho / none): 23.25 in every arm, both places --
-                                            // Arial's line. The estimate (S940E) already took the
-                                            // ASCII face; only this actual consumer kept the eastAsia
-                                            // gate, so reports__003862302b660a86's rows with an
-                                            // empty Arial/eastAsia=TNR paragraph rendered 24.97
-                                            // against Word's 23.5 and the estimate's 24.5 -- the
-                                            // last row of its floating table missed page 2 by 1.4pt.
-                                            let s1382 = std::env::var("OXI_S1382_DISABLE").is_err()
-                                                && !self.doc_body_has_real_cjk;
-                                            // S1559 (2026-09-26, default ON, opt-out OXI_S1559_DISABLE):
-                                            // an auto MULTIPLE keeps the ascii face as well -- the
-                                            // estimate (S943) already priced hhea x factor, only this
-                                            // consumer fell back to the eastAsia box when the factor
-                                            // was not 1.0. MEASURED (_pb_emptymult_face_gen.py, 24
-                                            // arms, COM Info(6), body and cell): an empty Arial-12
-                                            // mark at line 240/276/360/480 = 13.5/15.75/21.0/27.75
-                                            // (= 13.8 x factor, 0.75-quantised), Arial 10 and
-                                            // Calibri 11 alike, with or without eastAsia=MS Mincho.
-                                            // legal__0030f893 p3: six such empties (Arial 12/11,
-                                            // line 360) in a cell at 23.35/21.4 (Mincho 83/64 x 1.5)
-                                            // against Word's 21.0/18.75 -> +14pt, and the page's last
-                                            // three-line paragraph moved to p4.
-                                            let s1559_mult = std::env::var_os("OXI_S1559_DISABLE").is_none()
-                                                && effective_line_spacing.map_or(false, |f| f > 0.0);
-                                            let s989_ascii = std::env::var("OXI_S989_DISABLE")
-                                                .is_err()
-                                                && (!self.doc_body_has_real_cjk || s1376_mark
-                                                    || (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
-                                                && matches!(
-                                                    effective_line_rule,
-                                                    None | Some("auto")
-                                                )
-                                                && (s1559_mult || effective_line_spacing
-                                                    .map_or(true, |f| (f - 1.0).abs() <= 0.01))
-                                                // S1512 (2026-09-21, default ON, opt-out OXI_S1512_DISABLE):
-                                                // a mark whose ascii face comes only from the
-                                                // docDefaults theme (no rFonts on the mark) is
-                                                // still set in that ascii face in a Latin document.
-                                                // reports__006de1d2: 4pt empty cell paragraphs
-                                                // under a theme whose <a:ea typeface=""/> resolved
-                                                // to the CJK substitute (5.19 = 4 x 83/64) where
-                                                // Word's rows read Calibri's 4.88; five tables on
-                                                // p2 grew ~1.5pt each and a three-line paragraph
-                                                // fell to p3 (+1 page).
-                                                && (rpr_ref.font_family.is_some()
-                                                    || ((!self.doc_body_has_real_cjk
-                                                        || (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
-                                                        && std::env::var_os("OXI_S1512_DISABLE").is_none()))
-                                                && (rpr_ref.font_family_east_asia.is_none() || s1376_mark || s1382
-                                                    || (!self.doc_body_has_real_cjk
-                                                        && std::env::var("OXI_CELL_MARK_ASCII").as_deref() == Ok("1")));
-                                            // S1597 (2026-09-29, default ON, opt-out OXI_S1597_DISABLE):
-                                            // with adjustLineHeightInTable a snapped EMPTY cell line
-                                            // still measures its paragraph mark in the ASCII face (S583),
-                                            // snapped to whole cells of that face's own natural. blind-G
-                                            // forms__0209c52f (linePitch 298 = 14.9, ascii Century,
-                                            // eastAsia MS Mincho, 12pt marks): the empty rows step 15.0 in
-                                            // Word (one cell), Oxi 29.8 (MS Mincho 15.56 -> two).
-                                            let s1597_cell = !s989_ascii
-                                                && std::env::var_os("OXI_S1597_DISABLE").is_none()
-                                                && self.doc_body_has_real_cjk
-                                                && self.adjust_line_height_in_table
-                                                && para.style.snap_to_grid
-                                                && matches!(effective_line_rule, None | Some("auto"))
-                                                && rpr_ref.font_family_east_asia.is_none()
-                                                && !self.metrics_for(&rpr_ref, &para.style).is_cjk_83_64_font();
-                                            let empty_metrics = self.metrics_for_para_mark_g(
-                                                &rpr_ref,
-                                                &para.style,
-                                                s989_ascii || s1597_cell,
-                                            );
-                                            // S1574: in a CJK document the ascii-face empty line
-                                            // is its hhea natural (Century 8pt 9.617, Word PDF
-                                            // probe cell_blank_face); line_height_inner's CJK
-                                            // branch returned 11.25 for the same face.
-                                            if s989_ascii
-                                                && self.doc_body_has_real_cjk
-                                                && !empty_metrics.is_cjk_83_64_font()
-                                                && (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid))
-                                            {
-                                                empty_metrics.natural_line_height_hhea(empty_fs)
-                                                    * effective_line_spacing.unwrap_or(1.0)
-                                            } else if s1597_cell && !empty_metrics.is_cjk_83_64_font()
-                                                && row_line_pitch.map_or(false, |p| p > 0.1)
-                                            {
-                                                let p = row_line_pitch.unwrap_or(0.0);
-                                                let h = empty_metrics.natural_line_height_hhea(empty_fs)
-                                                    * effective_line_spacing.unwrap_or(1.0);
-                                                ((h / p - 0.001).ceil().max(1.0)) * p
-                                            } else {
-                                            self.line_height_inner(
-                                                empty_fs,
-                                                effective_line_spacing,
-                                                effective_line_rule,
-                                                empty_metrics,
-                                                para.style.snap_to_grid,
-                                                row_line_pitch,
-                                                true,
-                                            )
-                                            }
-                                        } else {
-                                            let metrics = self.doc_default_metrics();
-                                            // S1231 (2026-08-26, opt-out OXI_S1231_DISABLE): a
-                                            // size-less empty cell ¶ mark still resolves through
-                                            // the paragraph's STYLE CHAIN, exactly as the
-                                            // estimate does (estimate_para_height's empty_fs =
-                                            // ppr_rpr.font_size.unwrap_or(resolve_font_size)).
-                                            // kyotei36spec table3 row12: docDefaults sz=21 but
-                                            // Normal sets sz=16 → Word prices the wide cell's two
-                                            // empty paras at 8pt (row 21.1); the engine-default
-                                            // fallback priced them at 10.5 → 13.5 each → row
-                                            // 27.4 (+6.3) and the whole float form ran ~9pt
-                                            // tall (the S1230 blocker).
-                                            // ★SCOPE (2026-08-26): |chain − default| ≥ 1.5pt only.
-                                            // The unscoped chain-pricing is the S610 rule the
-                                            // kyodoken family already FALSIFIED (S636 kept the
-                                            // engine default for them), and the candidate A/B
-                                            // reproduced it: sub-1pt deltas are a compensation
-                                            // lottery (kyodoken07 +0.0047 vs kyodoken11 −0.0050,
-                                            // tokumei_08_07 −0.0412, ukhealthform −0.0311) while
-                                            // the ≥1.5pt class (kyotei Normal sz=16 vs default
-                                            // 11.0, Δ3.0) is probe-confirmed (+_pb_marksz_gen
-                                            // 6 arms) and +0.0496. The small-Δ law needs its own
-                                            // derivation (szCs/table-style inputs) before the
-                                            // threshold can drop.
-                                            let s1231_fs = {
-                                                let chain = self.resolve_font_size(
-                                                    &RunStyle::default(),
-                                                    &para.style,
-                                                );
-                                                // R24 (2026-08-27): COM probe _pb_smalldelta_gen
-                                                // (6 arms) prices the size-less empty at the
-                                                // CHAIN for EVERY Δ (kyodo shape dd11/Normal10.5
-                                                // → 12.75 = chain; admin dd11/Normal12 → 14.25 =
-                                                // chain) — the ≥1.5 guard is a compensation
-                                                // shield, not the law. Threshold stays until the
-                                                // exposed JP compensations (tokumei_08_07 −0.041,
-                                                // ukhealthform −0.031) are dissected; tune with
-                                                // OXI_S1231_TH.
-                                                let s1231_th: f32 = std::env::var("OXI_S1231_TH")
-                                                    .ok()
-                                                    .and_then(|v| v.parse().ok())
-                                                    .unwrap_or(1.5);
-                                                if std::env::var("OXI_S1231_DISABLE").is_err()
-                                                    && (chain - self.default_font_size).abs()
-                                                        >= s1231_th
-                                                {
-                                                    chain
-                                                } else {
-                                                    self.default_font_size
-                                                }
-                                            };
-                                            self.line_height_inner(
-                                                s1231_fs,
-                                                effective_line_spacing,
-                                                effective_line_rule,
-                                                metrics,
-                                                para.style.snap_to_grid,
-                                                row_line_pitch,
-                                                true,
-                                            )
-                                        };
+                                        let (pprrpr_fs, empty_lh) = self.cell_mark_line_height(
+                                            para, effective_line_spacing, effective_line_rule, row_line_pitch);
                                         if std::env::var("OXI_DBG_EMPTYLH").is_ok() {
                                             eprintln!("[EMPTYLH] row={} cell={} lh={:.2} pprrpr_fs={:?} default_fs={} ls={:?} rule={:?} snap={}",
                                     row_idx, cell_idx, empty_lh, pprrpr_fs, self.default_font_size,
@@ -7536,7 +7410,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             .map(|c| {
                                                                 self.registry
                                                                     .char_width_pt_with_fallback(
-                                                                        c, fs, fm,
+                                                                        c, fs, &fm,
                                                                     )
                                                             })
                                                             .sum::<f32>()
@@ -7584,6 +7458,9 @@ impl<'a> TableFitLayouter<'a> {
                                     let mut s1626_ri = 0usize;
                                     let mut s1626_seen = 0usize;
                                     for (line_idx, line) in lines.iter().enumerate() {
+                                        if hidden_final_mark && line_idx + 1 == lines.len() && line.is_empty() {
+                                            continue;
+                                        }
                                         let float_frame = cell_float_wrap.as_ref().map(|wrap|
                                             wrap.frame(line_idx, wrap_w, first_line_wrap_w, p_indent_left, p_first_line_indent));
                                         if let Some(frame) = float_frame { content_h += frame.gap; }
@@ -7600,7 +7477,7 @@ impl<'a> TableFitLayouter<'a> {
                                             }
                                         }
                                         // Clip content that overflows exact row height
-                                        if is_exact && content_h + pad_t >= row_height {
+                                        if exact_cell_limit.is_some_and(|limit| content_h + pad_t >= limit) {
                                             break;
                                         }
                                         // Line height = max of all runs in line (in_table_cell=true: no default font minimum)
@@ -7613,11 +7490,12 @@ impl<'a> TableFitLayouter<'a> {
                                         let ignore_ascii_spaces = !self.doc_body_has_real_cjk
                                             && line.iter().any(|(t, ..)| !t.trim().is_empty());
                                         let tab_mark_line = !self.doc_body_has_real_cjk
+                                            && !explicit_break_lines.contains(&line_idx)
                                             && line.iter().any(|f| f.0.contains('\t'))
                                             && line.iter().all(|f| f.0.chars().all(|c| c == '\t'));
                                         let tab_mark = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                                         let tab_mark_fs = self.resolve_font_size(&tab_mark, &para.style);
-                                        let tab_mark_metrics = self.metrics_for_para_mark_g(&tab_mark, &para.style, true);
+                                        let tab_mark_metrics = &*self.metrics_for_para_mark_g(&tab_mark, &para.style, true);
                                         let mut lh: f32 = line
                                             .iter()
                                             .filter(|(t, ..)| !cellpair_ws || !t.trim().is_empty())
@@ -7643,24 +7521,12 @@ impl<'a> TableFitLayouter<'a> {
                                                     _, // S1312 ruby flag
                                                     _source_style,
                                                 )| {
-                                                    // S1629 (2026-10-01, OPT-IN OXI_S1629=1 -- held:
-                                                    // reports__0013bcb8 PASS->FAIL, see below): a cell line is sized by
-                                                    // the run's own FACE -- bold/italic -- like the
-                                                    // body (metrics_for_text). reports__0013bcb8's
-                                                    // bold Book Antiqua 8pt header row: Word pitches
-                                                    // its lines 9.72 (the bold face's hhea box 9.645,
-                                                    // taller than its win box 9.51) against 9.96 for
-                                                    // the regular rows (win 9.94); Oxi sized both at
-                                                    // the regular 9.94, the row 0.44 too tall.
-                                                    // HELD because the same document's body lines
-                                                    // carry more text than Word's (its right column
-                                                    // starts two lines of text early on p2), and the
-                                                    // too-tall header row was what pushed its table
-                                                    // across the p2/p3 break the way Word's is.
-                                                    let metrics = match font_family.as_deref() {
-                                                        Some(ff) if std::env::var("OXI_S1629").as_deref() == Ok("1") =>
-                                                            self.registry.get_with_style(ff, *s1629_bold, *s1629_italic),
-                                                        Some(ff) => self.registry.get(ff),
+                                                    // Cell lines use the actual requested face, as
+                                                    // body lines and the cell height pre-pass do.
+                                                    // A compensating excess in surrounding flow
+                                                    // cannot justify sizing bold text as regular.
+                                                    let metrics = &*match font_family.as_deref() {
+                                                        Some(ff) => self.registry.get_with_style(ff, *s1629_bold, *s1629_italic),
                                                         None => self.registry.default_metrics(),
                                                     };
                                                     // S1119 cells (measured 2026-08-14,
@@ -7727,7 +7593,7 @@ impl<'a> TableFitLayouter<'a> {
                                             let mut descent = 0.0f32;
                                             let mut natural_max = 0.0f32;
                                             for f in line.iter().filter(|f| !f.0.trim().is_empty()) {
-                                                let m = self.registry.get(f.8.as_deref().unwrap_or("Calibri"));
+                                                let m = &*self.registry.get(f.8.as_deref().unwrap_or("Calibri"));
                                                 let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
                                                 natural_max = natural_max.max(m.natural_line_height_hhea(f.1));
                                                 ascent = ascent.max((m.win_ascent + leading) * f.1);
@@ -7740,6 +7606,15 @@ impl<'a> TableFitLayouter<'a> {
                                                 lh += (ascent + descent - natural_max).max(0.0);
                                             }
                                         }
+                                        // The final blank line belongs to the paragraph mark.
+                                        // Earlier blank lines ending at explicit breaks keep
+                                        // the break run's font box (Word's 32 controls).
+                                        if LayoutEngine::paragraph_mark_only(para)
+                                            || (line_idx + 1 == lines.len()
+                                                && line.iter().all(|f| LayoutEngine::mark_spacing_only_text(&f.0))) {
+                                            lh = self.cell_mark_line_height(para, effective_line_spacing,
+                                                effective_line_rule, row_line_pitch).1;
+                                        }
                                         if std::env::var("OXI_DBG_CELLLH").is_ok() {
                                             let fams: Vec<String> = line.iter().map(|f| format!("{}@{}", f.8.as_deref().unwrap_or("-"), f.1)).collect();
                                             let head: String = line.iter().flat_map(|f| f.0.chars()).take(10).collect();
@@ -7749,7 +7624,7 @@ impl<'a> TableFitLayouter<'a> {
                                         if lh == 0.0 {
                                             // whitespace-only line: fall back to all fragments
                                             lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _, _, _)| {
-                                    let metrics = match font_family.as_deref() {
+                                    let metrics = &*match font_family.as_deref() {
                                         Some(ff) => self.registry.get(ff),
                                         None => self.registry.default_metrics(),
                                     };
@@ -7784,7 +7659,7 @@ impl<'a> TableFitLayouter<'a> {
                                             lh = lines.iter().flat_map(|l| l.iter())
                                     .filter(|(text, ..)| !text.trim().is_empty())
                                     .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _, _, _)| {
-                                        let metrics = match font_family.as_deref() {
+                                        let metrics = &*match font_family.as_deref() {
                                             Some(ff) => self.registry.get(ff),
                                             None => self.registry.default_metrics(),
                                         };
@@ -7832,7 +7707,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     let nat = line.iter()
                                                         .filter(|t| !t.0.trim().is_empty())
                                                         .map(|t| {
-                                                            let metrics = match t.8.as_deref() {
+                                                            let metrics = &*match t.8.as_deref() {
                                                                 Some(ff) => self.registry.get(ff),
                                                                 None => self.registry.default_metrics(),
                                                             };
@@ -7867,7 +7742,7 @@ impl<'a> TableFitLayouter<'a> {
                                         {
                                             let (mut a0, mut d0, mut a1, mut d1) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
                                             for t in line.iter().filter(|t| LayoutEngine::s1517_is_text(&t.0, &t.16)) {
-                                                let m = match t.8.as_deref() {
+                                                let m = &*match t.8.as_deref() {
                                                     Some(ff) => self.registry.get(ff),
                                                     None => self.registry.default_metrics(),
                                                 };
@@ -7915,13 +7790,14 @@ impl<'a> TableFitLayouter<'a> {
                                         // short from p78 on. Symbol-only (a non-Symbol marker
                                         // measured NO growth — B/J arms; the S1037 tall-marker
                                         // cell case stays unmeasured/unwired); exact/atLeast
-                                        // absorb the marker (S947); Latin docs only (JP corpus
+                                        // exact clips the marker; minimum absorbs only the
+                                        // overflow covered by its floor. Latin docs only (JP corpus
                                         // byte-identical).
                                         if line_idx == 0
                                             && !self.doc_body_has_real_cjk
                                             && !matches!(
                                                 effective_line_rule,
-                                                Some("exact") | Some("atLeast")
+                                                Some("exact")
                                             )
                                             && (list_marker_info
                                                 .as_ref()
@@ -7930,6 +7806,7 @@ impl<'a> TableFitLayouter<'a> {
                                             && std::env::var("OXI_S1125_DISABLE").is_err()
                                         {
                                             let mut s1125_asc: f32 = 0.0;
+                                            let mut s1125_desc: f32 = 0.0;
                                             let mut s1125_best_sum: f32 = 0.0;
                                             let mut s1125_ext: f32 = 0.0;
                                             for (t, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _, _, _) in
@@ -7938,11 +7815,12 @@ impl<'a> TableFitLayouter<'a> {
                                                 if t.trim().is_empty() {
                                                     continue;
                                                 }
-                                                let m = match font_family.as_deref() {
+                                                let m = &*match font_family.as_deref() {
                                                     Some(ff) => self.registry.get(ff),
                                                     None => self.registry.default_metrics(),
                                                 };
                                                 s1125_asc = s1125_asc.max(m.win_ascent * *fs);
+                                                s1125_desc = s1125_desc.max(m.win_descent * *fs);
                                                 let win_sum = (m.win_ascent + m.win_descent) * *fs;
                                                 let fext = (m.natural_line_height_hhea(*fs)
                                                     - win_sum)
@@ -7961,10 +7839,10 @@ impl<'a> TableFitLayouter<'a> {
                                                 // S1614: an AUM numbering marker uses its own ascent.
                                                 let marker_asc = self.s1614_aum_marker_asc(para)
                                                     .unwrap_or(2059.0 / 2048.0 * mfs);
-                                                content_h += (marker_asc
-                                                    - s1125_asc
-                                                    - s1125_ext)
-                                                    .max(0.0);
+                                                content_h += LayoutEngine::minimum_marker_entry_overflow(
+                                                    (marker_asc - s1125_asc - s1125_ext).max(0.0),
+                                                    s1125_asc + s1125_desc + s1125_ext,
+                                                    lh, effective_line_rule);
                                             }
                                         }
                                         // Task P step 6 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): grow the cell
@@ -8190,7 +8068,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             let char_w = self
                                                                 .registry
                                                                 .char_width_pt_with_fallback(
-                                                                    ch, *fs, fm,
+                                                                    ch, *fs, &fm,
                                                                 );
                                                             // Do not compress beyond the actual deficit and
                                                             // then distribute that artificial excess as spaces.
@@ -8205,11 +8083,14 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                             }
 
-                                            // Phase 2: Distribute slack at word spaces, then CJK gaps
+                                            // Phase 2: Distribute slack at word spaces, then CJK gaps.
+                                            // A positioned tab has a fixed stop advance; it is
+                                            // never a stretchable word space. Keep its advance
+                                            // independent of the justified line's remaining slack.
                                             if slack > 0.0 {
                                                 let space_count = line.iter()
                                         .enumerate()
-                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
+                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty() && !text.contains('\t'))
                                         .count();
                                                 if space_count > 0 {
                                                     let per_space = slack / space_count as f32;
@@ -8237,7 +8118,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     ) in line.iter().enumerate()
                                                     {
                                                         if fi < line.len() - 1
-                                                            && text.trim().is_empty()
+                                                            && text.trim().is_empty() && !text.contains('\t')
                                                         {
                                                             frag_spacing[fi] += per_space;
                                                         }
@@ -8366,7 +8247,7 @@ impl<'a> TableFitLayouter<'a> {
                                             rs.font_family_east_asia = Some(e.clone());
                                             rs.has_explicit_east_asia = true;
                                         }
-                                        let m = self.metrics_for_text(text, &rs, &para.style);
+                                        let m = &*self.metrics_for_text(text, &rs, &para.style);
                                         m.word_line_height_table_cell(*fs)
                                     })
                                     .fold(0.0_f32, f32::max)
@@ -8543,7 +8424,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     rs.has_explicit_east_asia = true;
                                                 }
                                                 let m =
-                                                    self.metrics_for_text(text, &rs, &para.style);
+                                                    &*self.metrics_for_text(text, &rs, &para.style);
                                                 if m.is_cjk_83_64_font() {
                                                     let n = m.word_line_height_no_grid(*fs);
                                                     if n > natural_cjk {
@@ -8688,14 +8569,14 @@ impl<'a> TableFitLayouter<'a> {
                                                             .unwrap_or_else(|| ruby::default_hps_raise_pt(bfs, hps));
                                                         let rm = rb.annotation_fonts.first()
                                                             .map(|n| self.registry.get(n))
-                                                            .unwrap_or(bm);
+                                                            .unwrap_or_else(|| bm.clone());
                                                         let parts = |m: &FontMetrics, fs: f32| {
                                                             let extra = (LayoutEngine::s1367_cjk_box(m, fs)
                                                                 - (m.win_ascent + m.win_descent) * fs).max(0.0) / 2.0;
                                                             (m.win_ascent * fs + extra, m.win_descent * fs + extra)
                                                         };
-                                                        let (up_r, _) = parts(rm, hps);
-                                                        let (_, down_b) = parts(bm, bfs);
+                                                        let (up_r, _) = parts(&rm, hps);
+                                                        let (_, down_b) = parts(&bm, bfs);
                                                         let baseline = lh / 2.0 + (raise + up_r - down_b) / 2.0;
                                                         // renderer: baseline = y + text_y_off - 1.0 + ascent
                                                         baseline - bm.win_ascent * bfs + 1.0
@@ -8705,6 +8586,35 @@ impl<'a> TableFitLayouter<'a> {
                                             }
                                             _ => cell_text_y_off,
                                         };
+                                        // Ordinary horizontal text on one cell line shares a
+                                        // baseline even when its faces or sizes differ. Preserve
+                                        // the logical line box and express the paint baseline
+                                        // explicitly; using each face's own ascent lowers the
+                                        // shorter face beside a taller symbol or formatting run.
+                                        // Grid, ruby, positioned scripts and embedded objects
+                                        // retain their existing composed geometry.
+                                        let shared_cell_baseline = if row_line_pitch.is_none()
+                                            && effective_line_rule != Some("exact")
+                                            && para.style.list_marker.is_none()
+                                            && line.iter().all(|f| !f.15 && !f.16.combine
+                                                && f.16.vertical_align.is_none()
+                                                && f.16.position.map_or(true, |p| p.abs() < 0.001)
+                                                && f.16.inline_object_extent.is_none()
+                                                && !f.0.starts_with('\u{F8FD}'))
+                                        {
+                                            let mut smallest = f32::INFINITY;
+                                            let mut largest = 0.0f32;
+                                            for f in line.iter().filter(|f| !f.0.trim().is_empty()) {
+                                                let m = &*self.registry.get_with_style(
+                                                    f.8.as_deref().unwrap_or("Calibri"), f.3, f.4);
+                                                let ascent = m.baseline_ascent() * f.1;
+                                                smallest = smallest.min(ascent);
+                                                largest = largest.max(ascent);
+                                            }
+                                            if largest > smallest + 0.001 {
+                                                Some(cell_text_y_off - 1.0 + largest)
+                                            } else { None }
+                                        } else { None };
                                         // S592: line-1 body starts AFTER the inline marker (no overlap).
                                         // S718: line-1 body pulled left to the defaultTabStop position.
                                         let mut rx = if s592_cell_space && line_idx == 0 {
@@ -8812,7 +8722,24 @@ impl<'a> TableFitLayouter<'a> {
                                         ) in line.iter().enumerate()
                                         {
                                             let adj_w = *tw + frag_width_adj[frag_idx];
-                                            let aki_leading = aki_plan.get(frag_idx).map_or(0.0, |p| p.leading_gap);
+                                            // Incoming auto-space belongs before this fragment's first glyph.
+                                            // Its width is already included in adj_w by the character walker.
+                                            let natural_leading = frag_idx.checked_sub(1)
+                                                .and_then(|i| line.get(i))
+                                                .filter(|previous| {
+                                                    let ruby_adjacent = std::env::var("OXI_S1316_DISABLE").is_err()
+                                                        && (previous.16.ruby_field || _source_style.ruby_field);
+                                                    !ruby_adjacent && previous.0.chars().last()
+                                                        .zip(text.chars().next())
+                                                        .is_some_and(|(a,b)| cell_aki_joint(a,b,
+                                                            para.style.auto_space_de,para.style.auto_space_dn))
+                                                })
+                                                .map_or(0.0, |previous| {
+                                                    self.natural_autospace_after(previous.0.chars().last().unwrap_or(' '),
+                                                        &previous.16,&para.style,previous.1,previous.11)
+                                                });
+                                            let aki_leading = aki_plan.get(frag_idx)
+                                                .map_or(natural_leading, |p| p.leading_gap);
                                             // Task P step 5 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a U+F8FE{index}
                                             // cell-inline OLE fragment → the registered &Image drawn on
                                             // the line. Step 5 places the object bottom at the line
@@ -9085,6 +9012,7 @@ impl<'a> TableFitLayouter<'a> {
                                             );
                                             // Session 72 Phase A: populate text_y_off (y still includes it).
                                             cell_el.text_y_off = cell_text_y_off;
+                                            cell_el.baseline_offset = shared_cell_baseline;
                                             self.set_cell_exact_baseline(&mut cell_el, effective_line_rule, effective_line_spacing.unwrap_or(lh));
                                             // Attribute to the table's source block index so diff tools
                                             // can localize cell text. Without this, para_idx is None and
@@ -9175,9 +9103,10 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                             } else { None };
                                             let grid_run_chars: Vec<char> = text.chars().collect();
-                                            let grid_metrics: Vec<&FontMetrics> = if single_byte_grid.is_some() {
+                                            let grid_metric_owners: Vec<FontMetricsRef<'_>> = if single_byte_grid.is_some() {
                                                 grid_run_chars.iter().copied().enumerate().map(|(i, ch)| self.metrics_for_char_in(ch, !self.s1052_cell_latin_quote(&grid_run_chars, i), _source_style, &para.style)).collect()
                                             } else { Vec::new() };
+                                            let grid_metrics: Vec<&FontMetrics> = grid_metric_owners.iter().map(|metrics| &**metrics).collect();
                                             let grid_kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
                                                 && _source_style.kern.or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
                                                     .map_or(false, |k| k > 0.0 && *fs >= k);
@@ -9198,12 +9127,11 @@ impl<'a> TableFitLayouter<'a> {
                                                         text,
                                                         *fs,
                                                         &self.registry,
-                                                        fm,
+                                                        &fm,
                                                         *cs + justify_char_spacing + if single_byte_grid.is_some() { 0.0 } else { grid_cs_adj },
                                                         para.style.auto_space_de,
                                                         para.style.auto_space_dn,
-                                                        aki_plan.get(frag_idx).map(|p| p.gap_scale * s1175_autospace(
-                                                            *fs, *cs, self.balance_single_byte_double_byte_width && !line[frag_idx].15)),
+                                                        None,
                                                         std::env::var_os("OXI_CELL_BALANCED_SPACE").is_some()
                                                             && self.balance_single_byte_double_byte_width,
                                                         frag_idx.checked_sub(1).and_then(|i| line.get(i))
@@ -9212,6 +9140,10 @@ impl<'a> TableFitLayouter<'a> {
                                                         single_byte_grid,
                                                         &grid_metrics, grid_latin_em, grid_kern,
                                                         &frag_char_width_adj[frag_idx],
+                                                        &text.chars().map(|c| self.natural_autospace_after(c,
+                                                            _source_style,&para.style,*fs,*cs)
+                                                            * aki_plan.get(frag_idx).map_or(1.0, |p| p.gap_scale))
+                                                            .collect::<Vec<_>>(),
                                                     )
                                                 } else {
                                                     None
@@ -9254,6 +9186,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         },
                                                     );
                                                     se.text_y_off = cell_text_y_off;
+                                                    se.baseline_offset = shared_cell_baseline;
                                                     se.paragraph_index = block_idx;
                                                     se.cell_paragraph_index =
                                                         Some(cell_para_counter);
@@ -9300,12 +9233,12 @@ impl<'a> TableFitLayouter<'a> {
                                                         let ruby_text = ruby_ir.text.as_str();
                                                         let ruby_n = ruby_text.chars().count();
                                                         let ruby_w: f32 = ruby_text.chars()
-                                                            .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_m))
+                                                            .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, &ruby_m))
                                                             .sum();
                                                         let base_w: f32 = group.iter().map(|r| {
                                                             let n = r.text.chars().count() as f32;
                                                             r.text.chars()
-                                                                .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, base_m))
+                                                                .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, &base_m))
                                                                 .sum::<f32>()
                                                                 + r.style.character_spacing.unwrap_or(0.0) * n
                                                         }).sum();
@@ -10719,7 +10652,7 @@ impl<'a> TableFitLayouter<'a> {
                         .cells
                         .first()
                         .and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
-                        .unwrap_or(default_pad_b);
+                        .unwrap_or(row_default_pad_b);
                     let bw = if separate_outer_edges { fragment_bottom_width } else { row
                         .cells
                         .first()
@@ -10806,6 +10739,19 @@ impl<'a> TableFitLayouter<'a> {
                             } else {
                                 sa
                             };
+                            // Contextual after spacing belongs to the boundary
+                            // with the following paragraph. A page cut does not
+                            // restore a boundary that same-style adjacency removed.
+                            let same_style_next = cell.blocks.windows(2).any(|pair| {
+                                matches!((&pair[0], &pair[1]),
+                                    (Block::Paragraph(current), Block::Paragraph(next))
+                                    if std::ptr::eq(current, *para)
+                                        && current.style.style_id == next.style.style_id)
+                            });
+                            let sa = if !self.preserve_same_style_cell_spacing
+                                && std::env::var("OXI_S939_DISABLE").is_err()
+                                && para.style.contextual_spacing && same_style_next
+                            { 0.0 } else { sa };
                             // The trailing after and the cell's bottom frame
                             // (tcMar_b + border = S819's q) OVERLAP rather than
                             // stack: Word's fragment closes at
@@ -10970,7 +10916,9 @@ impl<'a> TableFitLayouter<'a> {
                                 // on both pages. Modern Word moves the complete row.
                                 short_widow_moves_row = true;
                             }
-                            if k == 1 && key.3 > 0
+                            if (k == 1 || (n == 3 && k == 2)) && key.3 > 0
+                                // A three-line paragraph cannot keep two lines
+                                // on both sides; move it after preceding cell content.
                                 // Legacy and settings-less documents allow a
                                 // lone first line in a split table paragraph.
                                 && self.compat_mode >= 15 && self.compat_mode_explicit
@@ -11397,7 +11345,7 @@ impl<'a> TableFitLayouter<'a> {
                         row.cells
                             .first()
                             .and_then(|c| c.margins.as_ref().and_then(|m| m.top))
-                            .unwrap_or(default_pad_t)
+                            .unwrap_or(row_default_pad_t)
                     } else {
                         0.0
                     };
@@ -11416,7 +11364,7 @@ impl<'a> TableFitLayouter<'a> {
                             .cells
                             .first()
                             .and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
-                            .unwrap_or(default_pad_b);
+                            .unwrap_or(row_default_pad_b);
                         // S1528 (2026-09-24, opt-out OXI_S1528_DISABLE): the tail
                         // is the cell's RESOLVED space_after, i.e. after Word's
                         // in-cell reset of inherited spacing, not the raw style
@@ -11653,7 +11601,7 @@ impl<'a> TableFitLayouter<'a> {
                                     rpr.font_family = font_family.clone();
                                     rpr.font_size = Some(*font_size);
                                     let para_style = crate::ir::ParagraphStyle::default();
-                                    let metrics = self.metrics_for_text("", &rpr, &para_style);
+                                    let metrics = &*self.metrics_for_text("", &rpr, &para_style);
                                     let h = metrics.word_ascent_pt(*font_size)
                                         + metrics.word_descent_pt(*font_size);
                                     if h > max_nat {
@@ -11841,7 +11789,7 @@ impl<'a> TableFitLayouter<'a> {
                 let continuation_pad_b = if separate_outer_edges
                     && std::env::var("OXI_S819_DISABLE").is_err() {
                     row.cells.first().and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
-                        .unwrap_or(default_pad_b)
+                        .unwrap_or(row_default_pad_b)
                 } else { 0.0 };
                 // 2026-09-25: hard cap on continuation pages for ONE row. The
                 // loop's progress guarantee (overflow shifts up by a page each
@@ -12289,6 +12237,39 @@ impl<'a> TableFitLayouter<'a> {
                             }
                         }
                     }
+                    // A fresh paragraph carries the same resolved before gap
+                    // on every continuation, including the third and later pages.
+                    // Nested tables have their own flow identities and carry map.
+                    if std::env::var_os("OXI_S1431_DISABLE").is_none() {
+                        let first_top = overflow.iter().filter(|e| anchors(e))
+                            .map(|e| e.y - e.flow_line_offset)
+                            .fold(f32::INFINITY, f32::min);
+                        let carry = overflow.iter()
+                            .filter(|e| anchors(e)
+                                && e.cell_ancestor_path.is_empty()
+                                && e.cell_row_index == Some(row_idx)
+                                && (e.y - e.flow_line_offset - first_top).abs() < 0.01)
+                            .filter_map(|e| {
+                                let key = (e.cell_col_index?, e.cell_paragraph_index?);
+                                let stayed = this_page.iter().any(|c| {
+                                    anchors(c) && c.cell_ancestor_path.is_empty()
+                                        && c.cell_row_index == Some(row_idx)
+                                        && c.cell_col_index == Some(key.0)
+                                        && c.cell_paragraph_index == Some(key.1)
+                                });
+                                if stayed { None } else { s1431_cell_para_sb.get(&key).copied() }
+                            }).fold(0.0f32, f32::max);
+                        let target_top = page_top + s817_cont_pad + carry;
+                        if carry > 0.0 && first_top.is_finite() && first_top < target_top - 0.01 {
+                            let adjust = target_top - first_top;
+                            for e in overflow.iter_mut() {
+                                if matches!(e.content, LayoutContent::Text { .. })
+                                    || (s998_reanchor_img && matches!(e.content, LayoutContent::Image { .. }))
+                                    || (float_replay.is_some() && e.margin_float)
+                                { e.y += adjust; }
+                            }
+                        }
+                    }
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         let tp_txt = this_page
                             .iter()
@@ -12362,7 +12343,7 @@ impl<'a> TableFitLayouter<'a> {
                         let Some(cell) = e.cell_col_index.and_then(|ci| row.cells.get(ci)) else { continue; };
                         if cell.v_merge.is_some() { continue; }
                         let bottom = cell.margins.as_ref().and_then(|m| m.bottom)
-                            .unwrap_or(default_pad_b) + self.rowbox2_trh_bw(table, row);
+                            .unwrap_or(row_default_pad_b) + self.rowbox2_trh_bw(table, row);
                         match &e.content {
                             LayoutContent::Text { text, .. } => {
                                 independent_continuation_end = independent_continuation_end
@@ -12625,7 +12606,7 @@ impl<'a> TableFitLayouter<'a> {
                                 if e.cell_float_row_bound {
                                     let pad = e.cell_col_index.and_then(|i| row.cells.get(i))
                                         .and_then(|c| c.margins.as_ref()).and_then(|m| m.bottom)
-                                        .unwrap_or(default_pad_b);
+                                        .unwrap_or(row_default_pad_b);
                                     e.y + e.height + pad + self.rowbox2_trh_bw(table, row)
                                 } else {
                                     e.y - e.flow_line_offset + e.flow_line_height.unwrap_or(e.height)

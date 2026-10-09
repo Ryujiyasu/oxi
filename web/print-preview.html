@@ -23,7 +23,12 @@
 
 <script type="module">
 import { renderVerticalText } from '../docs/vertical-text.js';
-import init, { layout_document } from './oxidocs_wasm.js';
+import { textBaseline } from '../docs/text-baseline.js';
+import { drawRegisteredText } from '../docs/runtime-font-glyph.js';
+import * as fontApi from './oxidocs_wasm.js';
+import { RuntimeFontLoader, showFontAccess } from '../docs/runtime-font-loader.js';
+const fontLoader = new RuntimeFontLoader(fontApi);
+import init, { layout_document, get_font_glyph_outline } from './oxidocs_wasm.js';
 
 const DPI = 150;
 const SCALE = DPI / 72; // points to pixels at target DPI
@@ -127,9 +132,9 @@ function renderText(ctx, elem) {
     ctx.letterSpacing = `${elem.character_spacing}px`;
   }
 
-  // Draw text at baseline (y + ascent approximation)
-  const baseline = elem.y + fontSize * 0.85;
-  ctx.fillText(elem.text || '', elem.x, baseline);
+  // Honor the baseline resolved by layout for mixed cell text.
+  const baseline = textBaseline(elem, fontSize);
+  drawRegisteredText(ctx, elem, baseline, get_font_glyph_outline);
 
   // Reset letter spacing
   if (elem.character_spacing && elem.character_spacing !== 0) {
@@ -195,7 +200,11 @@ function renderShading(ctx, elem) {
   }
 }
 
+let previewFontEpoch = 0;
 async function processFile(arrayBuffer) {
+  const fontEpoch = ++previewFontEpoch;
+  window.__oxiRenderDone = false;
+  let fontLayout;
   const statusEl = document.getElementById('status');
   const pagesEl = document.getElementById('pages');
   pagesEl.innerHTML = '';
@@ -205,7 +214,11 @@ async function processFile(arrayBuffer) {
 
   try {
     const bytes = new Uint8Array(arrayBuffer);
-    const result = layout_document(bytes);
+    let result = layout_document(bytes);
+    fontLayout = result;
+    result = await fontLoader.resolveLayout(() => layout_document(bytes), result, () => fontEpoch === previewFontEpoch);
+    if (fontEpoch !== previewFontEpoch) return;
+    fontLayout = result;
     const layoutMs = Math.round(performance.now() - start);
 
     if (!result || !result.pages || result.pages.length === 0) {
@@ -227,7 +240,9 @@ async function processFile(arrayBuffer) {
     window.__oxiTotalMs = totalMs;
     window.__oxiPageCount = result.pages.length;
   } catch (e) {
-    statusEl.textContent = `Error: ${e.message}`;
+    if (fontEpoch !== previewFontEpoch) return;
+    if (e.fontAccessError) showFontAccess(statusEl, fontLoader, fontLayout, () => processFile(arrayBuffer), e);
+    else statusEl.textContent = `Error: ${e.message}`;
     console.error(e);
   }
 }

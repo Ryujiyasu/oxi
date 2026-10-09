@@ -1,0 +1,9007 @@
+{
+  "upm": 2048,
+  "min_connector_overlap": 200,
+  "constructions": [
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 513,
+        "advance_width": 648,
+        "bounds": [
+          247,
+          -430,
+          401,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 124,
+      "variants": [
+        {
+          "gid": 513,
+          "advance_width": 648,
+          "bounds": [
+            247,
+            -430,
+            401,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3627,
+          "advance_width": 648,
+          "bounds": [
+            247,
+            -652,
+            401,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4698,
+          "advance_width": 657,
+          "bounds": [
+            247,
+            -1095,
+            410,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3628,
+          "advance_width": 661,
+          "bounds": [
+            247,
+            -1452,
+            414,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4708,
+          "advance_width": 674,
+          "bounds": [
+            247,
+            -1999,
+            427,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3629,
+          "advance_width": 679,
+          "bounds": [
+            247,
+            -2452,
+            432,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4718,
+          "advance_width": 697,
+          "bounds": [
+            247,
+            -3171,
+            450,
+            4340
+          ],
+          "advance_measurement": 7512,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4720,
+          "advance_width": 709,
+          "bounds": [
+            247,
+            -3793,
+            462,
+            4962
+          ],
+          "advance_measurement": 8756,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4720,
+          "advance_width": 709,
+          "bounds": [
+            247,
+            -3793,
+            462,
+            4962
+          ],
+          "start": 8500,
+          "end": 8500,
+          "full_advance": 8756,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4720,
+          "advance_width": 709,
+          "bounds": [
+            247,
+            -3793,
+            462,
+            4962
+          ],
+          "start": 8500,
+          "end": 8500,
+          "full_advance": 8756,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 932,
+        "advance_width": 1134,
+        "bounds": [
+          79,
+          -430,
+          1052,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8260,
+      "variants": [
+        {
+          "gid": 932,
+          "advance_width": 1134,
+          "bounds": [
+            79,
+            -430,
+            1052,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3415,
+          "advance_width": 1129,
+          "bounds": [
+            50,
+            -570,
+            1079,
+            1740
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3416,
+          "advance_width": 1647,
+          "bounds": [
+            50,
+            -1370,
+            1597,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3417,
+          "advance_width": 2170,
+          "bounds": [
+            50,
+            -2370,
+            2120,
+            3540
+          ],
+          "advance_measurement": 5911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3418,
+          "advance_width": 2693,
+          "bounds": [
+            50,
+            -3710,
+            2643,
+            4881
+          ],
+          "advance_measurement": 8592,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 958,
+        "advance_width": 1345,
+        "bounds": [
+          35,
+          -85,
+          1465,
+          1886
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8730,
+      "variants": [
+        {
+          "gid": 958,
+          "advance_width": 1345,
+          "bounds": [
+            35,
+            -85,
+            1465,
+            1886
+          ],
+          "advance_measurement": 1972,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3493,
+          "advance_width": 1521,
+          "bounds": [
+            35,
+            -570,
+            1596,
+            1973
+          ],
+          "advance_measurement": 2544,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3495,
+          "advance_width": 1537,
+          "bounds": [
+            35,
+            -1635,
+            1612,
+            2933
+          ],
+          "advance_measurement": 4569,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3496,
+          "advance_width": 1566,
+          "bounds": [
+            35,
+            -2745,
+            1641,
+            4083
+          ],
+          "advance_measurement": 6829,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3497,
+          "advance_width": 1572,
+          "bounds": [
+            35,
+            -3895,
+            1647,
+            5233
+          ],
+          "advance_measurement": 9129,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3498,
+          "advance_width": 1534,
+          "bounds": [
+            35,
+            -5045,
+            1609,
+            6383
+          ],
+          "advance_measurement": 11429,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1763,
+          "advance_width": 1317,
+          "bounds": [
+            25,
+            0,
+            1074,
+            2742
+          ],
+          "start": 0,
+          "end": 2500,
+          "full_advance": 2743,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3379,
+          "advance_width": 1317,
+          "bounds": [
+            939,
+            0,
+            1074,
+            1210
+          ],
+          "start": 1150,
+          "end": 1150,
+          "full_advance": 1211,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4616,
+          "advance_width": 1317,
+          "bounds": [
+            939,
+            0,
+            1417,
+            1210
+          ],
+          "start": 600,
+          "end": 0,
+          "full_advance": 1211,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 962,
+        "advance_width": 1663,
+        "bounds": [
+          91,
+          -430,
+          1573,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8719,
+      "variants": [
+        {
+          "gid": 962,
+          "advance_width": 1663,
+          "bounds": [
+            91,
+            -430,
+            1573,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3536,
+          "advance_width": 2068,
+          "bounds": [
+            105,
+            -570,
+            1963,
+            1740
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3537,
+          "advance_width": 3090,
+          "bounds": [
+            105,
+            -1370,
+            2985,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3538,
+          "advance_width": 4401,
+          "bounds": [
+            105,
+            -2370,
+            4296,
+            3540
+          ],
+          "advance_measurement": 5911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3539,
+          "advance_width": 5978,
+          "bounds": [
+            105,
+            -3710,
+            5873,
+            4880
+          ],
+          "advance_measurement": 8591,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 963,
+        "advance_width": 1451,
+        "bounds": [
+          26,
+          -430,
+          1323,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8721,
+      "variants": [
+        {
+          "gid": 963,
+          "advance_width": 1451,
+          "bounds": [
+            26,
+            -430,
+            1323,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3532,
+          "advance_width": 2323,
+          "bounds": [
+            437,
+            -571,
+            1976,
+            1740
+          ],
+          "advance_measurement": 2312,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3533,
+          "advance_width": 2715,
+          "bounds": [
+            26,
+            -1370,
+            2536,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3534,
+          "advance_width": 4262,
+          "bounds": [
+            173,
+            -2370,
+            4056,
+            3540
+          ],
+          "advance_measurement": 5911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3535,
+          "advance_width": 5937,
+          "bounds": [
+            150,
+            -3709,
+            5592,
+            4880
+          ],
+          "advance_measurement": 8590,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1313,
+        "advance_width": 1083,
+        "bounds": [
+          247,
+          -430,
+          836,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8214,
+      "variants": [
+        {
+          "gid": 1313,
+          "advance_width": 1083,
+          "bounds": [
+            247,
+            -430,
+            836,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3630,
+          "advance_width": 1083,
+          "bounds": [
+            247,
+            -652,
+            836,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4699,
+          "advance_width": 1313,
+          "bounds": [
+            347,
+            -1095,
+            966,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3631,
+          "advance_width": 1126,
+          "bounds": [
+            247,
+            -1452,
+            879,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4709,
+          "advance_width": 1228,
+          "bounds": [
+            247,
+            -1999,
+            981,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3632,
+          "advance_width": 1184,
+          "bounds": [
+            247,
+            -2452,
+            937,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4719,
+          "advance_width": 1294,
+          "bounds": [
+            247,
+            -3171,
+            1047,
+            4340
+          ],
+          "advance_measurement": 7512,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4721,
+          "advance_width": 1358,
+          "bounds": [
+            247,
+            -3793,
+            1111,
+            4962
+          ],
+          "advance_measurement": 8756,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4721,
+          "advance_width": 1358,
+          "bounds": [
+            247,
+            -3793,
+            1111,
+            4962
+          ],
+          "start": 8500,
+          "end": 8500,
+          "full_advance": 8756,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4721,
+          "advance_width": 1358,
+          "bounds": [
+            247,
+            -3793,
+            1111,
+            4962
+          ],
+          "start": 8500,
+          "end": 8500,
+          "full_advance": 8756,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1371,
+        "advance_width": 959,
+        "bounds": [
+          81,
+          -16,
+          879,
+          1481
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8593,
+      "variants": [
+        {
+          "gid": 1371,
+          "advance_width": 959,
+          "bounds": [
+            81,
+            -16,
+            879,
+            1481
+          ],
+          "advance_measurement": 1498,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4591,
+          "advance_width": 959,
+          "bounds": [
+            409,
+            0,
+            551,
+            1210
+          ],
+          "start": 1200,
+          "end": 1200,
+          "full_advance": 1211,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1371,
+          "advance_width": 959,
+          "bounds": [
+            81,
+            -16,
+            879,
+            1481
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 1498,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1373,
+        "advance_width": 959,
+        "bounds": [
+          80,
+          -15,
+          879,
+          1481
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8595,
+      "variants": [
+        {
+          "gid": 1373,
+          "advance_width": 959,
+          "bounds": [
+            80,
+            -15,
+            879,
+            1481
+          ],
+          "advance_measurement": 1497,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1373,
+          "advance_width": 959,
+          "bounds": [
+            80,
+            -15,
+            879,
+            1481
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 1497,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4591,
+          "advance_width": 959,
+          "bounds": [
+            409,
+            0,
+            551,
+            1210
+          ],
+          "start": 1200,
+          "end": 1200,
+          "full_advance": 1211,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1435,
+        "advance_width": 1200,
+        "bounds": [
+          90,
+          0,
+          1110,
+          1481
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8657,
+      "variants": [
+        {
+          "gid": 1435,
+          "advance_width": 1200,
+          "bounds": [
+            90,
+            0,
+            1110,
+            1481
+          ],
+          "advance_measurement": 1482,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4592,
+          "advance_width": 1200,
+          "bounds": [
+            320,
+            0,
+            878,
+            1210
+          ],
+          "start": 1200,
+          "end": 1200,
+          "full_advance": 1211,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1435,
+          "advance_width": 1200,
+          "bounds": [
+            90,
+            0,
+            1110,
+            1481
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 1482,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1437,
+        "advance_width": 1200,
+        "bounds": [
+          90,
+          -16,
+          1110,
+          1465
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8659,
+      "variants": [
+        {
+          "gid": 1437,
+          "advance_width": 1200,
+          "bounds": [
+            90,
+            -16,
+            1110,
+            1465
+          ],
+          "advance_measurement": 1482,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1437,
+          "advance_width": 1200,
+          "bounds": [
+            90,
+            -16,
+            1110,
+            1465
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 1482,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4592,
+          "advance_width": 1200,
+          "bounds": [
+            320,
+            0,
+            878,
+            1210
+          ],
+          "start": 1200,
+          "end": 1200,
+          "full_advance": 1211,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1495,
+        "advance_width": 1663,
+        "bounds": [
+          90,
+          -430,
+          1572,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8720,
+      "variants": [
+        {
+          "gid": 1495,
+          "advance_width": 1663,
+          "bounds": [
+            90,
+            -430,
+            1572,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4640,
+          "advance_width": 2068,
+          "bounds": [
+            105,
+            -570,
+            1963,
+            1740
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4641,
+          "advance_width": 3090,
+          "bounds": [
+            105,
+            -1370,
+            2985,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4642,
+          "advance_width": 4401,
+          "bounds": [
+            105,
+            -2370,
+            4296,
+            3540
+          ],
+          "advance_measurement": 5911,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4643,
+          "advance_width": 5978,
+          "bounds": [
+            105,
+            -3710,
+            5873,
+            4880
+          ],
+          "advance_measurement": 8591,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1508,
+        "advance_width": 600,
+        "bounds": [
+          222,
+          -200,
+          378,
+          1365
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8739,
+      "variants": [
+        {
+          "gid": 1508,
+          "advance_width": 600,
+          "bounds": [
+            222,
+            -200,
+            378,
+            1365
+          ],
+          "advance_measurement": 1566,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1508,
+          "advance_width": 600,
+          "bounds": [
+            222,
+            -200,
+            378,
+            1365
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1566,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1508,
+          "advance_width": 600,
+          "bounds": [
+            222,
+            -200,
+            378,
+            1365
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1566,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1510,
+        "advance_width": 950,
+        "bounds": [
+          222,
+          -200,
+          728,
+          1365
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8741,
+      "variants": [
+        {
+          "gid": 1510,
+          "advance_width": 950,
+          "bounds": [
+            222,
+            -200,
+            728,
+            1365
+          ],
+          "advance_measurement": 1566,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1510,
+          "advance_width": 950,
+          "bounds": [
+            222,
+            -200,
+            728,
+            1365
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1566,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1510,
+          "advance_width": 950,
+          "bounds": [
+            222,
+            -200,
+            728,
+            1365
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1566,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1516,
+        "advance_width": 1201,
+        "bounds": [
+          99,
+          -421,
+          1066,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8747,
+      "variants": [
+        {
+          "gid": 1516,
+          "advance_width": 1201,
+          "bounds": [
+            99,
+            -421,
+            1066,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3504,
+          "advance_width": 1217,
+          "bounds": [
+            105,
+            -801,
+            1072,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3505,
+          "advance_width": 1652,
+          "bounds": [
+            105,
+            -1623,
+            1422,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3506,
+          "advance_width": 2118,
+          "bounds": [
+            105,
+            -2725,
+            1888,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        },
+        {
+          "gid": 3507,
+          "advance_width": 2670,
+          "bounds": [
+            105,
+            -4169,
+            2440,
+            5290
+          ],
+          "advance_measurement": 9460,
+          "italic_correction": 1365,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1734,
+          "advance_width": 2515,
+          "bounds": [
+            231,
+            0,
+            1402,
+            2933
+          ],
+          "start": 0,
+          "end": 200,
+          "full_advance": 2934,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1754,
+          "advance_width": 2515,
+          "bounds": [
+            1138,
+            0,
+            1402,
+            2500
+          ],
+          "start": 1100,
+          "end": 1100,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1733,
+          "advance_width": 2515,
+          "bounds": [
+            1138,
+            0,
+            2285,
+            2921
+          ],
+          "start": 200,
+          "end": 0,
+          "full_advance": 2922,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 1265
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1517,
+        "advance_width": 1891,
+        "bounds": [
+          99,
+          -421,
+          1756,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8748,
+      "variants": [
+        {
+          "gid": 1517,
+          "advance_width": 1891,
+          "bounds": [
+            99,
+            -421,
+            1756,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3508,
+          "advance_width": 1948,
+          "bounds": [
+            105,
+            -801,
+            1803,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3509,
+          "advance_width": 2466,
+          "bounds": [
+            105,
+            -1623,
+            2236,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3510,
+          "advance_width": 3139,
+          "bounds": [
+            105,
+            -2725,
+            2909,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1518,
+        "advance_width": 2581,
+        "bounds": [
+          99,
+          -421,
+          2446,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8749,
+      "variants": [
+        {
+          "gid": 1518,
+          "advance_width": 2581,
+          "bounds": [
+            99,
+            -421,
+            2446,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3511,
+          "advance_width": 2679,
+          "bounds": [
+            105,
+            -801,
+            2534,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3512,
+          "advance_width": 3280,
+          "bounds": [
+            105,
+            -1623,
+            3050,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3513,
+          "advance_width": 4160,
+          "bounds": [
+            105,
+            -2725,
+            3930,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1519,
+        "advance_width": 1231,
+        "bounds": [
+          110,
+          -421,
+          1109,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8750,
+      "variants": [
+        {
+          "gid": 1519,
+          "advance_width": 1231,
+          "bounds": [
+            110,
+            -421,
+            1109,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3514,
+          "advance_width": 1243,
+          "bounds": [
+            111,
+            -801,
+            1108,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3515,
+          "advance_width": 1652,
+          "bounds": [
+            105,
+            -1623,
+            1422,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3516,
+          "advance_width": 2118,
+          "bounds": [
+            105,
+            -2725,
+            1888,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1520,
+        "advance_width": 1945,
+        "bounds": [
+          110,
+          -421,
+          1800,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8751,
+      "variants": [
+        {
+          "gid": 1520,
+          "advance_width": 1945,
+          "bounds": [
+            110,
+            -421,
+            1800,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3517,
+          "advance_width": 1948,
+          "bounds": [
+            105,
+            -801,
+            1803,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3518,
+          "advance_width": 2466,
+          "bounds": [
+            105,
+            -1623,
+            2236,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3519,
+          "advance_width": 3139,
+          "bounds": [
+            105,
+            -2725,
+            2909,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1521,
+        "advance_width": 2633,
+        "bounds": [
+          110,
+          -421,
+          2488,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8752,
+      "variants": [
+        {
+          "gid": 1521,
+          "advance_width": 2633,
+          "bounds": [
+            110,
+            -421,
+            2488,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3520,
+          "advance_width": 2674,
+          "bounds": [
+            105,
+            -801,
+            2534,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3521,
+          "advance_width": 3280,
+          "bounds": [
+            105,
+            -1623,
+            3050,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3522,
+          "advance_width": 4160,
+          "bounds": [
+            105,
+            -2725,
+            3930,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1522,
+        "advance_width": 1297,
+        "bounds": [
+          110,
+          -421,
+          1257,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8753,
+      "variants": [
+        {
+          "gid": 1522,
+          "advance_width": 1297,
+          "bounds": [
+            110,
+            -421,
+            1257,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3523,
+          "advance_width": 1302,
+          "bounds": [
+            105,
+            -801,
+            1253,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3524,
+          "advance_width": 1652,
+          "bounds": [
+            105,
+            -1623,
+            1631,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3525,
+          "advance_width": 2414,
+          "bounds": [
+            401,
+            -2725,
+            2198,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1523,
+        "advance_width": 1294,
+        "bounds": [
+          110,
+          -421,
+          1254,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8754,
+      "variants": [
+        {
+          "gid": 1523,
+          "advance_width": 1294,
+          "bounds": [
+            110,
+            -421,
+            1254,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3526,
+          "advance_width": 1302,
+          "bounds": [
+            105,
+            -801,
+            1253,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3527,
+          "advance_width": 1652,
+          "bounds": [
+            105,
+            -1623,
+            1520,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3528,
+          "advance_width": 2118,
+          "bounds": [
+            105,
+            -2725,
+            1994,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1524,
+        "advance_width": 1331,
+        "bounds": [
+          110,
+          -421,
+          1291,
+          1796
+        ],
+        "italic_correction": 415,
+        "extended_shape": true
+      },
+      "codepoint": 8755,
+      "variants": [
+        {
+          "gid": 1524,
+          "advance_width": 1331,
+          "bounds": [
+            110,
+            -421,
+            1291,
+            1796
+          ],
+          "advance_measurement": 2218,
+          "italic_correction": 415,
+          "extended_shape": true
+        },
+        {
+          "gid": 3529,
+          "advance_width": 1302,
+          "bounds": [
+            105,
+            -801,
+            1253,
+            1967
+          ],
+          "advance_measurement": 2769,
+          "italic_correction": 420,
+          "extended_shape": true
+        },
+        {
+          "gid": 3530,
+          "advance_width": 1652,
+          "bounds": [
+            105,
+            -1623,
+            1520,
+            2782
+          ],
+          "advance_measurement": 4406,
+          "italic_correction": 755,
+          "extended_shape": true
+        },
+        {
+          "gid": 3531,
+          "advance_width": 2118,
+          "bounds": [
+            105,
+            -2725,
+            1994,
+            3857
+          ],
+          "advance_measurement": 6583,
+          "italic_correction": 1105,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1663,
+        "advance_width": 1362,
+        "bounds": [
+          52,
+          -119,
+          1308,
+          1421
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8896,
+      "variants": [
+        {
+          "gid": 1663,
+          "advance_width": 1362,
+          "bounds": [
+            52,
+            -119,
+            1308,
+            1421
+          ],
+          "advance_measurement": 1541,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4644,
+          "advance_width": 1868,
+          "bounds": [
+            55,
+            -571,
+            1813,
+            1739
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4645,
+          "advance_width": 2939,
+          "bounds": [
+            60,
+            -1370,
+            2879,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1664,
+        "advance_width": 1362,
+        "bounds": [
+          54,
+          -119,
+          1310,
+          1421
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8897,
+      "variants": [
+        {
+          "gid": 1664,
+          "advance_width": 1362,
+          "bounds": [
+            54,
+            -119,
+            1310,
+            1421
+          ],
+          "advance_measurement": 1541,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4646,
+          "advance_width": 1868,
+          "bounds": [
+            55,
+            -571,
+            1813,
+            1739
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4647,
+          "advance_width": 2939,
+          "bounds": [
+            60,
+            -1370,
+            2879,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1665,
+        "advance_width": 1579,
+        "bounds": [
+          222,
+          -120,
+          1357,
+          1437
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8898,
+      "variants": [
+        {
+          "gid": 1665,
+          "advance_width": 1579,
+          "bounds": [
+            222,
+            -120,
+            1357,
+            1437
+          ],
+          "advance_measurement": 1558,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4648,
+          "advance_width": 1901,
+          "bounds": [
+            190,
+            -570,
+            1711,
+            1764
+          ],
+          "advance_measurement": 2335,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4649,
+          "advance_width": 2851,
+          "bounds": [
+            190,
+            -1370,
+            2661,
+            2579
+          ],
+          "advance_measurement": 3950,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1666,
+        "advance_width": 1579,
+        "bounds": [
+          222,
+          -120,
+          1357,
+          1437
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8899,
+      "variants": [
+        {
+          "gid": 1666,
+          "advance_width": 1579,
+          "bounds": [
+            222,
+            -120,
+            1357,
+            1437
+          ],
+          "advance_measurement": 1558,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4650,
+          "advance_width": 1901,
+          "bounds": [
+            190,
+            -570,
+            1711,
+            1764
+          ],
+          "advance_measurement": 2335,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4651,
+          "advance_width": 2851,
+          "bounds": [
+            190,
+            -1370,
+            2661,
+            2579
+          ],
+          "advance_measurement": 3950,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1727,
+        "advance_width": 717,
+        "bounds": [
+          228,
+          -430,
+          674,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8968,
+      "variants": [
+        {
+          "gid": 1727,
+          "advance_width": 717,
+          "bounds": [
+            228,
+            -430,
+            674,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3459,
+          "advance_width": 729,
+          "bounds": [
+            228,
+            -652,
+            684,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4690,
+          "advance_width": 748,
+          "bounds": [
+            228,
+            -1095,
+            703,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3460,
+          "advance_width": 776,
+          "bounds": [
+            228,
+            -1452,
+            731,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4700,
+          "advance_width": 786,
+          "bounds": [
+            228,
+            -1999,
+            741,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3461,
+          "advance_width": 817,
+          "bounds": [
+            228,
+            -2452,
+            772,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4710,
+          "advance_width": 836,
+          "bounds": [
+            228,
+            -3170,
+            791,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3462,
+          "advance_width": 863,
+          "bounds": [
+            228,
+            -3792,
+            818,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1742,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            288,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1741,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            680,
+            2477
+          ],
+          "start": 2400,
+          "end": 0,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1728,
+        "advance_width": 717,
+        "bounds": [
+          43,
+          -430,
+          489,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8969,
+      "variants": [
+        {
+          "gid": 1728,
+          "advance_width": 717,
+          "bounds": [
+            43,
+            -430,
+            489,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3463,
+          "advance_width": 729,
+          "bounds": [
+            45,
+            -652,
+            501,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4691,
+          "advance_width": 748,
+          "bounds": [
+            45,
+            -1095,
+            520,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3464,
+          "advance_width": 776,
+          "bounds": [
+            45,
+            -1452,
+            548,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4701,
+          "advance_width": 786,
+          "bounds": [
+            45,
+            -1999,
+            558,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3465,
+          "advance_width": 817,
+          "bounds": [
+            45,
+            -2452,
+            589,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4711,
+          "advance_width": 836,
+          "bounds": [
+            45,
+            -3170,
+            608,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3466,
+          "advance_width": 863,
+          "bounds": [
+            45,
+            -3792,
+            635,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1745,
+          "advance_width": 717,
+          "bounds": [
+            429,
+            0,
+            639,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1744,
+          "advance_width": 717,
+          "bounds": [
+            37,
+            0,
+            639,
+            2477
+          ],
+          "start": 2400,
+          "end": 0,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1729,
+        "advance_width": 717,
+        "bounds": [
+          228,
+          -430,
+          674,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8970,
+      "variants": [
+        {
+          "gid": 1729,
+          "advance_width": 717,
+          "bounds": [
+            228,
+            -430,
+            674,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3467,
+          "advance_width": 729,
+          "bounds": [
+            228,
+            -652,
+            684,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4692,
+          "advance_width": 748,
+          "bounds": [
+            228,
+            -1095,
+            703,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3468,
+          "advance_width": 776,
+          "bounds": [
+            228,
+            -1452,
+            731,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4702,
+          "advance_width": 786,
+          "bounds": [
+            228,
+            -1999,
+            741,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3469,
+          "advance_width": 863,
+          "bounds": [
+            228,
+            -2452,
+            772,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4712,
+          "advance_width": 836,
+          "bounds": [
+            228,
+            -3170,
+            791,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3470,
+          "advance_width": 863,
+          "bounds": [
+            228,
+            -3792,
+            818,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1743,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            680,
+            2477
+          ],
+          "start": 0,
+          "end": 2400,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1742,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            288,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1730,
+        "advance_width": 717,
+        "bounds": [
+          43,
+          -430,
+          489,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8971,
+      "variants": [
+        {
+          "gid": 1730,
+          "advance_width": 717,
+          "bounds": [
+            43,
+            -430,
+            489,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3471,
+          "advance_width": 729,
+          "bounds": [
+            45,
+            -652,
+            501,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4693,
+          "advance_width": 748,
+          "bounds": [
+            45,
+            -1095,
+            520,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3472,
+          "advance_width": 776,
+          "bounds": [
+            45,
+            -1452,
+            548,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4703,
+          "advance_width": 786,
+          "bounds": [
+            45,
+            -1999,
+            558,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3473,
+          "advance_width": 817,
+          "bounds": [
+            45,
+            -2452,
+            589,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4713,
+          "advance_width": 836,
+          "bounds": [
+            45,
+            -3170,
+            608,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3474,
+          "advance_width": 863,
+          "bounds": [
+            45,
+            -3792,
+            635,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1746,
+          "advance_width": 717,
+          "bounds": [
+            37,
+            0,
+            639,
+            2477
+          ],
+          "start": 0,
+          "end": 2400,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1745,
+          "advance_width": 717,
+          "bounds": [
+            429,
+            0,
+            639,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1764,
+        "advance_width": 901,
+        "bounds": [
+          228,
+          -430,
+          858,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10214,
+      "variants": [
+        {
+          "gid": 1764,
+          "advance_width": 901,
+          "bounds": [
+            228,
+            -430,
+            858,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3443,
+          "advance_width": 960,
+          "bounds": [
+            228,
+            -652,
+            915,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4696,
+          "advance_width": 978,
+          "bounds": [
+            228,
+            -1095,
+            933,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3444,
+          "advance_width": 996,
+          "bounds": [
+            228,
+            -1452,
+            951,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4706,
+          "advance_width": 1014,
+          "bounds": [
+            228,
+            -1999,
+            969,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3445,
+          "advance_width": 1038,
+          "bounds": [
+            228,
+            -2452,
+            993,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4716,
+          "advance_width": 1062,
+          "bounds": [
+            228,
+            -3170,
+            1017,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3446,
+          "advance_width": 1087,
+          "bounds": [
+            228,
+            -3792,
+            1042,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1765,
+        "advance_width": 901,
+        "bounds": [
+          43,
+          -430,
+          673,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10215,
+      "variants": [
+        {
+          "gid": 1765,
+          "advance_width": 901,
+          "bounds": [
+            43,
+            -430,
+            673,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3447,
+          "advance_width": 960,
+          "bounds": [
+            45,
+            -652,
+            732,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4697,
+          "advance_width": 978,
+          "bounds": [
+            45,
+            -1095,
+            750,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3448,
+          "advance_width": 996,
+          "bounds": [
+            45,
+            -1452,
+            768,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4707,
+          "advance_width": 1014,
+          "bounds": [
+            45,
+            -1999,
+            786,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3449,
+          "advance_width": 1038,
+          "bounds": [
+            45,
+            -2452,
+            810,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4717,
+          "advance_width": 1062,
+          "bounds": [
+            45,
+            -3170,
+            834,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3450,
+          "advance_width": 1087,
+          "bounds": [
+            45,
+            -3792,
+            859,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1766,
+        "advance_width": 736,
+        "bounds": [
+          125,
+          -435,
+          630,
+          1436
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10216,
+      "variants": [
+        {
+          "gid": 1766,
+          "advance_width": 736,
+          "bounds": [
+            125,
+            -435,
+            630,
+            1436
+          ],
+          "advance_measurement": 1872,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3451,
+          "advance_width": 736,
+          "bounds": [
+            125,
+            -640,
+            630,
+            1810
+          ],
+          "advance_measurement": 2451,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3452,
+          "advance_width": 736,
+          "bounds": [
+            125,
+            -1393,
+            683,
+            2564
+          ],
+          "advance_measurement": 3958,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3453,
+          "advance_width": 789,
+          "bounds": [
+            125,
+            -2390,
+            736,
+            3559
+          ],
+          "advance_measurement": 5950,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3454,
+          "advance_width": 860,
+          "bounds": [
+            125,
+            -3725,
+            807,
+            4894
+          ],
+          "advance_measurement": 8620,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1767,
+        "advance_width": 736,
+        "bounds": [
+          106,
+          -435,
+          612,
+          1436
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10217,
+      "variants": [
+        {
+          "gid": 1767,
+          "advance_width": 736,
+          "bounds": [
+            106,
+            -435,
+            612,
+            1436
+          ],
+          "advance_measurement": 1872,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3455,
+          "advance_width": 736,
+          "bounds": [
+            106,
+            -640,
+            611,
+            1811
+          ],
+          "advance_measurement": 2452,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3456,
+          "advance_width": 736,
+          "bounds": [
+            53,
+            -1393,
+            611,
+            2564
+          ],
+          "advance_measurement": 3958,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3457,
+          "advance_width": 789,
+          "bounds": [
+            53,
+            -2390,
+            664,
+            3559
+          ],
+          "advance_measurement": 5950,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3458,
+          "advance_width": 860,
+          "bounds": [
+            53,
+            -3725,
+            735,
+            4894
+          ],
+          "advance_measurement": 8620,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1768,
+        "advance_width": 1782,
+        "bounds": [
+          108,
+          -199,
+          1671,
+          1369
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10752,
+      "variants": [
+        {
+          "gid": 1768,
+          "advance_width": 1782,
+          "bounds": [
+            108,
+            -199,
+            1671,
+            1369
+          ],
+          "advance_measurement": 1569,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3777,
+          "advance_width": 2695,
+          "bounds": [
+            173,
+            -594,
+            2522,
+            1763
+          ],
+          "advance_measurement": 2358,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3778,
+          "advance_width": 4358,
+          "bounds": [
+            195,
+            -1397,
+            4150,
+            2559
+          ],
+          "advance_measurement": 3957,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1769,
+        "advance_width": 1782,
+        "bounds": [
+          108,
+          -199,
+          1671,
+          1369
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10753,
+      "variants": [
+        {
+          "gid": 1769,
+          "advance_width": 1782,
+          "bounds": [
+            108,
+            -199,
+            1671,
+            1369
+          ],
+          "advance_measurement": 1569,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3779,
+          "advance_width": 2695,
+          "bounds": [
+            173,
+            -594,
+            2522,
+            1763
+          ],
+          "advance_measurement": 2358,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3780,
+          "advance_width": 4358,
+          "bounds": [
+            195,
+            -1397,
+            4150,
+            2559
+          ],
+          "advance_measurement": 3957,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1770,
+        "advance_width": 1782,
+        "bounds": [
+          108,
+          -199,
+          1671,
+          1369
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10754,
+      "variants": [
+        {
+          "gid": 1770,
+          "advance_width": 1782,
+          "bounds": [
+            108,
+            -199,
+            1671,
+            1369
+          ],
+          "advance_measurement": 1569,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3781,
+          "advance_width": 2695,
+          "bounds": [
+            173,
+            -594,
+            2522,
+            1763
+          ],
+          "advance_measurement": 2358,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3782,
+          "advance_width": 4358,
+          "bounds": [
+            195,
+            -1397,
+            4150,
+            2559
+          ],
+          "advance_measurement": 3957,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1771,
+        "advance_width": 1425,
+        "bounds": [
+          180,
+          -145,
+          1245,
+          1422
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10756,
+      "variants": [
+        {
+          "gid": 1771,
+          "advance_width": 1425,
+          "bounds": [
+            180,
+            -145,
+            1245,
+            1422
+          ],
+          "advance_measurement": 1568,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3785,
+          "advance_width": 2092,
+          "bounds": [
+            240,
+            -585,
+            1852,
+            1740
+          ],
+          "advance_measurement": 2326,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3786,
+          "advance_width": 3171,
+          "bounds": [
+            250,
+            -1370,
+            2921,
+            2579
+          ],
+          "advance_measurement": 3950,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1772,
+        "advance_width": 1499,
+        "bounds": [
+          190,
+          -134,
+          1309,
+          1421
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10758,
+      "variants": [
+        {
+          "gid": 1772,
+          "advance_width": 1499,
+          "bounds": [
+            190,
+            -134,
+            1309,
+            1421
+          ],
+          "advance_measurement": 1556,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3789,
+          "advance_width": 1901,
+          "bounds": [
+            190,
+            -570,
+            1711,
+            1740
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4569,
+          "advance_width": 2851,
+          "bounds": [
+            190,
+            -1370,
+            2661,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 1773,
+        "advance_width": 1608,
+        "bounds": [
+          140,
+          -16,
+          1468,
+          1312
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10761,
+      "variants": [
+        {
+          "gid": 1773,
+          "advance_width": 1608,
+          "bounds": [
+            140,
+            -16,
+            1468,
+            1312
+          ],
+          "advance_measurement": 1329,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3794,
+          "advance_width": 2521,
+          "bounds": [
+            190,
+            -596,
+            2331,
+            1766
+          ],
+          "advance_measurement": 2363,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4572,
+          "advance_width": 3849,
+          "bounds": [
+            161,
+            -1376,
+            3688,
+            2538
+          ],
+          "advance_measurement": 3915,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3413,
+        "advance_width": 1176,
+        "bounds": [
+          125,
+          -435,
+          1070,
+          1436
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10218,
+      "variants": [
+        {
+          "gid": 3413,
+          "advance_width": 1176,
+          "bounds": [
+            125,
+            -435,
+            1070,
+            1436
+          ],
+          "advance_measurement": 1872,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3613,
+          "advance_width": 1176,
+          "bounds": [
+            125,
+            -604,
+            1070,
+            1775
+          ],
+          "advance_measurement": 2380,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3614,
+          "advance_width": 1229,
+          "bounds": [
+            125,
+            -1393,
+            1123,
+            2564
+          ],
+          "advance_measurement": 3958,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3615,
+          "advance_width": 1282,
+          "bounds": [
+            125,
+            -2390,
+            1176,
+            3559
+          ],
+          "advance_measurement": 5950,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3414,
+        "advance_width": 1177,
+        "bounds": [
+          106,
+          -435,
+          1052,
+          1436
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10219,
+      "variants": [
+        {
+          "gid": 3414,
+          "advance_width": 1177,
+          "bounds": [
+            106,
+            -435,
+            1052,
+            1436
+          ],
+          "advance_measurement": 1872,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3616,
+          "advance_width": 1176,
+          "bounds": [
+            106,
+            -604,
+            1051,
+            1775
+          ],
+          "advance_measurement": 2380,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3617,
+          "advance_width": 1229,
+          "bounds": [
+            106,
+            -1393,
+            1104,
+            2564
+          ],
+          "advance_measurement": 3958,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3618,
+          "advance_width": 1282,
+          "bounds": [
+            106,
+            -2390,
+            1157,
+            3559
+          ],
+          "advance_measurement": 5950,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3475,
+        "advance_width": 717,
+        "bounds": [
+          228,
+          -458,
+          674,
+          1449
+        ],
+        "italic_correction": 0,
+        "extended_shape": true
+      },
+      "codepoint": 8261,
+      "variants": [
+        {
+          "gid": 3475,
+          "advance_width": 717,
+          "bounds": [
+            228,
+            -458,
+            674,
+            1449
+          ],
+          "advance_measurement": 1908,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3476,
+          "advance_width": 729,
+          "bounds": [
+            228,
+            -652,
+            684,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4694,
+          "advance_width": 748,
+          "bounds": [
+            228,
+            -1095,
+            703,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3477,
+          "advance_width": 776,
+          "bounds": [
+            228,
+            -1452,
+            731,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4704,
+          "advance_width": 786,
+          "bounds": [
+            228,
+            -1999,
+            741,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3478,
+          "advance_width": 817,
+          "bounds": [
+            228,
+            -2452,
+            772,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4714,
+          "advance_width": 836,
+          "bounds": [
+            228,
+            -3170,
+            791,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3479,
+          "advance_width": 863,
+          "bounds": [
+            228,
+            -3792,
+            818,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3488,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            680,
+            2477
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3487,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            288,
+            2500
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3486,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            672,
+            2477
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3487,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            288,
+            2500
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3485,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            680,
+            2477
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3480,
+        "advance_width": 717,
+        "bounds": [
+          43,
+          -458,
+          489,
+          1449
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8262,
+      "variants": [
+        {
+          "gid": 3480,
+          "advance_width": 717,
+          "bounds": [
+            43,
+            -458,
+            489,
+            1449
+          ],
+          "advance_measurement": 1908,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3481,
+          "advance_width": 729,
+          "bounds": [
+            45,
+            -652,
+            501,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4695,
+          "advance_width": 748,
+          "bounds": [
+            45,
+            -1095,
+            520,
+            2265
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3482,
+          "advance_width": 776,
+          "bounds": [
+            45,
+            -1452,
+            548,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4705,
+          "advance_width": 786,
+          "bounds": [
+            45,
+            -1999,
+            558,
+            3169
+          ],
+          "advance_measurement": 5169,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3483,
+          "advance_width": 817,
+          "bounds": [
+            45,
+            -2452,
+            589,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4715,
+          "advance_width": 836,
+          "bounds": [
+            45,
+            -3170,
+            608,
+            4340
+          ],
+          "advance_measurement": 7511,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3484,
+          "advance_width": 863,
+          "bounds": [
+            45,
+            -3792,
+            635,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3492,
+          "advance_width": 717,
+          "bounds": [
+            37,
+            0,
+            639,
+            2477
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3491,
+          "advance_width": 717,
+          "bounds": [
+            429,
+            0,
+            639,
+            2500
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3490,
+          "advance_width": 717,
+          "bounds": [
+            45,
+            0,
+            639,
+            2477
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3491,
+          "advance_width": 717,
+          "bounds": [
+            429,
+            0,
+            639,
+            2500
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3489,
+          "advance_width": 717,
+          "bounds": [
+            37,
+            0,
+            639,
+            2477
+          ],
+          "start": 133,
+          "end": 133,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3619,
+        "advance_width": 855,
+        "bounds": [
+          95,
+          -434,
+          720,
+          1430
+        ],
+        "italic_correction": 0,
+        "extended_shape": true
+      },
+      "codepoint": 10748,
+      "variants": [
+        {
+          "gid": 3619,
+          "advance_width": 855,
+          "bounds": [
+            95,
+            -434,
+            720,
+            1430
+          ],
+          "advance_measurement": 1865,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3620,
+          "advance_width": 855,
+          "bounds": [
+            95,
+            -652,
+            720,
+            1821
+          ],
+          "advance_measurement": 2474,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3621,
+          "advance_width": 945,
+          "bounds": [
+            95,
+            -1452,
+            810,
+            2587
+          ],
+          "advance_measurement": 4040,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3622,
+          "advance_width": 1018,
+          "bounds": [
+            95,
+            -2455,
+            883,
+            3625
+          ],
+          "advance_measurement": 6081,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3623,
+        "advance_width": 835,
+        "bounds": [
+          115,
+          -434,
+          740,
+          1430
+        ],
+        "italic_correction": 0,
+        "extended_shape": true
+      },
+      "codepoint": 10749,
+      "variants": [
+        {
+          "gid": 3623,
+          "advance_width": 835,
+          "bounds": [
+            115,
+            -434,
+            740,
+            1430
+          ],
+          "advance_measurement": 1865,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3624,
+          "advance_width": 855,
+          "bounds": [
+            135,
+            -652,
+            760,
+            1821
+          ],
+          "advance_measurement": 2474,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3625,
+          "advance_width": 945,
+          "bounds": [
+            135,
+            -1452,
+            850,
+            2587
+          ],
+          "advance_measurement": 4040,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3626,
+          "advance_width": 1018,
+          "bounds": [
+            135,
+            -2455,
+            923,
+            3625
+          ],
+          "advance_measurement": 6081,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3787,
+        "advance_width": 1499,
+        "bounds": [
+          190,
+          -134,
+          1309,
+          1421
+        ],
+        "italic_correction": 0,
+        "extended_shape": true
+      },
+      "codepoint": 10757,
+      "variants": [
+        {
+          "gid": 3787,
+          "advance_width": 1499,
+          "bounds": [
+            190,
+            -134,
+            1309,
+            1421
+          ],
+          "advance_measurement": 1556,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3788,
+          "advance_width": 1901,
+          "bounds": [
+            190,
+            -570,
+            1711,
+            1740
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4568,
+          "advance_width": 2851,
+          "bounds": [
+            190,
+            -1370,
+            2661,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3790,
+        "advance_width": 1994,
+        "bounds": [
+          60,
+          -430,
+          1934,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": true
+      },
+      "codepoint": 10759,
+      "variants": [
+        {
+          "gid": 3790,
+          "advance_width": 1994,
+          "bounds": [
+            60,
+            -430,
+            1934,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3791,
+          "advance_width": 2577,
+          "bounds": [
+            60,
+            -570,
+            2517,
+            1740
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4570,
+          "advance_width": 4402,
+          "bounds": [
+            90,
+            -1370,
+            4312,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 3792,
+        "advance_width": 1994,
+        "bounds": [
+          60,
+          -430,
+          1934,
+          1431
+        ],
+        "italic_correction": 0,
+        "extended_shape": true
+      },
+      "codepoint": 10760,
+      "variants": [
+        {
+          "gid": 3792,
+          "advance_width": 1994,
+          "bounds": [
+            60,
+            -430,
+            1934,
+            1431
+          ],
+          "advance_measurement": 1862,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3793,
+          "advance_width": 2577,
+          "bounds": [
+            60,
+            -570,
+            2517,
+            1740
+          ],
+          "advance_measurement": 2311,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4571,
+          "advance_width": 4402,
+          "bounds": [
+            90,
+            -1370,
+            4312,
+            2540
+          ],
+          "advance_measurement": 3911,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 4003,
+        "advance_width": 1515,
+        "bounds": [
+          180,
+          -145,
+          1245,
+          1422
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10755,
+      "variants": [
+        {
+          "gid": 4003,
+          "advance_width": 1515,
+          "bounds": [
+            180,
+            -145,
+            1245,
+            1422
+          ],
+          "advance_measurement": 1568,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3783,
+          "advance_width": 2094,
+          "bounds": [
+            240,
+            -609,
+            1854,
+            1740
+          ],
+          "advance_measurement": 2350,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3784,
+          "advance_width": 3171,
+          "bounds": [
+            250,
+            -1370,
+            2921,
+            2579
+          ],
+          "advance_measurement": 3950,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 4666,
+        "advance_width": 850,
+        "bounds": [
+          180,
+          -452,
+          812,
+          1445
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 40,
+      "variants": [
+        {
+          "gid": 4666,
+          "advance_width": 850,
+          "bounds": [
+            180,
+            -452,
+            812,
+            1445
+          ],
+          "advance_measurement": 1898,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3435,
+          "advance_width": 920,
+          "bounds": [
+            180,
+            -652,
+            855,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4672,
+          "advance_width": 1004,
+          "bounds": [
+            176,
+            -1103,
+            938,
+            2275
+          ],
+          "advance_measurement": 3379,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3436,
+          "advance_width": 1012,
+          "bounds": [
+            170,
+            -1438,
+            947,
+            2608
+          ],
+          "advance_measurement": 4047,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4678,
+          "advance_width": 1175,
+          "bounds": [
+            168,
+            -2025,
+            1109,
+            3197
+          ],
+          "advance_measurement": 5223,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3437,
+          "advance_width": 1248,
+          "bounds": [
+            160,
+            -2441,
+            1183,
+            3611
+          ],
+          "advance_measurement": 6053,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4684,
+          "advance_width": 1396,
+          "bounds": [
+            157,
+            -3220,
+            1331,
+            4392
+          ],
+          "advance_measurement": 7613,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3438,
+          "advance_width": 1502,
+          "bounds": [
+            150,
+            -3855,
+            1437,
+            5025
+          ],
+          "advance_measurement": 8881,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1737,
+          "advance_width": 1553,
+          "bounds": [
+            236,
+            -1,
+            1523,
+            4731
+          ],
+          "start": 0,
+          "end": 300,
+          "full_advance": 4733,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1736,
+          "advance_width": 1553,
+          "bounds": [
+            236,
+            0,
+            450,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1735,
+          "advance_width": 1553,
+          "bounds": [
+            236,
+            0,
+            1523,
+            4732
+          ],
+          "start": 300,
+          "end": 0,
+          "full_advance": 4733,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 4667,
+        "advance_width": 850,
+        "bounds": [
+          38,
+          -452,
+          670,
+          1445
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 41,
+      "variants": [
+        {
+          "gid": 4667,
+          "advance_width": 850,
+          "bounds": [
+            38,
+            -452,
+            670,
+            1445
+          ],
+          "advance_measurement": 1898,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3439,
+          "advance_width": 920,
+          "bounds": [
+            65,
+            -652,
+            740,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4673,
+          "advance_width": 1004,
+          "bounds": [
+            66,
+            -1103,
+            828,
+            2275
+          ],
+          "advance_measurement": 3379,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3440,
+          "advance_width": 1012,
+          "bounds": [
+            65,
+            -1438,
+            842,
+            2608
+          ],
+          "advance_measurement": 4047,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4679,
+          "advance_width": 1175,
+          "bounds": [
+            66,
+            -2025,
+            1007,
+            3197
+          ],
+          "advance_measurement": 5223,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3441,
+          "advance_width": 1248,
+          "bounds": [
+            65,
+            -2441,
+            1088,
+            3611
+          ],
+          "advance_measurement": 6053,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4685,
+          "advance_width": 1396,
+          "bounds": [
+            65,
+            -3220,
+            1240,
+            4392
+          ],
+          "advance_measurement": 7613,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3442,
+          "advance_width": 1502,
+          "bounds": [
+            65,
+            -3855,
+            1352,
+            5025
+          ],
+          "advance_measurement": 8881,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1740,
+          "advance_width": 1553,
+          "bounds": [
+            30,
+            0,
+            1317,
+            4732
+          ],
+          "start": 0,
+          "end": 300,
+          "full_advance": 4733,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1739,
+          "advance_width": 1553,
+          "bounds": [
+            1103,
+            0,
+            1317,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1738,
+          "advance_width": 1553,
+          "bounds": [
+            30,
+            0,
+            1317,
+            4732
+          ],
+          "start": 300,
+          "end": 0,
+          "full_advance": 4733,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 4668,
+        "advance_width": 793,
+        "bounds": [
+          95,
+          -458,
+          733,
+          1449
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 123,
+      "variants": [
+        {
+          "gid": 4668,
+          "advance_width": 793,
+          "bounds": [
+            95,
+            -458,
+            733,
+            1449
+          ],
+          "advance_measurement": 1908,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3419,
+          "advance_width": 793,
+          "bounds": [
+            95,
+            -646,
+            733,
+            1816
+          ],
+          "advance_measurement": 2463,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4676,
+          "advance_width": 868,
+          "bounds": [
+            97,
+            -1093,
+            806,
+            2263
+          ],
+          "advance_measurement": 3357,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3420,
+          "advance_width": 793,
+          "bounds": [
+            75,
+            -1456,
+            733,
+            2626
+          ],
+          "advance_measurement": 4083,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4682,
+          "advance_width": 1020,
+          "bounds": [
+            101,
+            -2006,
+            956,
+            3176
+          ],
+          "advance_measurement": 5183,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3421,
+          "advance_width": 812,
+          "bounds": [
+            75,
+            -2456,
+            752,
+            3627
+          ],
+          "advance_measurement": 6084,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4688,
+          "advance_width": 1218,
+          "bounds": [
+            107,
+            -3188,
+            1149,
+            4358
+          ],
+          "advance_measurement": 7547,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3422,
+          "advance_width": 1322,
+          "bounds": [
+            110,
+            -3815,
+            1252,
+            4985
+          ],
+          "advance_measurement": 8801,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1749,
+          "advance_width": 1402,
+          "bounds": [
+            596,
+            3,
+            1365,
+            2548
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 2546,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1750,
+          "advance_width": 1402,
+          "bounds": [
+            596,
+            0,
+            806,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1748,
+          "advance_width": 1402,
+          "bounds": [
+            169,
+            0,
+            806,
+            4687
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 4688,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1750,
+          "advance_width": 1402,
+          "bounds": [
+            596,
+            0,
+            806,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1747,
+          "advance_width": 1402,
+          "bounds": [
+            596,
+            0,
+            1365,
+            2545
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 2546,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 4669,
+        "advance_width": 793,
+        "bounds": [
+          60,
+          -458,
+          698,
+          1449
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 125,
+      "variants": [
+        {
+          "gid": 4669,
+          "advance_width": 793,
+          "bounds": [
+            60,
+            -458,
+            698,
+            1449
+          ],
+          "advance_measurement": 1908,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3423,
+          "advance_width": 793,
+          "bounds": [
+            60,
+            -646,
+            698,
+            1816
+          ],
+          "advance_measurement": 2463,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4677,
+          "advance_width": 868,
+          "bounds": [
+            62,
+            -1093,
+            771,
+            2263
+          ],
+          "advance_measurement": 3357,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3424,
+          "advance_width": 793,
+          "bounds": [
+            60,
+            -1456,
+            718,
+            2626
+          ],
+          "advance_measurement": 4083,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4683,
+          "advance_width": 1020,
+          "bounds": [
+            65,
+            -2006,
+            919,
+            3176
+          ],
+          "advance_measurement": 5183,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3425,
+          "advance_width": 812,
+          "bounds": [
+            60,
+            -2456,
+            737,
+            3627
+          ],
+          "advance_measurement": 6084,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4689,
+          "advance_width": 1218,
+          "bounds": [
+            69,
+            -3188,
+            1111,
+            4358
+          ],
+          "advance_measurement": 7547,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3426,
+          "advance_width": 1322,
+          "bounds": [
+            70,
+            -3815,
+            1212,
+            4985
+          ],
+          "advance_measurement": 8801,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1753,
+          "advance_width": 1402,
+          "bounds": [
+            37,
+            0,
+            806,
+            2545
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 2546,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1750,
+          "advance_width": 1402,
+          "bounds": [
+            596,
+            0,
+            806,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1752,
+          "advance_width": 1402,
+          "bounds": [
+            596,
+            0,
+            1233,
+            4687
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 4688,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1750,
+          "advance_width": 1402,
+          "bounds": [
+            596,
+            0,
+            806,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1751,
+          "advance_width": 1402,
+          "bounds": [
+            37,
+            0,
+            806,
+            2545
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 2546,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 4670,
+        "advance_width": 717,
+        "bounds": [
+          228,
+          -458,
+          674,
+          1449
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 91,
+      "variants": [
+        {
+          "gid": 4670,
+          "advance_width": 717,
+          "bounds": [
+            228,
+            -458,
+            674,
+            1449
+          ],
+          "advance_measurement": 1908,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3427,
+          "advance_width": 729,
+          "bounds": [
+            228,
+            -652,
+            684,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4674,
+          "advance_width": 748,
+          "bounds": [
+            227,
+            -1094,
+            703,
+            2266
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3428,
+          "advance_width": 776,
+          "bounds": [
+            228,
+            -1452,
+            731,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4680,
+          "advance_width": 786,
+          "bounds": [
+            227,
+            -1999,
+            741,
+            3170
+          ],
+          "advance_measurement": 5170,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3429,
+          "advance_width": 817,
+          "bounds": [
+            228,
+            -2452,
+            772,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4686,
+          "advance_width": 836,
+          "bounds": [
+            227,
+            -3171,
+            791,
+            4340
+          ],
+          "advance_measurement": 7512,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3430,
+          "advance_width": 863,
+          "bounds": [
+            228,
+            -3792,
+            818,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1743,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            680,
+            2477
+          ],
+          "start": 0,
+          "end": 2300,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1742,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            288,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1741,
+          "advance_width": 717,
+          "bounds": [
+            78,
+            0,
+            680,
+            2477
+          ],
+          "start": 2300,
+          "end": 0,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Vert",
+      "base": {
+        "gid": 4671,
+        "advance_width": 717,
+        "bounds": [
+          43,
+          -458,
+          489,
+          1449
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 93,
+      "variants": [
+        {
+          "gid": 4671,
+          "advance_width": 717,
+          "bounds": [
+            43,
+            -458,
+            489,
+            1449
+          ],
+          "advance_measurement": 1908,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3431,
+          "advance_width": 729,
+          "bounds": [
+            45,
+            -652,
+            501,
+            1822
+          ],
+          "advance_measurement": 2475,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4675,
+          "advance_width": 748,
+          "bounds": [
+            45,
+            -1094,
+            521,
+            2266
+          ],
+          "advance_measurement": 3361,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3432,
+          "advance_width": 776,
+          "bounds": [
+            45,
+            -1452,
+            548,
+            2622
+          ],
+          "advance_measurement": 4075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4681,
+          "advance_width": 786,
+          "bounds": [
+            45,
+            -1999,
+            559,
+            3170
+          ],
+          "advance_measurement": 5170,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3433,
+          "advance_width": 817,
+          "bounds": [
+            45,
+            -2452,
+            589,
+            3622
+          ],
+          "advance_measurement": 6075,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 4687,
+          "advance_width": 836,
+          "bounds": [
+            45,
+            -3171,
+            609,
+            4340
+          ],
+          "advance_measurement": 7512,
+          "italic_correction": 0,
+          "extended_shape": true
+        },
+        {
+          "gid": 3434,
+          "advance_width": 863,
+          "bounds": [
+            45,
+            -3792,
+            635,
+            4962
+          ],
+          "advance_measurement": 8755,
+          "italic_correction": 0,
+          "extended_shape": true
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 1746,
+          "advance_width": 717,
+          "bounds": [
+            37,
+            0,
+            639,
+            2477
+          ],
+          "start": 0,
+          "end": 2300,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1745,
+          "advance_width": 717,
+          "bounds": [
+            429,
+            0,
+            639,
+            2500
+          ],
+          "start": 2500,
+          "end": 2500,
+          "full_advance": 2501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1744,
+          "advance_width": 717,
+          "bounds": [
+            37,
+            0,
+            639,
+            2477
+          ],
+          "start": 2300,
+          "end": 0,
+          "full_advance": 2478,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 440,
+        "advance_width": 0,
+        "bounds": [
+          -573,
+          1070,
+          0,
+          1442
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 770,
+      "variants": [
+        {
+          "gid": 440,
+          "advance_width": 0,
+          "bounds": [
+            -573,
+            1070,
+            0,
+            1442
+          ],
+          "advance_measurement": 574,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3548,
+          "advance_width": 831,
+          "bounds": [
+            0,
+            1070,
+            831,
+            1442
+          ],
+          "advance_measurement": 832,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3549,
+          "advance_width": 1161,
+          "bounds": [
+            0,
+            1070,
+            1161,
+            1448
+          ],
+          "advance_measurement": 1162,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3550,
+          "advance_width": 1935,
+          "bounds": [
+            0,
+            1070,
+            1935,
+            1448
+          ],
+          "advance_measurement": 1936,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3551,
+          "advance_width": 3699,
+          "bounds": [
+            0,
+            1069,
+            3699,
+            1448
+          ],
+          "advance_measurement": 3700,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 441,
+        "advance_width": 0,
+        "bounds": [
+          -588,
+          1468,
+          14,
+          1780
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": null,
+      "variants": [
+        {
+          "gid": 440,
+          "advance_width": 0,
+          "bounds": [
+            -573,
+            1070,
+            0,
+            1442
+          ],
+          "advance_measurement": 574,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3552,
+          "advance_width": 831,
+          "bounds": [
+            0,
+            1070,
+            831,
+            1380
+          ],
+          "advance_measurement": 832,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3553,
+          "advance_width": 1137,
+          "bounds": [
+            0,
+            1070,
+            1137,
+            1380
+          ],
+          "advance_measurement": 1138,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3554,
+          "advance_width": 1929,
+          "bounds": [
+            0,
+            1070,
+            1929,
+            1378
+          ],
+          "advance_measurement": 1930,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3555,
+          "advance_width": 3693,
+          "bounds": [
+            0,
+            1070,
+            3693,
+            1380
+          ],
+          "advance_measurement": 3694,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 444,
+        "advance_width": 0,
+        "bounds": [
+          -572,
+          1084,
+          0,
+          1456
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 780,
+      "variants": [
+        {
+          "gid": 444,
+          "advance_width": 0,
+          "bounds": [
+            -572,
+            1084,
+            0,
+            1456
+          ],
+          "advance_measurement": 573,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3540,
+          "advance_width": 831,
+          "bounds": [
+            0,
+            1084,
+            831,
+            1456
+          ],
+          "advance_measurement": 832,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3541,
+          "advance_width": 1161,
+          "bounds": [
+            0,
+            1084,
+            1161,
+            1462
+          ],
+          "advance_measurement": 1162,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3542,
+          "advance_width": 1935,
+          "bounds": [
+            0,
+            1084,
+            1935,
+            1462
+          ],
+          "advance_measurement": 1936,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3543,
+          "advance_width": 3699,
+          "bounds": [
+            0,
+            1084,
+            3699,
+            1462
+          ],
+          "advance_measurement": 3700,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 445,
+        "advance_width": 0,
+        "bounds": [
+          -588,
+          1468,
+          14,
+          1780
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": null,
+      "variants": [
+        {
+          "gid": 445,
+          "advance_width": 0,
+          "bounds": [
+            -588,
+            1468,
+            14,
+            1780
+          ],
+          "advance_measurement": 603,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3544,
+          "advance_width": 801,
+          "bounds": [
+            0,
+            1084,
+            801,
+            1394
+          ],
+          "advance_measurement": 802,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3545,
+          "advance_width": 1137,
+          "bounds": [
+            0,
+            1084,
+            1137,
+            1394
+          ],
+          "advance_measurement": 1138,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3546,
+          "advance_width": 1929,
+          "bounds": [
+            0,
+            1084,
+            1929,
+            1392
+          ],
+          "advance_measurement": 1930,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3547,
+          "advance_width": 3693,
+          "bounds": [
+            0,
+            1084,
+            3693,
+            1394
+          ],
+          "advance_measurement": 3694,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 449,
+        "advance_width": 0,
+        "bounds": [
+          -616,
+          1128,
+          46,
+          1366
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 771,
+      "variants": [
+        {
+          "gid": 449,
+          "advance_width": 0,
+          "bounds": [
+            -616,
+            1128,
+            46,
+            1366
+          ],
+          "advance_measurement": 663,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3556,
+          "advance_width": 801,
+          "bounds": [
+            0,
+            1128,
+            801,
+            1366
+          ],
+          "advance_measurement": 802,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3557,
+          "advance_width": 1161,
+          "bounds": [
+            -1,
+            1124,
+            1161,
+            1408
+          ],
+          "advance_measurement": 1163,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3558,
+          "advance_width": 1929,
+          "bounds": [
+            0,
+            1124,
+            1929,
+            1408
+          ],
+          "advance_measurement": 1930,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3559,
+          "advance_width": 3695,
+          "bounds": [
+            0,
+            1124,
+            3695,
+            1417
+          ],
+          "advance_measurement": 3696,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 450,
+        "advance_width": 0,
+        "bounds": [
+          -616,
+          1480,
+          46,
+          1718
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": null,
+      "variants": [
+        {
+          "gid": 450,
+          "advance_width": 0,
+          "bounds": [
+            -616,
+            1480,
+            46,
+            1718
+          ],
+          "advance_measurement": 663,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3560,
+          "advance_width": 801,
+          "bounds": [
+            0,
+            1128,
+            801,
+            1358
+          ],
+          "advance_measurement": 802,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3561,
+          "advance_width": 1161,
+          "bounds": [
+            0,
+            1121,
+            1161,
+            1375
+          ],
+          "advance_measurement": 1162,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3562,
+          "advance_width": 1929,
+          "bounds": [
+            0,
+            1124,
+            1929,
+            1388
+          ],
+          "advance_measurement": 1930,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3563,
+          "advance_width": 3695,
+          "bounds": [
+            0,
+            1126,
+            3695,
+            1390
+          ],
+          "advance_measurement": 3696,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 461,
+        "advance_width": 0,
+        "bounds": [
+          -588,
+          1114,
+          16,
+          1411
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 774,
+      "variants": [
+        {
+          "gid": 461,
+          "advance_width": 0,
+          "bounds": [
+            -588,
+            1114,
+            16,
+            1411
+          ],
+          "advance_measurement": 605,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3564,
+          "advance_width": 801,
+          "bounds": [
+            0,
+            1084,
+            801,
+            1381
+          ],
+          "advance_measurement": 802,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3565,
+          "advance_width": 1136,
+          "bounds": [
+            0,
+            1084,
+            1136,
+            1391
+          ],
+          "advance_measurement": 1137,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3566,
+          "advance_width": 1936,
+          "bounds": [
+            0,
+            1084,
+            1936,
+            1405
+          ],
+          "advance_measurement": 1937,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3567,
+          "advance_width": 3700,
+          "bounds": [
+            0,
+            1084,
+            3700,
+            1405
+          ],
+          "advance_measurement": 3701,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 462,
+        "advance_width": 0,
+        "bounds": [
+          -598,
+          1490,
+          26,
+          1785
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": null,
+      "variants": [
+        {
+          "gid": 462,
+          "advance_width": 0,
+          "bounds": [
+            -598,
+            1490,
+            26,
+            1785
+          ],
+          "advance_measurement": 625,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3568,
+          "advance_width": 801,
+          "bounds": [
+            0,
+            1084,
+            801,
+            1381
+          ],
+          "advance_measurement": 802,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3569,
+          "advance_width": 1136,
+          "bounds": [
+            0,
+            1084,
+            1136,
+            1391
+          ],
+          "advance_measurement": 1137,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3570,
+          "advance_width": 1936,
+          "bounds": [
+            0,
+            1084,
+            1936,
+            1405
+          ],
+          "advance_measurement": 1937,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3571,
+          "advance_width": 3700,
+          "bounds": [
+            0,
+            1084,
+            3700,
+            1405
+          ],
+          "advance_measurement": 3701,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1191,
+        "advance_width": 0,
+        "bounds": [
+          -657,
+          1197,
+          84,
+          1303
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 773,
+      "variants": [
+        {
+          "gid": 1191,
+          "advance_width": 0,
+          "bounds": [
+            -657,
+            1197,
+            84,
+            1303
+          ],
+          "advance_measurement": 742,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3364,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            1197,
+            881,
+            1303
+          ],
+          "advance_measurement": 882,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3365,
+          "advance_width": 1161,
+          "bounds": [
+            0,
+            1197,
+            1161,
+            1303
+          ],
+          "advance_measurement": 1162,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3366,
+          "advance_width": 1935,
+          "bounds": [
+            0,
+            1197,
+            1935,
+            1303
+          ],
+          "advance_measurement": 1936,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3364,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            1197,
+            881,
+            1303
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3364,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            1197,
+            881,
+            1303
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1225,
+        "advance_width": 0,
+        "bounds": [
+          -741,
+          -360,
+          0,
+          -254
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 818,
+      "variants": [
+        {
+          "gid": 1225,
+          "advance_width": 0,
+          "bounds": [
+            -741,
+            -360,
+            0,
+            -254
+          ],
+          "advance_measurement": 742,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3370,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            -360,
+            881,
+            -254
+          ],
+          "advance_measurement": 882,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3371,
+          "advance_width": 1161,
+          "bounds": [
+            0,
+            -360,
+            1161,
+            -254
+          ],
+          "advance_measurement": 1162,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3372,
+          "advance_width": 1935,
+          "bounds": [
+            0,
+            -360,
+            1935,
+            -254
+          ],
+          "advance_measurement": 1936,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3370,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            -360,
+            881,
+            -254
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3370,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            -360,
+            881,
+            -254
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1226,
+        "advance_width": 0,
+        "bounds": [
+          -741,
+          -563,
+          0,
+          -210
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 819,
+      "variants": [
+        {
+          "gid": 1226,
+          "advance_width": 0,
+          "bounds": [
+            -741,
+            -563,
+            0,
+            -210
+          ],
+          "advance_measurement": 742,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3373,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            -563,
+            881,
+            -210
+          ],
+          "advance_measurement": 882,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3374,
+          "advance_width": 1161,
+          "bounds": [
+            0,
+            -563,
+            1161,
+            -210
+          ],
+          "advance_measurement": 1162,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3375,
+          "advance_width": 1935,
+          "bounds": [
+            0,
+            -563,
+            1935,
+            -210
+          ],
+          "advance_measurement": 1936,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3373,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            -563,
+            881,
+            -210
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3373,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            -563,
+            881,
+            -210
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1238,
+        "advance_width": 0,
+        "bounds": [
+          -741,
+          1166,
+          0,
+          1519
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 831,
+      "variants": [
+        {
+          "gid": 1238,
+          "advance_width": 0,
+          "bounds": [
+            -741,
+            1166,
+            0,
+            1519
+          ],
+          "advance_measurement": 742,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3367,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            1166,
+            881,
+            1519
+          ],
+          "advance_measurement": 882,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3368,
+          "advance_width": 1161,
+          "bounds": [
+            0,
+            1166,
+            1161,
+            1519
+          ],
+          "advance_measurement": 1162,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3369,
+          "advance_width": 1935,
+          "bounds": [
+            0,
+            1166,
+            1935,
+            1519
+          ],
+          "advance_measurement": 1936,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3367,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            1166,
+            881,
+            1519
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3367,
+          "advance_width": 881,
+          "bounds": [
+            0,
+            1166,
+            881,
+            1519
+          ],
+          "start": 800,
+          "end": 800,
+          "full_advance": 882,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1318,
+        "advance_width": 754,
+        "bounds": [
+          0,
+          1120,
+          754,
+          1612
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8407,
+      "variants": [
+        {
+          "gid": 1318,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1120,
+            754,
+            1612
+          ],
+          "advance_measurement": 755,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4652,
+          "advance_width": 600,
+          "bounds": [
+            0,
+            1319,
+            600,
+            1413
+          ],
+          "start": 580,
+          "end": 580,
+          "full_advance": 601,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1318,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1120,
+            754,
+            1612
+          ],
+          "start": 400,
+          "end": 0,
+          "full_advance": 755,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1370,
+        "advance_width": 1716,
+        "bounds": [
+          115,
+          172,
+          1601,
+          998
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8592,
+      "variants": [
+        {
+          "gid": 1370,
+          "advance_width": 1716,
+          "bounds": [
+            115,
+            172,
+            1601,
+            998
+          ],
+          "advance_measurement": 1716,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4653,
+          "advance_width": 1601,
+          "bounds": [
+            115,
+            172,
+            1601,
+            998
+          ],
+          "start": 0,
+          "end": 1300,
+          "full_advance": 1602,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1755,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4658,
+          "advance_width": 1198,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 1198,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1372,
+        "advance_width": 1716,
+        "bounds": [
+          115,
+          172,
+          1601,
+          998
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8594,
+      "variants": [
+        {
+          "gid": 1372,
+          "advance_width": 1716,
+          "bounds": [
+            115,
+            172,
+            1601,
+            998
+          ],
+          "advance_measurement": 1716,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4657,
+          "advance_width": 1198,
+          "bounds": [
+            122,
+            519,
+            1198,
+            652
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 1199,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1755,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4654,
+          "advance_width": 1601,
+          "bounds": [
+            0,
+            172,
+            1486,
+            998
+          ],
+          "start": 1300,
+          "end": 0,
+          "full_advance": 1601,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1374,
+        "advance_width": 1886,
+        "bounds": [
+          115,
+          172,
+          1771,
+          998
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8596,
+      "variants": [
+        {
+          "gid": 1374,
+          "advance_width": 1886,
+          "bounds": [
+            115,
+            172,
+            1771,
+            998
+          ],
+          "advance_measurement": 1886,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4653,
+          "advance_width": 1601,
+          "bounds": [
+            115,
+            172,
+            1601,
+            998
+          ],
+          "start": 0,
+          "end": 1300,
+          "full_advance": 1602,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1755,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4654,
+          "advance_width": 1601,
+          "bounds": [
+            0,
+            172,
+            1486,
+            998
+          ],
+          "start": 1300,
+          "end": 0,
+          "full_advance": 1601,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1390,
+        "advance_width": 1786,
+        "bounds": [
+          115,
+          173,
+          1610,
+          999
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8612,
+      "variants": [
+        {
+          "gid": 1390,
+          "advance_width": 1786,
+          "bounds": [
+            115,
+            173,
+            1610,
+            999
+          ],
+          "advance_measurement": 1786,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4653,
+          "advance_width": 1601,
+          "bounds": [
+            115,
+            172,
+            1601,
+            998
+          ],
+          "start": 0,
+          "end": 1300,
+          "full_advance": 1602,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1755,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4619,
+          "advance_width": 823,
+          "bounds": [
+            0,
+            238,
+            647,
+            934
+          ],
+          "start": 500,
+          "end": 0,
+          "full_advance": 823,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1392,
+        "advance_width": 1786,
+        "bounds": [
+          176,
+          172,
+          1671,
+          998
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8614,
+      "variants": [
+        {
+          "gid": 1392,
+          "advance_width": 1786,
+          "bounds": [
+            176,
+            172,
+            1671,
+            998
+          ],
+          "advance_measurement": 1786,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4620,
+          "advance_width": 823,
+          "bounds": [
+            176,
+            238,
+            823,
+            934
+          ],
+          "start": 0,
+          "end": 500,
+          "full_advance": 824,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1755,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4654,
+          "advance_width": 1601,
+          "bounds": [
+            0,
+            172,
+            1486,
+            998
+          ],
+          "start": 1300,
+          "end": 0,
+          "full_advance": 1601,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1395,
+        "advance_width": 1686,
+        "bounds": [
+          115,
+          172,
+          1550,
+          1215
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8617,
+      "variants": [
+        {
+          "gid": 1395,
+          "advance_width": 1686,
+          "bounds": [
+            115,
+            172,
+            1550,
+            1215
+          ],
+          "advance_measurement": 1686,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4653,
+          "advance_width": 1601,
+          "bounds": [
+            115,
+            172,
+            1601,
+            998
+          ],
+          "start": 0,
+          "end": 1300,
+          "full_advance": 1602,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1755,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4617,
+          "advance_width": 801,
+          "bounds": [
+            0,
+            519,
+            665,
+            1215
+          ],
+          "start": 400,
+          "end": 0,
+          "full_advance": 801,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1396,
+        "advance_width": 1686,
+        "bounds": [
+          136,
+          172,
+          1571,
+          1215
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8618,
+      "variants": [
+        {
+          "gid": 1396,
+          "advance_width": 1686,
+          "bounds": [
+            136,
+            172,
+            1571,
+            1215
+          ],
+          "advance_measurement": 1686,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4618,
+          "advance_width": 801,
+          "bounds": [
+            136,
+            519,
+            801,
+            1215
+          ],
+          "start": 0,
+          "end": 400,
+          "full_advance": 802,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1755,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            519,
+            1076,
+            652
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4654,
+          "advance_width": 1601,
+          "bounds": [
+            0,
+            172,
+            1486,
+            998
+          ],
+          "start": 1300,
+          "end": 0,
+          "full_advance": 1601,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1434,
+        "advance_width": 1773,
+        "bounds": [
+          115,
+          63,
+          1687,
+          1105
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8656,
+      "variants": [
+        {
+          "gid": 1434,
+          "advance_width": 1773,
+          "bounds": [
+            115,
+            63,
+            1687,
+            1105
+          ],
+          "advance_measurement": 1773,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4655,
+          "advance_width": 1651,
+          "bounds": [
+            115,
+            63,
+            1651,
+            1105
+          ],
+          "start": 0,
+          "end": 1150,
+          "full_advance": 1652,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4621,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            311,
+            1076,
+            859
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4660,
+          "advance_width": 1198,
+          "bounds": [
+            0,
+            311,
+            1076,
+            859
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 1198,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1436,
+        "advance_width": 1773,
+        "bounds": [
+          51,
+          63,
+          1658,
+          1105
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8658,
+      "variants": [
+        {
+          "gid": 1436,
+          "advance_width": 1773,
+          "bounds": [
+            51,
+            63,
+            1658,
+            1105
+          ],
+          "advance_measurement": 1773,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4659,
+          "advance_width": 1198,
+          "bounds": [
+            122,
+            311,
+            1198,
+            859
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 1199,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4621,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            311,
+            1076,
+            859
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4656,
+          "advance_width": 1651,
+          "bounds": [
+            0,
+            63,
+            1536,
+            1105
+          ],
+          "start": 1150,
+          "end": 0,
+          "full_advance": 1651,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1438,
+        "advance_width": 2120,
+        "bounds": [
+          115,
+          63,
+          2005,
+          1105
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8660,
+      "variants": [
+        {
+          "gid": 1438,
+          "advance_width": 2120,
+          "bounds": [
+            115,
+            63,
+            2005,
+            1105
+          ],
+          "advance_measurement": 2120,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4655,
+          "advance_width": 1651,
+          "bounds": [
+            115,
+            63,
+            1651,
+            1105
+          ],
+          "start": 0,
+          "end": 1150,
+          "full_advance": 1652,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4621,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            311,
+            1076,
+            859
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4656,
+          "advance_width": 1651,
+          "bounds": [
+            0,
+            63,
+            1536,
+            1105
+          ],
+          "start": 1150,
+          "end": 0,
+          "full_advance": 1651,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1760,
+        "advance_width": 1261,
+        "bounds": [
+          0,
+          1070,
+          1261,
+          1503
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 9140,
+      "variants": [
+        {
+          "gid": 1760,
+          "advance_width": 1261,
+          "bounds": [
+            0,
+            1070,
+            1261,
+            1503
+          ],
+          "advance_measurement": 1262,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3590,
+          "advance_width": 2035,
+          "bounds": [
+            0,
+            1070,
+            2035,
+            1503
+          ],
+          "advance_measurement": 2036,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3591,
+          "advance_width": 3000,
+          "bounds": [
+            0,
+            1070,
+            3000,
+            1503
+          ],
+          "advance_measurement": 3001,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3592,
+          "advance_width": 3545,
+          "bounds": [
+            0,
+            1070,
+            3545,
+            1503
+          ],
+          "advance_measurement": 3546,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3593,
+          "advance_width": 4365,
+          "bounds": [
+            0,
+            1070,
+            4365,
+            1503
+          ],
+          "advance_measurement": 4366,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4588,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1070,
+            1500,
+            1503
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 1501,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4589,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1338,
+            1500,
+            1503
+          ],
+          "start": 1400,
+          "end": 1400,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4590,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1070,
+            1500,
+            1503
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 1501,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 1761,
+        "advance_width": 1261,
+        "bounds": [
+          0,
+          -600,
+          1261,
+          -167
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 9141,
+      "variants": [
+        {
+          "gid": 1761,
+          "advance_width": 1261,
+          "bounds": [
+            0,
+            -600,
+            1261,
+            -167
+          ],
+          "advance_measurement": 1262,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3594,
+          "advance_width": 2035,
+          "bounds": [
+            0,
+            -797,
+            2035,
+            -364
+          ],
+          "advance_measurement": 2036,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3595,
+          "advance_width": 3000,
+          "bounds": [
+            0,
+            -785,
+            3000,
+            -352
+          ],
+          "advance_measurement": 3001,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3596,
+          "advance_width": 3545,
+          "bounds": [
+            0,
+            -797,
+            3545,
+            -364
+          ],
+          "advance_measurement": 3546,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3597,
+          "advance_width": 4365,
+          "bounds": [
+            0,
+            -797,
+            4365,
+            -364
+          ],
+          "advance_measurement": 4366,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4582,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            -797,
+            1500,
+            -364
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 1501,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4583,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            -797,
+            1500,
+            -632
+          ],
+          "start": 1400,
+          "end": 1400,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4584,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            -797,
+            1500,
+            -364
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 1501,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3376,
+        "advance_width": 754,
+        "bounds": [
+          0,
+          1319,
+          754,
+          1612
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8400,
+      "variants": [
+        {
+          "gid": 3376,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1319,
+            754,
+            1612
+          ],
+          "advance_measurement": 755,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3376,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1319,
+            754,
+            1612
+          ],
+          "start": 0,
+          "end": 400,
+          "full_advance": 755,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4652,
+          "advance_width": 600,
+          "bounds": [
+            0,
+            1319,
+            600,
+            1413
+          ],
+          "start": 580,
+          "end": 580,
+          "full_advance": 601,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3377,
+        "advance_width": 754,
+        "bounds": [
+          0,
+          1319,
+          754,
+          1612
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8401,
+      "variants": [
+        {
+          "gid": 3377,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1319,
+            754,
+            1612
+          ],
+          "advance_measurement": 755,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4652,
+          "advance_width": 600,
+          "bounds": [
+            0,
+            1319,
+            600,
+            1413
+          ],
+          "start": 580,
+          "end": 580,
+          "full_advance": 601,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3377,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1319,
+            754,
+            1612
+          ],
+          "start": 400,
+          "end": 0,
+          "full_advance": 755,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3382,
+        "advance_width": 754,
+        "bounds": [
+          0,
+          1120,
+          754,
+          1612
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8406,
+      "variants": [
+        {
+          "gid": 3382,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1120,
+            754,
+            1612
+          ],
+          "advance_measurement": 755,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3382,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1120,
+            754,
+            1612
+          ],
+          "start": 0,
+          "end": 400,
+          "full_advance": 755,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4652,
+          "advance_width": 600,
+          "bounds": [
+            0,
+            1319,
+            600,
+            1413
+          ],
+          "start": 580,
+          "end": 580,
+          "full_advance": 601,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3391,
+        "advance_width": 1270,
+        "bounds": [
+          0,
+          1120,
+          1270,
+          1612
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8417,
+      "variants": [
+        {
+          "gid": 3391,
+          "advance_width": 1270,
+          "bounds": [
+            0,
+            1120,
+            1270,
+            1612
+          ],
+          "advance_measurement": 1271,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 3382,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1120,
+            754,
+            1612
+          ],
+          "start": 0,
+          "end": 400,
+          "full_advance": 755,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4652,
+          "advance_width": 600,
+          "bounds": [
+            0,
+            1319,
+            600,
+            1413
+          ],
+          "start": 500,
+          "end": 500,
+          "full_advance": 601,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 1318,
+          "advance_width": 754,
+          "bounds": [
+            0,
+            1120,
+            754,
+            1612
+          ],
+          "start": 400,
+          "end": 0,
+          "full_advance": 755,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3395,
+        "advance_width": 1261,
+        "bounds": [
+          0,
+          1070,
+          1261,
+          1503
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 8425,
+      "variants": [
+        {
+          "gid": 3395,
+          "advance_width": 1261,
+          "bounds": [
+            0,
+            1070,
+            1261,
+            1503
+          ],
+          "advance_measurement": 1262,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4588,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1070,
+            1500,
+            1503
+          ],
+          "start": 0,
+          "end": 1000,
+          "full_advance": 1501,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4589,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1338,
+            1500,
+            1503
+          ],
+          "start": 1400,
+          "end": 1400,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4590,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1070,
+            1500,
+            1503
+          ],
+          "start": 1000,
+          "end": 0,
+          "full_advance": 1501,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3580,
+        "advance_width": 1264,
+        "bounds": [
+          0,
+          1042,
+          1264,
+          1629
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 9180,
+      "variants": [
+        {
+          "gid": 3580,
+          "advance_width": 1264,
+          "bounds": [
+            0,
+            1042,
+            1264,
+            1629
+          ],
+          "advance_measurement": 1265,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3581,
+          "advance_width": 2039,
+          "bounds": [
+            0,
+            1042,
+            2039,
+            1629
+          ],
+          "advance_measurement": 2040,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3582,
+          "advance_width": 3004,
+          "bounds": [
+            0,
+            1025,
+            3004,
+            1629
+          ],
+          "advance_measurement": 3005,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3583,
+          "advance_width": 3549,
+          "bounds": [
+            0,
+            1023,
+            3549,
+            1629
+          ],
+          "advance_measurement": 3550,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3584,
+          "advance_width": 4369,
+          "bounds": [
+            0,
+            1023,
+            4369,
+            1629
+          ],
+          "advance_measurement": 4370,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4585,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            1042,
+            1713,
+            1503
+          ],
+          "start": 0,
+          "end": 600,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4589,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1338,
+            1500,
+            1503
+          ],
+          "start": 1200,
+          "end": 1200,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4587,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            1042,
+            1713,
+            1503
+          ],
+          "start": 600,
+          "end": 0,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3585,
+        "advance_width": 1264,
+        "bounds": [
+          0,
+          -951,
+          1264,
+          -364
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 9181,
+      "variants": [
+        {
+          "gid": 3585,
+          "advance_width": 1264,
+          "bounds": [
+            0,
+            -951,
+            1264,
+            -364
+          ],
+          "advance_measurement": 1265,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3586,
+          "advance_width": 2039,
+          "bounds": [
+            0,
+            -951,
+            2039,
+            -364
+          ],
+          "advance_measurement": 2040,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3587,
+          "advance_width": 3004,
+          "bounds": [
+            0,
+            -968,
+            3004,
+            -364
+          ],
+          "advance_measurement": 3005,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3588,
+          "advance_width": 3549,
+          "bounds": [
+            0,
+            -970,
+            3549,
+            -364
+          ],
+          "advance_measurement": 3550,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3589,
+          "advance_width": 4369,
+          "bounds": [
+            0,
+            -970,
+            4369,
+            -364
+          ],
+          "advance_measurement": 4370,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4579,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            -797,
+            1713,
+            -336
+          ],
+          "start": 0,
+          "end": 600,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4583,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            -797,
+            1500,
+            -632
+          ],
+          "start": 1200,
+          "end": 1200,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4581,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            -797,
+            1713,
+            -336
+          ],
+          "start": 600,
+          "end": 0,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3598,
+        "advance_width": 1264,
+        "bounds": [
+          0,
+          1070,
+          1264,
+          1708
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 9182,
+      "variants": [
+        {
+          "gid": 3598,
+          "advance_width": 1264,
+          "bounds": [
+            0,
+            1070,
+            1264,
+            1708
+          ],
+          "advance_measurement": 1265,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3599,
+          "advance_width": 2035,
+          "bounds": [
+            0,
+            1070,
+            2035,
+            1708
+          ],
+          "advance_measurement": 2036,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3600,
+          "advance_width": 3000,
+          "bounds": [
+            0,
+            1070,
+            3000,
+            1708
+          ],
+          "advance_measurement": 3001,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3601,
+          "advance_width": 3545,
+          "bounds": [
+            0,
+            1070,
+            3545,
+            1725
+          ],
+          "advance_measurement": 3546,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3602,
+          "advance_width": 4365,
+          "bounds": [
+            0,
+            1070,
+            4365,
+            1725
+          ],
+          "advance_measurement": 4366,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4585,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            1042,
+            1713,
+            1503
+          ],
+          "start": 0,
+          "end": 700,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4589,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1338,
+            1500,
+            1503
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4586,
+          "advance_width": 1885,
+          "bounds": [
+            0,
+            1338,
+            1885,
+            1691
+          ],
+          "start": 650,
+          "end": 650,
+          "full_advance": 1886,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4589,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            1338,
+            1500,
+            1503
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4587,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            1042,
+            1713,
+            1503
+          ],
+          "start": 700,
+          "end": 0,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3603,
+        "advance_width": 1264,
+        "bounds": [
+          0,
+          -1002,
+          1264,
+          -364
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 9183,
+      "variants": [
+        {
+          "gid": 3603,
+          "advance_width": 1264,
+          "bounds": [
+            0,
+            -1002,
+            1264,
+            -364
+          ],
+          "advance_measurement": 1265,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3604,
+          "advance_width": 2035,
+          "bounds": [
+            0,
+            -1002,
+            2035,
+            -364
+          ],
+          "advance_measurement": 2036,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3605,
+          "advance_width": 3000,
+          "bounds": [
+            0,
+            -1002,
+            3000,
+            -364
+          ],
+          "advance_measurement": 3001,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3606,
+          "advance_width": 3545,
+          "bounds": [
+            0,
+            -1019,
+            3545,
+            -364
+          ],
+          "advance_measurement": 3546,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3607,
+          "advance_width": 4365,
+          "bounds": [
+            0,
+            -1019,
+            4365,
+            -364
+          ],
+          "advance_measurement": 4366,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4579,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            -797,
+            1713,
+            -336
+          ],
+          "start": 0,
+          "end": 600,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4583,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            -797,
+            1500,
+            -632
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4580,
+          "advance_width": 1885,
+          "bounds": [
+            0,
+            -985,
+            1885,
+            -632
+          ],
+          "start": 600,
+          "end": 600,
+          "full_advance": 1886,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4583,
+          "advance_width": 1500,
+          "bounds": [
+            0,
+            -797,
+            1500,
+            -632
+          ],
+          "start": 1500,
+          "end": 1500,
+          "full_advance": 1501,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4581,
+          "advance_width": 1713,
+          "bounds": [
+            0,
+            -797,
+            1713,
+            -336
+          ],
+          "start": 600,
+          "end": 0,
+          "full_advance": 1714,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3608,
+        "advance_width": 1261,
+        "bounds": [
+          0,
+          1071,
+          1261,
+          1503
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 9184,
+      "variants": [
+        {
+          "gid": 3608,
+          "advance_width": 1261,
+          "bounds": [
+            0,
+            1071,
+            1261,
+            1503
+          ],
+          "advance_measurement": 1262,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3609,
+          "advance_width": 2035,
+          "bounds": [
+            0,
+            1070,
+            2035,
+            1502
+          ],
+          "advance_measurement": 2036,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3610,
+          "advance_width": 3000,
+          "bounds": [
+            0,
+            1071,
+            2999,
+            1503
+          ],
+          "advance_measurement": 3000,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3611,
+          "advance_width": 3545,
+          "bounds": [
+            0,
+            1071,
+            3545,
+            1503
+          ],
+          "advance_measurement": 3546,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 3612,
+          "advance_width": 4365,
+          "bounds": [
+            0,
+            1071,
+            4365,
+            1503
+          ],
+          "advance_measurement": 4366,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": []
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3655,
+        "advance_width": 1773,
+        "bounds": [
+          115,
+          63,
+          1651,
+          1105
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10502,
+      "variants": [
+        {
+          "gid": 3655,
+          "advance_width": 1773,
+          "bounds": [
+            115,
+            63,
+            1651,
+            1105
+          ],
+          "advance_measurement": 1773,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4655,
+          "advance_width": 1651,
+          "bounds": [
+            115,
+            63,
+            1651,
+            1105
+          ],
+          "start": 0,
+          "end": 1150,
+          "full_advance": 1652,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4621,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            311,
+            1076,
+            859
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4623,
+          "advance_width": 823,
+          "bounds": [
+            0,
+            29,
+            647,
+            1140
+          ],
+          "start": 500,
+          "end": 0,
+          "full_advance": 823,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    },
+    {
+      "direction": "Horiz",
+      "base": {
+        "gid": 3656,
+        "advance_width": 1773,
+        "bounds": [
+          122,
+          63,
+          1658,
+          1105
+        ],
+        "italic_correction": 0,
+        "extended_shape": false
+      },
+      "codepoint": 10503,
+      "variants": [
+        {
+          "gid": 3656,
+          "advance_width": 1773,
+          "bounds": [
+            122,
+            63,
+            1658,
+            1105
+          ],
+          "advance_measurement": 1773,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "assembly": [
+        {
+          "gid": 4622,
+          "advance_width": 823,
+          "bounds": [
+            176,
+            29,
+            823,
+            1140
+          ],
+          "start": 0,
+          "end": 500,
+          "full_advance": 824,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4621,
+          "advance_width": 1076,
+          "bounds": [
+            0,
+            311,
+            1076,
+            859
+          ],
+          "start": 1000,
+          "end": 1000,
+          "full_advance": 1077,
+          "flags": 1,
+          "italic_correction": 0,
+          "extended_shape": false
+        },
+        {
+          "gid": 4656,
+          "advance_width": 1651,
+          "bounds": [
+            0,
+            63,
+            1536,
+            1105
+          ],
+          "start": 1150,
+          "end": 0,
+          "full_advance": 1651,
+          "flags": 0,
+          "italic_correction": 0,
+          "extended_shape": false
+        }
+      ],
+      "italic_correction": 0
+    }
+  ]
+}

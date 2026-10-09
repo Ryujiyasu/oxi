@@ -5,6 +5,7 @@
 pub mod error;
 pub mod extract;
 pub mod font_util;
+pub mod glyph_encoding;
 pub mod ir;
 pub mod parser;
 pub mod signature;
@@ -15,4 +16,4 @@ pub use extract::{extract_text, extract_text_string};
 pub use ir::PdfDocument;
 pub use parser::parse_pdf;
 pub use signature::{sign_pdf, verify_pdf_signatures, SignatureConfig, SignatureProvider};
-pub use writer::write_pdf;
+pub use writer::{write_pdf, write_pdf_checked};

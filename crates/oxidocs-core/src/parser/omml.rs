@@ -33,6 +33,38 @@ thread_local! {
     /// S1253: the first `w:sz` (half-points) seen inside the oMath currently
     /// being parsed. See `take_math_sz`.
     static MATH_SZ: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+    static REDUCE_FRACTIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keeps package math settings scoped to this parse, including nested parts.
+pub(crate) struct FractionSettingsGuard(bool);
+
+impl Drop for FractionSettingsGuard {
+    fn drop(&mut self) {
+        REDUCE_FRACTIONS.with(|c| c.set(self.0));
+    }
+}
+
+pub(crate) fn fraction_settings(settings: Option<&str>) -> FractionSettingsGuard {
+    let mut reduce = false;
+    if let Some(xml) = settings {
+        let mut reader = Reader::from_str(xml);
+        let mut inside = false;
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) if local(e.name().as_ref()) == "mathPr" => inside = true,
+                Ok(Event::End(e)) if local(e.name().as_ref()) == "mathPr" => inside = false,
+                Ok(Event::Empty(e)) | Ok(Event::Start(e)) if inside
+                    && local(e.name().as_ref()) == "smallFrac" => {
+                    reduce = !e.attributes().flatten().any(|a| local(a.key.as_ref()) == "val"
+                        && matches!(a.value.as_ref(), b"0" | b"off" | b"false"));
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+    FractionSettingsGuard(REDUCE_FRACTIONS.with(|c| c.replace(reduce)))
 }
 
 /// S1253 (2026-08-29): the font size the maths declared for ITSELF, in points,
@@ -53,20 +85,32 @@ pub fn take_math_sz() -> Option<f32> {
     MATH_SZ.with(|c| c.take())
 }
 
+/// Optional package-aware resolution for generic run properties. The caller
+/// owns the theme/style environment; the math IR stores the resulting RunStyle.
+pub type RunPropertyParser<'a> = dyn FnMut(&str) -> Result<Option<crate::ir::RunStyle>, ParseError> + 'a;
+
+pub fn parse_omath_inline(reader: &mut Reader<&[u8]>) -> Result<MathBlock, ParseError> {
+    parse_omath_inline_with_run_properties(reader, &mut |_| Ok(None))
+}
+
+pub fn parse_omath_para(reader: &mut Reader<&[u8]>) -> Result<MathBlock, ParseError> {
+    parse_omath_para_with_run_properties(reader, &mut |_| Ok(None))
+}
+
 /// Parse `<m:oMath>` (inline) content. Reader should have just consumed
 /// the opening tag; reads until matching `</m:oMath>`.
-pub fn parse_omath_inline(
-    reader: &mut Reader<&[u8]>,
+pub fn parse_omath_inline_with_run_properties(
+    reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>,
 ) -> Result<MathBlock, ParseError> {
     MATH_SZ.with(|c| c.set(None));
-    let exprs = parse_expr_sequence(reader, "oMath")?;
+    let exprs = parse_expr_sequence(reader, run_properties, "oMath")?;
     Ok(MathBlock::Inline(exprs))
 }
 
 /// Parse `<m:oMathPara>` (display) content. Reader should have just
 /// consumed the opening tag; reads until matching `</m:oMathPara>`.
-pub fn parse_omath_para(
-    reader: &mut Reader<&[u8]>,
+pub fn parse_omath_para_with_run_properties(
+    reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>,
 ) -> Result<MathBlock, ParseError> {
     // oMathPara contains optional <m:oMathParaPr> + one or more <m:oMath>.
     // We currently merge all child <m:oMath> into one display block.
@@ -103,11 +147,11 @@ pub fn parse_omath_para(
                     }
                 } else if tag == "oMath" {
                     // Collect inner expressions directly into our content.
-                    let inner = parse_expr_sequence(reader, "oMath")?;
+                    let inner = parse_expr_sequence(reader, run_properties, "oMath")?;
                     content.extend(inner);
                 } else {
                     // Unknown — best-effort, try to parse as a single expr.
-                    if let Some(expr) = parse_single_expr(reader, &tag, &e)? {
+                    if let Some(expr) = parse_single_expr(reader, run_properties, &tag, &e)? {
                         content.push(expr);
                     }
                 }
@@ -118,13 +162,14 @@ pub fn parse_omath_para(
             _ => {}
         }
     }
-    Ok(MathBlock::Display { content, jc, host: None })
+    Ok(MathBlock::Display { content, jc, host: None,
+        reduce_fraction_size: REDUCE_FRACTIONS.with(|c| c.get()) })
 }
 
 /// Parse a sequence of math expressions, reading events until the
 /// matching closing tag (e.g., `</m:oMath>`, `</m:e>`, `</m:num>`).
 fn parse_expr_sequence(
-    reader: &mut Reader<&[u8]>,
+    reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>,
     closing_tag: &str,
 ) -> Result<Vec<MathExpr>, ParseError> {
     let mut out: Vec<MathExpr> = Vec::new();
@@ -132,7 +177,7 @@ fn parse_expr_sequence(
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
-                if let Some(expr) = parse_single_expr(reader, &tag, &e)? {
+                if let Some(expr) = parse_single_expr(reader, run_properties, &tag, &e)? {
                     out.push(expr);
                 }
             }
@@ -151,62 +196,62 @@ fn parse_expr_sequence(
 /// Parse a single OMML element (dispatcher). Returns `None` if the tag
 /// should be skipped (e.g., properties containers).
 fn parse_single_expr(
-    reader: &mut Reader<&[u8]>,
+    reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>,
     tag: &str,
     _open: &quick_xml::events::BytesStart,
 ) -> Result<Option<MathExpr>, ParseError> {
     match tag {
         // Leaf: math run (text)
-        "r" => Ok(Some(parse_run(reader)?)),
+        "r" => Ok(Some(parse_run(reader, run_properties)?)),
 
         // Fraction
-        "f" => Ok(Some(parse_fraction(reader)?)),
+        "f" => Ok(Some(parse_fraction(reader, run_properties)?)),
 
         // Scripts
-        "sSup" => Ok(Some(parse_ssup(reader)?)),
-        "sSub" => Ok(Some(parse_ssub(reader)?)),
-        "sSubSup" => Ok(Some(parse_ssubsup(reader)?)),
-        "sPre" => Ok(Some(parse_spre(reader)?)),
+        "sSup" => Ok(Some(parse_ssup(reader, run_properties)?)),
+        "sSub" => Ok(Some(parse_ssub(reader, run_properties)?)),
+        "sSubSup" => Ok(Some(parse_ssubsup(reader, run_properties)?)),
+        "sPre" => Ok(Some(parse_spre(reader, run_properties)?)),
 
         // Radical
-        "rad" => Ok(Some(parse_radical(reader)?)),
+        "rad" => Ok(Some(parse_radical(reader, run_properties)?)),
 
         // Delimiter (brackets around content)
-        "d" => Ok(Some(parse_delimiter(reader)?)),
+        "d" => Ok(Some(parse_delimiter(reader, run_properties)?)),
 
         // Matrix
-        "m" => Ok(Some(parse_matrix(reader)?)),
+        "m" => Ok(Some(parse_matrix(reader, run_properties)?)),
 
         // N-ary operator
-        "nary" => Ok(Some(parse_nary(reader)?)),
+        "nary" => Ok(Some(parse_nary(reader, run_properties)?)),
 
         // Accent (hat, tilde, macron, vector)
-        "acc" => Ok(Some(parse_accent(reader)?)),
+        "acc" => Ok(Some(parse_accent(reader, run_properties)?)),
 
         // Bar (overline/underline)
-        "bar" => Ok(Some(parse_bar(reader)?)),
+        "bar" => Ok(Some(parse_bar(reader, run_properties)?)),
 
         // Limits (lim_{x→0} / limⁿ)
-        "limLow" => Ok(Some(parse_limit(reader, "limLow", crate::ir::LimitPos::Lower)?)),
-        "limUpp" => Ok(Some(parse_limit(reader, "limUpp", crate::ir::LimitPos::Upper)?)),
+        "limLow" => Ok(Some(parse_limit(reader, run_properties, "limLow", crate::ir::LimitPos::Lower)?)),
+        "limUpp" => Ok(Some(parse_limit(reader, run_properties, "limUpp", crate::ir::LimitPos::Upper)?)),
 
         // Function (sin x, cos y, log z)
-        "func" => Ok(Some(parse_func(reader)?)),
+        "func" => Ok(Some(parse_func(reader, run_properties)?)),
 
         // Group character (underbrace, overbrace)
-        "groupChr" => Ok(Some(parse_group_chr(reader)?)),
+        "groupChr" => Ok(Some(parse_group_chr(reader, run_properties)?)),
 
         // Equation array (stacked equations)
-        "eqArr" => Ok(Some(parse_eq_arr(reader)?)),
+        "eqArr" => Ok(Some(parse_eq_arr(reader, run_properties)?)),
 
         // Box (visual grouping, no bar)
-        "box" => Ok(Some(parse_box(reader)?)),
+        "box" => Ok(Some(parse_box(reader, run_properties)?)),
 
         // Bordered box (rectangle border around expr)
-        "borderBox" => Ok(Some(parse_border_box(reader)?)),
+        "borderBox" => Ok(Some(parse_border_box(reader, run_properties)?)),
 
         // Phantom (reserves space without ink)
-        "phant" => Ok(Some(parse_phantom(reader)?)),
+        "phant" => Ok(Some(parse_phantom(reader, run_properties)?)),
 
         // Properties containers — skip (read through the closing tag)
         "rPr" | "fPr" | "sSubPr" | "sSupPr" | "sSubSupPr" | "sPrePr"
@@ -221,7 +266,7 @@ fn parse_single_expr(
         // Fallback: primitives not yet implemented. Read their children
         // as a flat Seq (loses tree structure; Phase 3 will extend).
         _ => {
-            let children = parse_expr_sequence(reader, tag)?;
+            let children = parse_expr_sequence(reader, run_properties, tag)?;
             if children.is_empty() {
                 Ok(None)
             } else if children.len() == 1 {
@@ -234,13 +279,14 @@ fn parse_single_expr(
 }
 
 /// Parse `<m:r>` (math run). Concatenates all `<m:t>` text children.
-fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_run(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut text = String::new();
-    // S1611: `<m:rPr>` carries `m:sty` (p/b/i/bi) and `m:nor`; everything else
-    // in either rPr is still ignored. A styled run becomes `MathExpr::Run`, which
-    // every layout arm already treats like `Text`.
+    // Mathematical alphabet properties and generic font/run properties
+    // coexist. Keep both, resolving the latter in the package's own context.
+    let mut run_style: Option<crate::ir::RunStyle> = None;
     let mut sty: Option<crate::ir::MathStyleVariant> = None;
     let mut nor = false;
+    let mut script = None;
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
@@ -261,14 +307,25 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                         }
                     }
                 } else if tag == "rPr" {
+                    let mut properties = quick_xml::Writer::new(Vec::new());
+                    properties.write_event(Event::Start(e.clone()))?;
+                    let mut has_run_properties = false;
                     let mut depth = 0usize;
                     loop {
-                        match reader.read_event() {
+                        let event = reader.read_event()?;
+                        properties.write_event(event.clone())?;
+                        match Ok::<_, ParseError>(event) {
                             Ok(ev @ Event::Empty(_)) | Ok(ev @ Event::Start(_)) => {
                                 let is_start = matches!(ev, Event::Start(_));
                                 let ee = match &ev { Event::Empty(x) | Event::Start(x) => x.clone(), _ => unreachable!() };
                                 if is_start { depth += 1; }
                                 let name = local(ee.name().as_ref());
+                                if depth <= 1 {
+                                    record_math_sz(&ee);
+                                    has_run_properties |= matches!(name.as_str(), "rFonts" | "rStyle" | "sz" | "szCs"
+                                        | "lang" | "b" | "i" | "bCs" | "iCs" | "color" | "spacing" | "position"
+                                        | "u" | "strike" | "dstrike" | "caps" | "smallCaps" | "vertAlign");
+                                }
                                 if name == "sty" {
                                     for attr in ee.attributes().flatten() {
                                         if local(attr.key.as_ref()) == "val" {
@@ -277,6 +334,21 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                                                 "b" => Some(crate::ir::MathStyleVariant::Bold),
                                                 "bi" => Some(crate::ir::MathStyleVariant::BoldItalic),
                                                 _ => Some(crate::ir::MathStyleVariant::Italic),
+                                            };
+                                        }
+                                    }
+                                } else if name == "scr" {
+                                    for attr in ee.attributes().flatten() {
+                                        if local(attr.key.as_ref()) == "val" {
+                                            use crate::ir::MathScript;
+                                            script = match attr.value.as_ref() {
+                                                b"roman" => Some(MathScript::Roman),
+                                                b"script" => Some(MathScript::Script),
+                                                b"fraktur" => Some(MathScript::Fraktur),
+                                                b"double-struck" => Some(MathScript::DoubleStruck),
+                                                b"sans-serif" => Some(MathScript::SansSerif),
+                                                b"monospace" => Some(MathScript::Monospace),
+                                                _ => None,
                                             };
                                         }
                                     }
@@ -296,6 +368,13 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                             _ => {}
                         }
                     }
+                    if has_run_properties {
+                        let bytes = properties.into_inner();
+                        let xml = String::from_utf8_lossy(&bytes);
+                        if let Some(parsed) = run_properties(&xml)? {
+                            run_style = Some(parsed);
+                        }
+                    }
                 } else {
                     // Unknown inner element — skip.
                     skip_until_end(reader, &tag)?;
@@ -309,10 +388,13 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
     }
     if text.is_empty() {
         Ok(MathExpr::Text(String::new()))
-    } else if (sty.is_some() || nor) && std::env::var_os("OXI_S1611_STY_DISABLE").is_none() {
+    } else if run_style.is_some()
+        || ((sty.is_some() || script.is_some() || nor) && std::env::var_os("OXI_S1611_STY_DISABLE").is_none()) {
+        let keep_math_style = std::env::var_os("OXI_S1611_STY_DISABLE").is_none();
         Ok(MathExpr::Run {
             text,
-            style: crate::ir::MathRunStyle { math_style: sty, literal: nor, ..Default::default() },
+            style: crate::ir::MathRunStyle { script: keep_math_style.then_some(script).flatten(),
+                math_style: keep_math_style.then_some(sty).flatten(), literal: keep_math_style && nor, run_style },
         })
     } else {
         Ok(MathExpr::Text(text))
@@ -320,7 +402,7 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:f>` fraction (num over den with bar).
-fn parse_fraction(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_fraction(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut num: Option<MathExpr> = None;
     let mut den: Option<MathExpr> = None;
     let mut bar_type = FracBarType::Bar;
@@ -330,11 +412,11 @@ fn parse_fraction(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
                     "num" => {
-                        let children = parse_expr_sequence(reader, "num")?;
+                        let children = parse_expr_sequence(reader, run_properties, "num")?;
                         num = Some(wrap_seq(children));
                     }
                     "den" => {
-                        let children = parse_expr_sequence(reader, "den")?;
+                        let children = parse_expr_sequence(reader, run_properties, "den")?;
                         den = Some(wrap_seq(children));
                     }
                     "fPr" => {
@@ -380,8 +462,8 @@ fn parse_fraction(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:sSup>` (base^sup).
-fn parse_ssup(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
-    let (base, sup) = parse_base_and_script(reader, "sSup", "e", "sup")?;
+fn parse_ssup(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
+    let (base, sup) = parse_base_and_script(reader, run_properties, "sSup", "e", "sup")?;
     Ok(MathExpr::Superscript {
         base: Box::new(base),
         sup: Box::new(sup),
@@ -389,8 +471,8 @@ fn parse_ssup(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:sSub>` (base_sub).
-fn parse_ssub(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
-    let (base, sub) = parse_base_and_script(reader, "sSub", "e", "sub")?;
+fn parse_ssub(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
+    let (base, sub) = parse_base_and_script(reader, run_properties, "sSub", "e", "sub")?;
     Ok(MathExpr::Subscript {
         base: Box::new(base),
         sub: Box::new(sub),
@@ -398,7 +480,7 @@ fn parse_ssub(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:sSubSup>` (base_sub^sup). Order in XML: e → sub → sup.
-fn parse_ssubsup(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_ssubsup(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut base: Option<MathExpr> = None;
     let mut sub: Option<MathExpr> = None;
     let mut sup: Option<MathExpr> = None;
@@ -407,9 +489,9 @@ fn parse_ssubsup(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
-                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
-                    "sub" => sub = Some(wrap_seq(parse_expr_sequence(reader, "sub")?)),
-                    "sup" => sup = Some(wrap_seq(parse_expr_sequence(reader, "sup")?)),
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
+                    "sub" => sub = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "sub")?)),
+                    "sup" => sup = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "sup")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -427,7 +509,7 @@ fn parse_ssubsup(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:sPre>` (pre-sub ^pre-sup base). XML order: sub → sup → e.
-fn parse_spre(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_spre(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut base: Option<MathExpr> = None;
     let mut sub: Option<MathExpr> = None;
     let mut sup: Option<MathExpr> = None;
@@ -436,9 +518,9 @@ fn parse_spre(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
-                    "sub" => sub = Some(wrap_seq(parse_expr_sequence(reader, "sub")?)),
-                    "sup" => sup = Some(wrap_seq(parse_expr_sequence(reader, "sup")?)),
-                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "sub" => sub = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "sub")?)),
+                    "sup" => sup = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "sup")?)),
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -456,7 +538,7 @@ fn parse_spre(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:rad>` (nth root or sqrt). XML: optional `<m:deg/>` + `<m:e>`.
-fn parse_radical(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_radical(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut degree: Option<Box<MathExpr>> = None;
     let mut radicand: Option<MathExpr> = None;
     loop {
@@ -465,13 +547,13 @@ fn parse_radical(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
                     "deg" => {
-                        let children = parse_expr_sequence(reader, "deg")?;
+                        let children = parse_expr_sequence(reader, run_properties, "deg")?;
                         if !children.is_empty() {
                             degree = Some(Box::new(wrap_seq(children)));
                         }
                     }
                     "e" => {
-                        radicand = Some(wrap_seq(parse_expr_sequence(reader, "e")?));
+                        radicand = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?));
                     }
                     _ => { skip_until_end(reader, &tag)?; }
                 }
@@ -492,7 +574,7 @@ fn parse_radical(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 /// Helper: parse `<parent>` with `<base_tag>...</base_tag>` and
 /// `<script_tag>...</script_tag>` children.
 fn parse_base_and_script(
-    reader: &mut Reader<&[u8]>,
+    reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>,
     parent: &str,
     base_tag: &str,
     script_tag: &str,
@@ -504,9 +586,9 @@ fn parse_base_and_script(
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 if tag == base_tag {
-                    base = Some(wrap_seq(parse_expr_sequence(reader, base_tag)?));
+                    base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, base_tag)?));
                 } else if tag == script_tag {
-                    script = Some(wrap_seq(parse_expr_sequence(reader, script_tag)?));
+                    script = Some(wrap_seq(parse_expr_sequence(reader, run_properties, script_tag)?));
                 } else {
                     skip_until_end(reader, &tag)?;
                 }
@@ -536,7 +618,7 @@ fn wrap_seq(mut children: Vec<MathExpr>) -> MathExpr {
 }
 
 /// Parse `<m:d>` delimiter: begChr/endChr/sepChr from dPr, content from e.
-fn parse_delimiter(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_delimiter(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut beg: char = '(';
     let mut end: char = ')';
     let mut sep: Option<char> = None;
@@ -575,7 +657,7 @@ fn parse_delimiter(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                         }
                     }
                     "e" => {
-                        content = Some(wrap_seq(parse_expr_sequence(reader, "e")?));
+                        content = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?));
                     }
                     _ => { skip_until_end(reader, &tag)?; }
                 }
@@ -595,7 +677,7 @@ fn parse_delimiter(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:m>` matrix: rows from mr, cells from e within row.
-fn parse_matrix(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_matrix(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     use crate::ir::MathAlignment;
     let mut rows: Vec<Vec<MathExpr>> = Vec::new();
     let mut col_align = MathAlignment::Center;
@@ -638,7 +720,7 @@ fn parse_matrix(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                                 Ok(Event::Start(ee)) => {
                                     let t = local(ee.name().as_ref());
                                     if t == "e" {
-                                        row_cells.push(wrap_seq(parse_expr_sequence(reader, "e")?));
+                                        row_cells.push(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?));
                                     } else {
                                         skip_until_end(reader, &t)?;
                                     }
@@ -665,11 +747,12 @@ fn parse_matrix(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:nary>`: n-ary operator (sum, integral, product).
-fn parse_nary(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_nary(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     use crate::ir::LimLoc;
-    let mut op: char = '\u{2211}'; // default ∑
+    let mut op: char = '\u{222b}'; // ISO/IEC 29500-1 22.1.2.20: omitted chr defaults to integral
     let mut lim_loc = LimLoc::SubSup;
     let mut grow = false;
+    let mut operator_color = None;
     let mut sub: Option<Box<MathExpr>> = None;
     let mut sup: Option<Box<MathExpr>> = None;
     let mut operand: Option<MathExpr> = None;
@@ -681,6 +764,9 @@ fn parse_nary(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                     "naryPr" => {
                         loop {
                             match reader.read_event() {
+                                Ok(Event::Start(ee)) if local(ee.name().as_ref()) == "ctrlPr" => {
+                                    operator_color = parse_math_control_color(reader, run_properties)?;
+                                }
                                 Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
                                     let t = local(ee.name().as_ref());
                                     match t.as_str() {
@@ -721,9 +807,9 @@ fn parse_nary(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                             }
                         }
                     }
-                    "sub" => sub = Some(Box::new(wrap_seq(parse_expr_sequence(reader, "sub")?))),
-                    "sup" => sup = Some(Box::new(wrap_seq(parse_expr_sequence(reader, "sup")?))),
-                    "e" => operand = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "sub" => sub = Some(Box::new(wrap_seq(parse_expr_sequence(reader, run_properties, "sub")?))),
+                    "sup" => sup = Some(Box::new(wrap_seq(parse_expr_sequence(reader, run_properties, "sup")?))),
+                    "e" => operand = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -735,6 +821,7 @@ fn parse_nary(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
     }
     Ok(MathExpr::Nary {
         op,
+        operator_color,
         sub,
         sup,
         operand: Box::new(operand.unwrap_or(MathExpr::Text(String::new()))),
@@ -743,8 +830,45 @@ fn parse_nary(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
     })
 }
 
+/// Resolve the operator's own run properties with the package theme/style context.
+/// Consumes the whole control-properties element without leaking its color to leaves.
+fn parse_math_control_color(
+    reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>,
+) -> Result<Option<String>, ParseError> {
+    let mut color = None;
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) if local(e.name().as_ref()) == "rPr" => {
+                let mut writer = quick_xml::Writer::new(Vec::new());
+                writer.write_event(Event::Start(e))?;
+                let mut depth = 1usize;
+                while depth > 0 {
+                    let event = reader.read_event()?;
+                    match &event {
+                        Event::Start(_) => depth += 1,
+                        Event::End(_) => depth -= 1,
+                        Event::Eof => return Err(ParseError::MissingPart("EOF in math control run properties".into())),
+                        _ => {}
+                    }
+                    writer.write_event(event)?;
+                }
+                let bytes = writer.into_inner();
+                color = run_properties(&String::from_utf8_lossy(&bytes))?.and_then(|style| style.color);
+            }
+            Event::Empty(e) if local(e.name().as_ref()) == "rPr" => {
+                let mut writer = quick_xml::Writer::new(Vec::new());
+                writer.write_event(Event::Empty(e))?;
+                color = run_properties(&String::from_utf8_lossy(&writer.into_inner()))?.and_then(|style| style.color);
+            }
+            Event::End(e) if local(e.name().as_ref()) == "ctrlPr" => return Ok(color),
+            Event::Eof => return Err(ParseError::MissingPart("EOF in math control properties".into())),
+            _ => {}
+        }
+    }
+}
+
 /// Parse `<m:acc>` accent: chr from accPr, base from e.
-fn parse_accent(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_accent(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut accent: char = '\u{0302}'; // default ̂ hat
     let mut base: Option<MathExpr> = None;
     loop {
@@ -772,7 +896,7 @@ fn parse_accent(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                             }
                         }
                     }
-                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -788,7 +912,7 @@ fn parse_accent(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:bar>`: overline (pos=top) or underline (pos=bot), base from e.
-fn parse_bar(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_bar(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     use crate::ir::BarPos;
     let mut pos = BarPos::Top;
     let mut base: Option<MathExpr> = None;
@@ -820,7 +944,7 @@ fn parse_bar(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                             }
                         }
                     }
-                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -837,7 +961,7 @@ fn parse_bar(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 
 /// Parse `<m:limLow>` or `<m:limUpp>`: base from e, limit expr from lim.
 fn parse_limit(
-    reader: &mut Reader<&[u8]>,
+    reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>,
     tag_name: &str,
     pos: crate::ir::LimitPos,
 ) -> Result<MathExpr, ParseError> {
@@ -848,8 +972,8 @@ fn parse_limit(
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
-                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
-                    "lim" => lim = Some(wrap_seq(parse_expr_sequence(reader, "lim")?)),
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
+                    "lim" => lim = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "lim")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -867,7 +991,7 @@ fn parse_limit(
 }
 
 /// Parse `<m:func>` function: fName + e argument.
-fn parse_func(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_func(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut name: Option<MathExpr> = None;
     let mut arg: Option<MathExpr> = None;
     loop {
@@ -875,8 +999,8 @@ fn parse_func(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
-                    "fName" => name = Some(wrap_seq(parse_expr_sequence(reader, "fName")?)),
-                    "e" => arg = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "fName" => name = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "fName")?)),
+                    "e" => arg = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -892,7 +1016,7 @@ fn parse_func(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:groupChr>` underbrace/overbrace: chr + pos from groupChrPr, base from e.
-fn parse_group_chr(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_group_chr(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     use crate::ir::BarPos;
     let mut chr: char = '\u{23DF}'; // default bottom curly bracket
     let mut pos = BarPos::Bot;
@@ -933,7 +1057,7 @@ fn parse_group_chr(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
                             }
                         }
                     }
-                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -951,14 +1075,14 @@ fn parse_group_chr(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:eqArr>` equation array: stacked expressions (one per e).
-fn parse_eq_arr(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_eq_arr(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut items: Vec<MathExpr> = Vec::new();
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
-                    "e" => items.push(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "e" => items.push(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -971,14 +1095,14 @@ fn parse_eq_arr(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:box>` visual grouping: content from e.
-fn parse_box(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_box(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut inner: Option<MathExpr> = None;
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
-                    "e" => inner = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "e" => inner = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -993,7 +1117,7 @@ fn parse_box(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 }
 
 /// Parse `<m:borderBox>`: box with border, sides from borderBoxPr.
-fn parse_border_box(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_border_box(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     use crate::ir::BoxBorders;
     let mut sides = BoxBorders::default();
     let mut base: Option<MathExpr> = None;
@@ -1028,7 +1152,7 @@ fn parse_border_box(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> 
                             }
                         }
                     }
-                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -1045,14 +1169,14 @@ fn parse_border_box(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> 
 }
 
 /// Parse `<m:phant>` phantom: reserves space without ink.
-fn parse_phantom(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+fn parse_phantom(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser<'_>) -> Result<MathExpr, ParseError> {
     let mut inner: Option<MathExpr> = None;
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let tag = local(e.name().as_ref());
                 match tag.as_str() {
-                    "e" => inner = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "e" => inner = Some(wrap_seq(parse_expr_sequence(reader, run_properties, "e")?)),
                     _ => { skip_until_end(reader, &tag)?; }
                 }
             }
@@ -1450,6 +1574,44 @@ mod tests {
         match &exprs[0] {
             MathExpr::Fraction { bar_type, .. } => assert_eq!(*bar_type, FracBarType::NoBar),
             _ => panic!(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod nary_default_regression_tests {
+    use super::*;
+
+    fn parsed_operator(properties: &str) -> char {
+        let xml = format!(r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:nary>{properties}<m:sub><m:r><m:t>a</m:t></m:r></m:sub><m:sup><m:r><m:t>b</m:t></m:r></m:sup><m:e><m:r><m:t>f(x)</m:t></m:r></m:e></m:nary></m:oMath>"#);
+        let mut reader = Reader::from_str(&xml);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) if local(e.name().as_ref()) == "oMath" => {
+                    let block = parse_omath_inline(&mut reader).unwrap();
+                    let MathBlock::Inline(xs) = block else { panic!("Expected inline math") };
+                    let MathExpr::Nary { op, sub, sup, .. } = &xs[0] else { panic!("Expected n-ary expression") };
+                    assert!(sub.is_some() && sup.is_some());
+                    return *op;
+                }
+                Event::Eof => panic!("Missing math block"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn missing_operator_character_means_integral_with_or_without_properties() {
+        // ISO/IEC 29500-1 22.1.2.20: an omitted chr under naryPr defaults
+        // to U+222B. A stored sum uses an explicit U+2211 character.
+        assert_eq!(parsed_operator(""), '\u{222b}');
+        assert_eq!(parsed_operator("<m:naryPr><m:limLoc m:val=\"subSup\"/></m:naryPr>"), '\u{222b}');
+    }
+
+    #[test]
+    fn explicit_nary_symbols_keep_their_identity() {
+        for op in ['\u{2211}', '\u{220f}', '\u{222b}', '\u{222e}'] {
+            assert_eq!(parsed_operator(&format!("<m:naryPr><m:chr m:val=\"{op}\"/></m:naryPr>")), op);
         }
     }
 }

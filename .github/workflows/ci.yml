@@ -140,7 +140,7 @@ jobs:
       - name: Install catalog generator dependencies
         run: python -m pip install fonttools==4.62.0
       - name: Test complete font enumeration
-        run: python -W error::ResourceWarning -m unittest discover -s tools/font-metrics-gen -p test_catalog.py -v
+        run: python -W error::ResourceWarning -m unittest discover -s tools/font-metrics-gen -p 'test*.py' -v
       - name: Export complete installed font catalog
         run: python tools/font-metrics-gen/catalog.py --output font-metrics/catalog --portable-output font-metrics/portable
       - name: Verify requested font coverage

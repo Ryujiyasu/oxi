@@ -1,0 +1,8 @@
+[package]
+name = "oxidocs-font-provider"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[dependencies]
+ttf-parser = "=0.25.1"

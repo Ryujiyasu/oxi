@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 from measure_pagination_oxi import aggregate_dump
@@ -72,6 +73,59 @@ class BodyReadingOrderTests(unittest.TestCase):
         self.assertEqual(result["delta_histogram"], {1: 1})
         self.assertFalse(result["pass"])
 
+
+class ParagraphStartProjectionTests(unittest.TestCase):
+    def layout(self, text="A paragraph whose source begins at an object"):
+        prefix = "\f" + text
+        shared = dict(type="text", x=72.0, w=0.0, h=14.0, font_size=12.0,
+                      para_idx=3, cell_para_idx=None, cell_row_idx=None, cell_col_idx=None,
+                      source_container_idx=0, source_paragraph_prefix=prefix,
+                      source_paragraph_chars=len(prefix), source_paragraph_controls=1,
+                      source_paragraph_column_controls=0)
+        caret = dict(shared, y=500.0, text="", source_boundary_attachment=True)
+        painted = dict(shared, y=72.0, text=text, w=240.0)
+        return dict(pages=[dict(page=1, elements=[caret]), dict(page=2, elements=[painted])])
+
+    def test_source_start_is_projected_without_moving_painted_elements(self):
+        layout = self.layout()
+        original = copy.deepcopy(layout)
+        records = aggregate_dump(layout)
+        self.assertEqual(records["1"][0]["text"], "A paragraph whose source begin")
+        self.assertEqual(records["1"][0]["y"], 500.0)
+        self.assertEqual(records["2"], [])
+        self.assertEqual(layout, original)
+
+    def test_short_paragraph_keeps_existing_word_collector_convention(self):
+        layout = self.layout("Short title")
+        records = aggregate_dump(layout)
+        self.assertEqual(records["1"][0]["text"], "")
+        self.assertEqual(records["2"][0]["text"], "Short title")
+
+    def test_projection_uses_explicit_page_identity(self):
+        layout = self.layout()
+        layout["pages"][0]["page"] = 27
+        layout["pages"][1]["page"] = 28
+        records = aggregate_dump(layout)
+        self.assertTrue(records["27"][0]["text"])
+        self.assertEqual(records["28"], [])
+
+    def test_repeated_local_index_in_another_container_does_not_fold(self):
+        layout = self.layout()
+        layout["pages"][1]["elements"][0]["source_container_idx"] = 1
+        records = aggregate_dump(layout)
+        self.assertEqual(records["1"][0]["text"], "")
+        self.assertTrue(records["2"][0]["text"])
+
+    def test_old_dumps_and_unattached_controls_keep_their_existing_projection(self):
+        for omitted in ("source_container_idx", "source_boundary_attachment"):
+            with self.subTest(omitted=omitted):
+                layout = self.layout()
+                for page in layout["pages"]:
+                    for element in page["elements"]:
+                        element.pop(omitted, None)
+                records = aggregate_dump(layout)
+                self.assertEqual(records["1"][0]["text"], "")
+                self.assertTrue(records["2"][0]["text"])
 
 if __name__ == "__main__":
     unittest.main()

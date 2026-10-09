@@ -5,12 +5,43 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// A lookup owns dynamically registered metrics while callers use them.
+/// Embedded catalogue metrics remain borrowed from their existing owner.
+#[derive(Clone)]
+pub enum FontMetricsRef<'a> {
+    Borrowed(&'a FontMetrics),
+    Registered(std::sync::Arc<FontMetrics>),
+}
+
+impl std::ops::Deref for FontMetricsRef<'_> {
+    type Target = FontMetrics;
+    fn deref(&self) -> &Self::Target {
+        match self { Self::Borrowed(metrics) => metrics, Self::Registered(metrics) => metrics }
+    }
+}
+
+impl<'a> From<&'a FontMetrics> for FontMetricsRef<'a> {
+    fn from(metrics: &'a FontMetrics) -> Self { Self::Borrowed(metrics) }
+}
+
+impl<'a> From<std::sync::Arc<FontMetrics>> for FontMetricsRef<'a> {
+    fn from(metrics: std::sync::Arc<FontMetrics>) -> Self { Self::Registered(metrics) }
+}
+
 pub mod runtime;
+pub(crate) mod program_math;
+mod glyph_bounds;
+pub use glyph_bounds::static_glyph_bounds;
 pub(crate) mod cjk_fallback;
+pub(crate) mod system_spacing_fallback;
 mod catalog;
+pub(crate) use catalog::{CatalogGlyphMetrics, glyph_metrics as catalog_glyph_metrics, glyph_corner_kern as catalog_glyph_corner_kern, glyph_face_metrics as catalog_glyph_face_metrics, glyph_rule_thickness as catalog_glyph_rule_thickness};
 pub mod shape;
 pub mod math_constants;
 pub mod math_glyphs;
+pub mod math_stretch;
+pub mod math_script_glyphs;
+pub mod math_kern;
 pub mod math_substitute;
 pub use math_constants::{MathConstants, MathTable};
 pub use math_glyphs::{GlyphVariant, MathGlyphTables};
@@ -134,6 +165,8 @@ struct RawFontMetrics {
     /// cmap is not Unicode) — treated as "unknown", never as "absent".
     #[serde(default)]
     sym_coverage: String,
+    #[serde(default)]
+    average_width: Option<i16>,
     widths: HashMap<u32, u16>,
 }
 
@@ -188,6 +221,10 @@ pub struct FontMetrics {
     /// Units per em (e.g. 256 for MS Gothic/Mincho, 2048 for most others)
     #[serde(default = "default_upm")]
     pub units_per_em: u16,
+    /// OS/2 average character advance, normalized to em. None preserves the
+    /// previous quarter-em gap when the metric source provides no average.
+    #[serde(default)]
+    pub average_width_em: Option<f32>,
     /// hhea ascent normalized to 1em
     pub ascent: f32,
     /// hhea descent normalized to 1em (positive value)
@@ -222,6 +259,22 @@ pub struct FontMetrics {
 }
 
 impl FontMetrics {
+    /// The Windows font box is separate from glyph ink. East Asian external
+    /// leading is rounded in design units and added equally to both sides.
+    /// This lookup uses font signatures, not family-name exceptions.
+    pub(crate) fn design_font_box_pt(&self,size:f32,external_leading:bool)->(f32,f32) {
+        let ascent=self.win_ascent.max(0.0);let descent=self.win_descent.max(0.0);
+        let padding=if external_leading && self.codepage_range1.is_some_and(|bits|bits & (0x1f << 17)!=0) {
+            let upm=f32::from(self.units_per_em.max(1));
+            let selected=if self.use_typo_metrics {self.typo_ascent+self.typo_descent+self.typo_line_gap}
+                else {ascent+descent};
+            let units=(selected*upm).round().max(0.0) as u32;
+            ((units*3+10)/20) as f32/upm
+        }else {0.0};
+        ((ascent+padding)*size,(descent+padding)*size)
+    }
+
+
     fn east_asian_design_line_height(&self, font_size: f32) -> f32 {
         let win_sum = self.win_ascent + self.win_descent;
         if self.codepage_range1.is_some() {
@@ -256,6 +309,11 @@ impl FontMetrics {
 
     pub fn char_width_em(&self, c: char) -> f32 {
         // S1330: a zero-width format character advances nothing (Word).
+        if is_nonspacing_kana_mark(c)
+            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+        {
+            return 0.0;
+        }
         if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
             return 0.0;
         }
@@ -330,6 +388,11 @@ impl FontMetrics {
         // a line of its own (line=576 exact) and cost the page a row.
         // Word keeps every such row on one line (PDF: 19 rows, none
         // ending in a lone mark).
+        if is_nonspacing_kana_mark(c)
+            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+        {
+            return 0.0;
+        }
         if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
             return 0.0;
         }
@@ -806,12 +869,12 @@ impl FontMetricsRegistry {
     ///
     /// Returns None when the run font has the glyph, when coverage data is
     /// missing for either side, or when no candidate face covers the codepoint.
-    pub fn symbol_fallback_face(&self, c: char, run: &FontMetrics) -> Option<&FontMetrics> {
+    pub fn symbol_fallback_face(&self, c: char, run: &FontMetrics) -> Option<FontMetricsRef<'_>> {
         if run.has_symbol_glyph(c) != Some(false) {
             return None;
         }
         for fam in ["Courier New", "Cambria Math", "Segoe UI Symbol"] {
-            if let Some(m) = self.fonts.get(fam) {
+            if let Some(m) = runtime::resolve_registered(fam, false, false).or_else(|| self.fonts.get(fam).map(FontMetricsRef::from)) {
                 if m.has_symbol_glyph(c) == Some(true) {
                     return Some(m);
                 }
@@ -979,6 +1042,7 @@ impl FontMetricsRegistry {
 
             let metrics = FontMetrics {
                 synthetic_bold_advance: 0.0,
+                average_width_em: raw.average_width.filter(|v| *v > 0).map(|v| v as f32 / upm),
                 family: raw.family.clone(),
                 units_per_em: raw.units_per_em,
                 ascent,
@@ -1058,6 +1122,7 @@ impl FontMetricsRegistry {
             if let Some(calibri) = fonts.get("Calibri").cloned() {
                 let gill = FontMetrics {
                     synthetic_bold_advance: 0.0,
+                average_width_em: None,
                     family: "Gill Sans Nova".to_string(),
                     units_per_em: 2048,
                     ascent: 2054.0 / 2048.0,
@@ -1228,22 +1293,23 @@ impl FontMetricsRegistry {
             HashMap::new()
         };
 
-        let mut synthetic_bold_fonts = HashMap::new();
-        {
-            let experimental_all_cjk = std::env::var_os("OXI_CJK_SYNTHETIC_BOLD").is_some();
-            for metrics in fonts.values() {
-                // Word's synthesized MS Gothic bold adds one design unit per glyph.
-                // This includes full-width spaces; native bold faces use their own metrics.
-                let measured_ms_gothic = metrics.family == "MS Gothic";
-                if measured_ms_gothic || (experimental_all_cjk
-                    && (metrics.units_per_em == 256 || metrics.family == "Yu Mincho Regular")) {
-                    let mut synthetic = metrics.clone();
-                    synthetic.synthetic_bold_advance = 1.0 / f32::from(metrics.units_per_em);
-                    synthetic_bold_fonts.insert(metrics.family.clone(), synthetic);
-                }
+        // Populate calibrated entries and their aliases from the matching
+        // catalog face; this also covers entries cloned from fallback metrics.
+        for metrics in fonts.values_mut() {
+            if let Some(average) = catalog::average_width_em(&metrics.family) {
+                metrics.average_width_em = Some(average);
             }
         }
-
+        // Calibrated regular metrics remain authoritative when the selected
+        // East Asian family has no real bold face. Emboldening adds one design
+        // unit per glyph; a native bold member retains its measured advances.
+        let synthetic_bold_fonts = fonts.values().filter_map(|metrics| {
+            catalog::synthetic_bold_eligible(&metrics.family).then(|| {
+                let mut synthetic = metrics.clone();
+                synthetic.synthetic_bold_advance = 1.0 / f32::from(metrics.units_per_em);
+                (metrics.family.clone(), synthetic)
+            })
+        }).collect();
         Self {
             fonts,
             synthetic_bold_fonts,
@@ -1436,21 +1502,32 @@ impl FontMetricsRegistry {
         self.fonts.contains_key(&format!("{}{}", base, suffix))
     }
 
-    fn get_regular_with_synthetic_bold(&self, family: &str, bold: bool) -> &FontMetrics {
+    /// Whether the resolved regular face lacks a real East Asian bold member.
+    pub(crate) fn synthesizes_bold(&self, family: &str) -> bool {
+        let regular = self.get(family);
+        self.synthetic_bold_fonts.contains_key(&regular.family)
+            || catalog::synthetic_bold_eligible(&regular.family)
+    }
+
+    fn get_regular_with_synthetic_bold(&self, family: &str, bold: bool) -> FontMetricsRef<'_> {
         let regular = self.get(family);
         if bold {
             if let Some(synthetic) = self.synthetic_bold_fonts.get(&regular.family) {
-                return synthetic;
+                return (synthetic).into();
+            }
+            if let Some(synthetic) = catalog::resolve_synthetic_bold(&regular.family) {
+                return (synthetic).into();
             }
         }
         regular
     }
 
-    pub fn get_with_style(&self, family: &str, bold: bool, italic: bool) -> &FontMetrics {
+    pub fn get_with_style(&self, family: &str, bold: bool, italic: bool) -> FontMetricsRef<'_> {
+        if let Some(metrics) = runtime::resolve_registered(family, bold, italic) { return metrics; }
         if std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some()
             && normalize_family_name(family) == "Yu Mincho Regular"
         {
-            return self.get_regular_with_synthetic_bold(family, bold);
+            return (self.get_regular_with_synthetic_bold(family, bold)).into();
         }
 
         // A measured regular/bold face does not stand in for a missing italic
@@ -1461,7 +1538,7 @@ impl FontMetricsRegistry {
             && !self.table_has_styled_face(family, bold, italic)
         {
             if let Some(metrics) = catalog::resolve_styled(family, bold, italic) {
-                return metrics;
+                return (metrics).into();
             }
         }
 
@@ -1474,12 +1551,18 @@ impl FontMetricsRegistry {
             };
             if bold {
                 if let Some(m) = self.fonts.get(&format!("{} Bold Italic", base)) {
-                    return m;
+                    return (m).into();
                 }
             }
             if let Some(m) = self.fonts.get(&format!("{} Italic", base)) {
-                return m;
+                return (m).into();
             }
+        }
+        // A legacy bold alias or disk resolver can substitute another family
+        // when this family lacks a real bold member. Preserve its regular face
+        // and synthesize the requested weight before that weaker substitution.
+        if bold && catalog::synthetic_bold_eligible(family) {
+            return (self.get_regular_with_synthetic_bold(family, true)).into();
         }
         // S1171: every styled lookup above has missed, so the next line would
         // hand an ITALIC (or bold) run the REGULAR face's advances. That is not
@@ -1508,9 +1591,9 @@ impl FontMetricsRegistry {
             && !self.table_has_styled_face(family, bold, italic)
             && !self.has_gdi_widths(family)
         {
-            if let Some(m) = catalog::resolve(family, bold, italic)
+            if let Some(m) = catalog::resolve(family, bold, italic).map(FontMetricsRef::from)
                 .or_else(|| runtime::resolve(family, bold, italic)) {
-                return m;
+                return (m).into();
             }
         }
         self.get_with_bold(family, bold)
@@ -1519,13 +1602,17 @@ impl FontMetricsRegistry {
     /// Get metrics for a font family, considering bold to look up Bold variant.
     /// When bold is true and a "{family} Bold" or "{family} Demibold" variant exists,
     /// return that variant's metrics; otherwise fall back to the regular variant.
-    pub fn get_with_bold(&self, family: &str, bold: bool) -> &FontMetrics {
+    pub fn get_with_bold(&self, family: &str, bold: bool) -> FontMetricsRef<'_> {
+        if let Some(metrics) = runtime::resolve_registered(family, bold, false) { return metrics; }
         if std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some()
             && normalize_family_name(family) == "Yu Mincho Regular"
         {
-            return self.get_regular_with_synthetic_bold(family, bold);
+            return (self.get_regular_with_synthetic_bold(family, bold)).into();
         }
 
+        if bold && catalog::synthetic_bold_eligible(family) {
+            return (self.get_regular_with_synthetic_bold(family, true)).into();
+        }
         if bold {
             // Try Bold variant first
             let normalized = normalize_family_name(family);
@@ -1538,7 +1625,7 @@ impl FontMetricsRegistry {
                 normalized.clone()
             };
             if let Some(m) = self.fonts.get(&bold_name) {
-                return m;
+                return (m).into();
             }
             // Try Demibold for Mincho fonts
             let demi_name = if normalized.ends_with(" Regular") {
@@ -1547,30 +1634,31 @@ impl FontMetricsRegistry {
                 format!("{} Demibold", normalized)
             };
             if let Some(m) = self.fonts.get(&demi_name) {
-                return m;
+                return (m).into();
             }
         }
         self.get_regular_with_synthetic_bold(family, bold)
     }
 
     /// Get metrics for a font family. Falls back to default (Calibri) if not found.
-    pub fn get(&self, family: &str) -> &FontMetrics {
+    pub fn get(&self, family: &str) -> FontMetricsRef<'_> {
+        if let Some(metrics) = runtime::resolve_registered(family, false, false) { return metrics; }
         // S1272: a CJK table entry with no CJK advances answers the wrong
         // question -- read the installed face instead of returning it.
         if self.cjk_table_lacks_cjk_widths(family) {
-            if let Some(m) = catalog::resolve(family, false, false)
+            if let Some(m) = catalog::resolve(family, false, false).map(FontMetricsRef::from)
                 .or_else(|| runtime::resolve(family, false, false)) {
-                return m;
+                return (m).into();
             }
         }
         // Try exact match first
         if let Some(m) = self.fonts.get(family) {
-            return m;
+            return (m).into();
         }
         // Try normalized name
         let normalized = normalize_family_name(family);
         if let Some(m) = self.fonts.get(&normalized) {
-            return m;
+            return (m).into();
         }
         // Try base name
         let base = base_family_name(family);
@@ -1586,14 +1674,14 @@ impl FontMetricsRegistry {
             && self.fonts.contains_key(&base)
             && std::env::var_os("OXI_S1610_DISABLE").is_none()
         {
-            if let Some(m) = catalog::resolve(family, false, false)
+            if let Some(m) = catalog::resolve(family, false, false).map(FontMetricsRef::from)
                 .or_else(|| runtime::resolve(family, false, false))
             {
-                return m;
+                return (m).into();
             }
         }
         if let Some(m) = self.fonts.get(&base) {
-            return m;
+            return (m).into();
         }
         // S1070 (2026-08-05, opt-out OXI_S1070_DISABLE): an OOXML font name is
         // matched CASE-INSENSITIVELY by Word. technical__007b1621 writes
@@ -1611,7 +1699,7 @@ impl FontMetricsRegistry {
                     .iter()
                     .find(|(k, _)| k.as_str().eq_ignore_ascii_case(cand))
                 {
-                    return m;
+                    return (m).into();
                 }
             }
         }
@@ -1623,18 +1711,18 @@ impl FontMetricsRegistry {
         // outside the system font directory entirely. S1146 below is the right
         // answer only for a name Word could NOT resolve either.
         if !self.has_gdi_widths(family) {
-            if let Some(m) = catalog::resolve(family, false, false)
+            if let Some(m) = catalog::resolve(family, false, false).map(FontMetricsRef::from)
                 .or_else(|| runtime::resolve(family, false, false)) {
-                return m;
+                return (m).into();
             }
         }
         // Word substitutes this unavailable traditional Chinese face with
         // YaHei, for both its localized and English names. Keep a real Kai
         // face when present (all table/runtime lookups above take precedence).
         if matches!(family, "標楷體" | "DFKai-SB") {
-            if let Some(metrics) = self.fonts.get("Microsoft YaHei")
+            if let Some(metrics) = self.fonts.get("Microsoft YaHei").map(FontMetricsRef::from)
                 .or_else(|| runtime::resolve("Microsoft YaHei", false, false)) {
-                return metrics;
+                return (metrics).into();
             }
         }
         // S1146 (2026-08-16, opt-out OXI_S1146_DISABLE): a font Word cannot
@@ -1661,7 +1749,7 @@ impl FontMetricsRegistry {
             });
             let want = if cjk_named { "Yu Gothic Regular" } else { "Cambria" };
             if let Some(m) = self.fonts.get(want) {
-                return m;
+                return (m).into();
             }
         }
         // Fallback to default
@@ -1670,7 +1758,7 @@ impl FontMetricsRegistry {
                 .values()
                 .next()
                 .expect("FontMetricsRegistry has no fonts loaded")
-        })
+        }).into()
     }
 
     /// S1008: true when `family` resolves to a REAL registry entry (exact /
@@ -1678,6 +1766,7 @@ impl FontMetricsRegistry {
     /// decide whether a fontTable `w:altName` substitution should fire (source
     /// unsupported → alternate supported).
     pub(crate) fn supports_family(&self, family: &str) -> bool {
+        if runtime::has_registered_family(family) { return true; }
         if self.fonts.contains_key(family)
             || self.fonts.contains_key(&normalize_family_name(family))
             || self.fonts.contains_key(&base_family_name(family))
@@ -1703,7 +1792,7 @@ impl FontMetricsRegistry {
     }
 
     /// Get the default font metrics (Calibri).
-    pub fn default_metrics(&self) -> &FontMetrics {
+    pub fn default_metrics(&self) -> FontMetricsRef<'_> {
         self.get(&self.default_family)
     }
 
@@ -1741,6 +1830,11 @@ impl FontMetricsRegistry {
         }
 
         // S1330: zero-width format characters advance nothing on every path.
+        if is_nonspacing_kana_mark(c)
+            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+        {
+            return 0.0;
+        }
         if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
             return 0.0;
         }
@@ -1748,7 +1842,7 @@ impl FontMetricsRegistry {
             // Resolve the original face so each path applies the synthetic
             // advance once, after its normal hinting/fallback calculation.
             let regular = self.get(&metrics.family);
-            return self.char_width_pt_with_fallback(c, font_size, regular)
+            return self.char_width_pt_with_fallback(c, font_size, &regular)
                 + metrics.synthetic_bold_advance * font_size;
         }
         // S888/S892: see char_width_pt_with_gdi_map — U+2011 = the hyphen
@@ -1924,6 +2018,11 @@ impl FontMetricsRegistry {
         }
 
         // S1330: zero-width format characters advance nothing on every path.
+        if is_nonspacing_kana_mark(c)
+            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+        {
+            return 0.0;
+        }
         if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
             return 0.0;
         }
@@ -1931,7 +2030,7 @@ impl FontMetricsRegistry {
             // Resolve the original face so each path applies the synthetic
             // advance once, after its normal hinting/fallback calculation.
             let regular = self.get(&metrics.family);
-            return self.char_width_pt_with_gdi_map(c, font_size, regular, gdi_map)
+            return self.char_width_pt_with_gdi_map(c, font_size, &regular, gdi_map)
                 + metrics.synthetic_bold_advance * font_size;
         }
         // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen mapping)
@@ -2498,6 +2597,12 @@ pub fn is_complex_script(c: char) -> bool {
     matches!(c as u32, 0x0900..=0x097F)
 }
 
+/// Japanese nonspacing voicing marks keep their ink and attach to the base.
+/// The spacing counterparts U+309B/U+309C still occupy their ordinary cell.
+pub fn is_nonspacing_kana_mark(c: char) -> bool {
+    matches!(c, '\u{3099}' | '\u{309A}')
+}
+
 /// S1330: Unicode format characters that occupy no advance and leave no ink.
 pub fn is_zero_width_char(c: char) -> bool {
     matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
@@ -2584,7 +2689,7 @@ mod tests {
         .unwrap();
         let registry = FontMetricsRegistry::load();
         for case in cases {
-            let mut metrics = registry.get("Calibri").clone();
+            let mut metrics = (*registry.get("Calibri")).clone();
             let upm = f32::from(case.upm);
             metrics.units_per_em = case.upm;
             metrics.win_ascent = case.win[0] / upm;
@@ -2644,7 +2749,7 @@ mod tests {
         for (c, name) in cps {
             eprintln!(
                 "[DEVA] U+{:04X} {:<14} in_table={} width_pt={:.4}",
-                *c as u32, name, has(*c), reg.char_width_pt_with_fallback(*c, fs, m)
+                *c as u32, name, has(*c), reg.char_width_pt_with_fallback(*c, fs, &m)
             );
         }
         // Devanagari font line-box metrics (deriving Word's uniform ~1.685em).
@@ -2662,7 +2767,7 @@ mod tests {
         // Which faces do the REAL corpus fonts resolve to?
         for f in ["Akshar", "Mangal", "Arial Unicode MS", "Kokila", "Utsaah", "Aparajita"] {
             let r = reg.get(f);
-            let ka = reg.char_width_pt_with_fallback('\u{0915}', fs, r);
+            let ka = reg.char_width_pt_with_fallback('\u{0915}', fs, &r);
             eprintln!("[DEVA] cs-font {:<16} -> family='{}' upm={} ka_width={:.3} has_ka={}",
                 f, r.family, r.units_per_em, ka, r.char_widths.contains_key(&'\u{0915}'));
         }
@@ -2671,7 +2776,7 @@ mod tests {
             "\u{0930}\u{093E}\u{0937}\u{094D}\u{091F}\u{094D}\u{0930}\u{0940}\u{092F}",
             "\u{092D}\u{093E}\u{0930}\u{0924}", "\u{0938}\u{0930}\u{0915}\u{093E}\u{0930}"];
         for w in words {
-            let sum: f32 = w.chars().map(|c| reg.char_width_pt_with_fallback(c, fs, m)).sum();
+            let sum: f32 = w.chars().map(|c| reg.char_width_pt_with_fallback(c, fs, &m)).sum();
             eprintln!("[DEVA] word {:?} nchars={} oxi_sum_width_pt={:.3}", w, w.chars().count(), sum);
         }
     }

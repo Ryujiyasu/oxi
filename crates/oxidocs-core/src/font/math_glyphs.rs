@@ -114,6 +114,9 @@ impl MathAdvances {
 
     /// Advance width in EM units, or None when the face has no such glyph.
     pub fn advance_em(&self, c: char) -> Option<f32> {
+        if super::runtime::resolve_registered("Cambria Math", false, false).is_some() {
+            return super::runtime::registered_glyph("Cambria Math", false, false, c, 0).map(|g| g.advance_em);
+        }
         self.adv
             .get(&(c as u32))
             .map(|du| *du as f32 / self.upm)
@@ -170,12 +173,20 @@ impl MathGlyphTables {
     /// Returns None when the character has no entry (geometric bbox can
     /// be used as a fallback in that case).
     pub fn italic_correction(&self, c: char) -> Option<i32> {
+        if let Some(metrics) = super::runtime::resolve_registered("Cambria Math", false, false) {
+            let g = super::runtime::registered_glyph("Cambria Math", false, false, c, 0)?;
+            return Some((g.italic_correction_em * f32::from(metrics.units_per_em)).round() as i32);
+        }
         self.italic_corr.get(&(c as u32)).copied()
     }
 
     /// Top-accent attachment horizontal offset in design units.
     /// When None, use half the glyph advance as geometric center.
     pub fn top_accent_attachment(&self, c: char) -> Option<i32> {
+        if let Some(metrics) = super::runtime::resolve_registered("Cambria Math", false, false) {
+            let g = super::runtime::registered_glyph("Cambria Math", false, false, c, 0)?;
+            return Some((g.top_accent_attachment_em? * f32::from(metrics.units_per_em)).round() as i32);
+        }
         self.top_accent.get(&(c as u32)).copied()
     }
 

@@ -10,6 +10,7 @@ repository = "https://github.com/Ryujiyasu/oxi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ttf-parser = "=0.25.1"
 oxidocs-core = { version = "0.8.2", path = "../oxidocs-core" }
 oxidocs-fonts = { version = "0.8.2", path = "../oxidocs-fonts" }
 oxicells-core = { version = "0.8.2", path = "../oxicells-core", optional = true }

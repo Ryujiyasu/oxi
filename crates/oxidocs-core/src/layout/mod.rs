@@ -15,8 +15,12 @@ mod line_break;
 mod table_fit;
 mod page;
 mod paragraph;
+mod cell_context;
+mod style_reference;
+mod style_pagination;
+pub use style_reference::FieldLanguage;
 
-use crate::font::{FontMetrics, FontMetricsRegistry};
+use crate::font::{FontMetrics, FontMetricsRef, FontMetricsRegistry};
 use crate::ir::*;
 
 /// Pre-allocated single-character strings to avoid heap allocation in hot loops.
@@ -453,34 +457,46 @@ fn s1167_em_ref(
         .fold(f32::INFINITY, f32::min)
 }
 
-/// The visible glyph sizes on a counted cell line, or its paragraph mark
-/// when tabs are its only content. Tab advances still participate in wrapping.
+/// Keep the formatting run that supplied each counted character. Font size
+/// alone does not identify its line metrics: two faces can share the same size.
+#[derive(Clone)]
+struct CellFitChar {
+    compression: crate::layout::jc_both_compress::CharContext,
+    run_index: usize,
+}
+impl std::ops::Deref for CellFitChar {
+    type Target = crate::layout::jc_both_compress::CharContext;
+    fn deref(&self) -> &Self::Target { &self.compression }
+}
+
+/// The visible formatting runs on a counted line, or its paragraph mark when
+/// tabs are its only content. Tab advances still participate in wrapping.
 struct CellLineSample {
-    font_sizes: Vec<f32>,
+    run_indices: Vec<usize>,
     uses_paragraph_mark: bool,
 }
 impl CellLineSample {
     fn from_chars<'a>(
-        chars: impl Iterator<Item = &'a crate::layout::jc_both_compress::CharContext>,
-        tab_sizes: &[f32],
-        keep_tab_sizes: bool,
+        chars: impl Iterator<Item = &'a CellFitChar>,
+        tab_runs: &[usize],
+        keep_tab_runs: bool,
     ) -> Self {
         let chars: Vec<_> = chars.collect();
         let has_visible = chars.iter().any(|c| !matches!(c.ch, ' ' | '\t'));
-        let mut font_sizes = Vec::new();
-        let mut has_tab = !tab_sizes.is_empty();
+        let mut run_indices = Vec::new();
+        let mut has_tab = !tab_runs.is_empty();
         for c in chars {
-            if !keep_tab_sizes && has_visible && c.ch == ' ' { continue; }
+            if !keep_tab_runs && has_visible && c.ch == ' ' { continue; }
             if c.ch == '\t' {
                 has_tab = true;
-                if keep_tab_sizes { font_sizes.push(c.font_size); }
-            } else {
-                font_sizes.push(c.font_size);
-            }
+                if keep_tab_runs { run_indices.push(c.run_index); }
+            } else { run_indices.push(c.run_index); }
         }
-        if keep_tab_sizes { font_sizes.extend_from_slice(tab_sizes); }
-        let uses_paragraph_mark = !keep_tab_sizes && font_sizes.is_empty() && has_tab;
-        Self { font_sizes, uses_paragraph_mark }
+        if keep_tab_runs { run_indices.extend_from_slice(tab_runs); }
+        run_indices.sort_unstable();
+        run_indices.dedup();
+        let uses_paragraph_mark = !keep_tab_runs && run_indices.is_empty() && has_tab;
+        Self { run_indices, uses_paragraph_mark }
     }
 }
 
@@ -632,6 +648,7 @@ fn autospace_cell_segments(
     grid_latin_em: bool,
     grid_kern: bool,
     char_width_adjustments: &[f32],
+    natural_gaps_after: &[f32],
 ) -> Option<Vec<(String, f32, f32)>> {
     if let Some((pitch, ratio, balance, scale)) = grid {
         let chars: Vec<char> = text.chars().collect();
@@ -668,7 +685,7 @@ fn autospace_cell_segments(
                 let bi = kinsoku::is_cjk_ideograph_or_kana(ch);
                 if (de && ((ai && ch.is_ascii_alphabetic()) || (a.is_ascii_alphabetic() && bi)))
                     || (dn && ((ai && ch.is_ascii_digit()) || (a.is_ascii_digit() && bi))) {
-                    x += gap_override.unwrap_or_else(|| s546_autospace_extra(fs));
+                    x += gap_override.or_else(|| natural_gaps_after.get(i-1).copied()).unwrap_or_else(|| s546_autospace_extra(fs));
                 }
             }
             let width = base * scale + extra + cs_render
@@ -721,7 +738,7 @@ fn autospace_cell_segments(
     for i in 0..chars.len() {
         if i > 0 && split_before[i] {
             segs.push((std::mem::take(&mut seg), seg_x, seg_w));
-            seg_x += seg_w + if joint_before[i] { aki } else { 0.0 };
+            seg_x += seg_w + if joint_before[i] { gap_override.or_else(|| natural_gaps_after.get(i-1).copied()).unwrap_or(aki) } else { 0.0 };
             seg_w = 0.0;
         }
         seg_w += if balanced[i] { fs * 0.5 + metrics.synthetic_bold_advance * fs }
@@ -1957,7 +1974,8 @@ fn merge_marked_paragraph_breaks(doc: &mut Document, final_view: bool) {
             }
         }
     }
-    fn visit(blocks: &mut Vec<Block>, final_view: bool) {
+    fn visit(blocks: &mut Vec<Block>, final_view: bool) -> Vec<usize> {
+        let mut removed = Vec::new();
         for block in blocks.iter_mut() {
             if let Block::Table(t) = block {
                 for row in &mut t.rows {
@@ -2002,6 +2020,7 @@ fn merge_marked_paragraph_breaks(doc: &mut Document, final_view: bool) {
                     continue;
                 }
             };
+            removed.push(i - 1);
             // An empty removed break before a table contributes no line box.
             // Keep its zero-width anchors on the following cell paragraph.
             let next = match &mut blocks[i - 1] {
@@ -2019,8 +2038,41 @@ fn merge_marked_paragraph_breaks(doc: &mut Document, final_view: bool) {
                 next.runs = runs;
             }
         }
+        removed
     }
-    for_each_block_tree(doc, |blocks| visit(blocks, final_view));
+    for page in &mut doc.pages {
+        let removed = visit(&mut page.blocks, final_view);
+        // Section transitions and anchors address the original body block list.
+        // A removed mark and its successor now address the same merged block.
+        let remap = |index: usize| index - removed.iter().filter(|&&r| r < index).count();
+        for run in &mut page.column_runs { run.0 = remap(run.0); }
+        for run in &mut page.page_number_runs { run.0 = remap(run.0); }
+        for run in &mut page.margin_runs { run.0 = remap(run.0); }
+        for run in &mut page.vertical_runs { run.0 = remap(run.0); }
+        for run in &mut page.grid_runs { run.0 = remap(run.0); }
+        for run in &mut page.section_grid_runs { run.block_start = remap(run.block_start); }
+        for run in &mut page.grid_char_runs { run.0 = remap(run.0); }
+        for run in &mut page.grid_char_quantized_runs { run.0 = remap(run.0); }
+        for image in &mut page.floating_images { image.anchor_block_index = remap(image.anchor_block_index); }
+        for shape in &mut page.shapes { shape.anchor_block_index = remap(shape.anchor_block_index); }
+        for tb in &mut page.text_boxes {
+            tb.anchor_block_index = remap(tb.anchor_block_index);
+            visit(&mut tb.blocks, final_view);
+        }
+        for blocks in [&mut page.header, &mut page.footer, &mut page.header_first,
+                       &mut page.footer_first, &mut page.header_even, &mut page.footer_even] {
+            visit(blocks, final_view);
+        }
+        for run in &mut page.header_runs {
+            run.block_start = remap(run.block_start);
+            for blocks in [&mut run.header, &mut run.footer, &mut run.header_first,
+                           &mut run.footer_first, &mut run.header_even, &mut run.footer_even] {
+                visit(blocks, final_view);
+            }
+        }
+        for note in &mut page.footnotes { visit(&mut note.blocks, final_view); }
+        for note in &mut page.endnotes { visit(&mut note.blocks, final_view); }
+    }
 }
 
 fn apply_revision_styling_to_run(
@@ -2294,6 +2346,106 @@ fn dbg_page_push(n_before: usize, n_elems: usize) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FlowAnchorGeometry {
+    page:usize,
+    paragraph_y:f32,
+    line_y:f32,
+    column_x:f32,
+    column_width:f32,
+}
+
+#[derive(Default)]
+struct FloatSourceAnchors {
+    known:std::collections::BTreeMap<(usize,usize),FlowAnchorGeometry>,
+    observed:std::collections::BTreeMap<(usize,usize),FlowAnchorGeometry>,
+    seen:std::collections::HashSet<Vec<(usize,usize,usize,u32,u32,u32,u32)>>,
+}
+
+fn flow_source_offset(paragraph:&Paragraph, point:&FlowSourcePoint)->usize {
+    paragraph.runs.iter().take(point.run_index).map(|run|run.text.chars().count()).sum::<usize>()
+        +point.char_offset
+}
+
+fn source_positioned_image(image:&Image,page:&Page)->bool {
+    if !matches!(image.wrap_type,Some(crate::ir::WrapType::Square)|Some(crate::ir::WrapType::Tight)){return false;}
+    let Some(position)=image.position.as_ref()else{return false};
+    let Some(point)=position.flow_source.as_ref()else{return false};
+    let Some(Block::Paragraph(paragraph))=page.blocks.get(image.anchor_block_index)else{return false};
+    // At the paragraph's source start the established paragraph-origin
+    // reservation already names the exact same insertion point. Retain its
+    // fitting contract; a later point or a line origin needs source flow.
+    flow_source_offset(paragraph,point)>0 || position.v_relative.as_deref()==Some("line")
+}
+
+impl FloatSourceAnchors {
+    fn advance(&mut self)->bool {
+        if self.known==self.observed{return false;}
+        let state=self.observed.iter().map(|(&(ir,index),geometry)|
+            (ir,index,geometry.page,geometry.paragraph_y.to_bits(),geometry.line_y.to_bits(),
+             geometry.column_x.to_bits(),geometry.column_width.to_bits())).collect::<Vec<_>>();
+        if !self.seen.insert(state){
+            eprintln!("[SOURCE-ANCHOR-CYCLE] wrapping and source attachment have not converged");
+            return false;
+        }
+        self.known=self.observed.clone();true
+    }
+
+    fn observe(&mut self,ir:usize,page:&Page,pages:&[LayoutPage],col_x:&[f32],col_width:&[f32]) {
+        for (index,image)in page.floating_images.iter().enumerate(){
+            if !source_positioned_image(image,page){continue;}
+            let Block::Paragraph(paragraph)=&page.blocks[image.anchor_block_index]else{continue};
+            let point=image.position.as_ref().unwrap().flow_source.as_ref().unwrap();
+            let offset=flow_source_offset(paragraph,point);
+            let terminal=paragraph.runs.iter().map(|run|run.text.chars().count()).sum::<usize>();
+            let mut positions=Vec::new();
+            for (pi,layout_page)in pages.iter().enumerate(){
+                for element in &layout_page.elements{
+                    if element.paragraph_index!=Some(image.anchor_block_index)
+                        ||element.cell_paragraph_index.is_some()||element.flow_line_offset!=0.0{continue;}
+                    let LayoutContent::Text{text,..}=&element.content else{continue};
+                    let source=match(element.run_index,element.char_offset){
+                        (Some(run),Some(character))=>FlowSourcePoint{run_index:run,char_offset:character},
+                        _ if text.is_empty()=>FlowSourcePoint{run_index:paragraph.runs.len(),char_offset:0},
+                        _=>continue,
+                    };
+                    let start=flow_source_offset(paragraph,&source);
+                    let length=element.source_char_len.unwrap_or_else(||text.chars().count());
+                    let column=col_x.iter().rposition(|x|element.x>=*x-0.8).unwrap_or(0);
+                    positions.push((start,start+length,pi,column,element.y));
+                }
+            }
+            // Prefer the source character at the insertion point, including
+            // real empty boundary carets. At the source end retain the last
+            // touched line, rather than guessing from paragraph page count.
+            let selected=positions.iter().find(|&&(start,end,_,_,_)|start<=offset&&offset<end)
+                .or_else(||positions.iter().find(|&&(start,end,_,_,_)|start==offset&&end==offset))
+                .or_else(||positions.iter().rev().find(|&&(_,end,_,_,_)|end==offset))
+                .or_else(||positions.iter().filter(|&&(start,_,_,_,_)|start>=offset).min_by_key(|p|p.0))
+                .or_else(||(offset>=terminal).then(||positions.last()).flatten());
+            let Some(&(_,_,pi,column,line_y))=selected else{continue};
+            let paragraph_y=positions.iter().filter(|p|p.2==pi&&p.3==column).map(|p|p.4).fold(f32::INFINITY,f32::min);
+            self.observed.insert((ir,index),FlowAnchorGeometry{page:pi,paragraph_y,line_y,
+                column_x:col_x.get(column).copied().unwrap_or(page.margin.left),
+                column_width:col_width.get(column).copied().unwrap_or(page.size.width-page.margin.left-page.margin.right)});
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FootnoteBoundary { active: bool, automatic_numbering: bool }
+impl From<bool> for FootnoteBoundary {
+    fn from(active: bool) -> Self { Self { active, automatic_numbering: true } }
+}
+
+/// A selected OpenType glyph from the text element's resolved font face.
+/// Bounds are normalized font coordinates: xMin, yMin, xMax, yMax.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct FontGlyph {
+    pub index: u16,
+    pub bounds_em: [f32; 4],
+}
+
 #[derive(Clone)]
 pub struct LayoutElement {
     pub x: f32,
@@ -2315,6 +2467,19 @@ pub struct LayoutElement {
     pub source_text: Option<String>,
     /// Number of source characters touched by the fragment, including expanded glyphs.
     pub source_char_len: Option<usize>,
+    /// Stable source container index; paragraph_index is local to this container.
+    pub source_container_index: Option<usize>,
+    /// Complete body paragraph source extent: (characters, flow controls).
+    /// Floating objects and painted case expansions do not add source characters.
+    pub source_paragraph_extent: Option<(usize, usize)>,
+    /// Number of source column controls, distinct from page and soft controls.
+    pub source_paragraph_column_controls: Option<usize>,
+    /// First 64 original source characters, including unpainted flow controls.
+    /// This is paragraph provenance, separate from each painted fragment's source_text.
+    pub source_paragraph_prefix: Option<String>,
+    /// A source object attaches before this unpainted boundary caret.
+    /// This is source attachment provenance, never a painted source character.
+    pub source_boundary_attachment: bool,
     /// R7.32 (Day 33 part 72, 2026-05-13): paragraph index within a table cell
     /// (0-based, counts only Block::Paragraph blocks in document order).
     /// `paragraph_index` alone is shared across all cells of the table, so
@@ -2368,6 +2533,8 @@ pub struct LayoutElement {
     pub text_y_off: f32,
     /// Explicit text baseline in points below the element origin.
     pub baseline_offset: Option<f32>,
+    /// Paint this glyph index instead of mapping the source text through cmap.
+    pub font_glyph: Option<FontGlyph>,
     /// Vertical displacement of an annotation from its parent flow line.
     /// Private replay identity and the original cell-relative line coordinate.
     cell_float_fragment: Option<(std::sync::Arc<()>, f32)>,
@@ -2439,6 +2606,11 @@ impl LayoutElement {
             char_offset: None,
             source_text: None,
             source_char_len: None,
+            source_container_index: None,
+            source_paragraph_extent: None,
+            source_paragraph_column_controls: None,
+            source_paragraph_prefix: None,
+            source_boundary_attachment: false,
             cell_paragraph_index: None,
             cell_row_index: None,
             cell_col_index: None,
@@ -2450,6 +2622,7 @@ impl LayoutElement {
             vmerge_flow_element: None,
             text_y_off: 0.0,
             baseline_offset: None,
+            font_glyph: None,
             cell_float_fragment: None,
             cell_float_row_bound: false,
             flow_line_offset: 0.0,
@@ -2483,6 +2656,11 @@ impl LayoutElement {
             char_offset: Some(char_offset),
             source_text: None,
             source_char_len: None,
+            source_container_index: None,
+            source_paragraph_extent: None,
+            source_paragraph_column_controls: None,
+            source_paragraph_prefix: None,
+            source_boundary_attachment: false,
             cell_paragraph_index: None,
             cell_row_index: None,
             cell_col_index: None,
@@ -2494,6 +2672,7 @@ impl LayoutElement {
             vmerge_flow_element: None,
             text_y_off: 0.0,
             baseline_offset: None,
+            font_glyph: None,
             cell_float_fragment: None,
             cell_float_row_bound: false,
             flow_line_offset: 0.0,
@@ -2695,6 +2874,7 @@ struct S755Geom {
 
 impl S755Geom {
     fn top(&self, page_no: usize) -> f32 {
+        if let Some((top, _)) = style_pagination::geometry(page_no) { return top; }
         if let Some((n, top, _)) = self.page_override {
             if n == page_no { return top; }
         }
@@ -2707,6 +2887,7 @@ impl S755Geom {
         }
     }
     fn ch(&self, page_no: usize) -> f32 {
+        if let Some((_, height)) = style_pagination::geometry(page_no) { return height; }
         if let Some((n, _, height)) = self.page_override {
             if n == page_no { return height; }
         }
@@ -2836,6 +3017,7 @@ impl BodyWrapPolicy {
 }
 
 pub struct LayoutEngine {
+    field_language: FieldLanguage,
     default_font_size: f32,
     cell_end_style_id: Option<String>,
     cell_default_style_id: Option<String>,
@@ -2897,6 +3079,9 @@ pub struct LayoutEngine {
     /// S833: settings.xml footnotePr declares custom special footnotes ->
     /// the declared-separator reservation model (see footnote_sep_alloc).
     fn_special_declared: bool,
+    // Footnote paragraphs form one story across body sections and pages.
+    // Preserve the preceding note's paragraph spacing when laying out a note.
+    footnote_previous_style: std::collections::HashMap<u32, ParagraphStyle>,
     /// S1257: the endnote separator note declares a real `<w:separator/>`.
     endnote_sep_line: bool,
     /// w:characterSpacingControl: enable yakumono (CJK punctuation) compression
@@ -2922,6 +3107,7 @@ pub struct LayoutEngine {
     balance_single_byte_double_byte_width: bool,
     keep_floating_tables_together: bool,
     preserve_same_style_cell_spacing: bool,
+    additive_paragraph_spacing: bool,
     /// R-05b: when the document has any comments, the body's available width
     /// is reduced by this many points to make room for the right-margin
     /// balloon column. 0.0 when the document has no comments. Set in
@@ -3273,6 +3459,10 @@ thread_local! {
     /// float hosted by the paragraph currently in layout_paragraph -- the
     /// band is applied per line there instead of reserved before the block.
     static S1497_BAND: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
+    /// Full-width vAnchor="text" frame that starts BELOW the flow cursor:
+    /// (page index, band top, band bottom). Body lines above it stay; a line
+    /// that would cross it moves below it (page.rs sets, paragraph.rs reads).
+    static TEXT_FRAME_EXCLUSION: std::cell::Cell<Option<(usize, f32, f32)>> = const { std::cell::Cell::new(None) };
     // S1501 (2026-09-20, default ON, opt-out OXI_S1501_DISABLE): an empty
     // sectPr-carrier paragraph that is the FIRST block of a fresh page keeps
     // its line (Word: policies__0c94a7 p3 -- a nextPage section holding only
@@ -3522,6 +3712,7 @@ impl LayoutEngine {
             hyphenation_zone: 18.0,
             settings_part_exists: true,
             fn_special_declared: false,
+            footnote_previous_style: std::collections::HashMap::new(),
             endnote_sep_line: false,
             compress_punctuation: false,
             wp_justification: false,
@@ -3530,7 +3721,9 @@ impl LayoutEngine {
             balance_single_byte_double_byte_width: false,
             keep_floating_tables_together: false,
             preserve_same_style_cell_spacing: false,
+            additive_paragraph_spacing: false,
             balloon_column_width: 0.0,
+            field_language: FieldLanguage::default(),
             show_comments: true,
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: false,
@@ -3539,6 +3732,13 @@ impl LayoutEngine {
             lrpb_count_distrust: std::cell::Cell::new(false),
             doc_grid_all_no_type: false,
         }
+    }
+
+    /// Select the application's language for field names and diagnostics.
+    /// Document content language does not select application UI language.
+    pub fn with_field_language(mut self, language: FieldLanguage) -> Self {
+        self.field_language = language;
+        self
     }
 
     /// S-01 setter: toggle whether comments / balloons / range highlight render.
@@ -3624,7 +3824,21 @@ impl LayoutEngine {
             .styles
             .doc_default_run_style
             .as_ref()
-            .and_then(|s| s.font_family.clone());
+            .and_then(|s| s.font_family.clone())
+            .or_else(|| {
+                // A declared paragraph root without a Latin face uses the
+                // legacy application face. Resolve it without manufacturing
+                // document-declared run properties in the parser's IR.
+                doc.styles.default_paragraph_style_id.as_ref()?;
+                let cjk_language = doc.styles.doc_default_run_style.as_ref()
+                    .and_then(|root| root.latin_lang.as_deref())
+                    .is_some_and(|language| {
+                        let language = language.to_ascii_lowercase();
+                        ["ja", "zh", "ko", "yue"].iter()
+                            .any(|prefix| language.starts_with(prefix))
+                    });
+                (!cjk_language).then(|| "Times New Roman".to_owned())
+            });
         let default_font_family_east_asia = doc
             .styles
             .doc_default_run_style
@@ -3700,6 +3914,24 @@ impl LayoutEngine {
             hyphenation_zone: doc.hyphenation_zone.unwrap_or(18.0),
             settings_part_exists: doc.settings_part_exists,
             fn_special_declared: doc.fn_special_declared,
+            footnote_previous_style: {
+                let mut result = std::collections::HashMap::new();
+                let mut seen = std::collections::HashSet::new();
+                let mut previous: Option<ParagraphStyle> = None;
+                for note in doc.pages.iter().flat_map(|page| page.footnotes.iter()) {
+                    if note.number >= u32::MAX - 2 || !seen.insert(note.number) {
+                        continue;
+                    }
+                    if let Some(style) = &previous {
+                        result.insert(note.number, style.clone());
+                    }
+                    previous = note.blocks.last().and_then(|block| match block {
+                        Block::Paragraph(p) => Some(p.style.clone()),
+                        _ => None,
+                    });
+                }
+                result
+            },
             endnote_sep_line: doc.endnote_sep_line,
             compress_punctuation: doc.compress_punctuation,
             wp_justification: doc.wp_justification,
@@ -3710,6 +3942,7 @@ impl LayoutEngine {
             balance_single_byte_double_byte_width: doc.balance_single_byte_double_byte_width,
             keep_floating_tables_together: doc.keep_floating_tables_together,
             preserve_same_style_cell_spacing: doc.preserve_same_style_cell_spacing,
+            additive_paragraph_spacing: doc.additive_paragraph_spacing,
             // R-05b: 293.8pt balloon column + 24pt buffer between body and
             // balloon = 317.8pt total. Width is COM-confirmed (fixture_01
             // pixel pass, 2026-04-25); buffer is approximate and refined as
@@ -3719,6 +3952,7 @@ impl LayoutEngine {
             } else {
                 293.8 + 24.0
             },
+            field_language: FieldLanguage::default(),
             show_comments: true,
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: doc
@@ -3761,6 +3995,13 @@ impl LayoutEngine {
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
+        let math_font_doc;
+        let doc=if document_has_math_font_runs(doc) {
+            let mut copy=doc.clone();
+            for_each_block_tree(&mut copy,|blocks|self.resolve_math_fonts_in_blocks(blocks));
+            math_font_doc=copy; &math_font_doc
+        }else{doc};
+
         // S1498 (2026-09-20, default ON, opt-out OXI_S1498_DISABLE): a text box
         // with bodyPr <a:spAutoFit/> is as tall as its content plus the
         // top/bottom insets, whatever cy says. Word COM Shape.Height
@@ -3903,16 +4144,29 @@ impl LayoutEngine {
     fn layout_pass(&self, doc: &Document) -> LayoutResult {
         let mut columns = GridColumnSearch::default();
         columns.enabled = std::env::var("OXI_AUTO_GRID_COLUMNS").is_ok();
+        let mut references = style_pagination::StylePagination::default();
+        let mut source_anchors=FloatSourceAnchors::default();
         loop {
             columns.observed.clear();
-            let result = self.layout_pass_with_columns(doc, &mut columns);
-            if !columns.advance() { return result; }
+            references.observed.clear();
+            source_anchors.observed.clear();
+            let result = self.layout_pass_with_columns(doc, &mut columns, &mut references, &mut source_anchors);
+            let columns_changed = columns.advance();
+            let references_changed = references.advance();
+            let source_anchors_changed=source_anchors.advance();
+            if !columns_changed && !references_changed && !source_anchors_changed { return result; }
         }
     }
 
-    fn layout_pass_with_columns(&self, doc: &Document, columns: &mut GridColumnSearch) -> LayoutResult {
+    fn layout_pass_with_columns(&self, doc: &Document, columns: &mut GridColumnSearch, references: &mut style_pagination::StylePagination, source_anchors: &mut FloatSourceAnchors) -> LayoutResult {
         // Pre-pass: resolve fitText runs using actual font metrics
         let mut doc_resolved = doc.clone();
+        // Contextual spacing follows neighboring source paragraphs across
+        // cell and nested-table boundaries. Resolve it on the layout copy
+        // before any measurement or replay, retaining the authored IR.
+        if std::env::var_os("OXI_CELL_SOURCE_CONTEXT_DISABLE").is_none() {
+            cell_context::apply(&mut doc_resolved, self.cell_end_style_id.as_deref());
+        }
         // Word preserves the declared top margin for CJK text as well. Fresh
         // PDF probes with 72.1/72.25/72.4pt origins (no grid, lines, and
         // linesAndChars) move their baselines by 0.12pt steps, the PDF device
@@ -4037,6 +4291,16 @@ impl LayoutEngine {
                     || Self::s1174_has_ref(&p.footer_even)
             });
         S1174_ACTIVE.with(|c| c.set(s1174_doc_active));
+        style_reference::initialize(&doc_resolved.styles, self.field_language);
+        if s1174_doc_active {
+            references.initialize(&doc_resolved);
+            // A style reference searches the complete body story, including
+            // preceding and following sections. An applied empty paragraph
+            // is a real occurrence and can resolve the field to empty text.
+            for page in &doc_resolved.pages {
+                for block in &page.blocks { Self::s1174_ingest_block(block, true); }
+            }
+        }
         // S1291 needs a TRUSTWORTHY logical page number, and there is one case
         // where Oxi cannot produce it: a CONTINUOUS section that carries its own
         // `<w:pgNumType w:start>`. The S560 merge folds that section into the
@@ -4181,7 +4445,37 @@ impl LayoutEngine {
                     }
                 }
             }
-            let laid_out = self.layout_page(page, &mut logical_prev, ir_idx, columns);
+            let mut laid_out = self.layout_page(page, &mut logical_prev, ir_idx, columns, references, source_anchors);
+            // Keep hit-testing provenance stable across pagination and sections.
+            // Source extents describe the paragraph, not an individual page fragment.
+            let source_extents: Vec<_> = page.blocks.iter().map(|block| {
+                if let Block::Paragraph(paragraph) = block {
+                    let (count, controls, columns) = paragraph.runs.iter()
+                        .flat_map(|run| run.text.chars())
+                        .fold((0usize, 0usize, 0usize), |(count, controls, columns), ch| {
+                            (count + 1, controls + usize::from(matches!(ch, '\x0C' | '\x0B' | '\n' | '\r')),
+                                columns + usize::from(ch == '\x0B'))
+                        });
+                    let prefix: String = paragraph.runs.iter().flat_map(|run| run.text.chars()).take(64).collect();
+                    Some((count, controls, columns, prefix))
+                } else { None }
+            }).collect();
+            for physical_page in &mut laid_out {
+                for element in &mut physical_page.elements {
+                    if let Some(index) = element.paragraph_index {
+                        element.source_container_index = Some(ir_idx);
+                        if element.cell_paragraph_index.is_none()
+                            && element.cell_row_index.is_none()
+                            && element.cell_col_index.is_none() {
+                            if let Some((count, controls, columns, prefix)) = source_extents.get(index).and_then(Option::as_ref) {
+                                element.source_paragraph_extent = Some((*count, *controls));
+                                element.source_paragraph_column_controls = Some(*columns);
+                                element.source_paragraph_prefix = Some(prefix.clone());
+                            }
+                        }
+                    }
+                }
+            }
             if std::env::var("OXI_DBG_IRPAGES").is_ok() {
                 eprintln!(
                     "[IRPAGE] ir={} blocks={} pages={} (cum_before={})",
@@ -4307,7 +4601,7 @@ impl LayoutEngine {
                         // CrossRef (S685) / Cached (S708): the display text is the cached
                         // result run («第１９条» / «2026/06/30»), a SEPARATE element; this
                         // instruction element is empty — skip it.
-                        FieldType::CrossRef | FieldType::Cached => continue,
+                        FieldType::CrossRef | FieldType::Cached | FieldType::CustomNoteReference => continue,
                     };
                     if &new_text != text {
                         // Estimate new width: each digit is ~size/2 pt for typical fonts.
@@ -4442,6 +4736,21 @@ impl LayoutEngine {
         run_style: &'a RunStyle,
         para_style: &'a ParagraphStyle,
     ) -> Option<&'a str> {
+        // Use the declared complex-script face for shaping and drawing when
+        // it covers the supported script. Keep Latin and East Asian routing
+        // and the separate line-box metrics unchanged.
+        if std::env::var("OXI_DEVA_DISABLE").is_err()
+            && text.chars().any(crate::font::is_complex_script)
+        {
+            if let Some(family) = run_style.font_family_cs.as_deref().or_else(|| {
+                para_style.default_run_style.as_ref()
+                    .and_then(|style| style.font_family_cs.as_deref())
+            }) {
+                if crate::font::shape::family_covers(family, '\u{0915}') {
+                    return Some(family);
+                }
+            }
+        }
         self.resolve_font_family_for_text_g(text, run_style, para_style, true)
     }
 
@@ -4810,7 +5119,7 @@ impl LayoutEngine {
             return None;
         }
         let fs = self.resolve_font_size(ms, &para.style);
-        let m = self.registry.get_with_style(
+        let m = &*self.registry.get_with_style(
             "Arial Unicode MS Latin",
             self.resolve_bold(ms, &para.style),
             self.resolve_italic(ms, &para.style),
@@ -4818,7 +5127,32 @@ impl LayoutEngine {
         Some(m.win_ascent * fs)
     }
 
-    fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+    // The preceding Latin face supplies half its average advance when SB/DB
+    // balancing is off. CJK and balanced runs retain the quarter-em basis.
+    fn natural_autospace_after(&self, ch: char, style: &RunStyle,
+        para: &ParagraphStyle, font_size: f32, cs: f32) -> f32 {
+        if std::env::var("OXI_AUTOSPACE2_DISABLE").is_ok() {
+            return s546_autospace_extra(font_size);
+        }
+        let balance = self.balance_single_byte_double_byte_width
+            && style.fit_text.is_none() && !style.ruby_spread;
+        let basis = if !balance && ch.is_ascii_alphanumeric() {
+            let metrics = &*self.metrics_for(style, para);
+            // East Asian code-page faces retain a quarter-em gap for Latin
+            // glyphs too. Their OS/2 average can include full-width glyphs and
+            // cannot describe the single-byte boundary. Other faces use their
+            // measured average advance; unknown averages retain quarter-em.
+            let east_asian = metrics.codepage_range1
+                .is_some_and(|codepages| codepages & (0x1f << 17) != 0);
+            if east_asian { font_size } else {
+                metrics.average_width_em.filter(|v| v.is_finite() && *v > 0.0)
+                    .map_or(font_size, |average| 2.0 * average * font_size)
+            }
+        } else { font_size };
+        s1175_autospace(basis, cs, balance)
+    }
+
+    fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> FontMetricsRef<'_> {
         match self.resolve_font_family(run_style, para_style) {
             Some(family) => self.registry.get_with_style(
                 self.s1036_metric_family(run_style, para_style, family),
@@ -4831,7 +5165,7 @@ impl LayoutEngine {
 
     // Vertical empty paragraphs use the paragraph mark's Latin font chain.
     // An unresolved chain inherits the same host font as an unstyled document.
-    fn metrics_for_vertical_mark(&self, run: &RunStyle, para: &ParagraphStyle) -> &FontMetrics {
+    fn metrics_for_vertical_mark(&self, run: &RunStyle, para: &ParagraphStyle) -> FontMetricsRef<'_> {
         if std::env::var_os("OXI_VERTICAL_MARK_ASCII_DISABLE").is_some() {
             return if std::env::var_os("OXI_VERTICAL_MARK_DISABLE").is_none()
                 && run.font_family.is_some() && run.font_family_east_asia.is_none()
@@ -4890,7 +5224,7 @@ impl LayoutEngine {
             let annotation_ascent = annotations.iter()
                 .map(|font| ascent(font, annotation_size)).fold(0.0_f32, f32::max);
             Some(ruby::ruby_expansion_with_ascents(
-                ruby, size, ascent(base, size), annotation_ascent,
+                ruby, size, ascent(&base, size), annotation_ascent,
             ))
         }).fold(0.0_f32, f32::max)
     }
@@ -4900,7 +5234,7 @@ impl LayoutEngine {
         text: &str,
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
-    ) -> &FontMetrics {
+    ) -> FontMetricsRef<'_> {
         // Devanagari line-height routing (opt-out OXI_DEVA_DISABLE). A run whose
         // declared font is a Latin face Word cannot use for Devanagari (Akshar,
         // Arial Unicode MS) falls back — for METRICS — not to Cambria (S1146,
@@ -4955,7 +5289,7 @@ impl LayoutEngine {
         &self,
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
-    ) -> &FontMetrics {
+    ) -> FontMetricsRef<'_> {
         self.metrics_for_para_mark_g(run_style, para_style, false)
     }
 
@@ -4965,7 +5299,7 @@ impl LayoutEngine {
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
         prefer_ascii: bool,
-    ) -> &FontMetrics {
+    ) -> FontMetricsRef<'_> {
         // S707 (2026-06-30): in a NO-GRID / no-type-docGrid context the empty-
         // paragraph / ¶-mark line height is governed by the ASCII (Latin) font,
         // NOT the eastAsia font (the S583 rule, here for the no-grid case S583
@@ -5069,7 +5403,7 @@ impl LayoutEngine {
         ch: char,
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
-    ) -> &FontMetrics {
+    ) -> FontMetricsRef<'_> {
         self.metrics_for_char_in(ch, true, run_style, para_style)
     }
 
@@ -5082,7 +5416,7 @@ impl LayoutEngine {
         run_has_real_cjk: bool,
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
-    ) -> &FontMetrics {
+    ) -> FontMetricsRef<'_> {
         let s763 = std::env::var("OXI_S763_DISABLE").is_err();
         // S801: en/em dash = the same ambiguous class (see
         // resolve_font_family_for_text_g) — Latin metrics for a dash in a
@@ -5286,7 +5620,7 @@ impl LayoutEngine {
         &self,
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
-    ) -> Option<&FontMetrics> {
+    ) -> Option<FontMetricsRef<'_>> {
         self.metrics_for_cjk_script(run_style, para_style, false)
     }
 
@@ -5295,9 +5629,9 @@ impl LayoutEngine {
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
         cjk_script: bool,
-    ) -> Option<&FontMetrics> {
+    ) -> Option<FontMetricsRef<'_>> {
         let metrics = |family: &str| {
-            if self.registry.get(family).family == "MS Gothic"
+            if self.registry.synthesizes_bold(family)
                 || std::env::var_os("OXI_CJK_SYNTHETIC_BOLD").is_some()
             {
                 self.registry.get_with_style(
@@ -5396,7 +5730,7 @@ impl LayoutEngine {
     }
 
     /// Default font metrics for the document (uses docDefaults font if set, otherwise Calibri).
-    fn doc_default_metrics(&self) -> &FontMetrics {
+    fn doc_default_metrics(&self) -> FontMetricsRef<'_> {
         match self.default_font_family.as_deref() {
             Some(ff) => self.registry.get(ff),
             None => self.registry.default_metrics(),
@@ -5435,9 +5769,9 @@ impl LayoutEngine {
                 resolved.push(run.clone());
                 continue;
             }
-            let mut groups: Vec<(Option<&'static str>, String)> = Vec::new();
+            let mut groups: Vec<(Option<(String, f32)>, String)> = Vec::new();
             for ch in run.text.chars() {
-                let metrics = self.metrics_for_char(ch, &run.style, style);
+                let metrics = &*self.metrics_for_char(ch, &run.style, style);
                 let mut buffer = [0u8; 4];
                 let base = self.resolve_font_family_for_text(ch.encode_utf8(&mut buffer), &run.style, style)
                     .unwrap_or(&metrics.family);
@@ -5449,6 +5783,27 @@ impl LayoutEngine {
                 previous = family;
                 previous_base.clear();
                 previous_base.push_str(base);
+                // Spacing glyphs with a font box need the face that can draw
+                // them. Coverage and the platform mapping choose the family;
+                // the applied paragraph-mark controls have no glyph font box.
+                let family = family.map(|name| (name.to_owned(), 1.0)).or_else(|| {
+                    // Formatting controls and Unicode line/paragraph
+                    // separators belong to flow, not glyph font fallback.
+                    if !ch.is_whitespace() || ch.is_control()
+                        || matches!(ch, '\u{2028}' | '\u{2029}')
+                        || Self::s1370_is_cjk_script(ch)
+                        || Self::mark_spacing_only_text(&ch.to_string())
+                        || crate::font::shape::family_covers(base, ch)
+                        || crate::font::runtime::font_file_for(base, false, false).is_none() {
+                        return None;
+                    }
+                    let language = run.style.latin_lang.as_deref()
+                        .or_else(|| style.default_run_style.as_ref().and_then(|rs| rs.latin_lang.as_deref()))
+                        .unwrap_or("en-US");
+                    crate::font::system_spacing_fallback::select(base, ch,
+                        self.resolve_bold(&run.style, style), self.resolve_italic(&run.style, style), language)
+                        .map(|mapping| (mapping.family, mapping.scale))
+                });
                 if let Some((last_family, text)) = groups.last_mut() {
                     if *last_family == family { text.push(ch); continue; }
                 }
@@ -5469,7 +5824,11 @@ impl LayoutEngine {
                     fragment.has_last_rendered_page_break = false;
                 }
                 if index != last { fragment.comment_range_end.clear(); }
-                if let Some(family) = family {
+                if let Some((family, scale)) = family {
+                    if (scale - 1.0).abs() > f32::EPSILON {
+                        fragment.style.font_size = Some(self.resolve_font_size(&run.style, style) * scale);
+                        fragment.style.font_size_from_defaults = false;
+                    }
                     fragment.style.font_family = Some(family.to_owned());
                     fragment.style.font_family_east_asia = Some(family.to_owned());
                     fragment.style.font_family_cs = Some(family.to_owned());
@@ -5553,7 +5912,7 @@ impl LayoutEngine {
             }
             let base_pt = self.resolve_font_size(&runs[k].style, para_style);
             let hps_pt = ruby_ir.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(base_pt / 2.0);
-            let ruby_metrics = self.metrics_for_text(&ruby_ir.text, &runs[k].style, para_style);
+            let ruby_metrics = &*self.metrics_for_text(&ruby_ir.text, &runs[k].style, para_style);
             let ruby_w: f32 = ruby_ir
                 .text
                 .chars()
@@ -5561,7 +5920,7 @@ impl LayoutEngine {
                 .sum();
             let mut base_w = 0.0_f32;
             for r in &runs[k..end] {
-                let m = self.metrics_for_text(&r.text, &r.style, para_style);
+                let m = &*self.metrics_for_text(&r.text, &r.style, para_style);
                 let fs = self.resolve_font_size(&r.style, para_style);
                 let chars = r.text.chars().count() as f32;
                 base_w += r.text.chars().map(|c| self.registry.char_width_pt_with_fallback(c, fs, m)).sum::<f32>();
@@ -6015,10 +6374,10 @@ impl LayoutEngine {
                                 if cols[k].blank {
                                     let mark = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                                     let size = self.resolve_font_size(&mark, &para.style);
-                                    let metrics = self.metrics_for_vertical_mark(&mark, &para.style);
+                                    let metrics = &*self.metrics_for_vertical_mark(&mark, &para.style);
                                     text_width = width(metrics, size);
                                 } else {
-                                    text_width = width(self.metrics_for_text(&cols[k].text, &recipe.style, &para.style), recipe.fs);
+                                    text_width = width(&self.metrics_for_text(&cols[k].text, &recipe.style, &para.style), recipe.fs);
                                     for (run_index, text) in &cols[k].segs {
                                         if let Some(run) = para.runs.get(*run_index) {
                                             let mut size = self.resolve_font_size(&run.style, &para.style);
@@ -6028,7 +6387,7 @@ impl LayoutEngine {
                                             {
                                                 size = Self::vertical_align_font_size(size);
                                             }
-                                            text_width = text_width.max(width(self.metrics_for_text(text, &run.style, &para.style), size));
+                                            text_width = text_width.max(width(&self.metrics_for_text(text, &run.style, &para.style), size));
                                         }
                                     }
                                     text_width += self.ruby_expansion_for_runs(&para.runs, recipe.fs, &para.style);
@@ -7153,7 +7512,7 @@ impl LayoutEngine {
                     {
                         rfs = Self::vertical_align_font_size(rfs);
                     }
-                    let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
+                    let metrics = &*self.metrics_for_text(&run.text, &run.style, &para.style);
                     metrics.word_line_height_no_grid(rfs)
                         + if natural_columns && metrics.is_cjk_83_64_font() {
                             rfs * (3.0 / 64.0)
@@ -7500,7 +7859,8 @@ cells={} pitch={:.2} text={:?}",
                 let glyph_chars: Vec<_> = text.chars().collect();
                 let advances: Vec<_> = glyph_chars.iter().copied().map(|ch| {
                     let metrics = self.metrics_for_char_in(ch, true, &run.style, &para.style);
-                    (metrics, self.registry.vertical_advance_pt(&metrics.family, ch, fs))
+                    let advance = self.registry.vertical_advance_pt(&metrics.family, ch, fs);
+                    (metrics, advance)
                 }).collect();
                 if advances.iter().any(|(_, advance)| advance.is_some()) || char_grid_active {
                     for (ci, (ch, (metrics, advance))) in glyph_chars.iter().copied().zip(advances).enumerate() {
@@ -7613,9 +7973,9 @@ cells={} pitch={:.2} text={:?}",
         elem
     }
 
-    fn layout_page(&self, page: &Page, logical: &mut u32, ir_index: usize, column_search: &mut GridColumnSearch) -> Vec<LayoutPage> {
+    fn layout_page(&self, page: &Page, logical: &mut u32, ir_index: usize, column_search: &mut GridColumnSearch, references: &mut style_pagination::StylePagination, source_anchors: &mut FloatSourceAnchors) -> Vec<LayoutPage> {
         // body in layout/page.rs (its own codegen unit, see split_layout_mod2.py)
-        page::PageLayouter(self).layout_page(page, logical, ir_index, column_search)
+        page::PageLayouter(self).layout_page(page, logical, ir_index, column_search, references, source_anchors)
     }
 
     /// Resolve absolute (x, y) position for a text box based on its anchor references.
@@ -8060,6 +8420,7 @@ cells={} pitch={:.2} text={:?}",
             box_page.grid_char_pitch = None;
             box_page.grid_char_cw_ratio = None;
             box_page.grid_char_quantized_runs.clear();
+            box_page.section_grid_runs.clear();
             box_page.grid_char_runs.clear();
             box_page.doc_grid_lines_and_chars = false;
             let (recipes, columns) = self.vertical_section_columns(
@@ -8148,7 +8509,7 @@ cells={} pitch={:.2} text={:?}",
                         &empty_fn_h_txbx,
                         1,
                         0,
-                        &[],
+                        &[], &[],
                         0.0,   // S749: band top unused (1-col)
                         false, // S691: textbox context (in_textbox)
                         false, // S726
@@ -8700,16 +9061,15 @@ cells={} pitch={:.2} text={:?}",
     fn s1174_has_ref(blocks: &[Block]) -> bool {
         blocks.iter().any(|b| match b {
             Block::Paragraph(p) => p.runs.iter().any(|r| r.style.styleref.is_some()),
+            Block::Table(t) => t.rows.iter().flat_map(|row| &row.cells)
+                .any(|cell| Self::s1174_has_ref(&cell.blocks)),
             _ => false,
         })
     }
 
-    /// S1174: clone header/footer blocks with each STYLEREF field's cached
-    /// text replaced by its resolution (map: style ID -> text). A field whose
-    /// style has no entry in the section is BLANKED, cache included —
-    /// reference__0061531a's Schedule-section headers cache the previous
-    /// section's Part name, but Word re-evaluates, finds no Part in the
-    /// section, and renders the line empty.
+    /// Replace cached style-reference results using display names, aliases
+    /// and localized built-in names. The occurrence map remains keyed by ID;
+    /// an applied empty paragraph is distinct from a missing occurrence.
     fn s1174_substitute(blocks: &[Block], map: &std::collections::HashMap<String, String>) -> Vec<Block> {
         let mut out = blocks.to_vec();
         for b in &mut out {
@@ -8717,7 +9077,7 @@ cells={} pitch={:.2} text={:?}",
                 let mut clearing = false;
                 for run in &mut p.runs {
                     if let Some(name) = run.style.styleref.as_ref() {
-                        run.text = map.get(name).cloned().unwrap_or_default();
+                        run.text = style_reference::resolve(name, map);
                         clearing = true;
                     } else if run.style.styleref_cont {
                         if clearing {
@@ -8725,6 +9085,12 @@ cells={} pitch={:.2} text={:?}",
                         }
                     } else {
                         clearing = false;
+                    }
+                }
+            } else if let Block::Table(t) = b {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        cell.blocks = Self::s1174_substitute(&cell.blocks, map);
                     }
                 }
             }
@@ -8753,6 +9119,268 @@ cells={} pitch={:.2} text={:?}",
     /// S1174: record a laid-out body paragraph's style texts. Paragraph style
     /// -> whole text; each contiguous same-rStyle run group -> its concatenated
     /// text (the nearest-before-the-page occurrence wins by overwrite order).
+
+    /// These spacing controls have no font box in the measured Word line.
+    /// Other spacing glyphs (including NBSP, thin/figure spaces and quads)
+    /// retain their run's font metrics even though their ink can be empty.
+    fn mark_spacing_only_char(c: char) -> bool {
+        matches!(c,
+            ' ' | '\t' | '\u{2002}' | '\u{2003}' | '\u{2005}' | '\u{200b}' | '\u{3000}' | '\u{feff}')
+    }
+
+    fn mark_spacing_only_text(text: &str) -> bool {
+        text.chars().all(Self::mark_spacing_only_char)
+    }
+
+    fn paragraph_mark_only(para: &Paragraph) -> bool {
+        para.runs.iter().all(|r| Self::mark_spacing_only_text(&r.text)
+            && r.style.inline_object_extent.is_none() && r.style.inline_object_image.is_none()
+            && r.footnote_ref.is_none() && r.endnote_ref.is_none()
+            && r.ruby.is_none() && !r.style.ruby_field && !r.is_math)
+    }
+
+    // OOXML automatic spacing is a multiplier; minimum and exact
+    // spacing are point values. Keep that distinction for ASCII empty marks
+    // in CJK documents as well as for ordinary text lines.
+    fn empty_mark_spacing_height(natural: f32, spacing: Option<f32>, rule: Option<&str>) -> f32 {
+        match rule {
+            Some("exact") => spacing.unwrap_or(natural).max(0.0),
+            Some("atLeast") => natural.max(spacing.unwrap_or(0.0)),
+            _ => natural * spacing.unwrap_or(1.0),
+        }
+    }
+
+    fn cell_mark_line_height(&self, para: &Paragraph,
+        effective_line_spacing: Option<f32>, effective_line_rule: Option<&str>,
+        row_line_pitch: Option<f32>) -> (Option<f32>, f32) {
+        let pprrpr_fs =
+            para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
+        // S1376 (2026-09-13, default ON, opt-out OXI_S1376_DISABLE):
+        // the mark's own rFonts decide an empty cell line in a
+        // Japanese document too. forms__00830ac053a2c57a: five
+        // empties per answer box carry rFonts BIZ UDP明朝 (no
+        // w:sz) -- Word sets each at one 16.25 cell (COM: BIZ
+        // UDP明朝 10.5, adjustLineHeightInTable); the CJK gate
+        // sent them to the document default 游明朝 (17.57 > pitch
+        // -> two cells), 213.5pt boxes against Word's 114.
+        // Probe: 游明朝 10.5 empties in such a cell ARE two cells
+        // in Word (32.46), so it is the mark's face that counts.
+        // S1376b: the mark is priced in its ASCII face (the S1300
+        // law), not the inherited eastAsia face. 1636d28e2c46: five
+        // marks carry rFonts ascii=Century with eastAsia inherited
+        // (ＭＳ 明朝); Word (COM Font.Name Century 10.5) sets each at
+        // one 13.6 cell, the eastAsia reading is 13.62 -> two cells.
+        let s1376_mark = pprrpr_fs.is_none()
+            && std::env::var("OXI_EMPTY_MARK_FAMILY_DISABLE").is_err()
+            && (!self.doc_body_has_real_cjk
+                || std::env::var("OXI_S1376_DISABLE").is_err())
+            && para.style.ppr_rpr.as_ref().is_some_and(|r| r.font_family.is_some());
+        let pprrpr_fs = pprrpr_fs.or_else(|| {
+            if s1376_mark {
+                Some(self.resolve_font_size(&RunStyle::default(), &para.style))
+            } else {
+                // An absent mark size still follows the paragraph style chain.
+                // Original Word controls cover the one-point inherited change
+                // as well as format-only runs and eight consecutive marks.
+                let mark = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                Some(self.resolve_font_size(&mark, &para.style))
+            }
+        });
+        let empty_lh = if let Some(empty_fs) = pprrpr_fs {
+            let rpr_ref = para
+                .style
+                .ppr_rpr
+                .as_ref()
+                .cloned()
+                .unwrap_or_default();
+            // S989 (2026-07-23, default ON, opt-out OXI_S989_DISABLE):
+            // mirror S940E (the estimate) in the ACTUAL cell-empty
+            // consumer. The estimate resolves a Latin cell ¶ mark in
+            // the ASCII font (Arial hhea 11.499 for fs=10), but this
+            // actual path used metrics_for_para_mark (prefer_ascii=
+            // false), resolving the eastAsia CJK 83/64 box (12.969 =
+            // 10 × 83/64) — +1.47pt per empty cell. reports__0020157f:
+            // the first table's 28 empty cells add ~+41pt, pushing the
+            // pre-break empty paragraph into a spurious page (Oxi 6 vs
+            // Word 4). line_height_inner's S815 branch returns hhea for
+            // the ASCII (non-CJK) metrics, matching the estimate exactly.
+            // Narrow discriminator = the estimate's effective-change set
+            // AND excludes the calibrated gen2/golden inherited-font
+            // cells: explicit ASCII rFonts, no explicit eastAsia,
+            // single/auto rule, Latin body.
+            // S1382 (2026-09-13, default ON, opt-out OXI_S1382_DISABLE):
+            // the mark's EXPLICIT eastAsia face does not change the
+            // line either. MEASURED (`_pb_markea_latin_gen.py`, Word
+            // COM, an empty Arial-10 paragraph in the body and in a
+            // cell, mark eastAsia = Times New Roman / ＭＳ 明朝 /
+            // Yu Mincho / none): 23.25 in every arm, both places --
+            // Arial's line. The estimate (S940E) already took the
+            // ASCII face; only this actual consumer kept the eastAsia
+            // gate, so reports__003862302b660a86's rows with an
+            // empty Arial/eastAsia=TNR paragraph rendered 24.97
+            // against Word's 23.5 and the estimate's 24.5 -- the
+            // last row of its floating table missed page 2 by 1.4pt.
+            // S1559 (2026-09-26, default ON, opt-out OXI_S1559_DISABLE):
+            // an auto MULTIPLE keeps the ascii face as well -- the
+            // estimate (S943) already priced hhea x factor, only this
+            // consumer fell back to the eastAsia box when the factor
+            // was not 1.0. MEASURED (_pb_emptymult_face_gen.py, 24
+            // arms, COM Info(6), body and cell): an empty Arial-12
+            // mark at line 240/276/360/480 = 13.5/15.75/21.0/27.75
+            // (= 13.8 x factor, 0.75-quantised), Arial 10 and
+            // Calibri 11 alike, with or without eastAsia=MS Mincho.
+            // legal__0030f893 p3: six such empties (Arial 12/11,
+            // line 360) in a cell at 23.35/21.4 (Mincho 83/64 x 1.5)
+            // against Word's 21.0/18.75 -> +14pt, and the page's last
+            // three-line paragraph moved to p4.
+            let s1559_mult = std::env::var_os("OXI_S1559_DISABLE").is_none()
+                && effective_line_spacing.map_or(false, |f| f > 0.0);
+            let s989_ascii = std::env::var("OXI_S989_DISABLE")
+                .is_err()
+                && (!self.doc_body_has_real_cjk || s1376_mark
+                    || (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
+                // A Latin mark keeps its ASCII face under minimum and exact
+                // spacing too; the rule governs the height, not the font slot.
+
+                // Automatic spacing is a multiplier; minimum/exact spacing
+                // is a point value, so zero is not a zero font multiplier.
+                && (!matches!(effective_line_rule, None | Some("auto"))
+                    || s1559_mult || effective_line_spacing
+                        .map_or(true, |f| (f - 1.0).abs() <= 0.01))
+                // S1512 (2026-09-21, default ON, opt-out OXI_S1512_DISABLE):
+                // a mark whose ascii face comes only from the
+                // docDefaults theme (no rFonts on the mark) is
+                // still set in that ascii face in a Latin document.
+                // reports__006de1d2: 4pt empty cell paragraphs
+                // under a theme whose <a:ea typeface=""/> resolved
+                // to the CJK substitute (5.19 = 4 x 83/64) where
+                // Word's rows read Calibri's 4.88; five tables on
+                // p2 grew ~1.5pt each and a three-line paragraph
+                // fell to p3 (+1 page).
+                && (rpr_ref.font_family.is_some()
+                    || ((!self.doc_body_has_real_cjk
+                        || (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
+                        && std::env::var_os("OXI_S1512_DISABLE").is_none()))
+                // An empty paragraph mark uses its ASCII face even when
+                // eastAsia is explicitly declared. The measured CJK-context
+                // pair retains identical Century/Arial advances in both forms.
+                ;
+            // S1597 (2026-09-29, default ON, opt-out OXI_S1597_DISABLE):
+            // with adjustLineHeightInTable a snapped EMPTY cell line
+            // still measures its paragraph mark in the ASCII face (S583),
+            // snapped to whole cells of that face's own natural. blind-G
+            // forms__0209c52f (linePitch 298 = 14.9, ascii Century,
+            // eastAsia MS Mincho, 12pt marks): the empty rows step 15.0 in
+            // Word (one cell), Oxi 29.8 (MS Mincho 15.56 -> two).
+            let s1597_cell = !s989_ascii
+                && std::env::var_os("OXI_S1597_DISABLE").is_none()
+                && self.doc_body_has_real_cjk
+                && self.adjust_line_height_in_table
+                && para.style.snap_to_grid
+                && matches!(effective_line_rule, None | Some("auto"))
+                && rpr_ref.font_family_east_asia.is_none()
+                && !self.metrics_for(&rpr_ref, &para.style).is_cjk_83_64_font();
+            let empty_metrics = &*self.metrics_for_para_mark_g(
+                &rpr_ref,
+                &para.style,
+                s989_ascii || s1597_cell,
+            );
+            // S1574: in a CJK document the ascii-face empty line
+            // is its hhea natural (Century 8pt 9.617, Word PDF
+            // probe cell_blank_face); line_height_inner's CJK
+            // branch returned 11.25 for the same face.
+            if s989_ascii
+                && self.doc_body_has_real_cjk
+                && !empty_metrics.is_cjk_83_64_font()
+                && (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid))
+            {
+                Self::empty_mark_spacing_height(
+                    empty_metrics.natural_line_height_hhea(empty_fs),
+                    effective_line_spacing, effective_line_rule)
+            } else if s1597_cell && !empty_metrics.is_cjk_83_64_font()
+                && row_line_pitch.map_or(false, |p| p > 0.1)
+            {
+                let p = row_line_pitch.unwrap_or(0.0);
+                let h = Self::empty_mark_spacing_height(
+                    empty_metrics.natural_line_height_hhea(empty_fs),
+                    effective_line_spacing, effective_line_rule);
+                ((h / p - 0.001).ceil().max(1.0)) * p
+            } else {
+            self.line_height_inner(
+                empty_fs,
+                effective_line_spacing,
+                effective_line_rule,
+                empty_metrics,
+                para.style.snap_to_grid,
+                row_line_pitch,
+                true,
+            )
+            }
+        } else {
+            let metrics = &*self.doc_default_metrics();
+            // S1231 (2026-08-26, opt-out OXI_S1231_DISABLE): a
+            // size-less empty cell ¶ mark still resolves through
+            // the paragraph's STYLE CHAIN, exactly as the
+            // estimate does (estimate_para_height's empty_fs =
+            // ppr_rpr.font_size.unwrap_or(resolve_font_size)).
+            // kyotei36spec table3 row12: docDefaults sz=21 but
+            // Normal sets sz=16 → Word prices the wide cell's two
+            // empty paras at 8pt (row 21.1); the engine-default
+            // fallback priced them at 10.5 → 13.5 each → row
+            // 27.4 (+6.3) and the whole float form ran ~9pt
+            // tall (the S1230 blocker).
+            // ★SCOPE (2026-08-26): |chain − default| ≥ 1.5pt only.
+            // The unscoped chain-pricing is the S610 rule the
+            // kyodoken family already FALSIFIED (S636 kept the
+            // engine default for them), and the candidate A/B
+            // reproduced it: sub-1pt deltas are a compensation
+            // lottery (kyodoken07 +0.0047 vs kyodoken11 −0.0050,
+            // tokumei_08_07 −0.0412, ukhealthform −0.0311) while
+            // the ≥1.5pt class (kyotei Normal sz=16 vs default
+            // 11.0, Δ3.0) is probe-confirmed (+_pb_marksz_gen
+            // 6 arms) and +0.0496. The small-Δ law needs its own
+            // derivation (szCs/table-style inputs) before the
+            // threshold can drop.
+            let s1231_fs = {
+                let chain = self.resolve_font_size(
+                    &RunStyle::default(),
+                    &para.style,
+                );
+                // R24 (2026-08-27): COM probe _pb_smalldelta_gen
+                // (6 arms) prices the size-less empty at the
+                // CHAIN for EVERY Δ (kyodo shape dd11/Normal10.5
+                // → 12.75 = chain; admin dd11/Normal12 → 14.25 =
+                // chain) — the ≥1.5 guard is a compensation
+                // shield, not the law. Threshold stays until the
+                // exposed JP compensations (tokumei_08_07 −0.041,
+                // ukhealthform −0.031) are dissected; tune with
+                // OXI_S1231_TH.
+                let s1231_th: f32 = std::env::var("OXI_S1231_TH")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1.5);
+                if std::env::var("OXI_S1231_DISABLE").is_err()
+                    && (chain - self.default_font_size).abs()
+                        >= s1231_th
+                {
+                    chain
+                } else {
+                    self.default_font_size
+                }
+            };
+            self.line_height_inner(
+                s1231_fs,
+                effective_line_spacing,
+                effective_line_rule,
+                metrics,
+                para.style.snap_to_grid,
+                row_line_pitch,
+                true,
+            )
+        };
+        (pprrpr_fs, empty_lh)
+    }
+
     fn s1174_ingest(para: &Paragraph, into_first: bool) {
         let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
         let mut put = |key: &str, val: String| {
@@ -8767,9 +9395,7 @@ cells={} pitch={:.2} text={:?}",
             }
         };
         if let Some(sid) = para.style.style_id.as_ref() {
-            if !text.trim().is_empty() {
-                put(sid, text.clone());
-            }
+            put(sid, text.trim().to_owned());
         }
         let mut cur: Option<(String, String)> = None;
         for r in &para.runs {
@@ -8777,24 +9403,24 @@ cells={} pitch={:.2} text={:?}",
                 (Some(cid), Some((c, buf))) if cid == c => buf.push_str(&r.text),
                 (Some(cid), _) => {
                     if let Some((c, buf)) = cur.take() {
-                        if !buf.trim().is_empty() {
-                            put(&c, buf);
+                        if !buf.is_empty() {
+                            put(&c, buf.trim().to_owned());
                         }
                     }
                     cur = Some((cid.clone(), r.text.clone()));
                 }
                 (None, _) => {
                     if let Some((c, buf)) = cur.take() {
-                        if !buf.trim().is_empty() {
-                            put(&c, buf);
+                        if !buf.is_empty() {
+                            put(&c, buf.trim().to_owned());
                         }
                     }
                 }
             }
         }
         if let Some((c, buf)) = cur.take() {
-            if !buf.trim().is_empty() {
-                put(&c, buf);
+            if !buf.is_empty() {
+                put(&c, buf.trim().to_owned());
             }
         }
     }
@@ -8863,7 +9489,7 @@ cells={} pitch={:.2} text={:?}",
         let extra_factor = (host.style.line_spacing.unwrap_or(1.0) - 1.0).max(0.0);
         let Some(run) = host.runs.first() else { return 0.0; };
         let fs = self.resolve_font_size(&run.style, &host.style);
-        let metrics = self.metrics_for_para_mark_g(&run.style, &host.style, !self.doc_body_has_real_cjk);
+        let metrics = &*self.metrics_for_para_mark_g(&run.style, &host.style, !self.doc_body_has_real_cjk);
         let natural = if !self.doc_body_has_real_cjk && !metrics.is_cjk_83_64_font()
             && std::env::var("OXI_S979_DISABLE").is_err()
         {
@@ -8930,7 +9556,7 @@ cells={} pitch={:.2} text={:?}",
             &mut Vec::new(), &mut Vec::new(), page.grid_line_pitch,
             None, false, None, None, false, false, 0.0,
             None, None, None, false, false, None, 0.0,
-            &std::collections::HashMap::new(), 1, 0, &[], 0.0,
+            &std::collections::HashMap::new(), 1, 0, &[], &[], 0.0,
             true, false, None, None, None, false, 0.0, None, None, false, None,
         );
         let min_x = elements.iter().map(|e| e.x).fold(f32::INFINITY, f32::min);
@@ -8965,7 +9591,7 @@ cells={} pitch={:.2} text={:?}",
             &mut Vec::new(), &mut Vec::new(), page.grid_line_pitch,
             None, false, None, None, false, false, 0.0,
             None, None, None, false, false, None, 0.0,
-            &std::collections::HashMap::new(), 1, 0, &[], 0.0,
+            &std::collections::HashMap::new(), 1, 0, &[], &[], 0.0,
             true, false, None, None, None, false, 0.0, None, None, false,
             None,
         );
@@ -9534,7 +10160,8 @@ cells={} pitch={:.2} text={:?}",
                     let inline_header = has_inline_image
                         && (mixed_inline_header || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some());
                     let text_height = if (!self.doc_body_has_real_cjk || inline_header)
-                        && (mixed_inline_header || std::env::var("OXI_HEADER_TEXT_FLOW").is_ok())
+                        && (mixed_inline_header || para.runs.iter().any(|run| run.style.styleref.is_some())
+                            || std::env::var("OXI_HEADER_TEXT_FLOW").is_ok())
                         && (visible_run.is_some() || inline_header)
                         && (inline_header || para.runs.iter().all(|r| r.style.inline_object_image.is_none()))
                     {
@@ -9813,7 +10440,7 @@ cells={} pitch={:.2} text={:?}",
             return 0.0;
         };
         let fs = self.resolve_font_size(&run.style, &p.style);
-        let m = self.metrics_for_text(&run.text, &run.style, &p.style);
+        let m = &*self.metrics_for_text(&run.text, &run.style, &p.style);
         // ascent/win_ascent are stored EM-NORMALIZED (~0.905 for Arial). The
         // footer line-box top sits `ascent` above the baseline; the glyph cap
         // ink sits cap≈0.71em below the baseline → the leading the body may
@@ -9856,7 +10483,7 @@ cells={} pitch={:.2} text={:?}",
                             &empty_fn_h_ftr,
                             1,
                             0,
-                            &[],
+                            &[], &[],
                             0.0,   // S749: band top unused (1-col)
                             true,  // S691: footer context
                             false, // S726: footer bottom differs
@@ -9890,8 +10517,34 @@ cells={} pitch={:.2} text={:?}",
         // on EVERY page = the {+1:17} cascade. The S843 header sibling.
         // Latin scope: 27 JP docs (tokumei/order/albaluna) carry ink-free
         // footers under the calibrated JP footer model — untouched.
+        // Use the same paragraph boxes for an empty formatted footer and a
+        // visible footer. The font, paragraph mark and line rule determine the
+        // stack; an ASCII hhea shortcut loses taller East Asian mark boxes.
+        let footer_para_height = |p: &Paragraph, cw: f32| -> f32 {
+                    let default_style = RunStyle::default();
+                    let size = self.resolve_font_size(
+                        p.runs.first().map(|r| &r.style).unwrap_or(&default_style), &p.style);
+                    let fragments: Vec<_> = p.runs.iter().enumerate()
+                        .filter(|(_, r)| !r.style.vanish)
+                        .map(|(i, r)| (r.text.as_str(), &r.style, r.field_type.clone(), i, 0usize))
+                        .collect();
+                    let width = (cw - p.style.indent_left.unwrap_or(0.0)
+                        - p.style.indent_right.unwrap_or(0.0)).max(1.0);
+                    let mut lines = self.break_into_lines(&fragments, width,
+                        p.style.indent_first_line.unwrap_or(0.0), &p.style,
+                        None, None, false, false, false, true, false, false, false);
+                    if lines.is_empty() {
+                        lines.push(Line { whitespace_paragraph: true, ..Line::default() });
+                    }
+                    let height: f32 = lines.iter().map(|line|
+                        self.line_height_for_line(line, &p.style, size, false, None, true)
+                    ).sum();
+                    height
+        };
+        // Empty-footer capacity is determined by its paragraph content and
+        // formatting. A CJK character in the body does not turn a single
+        // untouched empty footer into a visible line reservation.
         if !blocks.is_empty()
-            && !self.doc_body_has_real_cjk
             && std::env::var("OXI_S894_DISABLE").is_err()
         {
             let has_ink = blocks.iter().any(|b| match b {
@@ -9949,24 +10602,13 @@ cells={} pitch={:.2} text={:?}",
                 let mut prev_sa: Option<f32> = None;
                 for b in blocks {
                     if let Block::Paragraph(p) = b {
-                        let fs = p
-                            .style
-                            .ppr_rpr
-                            .as_ref()
-                            .and_then(|r| r.font_size)
-                            .or_else(|| {
-                                p.style.default_run_style.as_ref().and_then(|r| r.font_size)
-                            })
-                            .unwrap_or(self.default_font_size);
-                        let rpr = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let m = self.metrics_for_para_mark_g(&rpr, &p.style, true);
                         let sb = p.style.space_before.unwrap_or(0.0);
                         let sa = p.style.space_after.unwrap_or(0.0);
                         stack += match prev_sa {
                             None => sb,
                             Some(psa) => psa.max(sb),
                         };
-                        stack += m.natural_line_height_hhea(fs);
+                        stack += footer_para_height(p, page.size.width - page.margin.left - page.margin.right);
                         prev_sa = Some(sa);
                     }
                 }
@@ -10002,7 +10644,7 @@ cells={} pitch={:.2} text={:?}",
                                     })
                                     .unwrap_or(self.default_font_size);
                                 let rpr = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                                let m = self.metrics_for_para_mark_g(&rpr, &p.style, true);
+                                let m = &*self.metrics_for_para_mark_g(&rpr, &p.style, true);
                                 Some(m.natural_line_height_hhea(fs))
                             }
                             _ => None,
@@ -10112,127 +10754,7 @@ cells={} pitch={:.2} text={:?}",
                     // Whitespace-only lines use paragraph-mark metrics, just
                     // like empty lines. Their spacing is added by the stack
                     // below, not by the text-paragraph estimate as well.
-                    let h = if p.runs.is_empty() || p.runs.iter().all(|r| r.text.trim().is_empty()) {
-                        let empty_fs = p
-                            .style
-                            .ppr_rpr
-                            .as_ref()
-                            .and_then(|r| r.font_size)
-                            .unwrap_or_else(|| {
-                                self.resolve_font_size(&RunStyle::default(), &p.style)
-                            });
-                        let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        // S1057 (2026-08-02, opt-out OXI_S1057_DISABLE): in a LATIN
-                        // document an EMPTY footer paragraph's ¶ mark is governed by
-                        // the ASCII font, like every other empty-paragraph line
-                        // (S583/S707/S876/S989). Without it the mark resolves through
-                        // the eastAsia chain and the line becomes the CJK 83/64 box:
-                        // reports__0020157f's second (empty) footer paragraph measured
-                        // 14.266 = 11pt x 83/64 where its own font gives Calibri hhea
-                        // 13.428 — 0.838pt of phantom footer stack. That is what put
-                        // Oxi's content bottom at 728.307 while Word keeps a br-page
-                        // stub at 715.50 + 13.0 = 728.5 on the same page (COM
-                        // Information(6)). The S806(b) arm below already wants hhea;
-                        // it was unreachable because `is_cjk_83_64_font()` was true.
-                        let s1057_ascii = !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_S1057_DISABLE").is_err();
-                        let metrics = self.metrics_for_para_mark_g(&rpr_ref, &p.style, s1057_ascii);
-                        // S806 (a): an empty footer paragraph honors its style's
-                        // line=exact value (Footer style line=260 → 13.0).
-                        if s806_latin
-                            && p.style.line_spacing_rule.as_deref() == Some("exact")
-                            && p.style.line_spacing.unwrap_or(0.0) > 0.0
-                        {
-                            p.style.line_spacing.unwrap_or(0.0)
-                        } else if s806_latin
-                            && p.style.line_spacing_rule.as_deref() == Some("atLeast")
-                            && p.style.line_spacing.unwrap_or(0.0)
-                                > metrics.natural_line_height_hhea(empty_fs)
-                            && std::env::var("OXI_S930_DISABLE").is_err()
-                        {
-                            // S930 (2026-07-18, default ON, opt-out
-                            // OXI_S930_DISABLE): an ATLEAST rule FLOORS the empty
-                            // footer line. DERIVED on 002c1ffa65f3a566 (footer =
-                            // [empty 8pt P, 2-row table, Footer-style P], Normal
-                            // line=260 atLeast): the faithful-footer exact-spacer
-                            // ladder pins cbot ∈ [606.02, 606.52) = stack 65.40 —
-                            // component ladders give the leading empty para
-                            // 20.5..21.0 = sb 6 + pBdr-top 1.75 + line 13.0
-                            // (atLeast) EXACT; its 8pt natural (9.2) is floored
-                            // to 13.0. The trailing Footer-style para measures
-                            // 12.5..13.0 = hhea 12.649 UN-floored — the Footer
-                            // style has NO basedOn, so Normal's atLeast never
-                            // reaches it (the no-basedOn rule, S924 family) and
-                            // its resolved rule here is None → this arm is
-                            // naturally scoped by the para's own resolved rule.
-                            p.style.line_spacing.unwrap_or(0.0)
-                        } else if s806_latin && !metrics.is_cjk_83_64_font() {
-                            // Empty footer paragraphs use the resolved automatic
-                            // line-spacing multiplier, including values below one.
-                            // Word PDF controls on forms__004d37d6: line=14/120/
-                            // 240/480 moves the footer top with the multiplier;
-                            // ignoring it over-reserves the body at line=14.
-                            let natural = metrics.natural_line_height_hhea(empty_fs);
-                            if matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto")) {
-                                natural * p.style.line_spacing.filter(|v| *v > 0.0).unwrap_or(1.0)
-                            } else {
-                                natural
-                            }
-                        } else {
-                            // Day 33 part 11 (2026-05-10): always use natural line height
-                            // for empty footer paragraphs. Previous grid-snap (added
-                            // 2026-04-17 for 04b88e) over-reserves footer area when
-                            // grid pitch > natural line height (bd90b00: 16.5pt pitch,
-                            // ~13pt natural → 2.3pt over-reservation pushes 備考 to
-                            // page 2). The max-with-bottom-margin guard below ensures
-                            // we still reserve at least bottom_margin space.
-                            metrics.word_line_height_no_grid(empty_fs)
-                        }
-                    } else {
-                        let mut est = self.estimate_para_height(p, cw, gp, None, false, None, None);
-                        // S806: estimate_para_height's should_reset drops style
-                        // spacing ONLY for rule∈{auto,none} — an exact/atLeast
-                        // para keeps its style sb+sa inside the estimate
-                        // (uklocal Footer PAGE para: est 37.0 = 12+13+12), which
-                        // the S803/S806 gap accounting then double-counts.
-                        // Strip it; the stack adds spacing explicitly.
-                        if s806_latin
-                            && !p.style.has_direct_spacing
-                            && !matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"))
-                        {
-                            est -= p.style.space_before.unwrap_or(0.0)
-                                + p.style.space_after.unwrap_or(0.0);
-                        }
-                        // S890 (2026-07-17, default ON, opt-out
-                        // OXI_S890_DISABLE): Latin footer TEXT lines = hhea
-                        // natural. DERIVED (_pb_ftext_gen, relief-calibrated):
-                        // fT10 window → 11.45±0.1 = Arial-10 hhea 11.499 (the
-                        // 10.5 estimate EXCLUDED); fT8 → 9.10 ≈ hhea 9.199
-                        // (est 9.0 excluded); fTE10 (text+trailing empty) →
-                        // 23.05 = 2×hhea; fLGL → 33.70 EXACT. The earlier
-                        // "usnyserda pins 10.5" reading was the S559 pair of
-                        // the missing S889 footer-boundary relief — with the
-                        // relief, hhea stacks reproduce BOTH real docs.
-                        if s806_latin
-                            && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"))
-                            && std::env::var("OXI_S890_DISABLE").is_err()
-                        {
-                            if let Some(r) = p.runs.iter().find(|r| !r.text.trim().is_empty()) {
-                                let m = self.metrics_for_text(&r.text, &r.style, &p.style);
-                                if !m.is_cjk_83_64_font() {
-                                    let fs = self.resolve_font_size(&r.style, &p.style);
-                                    let one = self.estimate_para_height(
-                                        p, 100000.0, gp, None, false, None, None,
-                                    );
-                                    if one > 1.0 && est > 1.0 {
-                                        let n = (est / one).round().max(1.0);
-                                        est = n * m.natural_line_height_hhea(fs);
-                                    }
-                                }
-                            }
-                        }
-                        est
-                    };
+                    let h = footer_para_height(p, cw);
                     footer_h += h;
                     // S886 (2026-07-16, default ON, opt-out OXI_S886_DISABLE):
                     // a footer paragraph's pBdr consumes stack height — space +
@@ -10509,46 +11031,16 @@ cells={} pitch={:.2} text={:?}",
                                     self.resolve_font_size(&RunStyle::default(), &p.style)
                                 });
                             let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                            let m = self.metrics_for_para_mark(&rpr_ref, &p.style);
+                            let m = &*self.metrics_for_para_mark(&rpr_ref, &p.style);
                             s780_extra = (s780_extra - m.win_descent * fs).max(0.0);
                         }
                     }
                 }
             }
-            // S1542 (2026-09-25, opt-out OXI_S1542_DISABLE): the body may run
-            // into the footer's line box by the footer font's win descent.
-            // Probe `footerpush2/3` (A4, lines 360, 44 body lines whose last box
-            // ends at 809.85 + before, footer 14pt one line at footer 284):
-            //   ＭＳ 明朝 (line 18.16, top 809.54): Word keeps line 44 up to
-            //   box bottom 811.2 and drops it at 811.56 -> limit 809.54 + 1.96
-            //   (= 0.14 em win descent)
-            //   Century (line 17.08, top 810.62): kept through 812.76 -> limit
-            //   >= 810.62 + 2.14, 0.24 em = 3.36 (capped by the margin 813.55)
-            // Oxi rejected from 810.25 on. forms__017117b3d0f9921d p3: Word keeps
-            // a second empty 18pt paragraph ending at 813.0 above a 14pt footer;
-            // Oxi pushed it to p4 and every later page started one line late.
-            // Scope (2026-09-25 gate): the probe sheets all had a CJK body; on
-            // the EN corpus the allowance costs legal__003b5088 / policies__0097185c /
-            // legal__003a2d04 / legal__003ac6a4 (blind-F) and dozens of 785 docs
-            // -- there S726's footer-tight rule (derived on EN) stands. CJK only.
-            let s1542_descent = if std::env::var_os("OXI_S1542_DISABLE").is_none() && footer_h > 0.0
-                && self.doc_body_has_real_cjk {
-                blocks.iter().find_map(|b| match b {
-                    Block::Paragraph(p) if p.style.frame_pr.is_none() => {
-                        let fs = p.style.ppr_rpr.as_ref().and_then(|r| r.font_size)
-                            .or_else(|| p.style.default_run_style.as_ref().and_then(|r| r.font_size))
-                            .or_else(|| p.runs.iter().find_map(|r| r.style.font_size))
-                            .unwrap_or(self.default_font_size);
-                        let rpr = p.runs.iter().find(|r| !r.text.trim().is_empty()).map(|r| r.style.clone())
-                            .or_else(|| p.style.ppr_rpr.as_ref().cloned()).unwrap_or_default();
-                        let m = self.metrics_for_para_mark_g(&rpr, &p.style, true);
-                        Some((m.win_descent * fs).max(0.0))
-                    }
-                    _ => None,
-                }).unwrap_or(0.0)
-            } else {
-                0.0
-            };
+            // The footer reserves its actual flow box. Any leading that a
+            // body line may leave below its ink is handled by that line's fit
+            // test, rather than subtracting an unrelated footer font descent.
+            let s1542_descent = 0.0;
             if std::env::var("OXI_DBG_FTR").is_ok() {
                 eprintln!("[FTR] n_footer_blocks={} footer_dist={:.1} footer_h={:.1} s780_extra={:.2} s1542_descent={:.2} reserved={:.1} bottom_margin={:.1}",
                     blocks.len(), footer_dist, footer_h, s780_extra, s1542_descent,
@@ -10594,11 +11086,11 @@ cells={} pitch={:.2} text={:?}",
         // Word uses max(prev_space_after, space_before) — spacing collapse.
         let space_before = if para.style.before_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
-            // S895: style-sourced autospacing applies in Latin docs only.
+            // Body style autospacing follows its declared property in either script.
             // Empty paragraphs get FULL autospacing too (the earlier empty-
             // exclusion was falsified: _pb_autosp cTET probe 27.75 == the
             // 00054c43 DATE→empty→body gap in the Word PDF, 27.75 EXACT).
-            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
+
         {
             // S675 (2026-06-26): w:beforeAutospacing → flat 13.75pt, COM-derived
             // (constant, independent of font size / docDefaults / grid; applied as a
@@ -10650,7 +11142,11 @@ cells={} pitch={:.2} text={:?}",
 
         // Spacing collapse: max(prev_sa, cur_sb) instead of prev_sa + cur_sb.
         // prev_space_after was NOT added to cursor_y by the caller.
-        let collapsed_spacing = space_before.max(prev_space_after);
+        let collapsed_spacing = if self.additive_paragraph_spacing {
+            space_before + prev_space_after
+        } else {
+            space_before.max(prev_space_after)
+        };
         if std::env::var_os("OXI_DBG_SPACING").is_some() {
             let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
             eprintln!("[SPACING] cy={:.2} before={:.2} prev_after={:.2} collapsed={:.2} bi={:?} «{}»",
@@ -10701,7 +11197,11 @@ cells={} pitch={:.2} text={:?}",
                 // the c2/c3/c4 counter-probes (upper ctx + b=18, a=... -> Word
                 // KEEPS the excess). An explicit <w:contextualSpacing w:val="0"/>
                 // resolves to cur_ctx=false and takes the (true,false) branch.
-                if std::env::var("OXI_S874_DISABLE").is_err() {
+                if self.additive_paragraph_spacing {
+                    // Each paragraph owns its contribution under addition.
+                    effective_spacing = if prev_contextual_spacing { 0.0 } else { prev_space_after }
+                        + if para.style.contextual_spacing { 0.0 } else { space_before };
+                } else if std::env::var("OXI_S874_DISABLE").is_err() {
                     let a = prev_space_after;
                     let b = space_before;
                     effective_spacing =
@@ -10770,13 +11270,16 @@ cells={} pitch={:.2} text={:?}",
             },
             None => (None, false),
         };
-        if para.style.before_autospacing
-            && para.style.num_id.is_some()
+        if para.style.num_id.is_some()
             && para.style.num_id.as_deref() == s1516_prev_numid
             && std::env::var("OXI_S931_DISABLE").is_err()
-            && (s1516_prev_auto || prev_space_after > 0.0)
+            && (para.style.before_autospacing || s1516_prev_auto)
         {
-            effective_spacing = if s1516_prev_auto { 0.0 } else { prev_space_after };
+            // Adjacent items suppress each auto-spacing side independently.
+            // Explicit spacing and contextual-spacing suppression still apply.
+            let before = if para.style.before_autospacing { 0.0 } else { space_before };
+            let after = if s1516_prev_auto { 0.0 } else { prev_space_after };
+            effective_spacing = effective_spacing.min(before.max(after));
         }
 
         // Suppress space_before at the top of a page (page 2+).
@@ -10965,7 +11468,7 @@ cells={} pitch={:.2} text={:?}",
         let before = if intersection { para.style.space_before.unwrap_or(0.0).max(0.0) } else { 0.0 };
         let mut line_top = cursor_y + before;
         let mut advance = 0.0;
-        let line_height = if intersection && s758_bands.iter().any(|b| b.0 == current_page_idx && b.2 > line_top) {
+        let line_height = if intersection && s758_bands.iter().any(|b| b.0 == current_page_idx && b.2 > cursor_y) {
             let fragments: Vec<_> = para.runs.iter().enumerate()
                 .map(|(i,r)| (r.text.as_str(), &r.style, None, i, 0)).collect();
             let width = (content_width - para.style.indent_left.unwrap_or(0.0)
@@ -11006,7 +11509,10 @@ cells={} pitch={:.2} text={:?}",
                 // below both (Info6 169.5 under boxes ending ~165).
                 let overl: Vec<&(usize, f32, f32, f32, f32, bool, BodyWrapPolicy)> = s758_bands.iter().filter(|b|
                     b.0 == current_page_idx && line_top + line_height > b.1
-                        && line_top < b.2 - 0.5
+                        // The first flow box includes its leading space.
+                        // A full-width band inside that space still defers
+                        // the paragraph by one line-plus-space interval.
+                        && cursor_y + advance < b.2 - 0.5
                         && b.3 < right && b.4 > left).collect();
                 let required_lane = |policy: &BodyWrapPolicy| {
                     if policy.minimum_lane_width > 30.0 { policy.minimum_lane_width }
@@ -11367,6 +11873,7 @@ cells={} pitch={:.2} text={:?}",
         num_columns: usize,
         start_column: usize,
         col_x_positions: &[f32],
+        col_widths: &[f32],
         // S749 (2026-07-05): the vertical top of the current multi-column BAND
         // on the paragraph's first page. A continuous multi-col section that
         // starts MID-PAGE flows its columns from the section boundary — a
@@ -11416,7 +11923,7 @@ cells={} pitch={:.2} text={:?}",
         // see the s835_fn_relief derivation at the natural break test). Only
         // the body call site threads a real value; header/footer/footnote/
         // textbox/frame callers pass false (their bottoms are not fn areas).
-        fn_boundary_active: bool,
+        fn_boundary_active: impl Into<FootnoteBoundary>,
         // S900 (2026-07-17): the page's committed fn reserve from EARLIER
         // paragraphs (footnote_reserve_current), in pt. Needed to compute the
         // ABSOLUTE margin bottom (= effective bottom + reserve + this para's
@@ -11449,7 +11956,7 @@ cells={} pitch={:.2} text={:?}",
         body_wrap_bands: Option<(&[(usize, f32, f32, f32, f32, bool, BodyWrapPolicy)], usize)>,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // body in layout/paragraph.rs (its own codegen unit, see split_layout_mod2.py)
-        paragraph::ParagraphLayouter(self).layout_paragraph(para, start_x, cursor, content_width, content_height, page_top, page, pages, current_elements, grid_pitch, prev_style_id, prev_contextual_spacing, prev_autospacing_numid, prev_para_borders, prev_keep_next, in_textbox, prev_space_after, body_para_index, lm2_grid_cells, mult_cumul_raw, adjacent_to_empty_run, next_block_is_table, line_fn_refs_out, first_line_extra_content_h, para_fn_heights, num_columns, start_column, col_x_positions, col_band_top, is_header_footer, footer_tight, s755_geom, s758_band, s758_two_seg, fn_boundary_active, fn_reserve_above, fn_deferred_out, s903_next_borders, s916_tail_split, body_wrap_bands)
+        paragraph::ParagraphLayouter(self).layout_paragraph(para, start_x, cursor, content_width, content_height, page_top, page, pages, current_elements, grid_pitch, prev_style_id, prev_contextual_spacing, prev_autospacing_numid, prev_para_borders, prev_keep_next, in_textbox, prev_space_after, body_para_index, lm2_grid_cells, mult_cumul_raw, adjacent_to_empty_run, next_block_is_table, line_fn_refs_out, first_line_extra_content_h, para_fn_heights, num_columns, start_column, col_x_positions, col_widths, col_band_top, is_header_footer, footer_tight, s755_geom, s758_band, s758_two_seg, fn_boundary_active.into(), fn_reserve_above, fn_deferred_out, s903_next_borders, s916_tail_split, body_wrap_bands)
     }
 
     #[allow(unused_assignments)]
@@ -11498,19 +12005,7 @@ cells={} pitch={:.2} text={:?}",
     ) -> Vec<Line> {
         type Owned = (String, RunStyle, Option<FieldType>, usize, usize);
         let carry = |ls: &[Line]| -> Vec<Owned> {
-            ls.iter()
-                .flat_map(|l| {
-                    l.fragments.iter().map(|f| {
-                        (
-                            f.text.clone(),
-                            f.style.clone(),
-                            f.field_type.clone(),
-                            f.run_index,
-                            f.char_offset,
-                        )
-                    })
-                })
-                .collect()
+            ls.iter().flat_map(Line::source_fragments).collect()
         };
         let mut rest: Vec<Owned> = fragments
             .iter()
@@ -11531,6 +12026,9 @@ cells={} pitch={:.2} text={:?}",
             let mut row: Vec<LineFragment> = Vec::new();
             let mut seam = 0usize;
             let mut brk = LineBreakType::Normal;
+            let mut break_source = None;
+            let mut empty_break_style = None;
+            let mut emergency_word_break = false;
             let mut natural = 0.0f32;
             let mut compressed = false;
             for (seg, width) in [seg1_width, seg2_width].iter().enumerate() {
@@ -11565,6 +12063,9 @@ cells={} pitch={:.2} text={:?}",
                 natural += head.natural_total_width;
                 compressed |= head.was_compressed;
                 brk = head.break_type;
+                break_source = head.break_source.clone();
+                empty_break_style = head.empty_break_style.clone();
+                emergency_word_break |= head.emergency_word_break;
                 row.extend(head.fragments.iter().cloned());
                 rest = carry(&broken[1..]);
                 // A hard break inside the row ends the row there -- the rest of
@@ -11574,12 +12075,14 @@ cells={} pitch={:.2} text={:?}",
                 }
             }
             first_row = false;
-            if row.is_empty() {
+            if row.is_empty() && brk == LineBreakType::Normal {
                 break;
             }
             out.push(Line {
+                break_source,
+                empty_break_style,
                 whitespace_paragraph: fragments.iter().all(|f| f.0.trim().is_empty()),
-                emergency_word_break: false,
+                emergency_word_break,
                 fragments: row,
                 break_type: brk,
                 natural_total_width: natural,
@@ -12929,18 +13432,18 @@ cells={} pitch={:.2} text={:?}",
     fn s1119_run_face<'a>(
         &'a self,
         text: &str,
-        m: &'a crate::font::FontMetrics,
-    ) -> Option<&'a crate::font::FontMetrics> {
+        m: &crate::font::FontMetrics,
+    ) -> Option<FontMetricsRef<'a>> {
         if self.doc_body_has_real_cjk
             || text.is_empty()
             || std::env::var("OXI_S1119_DISABLE").is_ok()
         {
             return None;
         }
-        let mut face: Option<&crate::font::FontMetrics> = None;
+        let mut face: Option<FontMetricsRef<'_>> = None;
         for ch in text.chars() {
             let f = self.registry.symbol_fallback_face(ch, m)?;
-            match face {
+            match &face {
                 None => face = Some(f),
                 Some(prev) if prev.family == f.family => {}
                 Some(_) => return None,
@@ -12986,6 +13489,9 @@ cells={} pitch={:.2} text={:?}",
         // Use GDI tmHeight table if available (most accurate).
         // Falls back to formula-based calculation.
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
+        // Cell natural height uses the chosen font's design box. Word's
+        // Century/MS Mincho controls retain the same cell height when the
+        // only Japanese text is added in an unrelated body paragraph.
         let base =
             if let Some((h_px, _a_px, _d_px)) = self.registry.gdi_height(&metrics.family, ppem) {
                 // GDI table stores tmHeight (MulDiv-based ascent + descent).
@@ -13021,7 +13527,7 @@ cells={} pitch={:.2} text={:?}",
                     } else {
                         (raw * 8.0).floor() / 8.0
                     }
-                } else if in_table_cell && !self.doc_body_has_real_cjk
+                } else if in_table_cell
                 && std::env::var("OXI_S815_DISABLE").is_err()
                 // S922: S815's hhea basis is specific to Single spacing.
                 // Multiple spacing uses a GDI single-line height only when an
@@ -13090,9 +13596,7 @@ cells={} pitch={:.2} text={:?}",
                 // the GDI-less faces (JA blind 10 docs, golden 2).
                 metrics.word_line_height_no_grid(font_size)
             } else if in_table_cell
-                && !self.doc_body_has_real_cjk
                 && !metrics.is_cjk_83_64_font()
-                && grid_pitch.is_none()
                 && std::env::var("OXI_S815_DISABLE").is_err()
             {
                 // Without a line grid, adjustLineHeightInTable does not change
@@ -13103,8 +13607,7 @@ cells={} pitch={:.2} text={:?}",
                 metrics.word_line_height_standard(font_size)
             } else if in_table_cell {
                 // S815 (opt-in, see above): same rule on the no-GDI-table path.
-                if !self.doc_body_has_real_cjk
-                    && !metrics.is_cjk_83_64_font()
+                if !metrics.is_cjk_83_64_font()
                     && std::env::var("OXI_S815_DISABLE").is_err()
                 {
                     metrics.natural_line_height_hhea(font_size)
@@ -13258,7 +13761,7 @@ cells={} pitch={:.2} text={:?}",
                         match grid_pitch {
                             Some(pitch) if pitch > 0.0 => {
                                 let factor = line_spacing.unwrap_or(1.0);
-                                if factor > 1.0 && !self.doc_grid_all_no_type
+                                if !self.doc_grid_all_no_type
                                     && std::env::var_os("OXI_CELL_GRID_MULTIPLE_DISABLE").is_none()
                                 {
                                     // A typed grid's multiple is measured in grid lines.
@@ -13524,6 +14027,18 @@ cells={} pitch={:.2} text={:?}",
         para_font_size: f32,
         exact_cjk: bool,
     ) -> f32 {
+        let break_style = line.empty_break_style.as_ref().map(|style| {
+            let mut paragraph = para_style.clone();
+            let mut mark = style.clone();
+            mark.font_size = Some(self.resolve_font_size(style, para_style));
+            paragraph.ppr_rpr = Some(mark);
+            paragraph
+        });
+        let para_style = break_style.as_ref().unwrap_or(para_style);
+        let para_font_size = line.empty_break_style.as_ref()
+            .map(|style| self.resolve_font_size(style, para_style))
+            .unwrap_or(para_font_size);
+
         let mut max_ascent: f32 = 0.0;
         let mut max_descent: f32 = 0.0;
         // The tallest single fragment, kept beside the separate folds so the
@@ -13536,7 +14051,7 @@ cells={} pitch={:.2} text={:?}",
                 .and_then(|r| r.font_size)
                 .unwrap_or(para_font_size);
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-            let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+            let metrics = &*self.metrics_for_para_mark(&rpr_ref, para_style);
             max_ascent = metrics.word_ascent_pt(font_size);
             max_descent = metrics.word_descent_pt(font_size);
         } else {
@@ -13554,7 +14069,7 @@ cells={} pitch={:.2} text={:?}",
                     continue;
                 }
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let metrics = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                 let mut asc = metrics.word_ascent_pt(font_size);
                 let mut des = metrics.word_descent_pt(font_size);
                 // Diagnostic: keep the body capacity box at the same precision
@@ -13640,6 +14155,18 @@ cells={} pitch={:.2} text={:?}",
         para_style: &ParagraphStyle,
         para_font_size: f32,
     ) -> f32 {
+        let break_style = line.empty_break_style.as_ref().map(|style| {
+            let mut paragraph = para_style.clone();
+            let mut mark = style.clone();
+            mark.font_size = Some(self.resolve_font_size(style, para_style));
+            paragraph.ppr_rpr = Some(mark);
+            paragraph
+        });
+        let para_style = break_style.as_ref().unwrap_or(para_style);
+        let para_font_size = line.empty_break_style.as_ref()
+            .map(|style| self.resolve_font_size(style, para_style))
+            .unwrap_or(para_font_size);
+
         let mut max_ink: f32 = 0.0;
         if line.fragments.is_empty() {
             let font_size = para_style
@@ -13648,12 +14175,12 @@ cells={} pitch={:.2} text={:?}",
                 .and_then(|r| r.font_size)
                 .unwrap_or(para_font_size);
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-            let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+            let metrics = &*self.metrics_for_para_mark(&rpr_ref, para_style);
             max_ink = metrics.glyph_ink_height_pt(font_size);
         } else {
             for frag in &line.fragments {
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let metrics = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                 // S700: a vert_in_horz column's ink spans n·fs (the stacked chars).
                 let ink = if frag.style.vert_in_horz && std::env::var("OXI_S700_DISABLE").is_err() {
                     (frag.text.chars().count().max(1)) as f32 * font_size
@@ -13719,7 +14246,7 @@ cells={} pitch={:.2} text={:?}",
                 continue;
             }
             let fs = f.style.font_size.unwrap_or(para_fs);
-            let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+            let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
             if !m.is_cjk_83_64_font() {
                 continue;
             }
@@ -13731,9 +14258,9 @@ cells={} pitch={:.2} text={:?}",
                     .unwrap_or_else(|| ruby::default_hps_raise_pt(fs, hps));
                 let run = &para.runs[f.run_index];
                 let ann_asc = if ruby.annotation_fonts.is_empty() {
-                    box_asc(self.metrics_for_text(&ruby.text, &run.style, &para.style), hps)
+                    box_asc(&self.metrics_for_text(&ruby.text, &run.style, &para.style), hps)
                 } else {
-                    ruby.annotation_fonts.iter().map(|n| box_asc(self.registry.get(n), hps)).fold(0.0, f32::max)
+                    ruby.annotation_fonts.iter().map(|n| box_asc(&self.registry.get(n), hps)).fold(0.0, f32::max)
                 };
                 ruby_top = ruby_top.max(raise + ann_asc);
             }
@@ -13762,7 +14289,7 @@ cells={} pitch={:.2} text={:?}",
             if fragment.text.trim().is_empty() {
                 continue;
             }
-            let metrics = self.metrics_for_text(&fragment.text, &fragment.style, para_style);
+            let metrics = &*self.metrics_for_text(&fragment.text, &fragment.style, para_style);
             if !metrics.is_cjk_83_64_font() {
                 continue;
             }
@@ -13799,6 +14326,18 @@ cells={} pitch={:.2} text={:?}",
         in_table_cell: bool,
         grid_no_type: bool,
     ) -> f32 {
+        let break_style = line.empty_break_style.as_ref().map(|style| {
+            let mut paragraph = para_style.clone();
+            let mut mark = style.clone();
+            mark.font_size = Some(self.resolve_font_size(style, para_style));
+            paragraph.ppr_rpr = Some(mark);
+            paragraph
+        });
+        let para_style = break_style.as_ref().unwrap_or(para_style);
+        let para_font_size = line.empty_break_style.as_ref()
+            .map(|style| self.resolve_font_size(style, para_style))
+            .unwrap_or(para_font_size);
+
         let _default_style = RunStyle::default();
 
         // S1363 (2026-09-12, default ON, opt-out `OXI_S1363_DISABLE`) — the no-grid line is the
@@ -13950,7 +14489,12 @@ cells={} pitch={:.2} text={:?}",
                 || (grid_no_type
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S949_DISABLE").is_err());
-            let metrics = self.metrics_for_para_mark_g(&rpr_ref, para_style, s949_ascii);
+            // The empty cell's mark uses its ASCII font slot even under a
+            // typed grid. A CJK glyph elsewhere in the document does not change
+            // this mark into an East Asian glyph; snap that selected font box.
+            let cell_mark_ascii = in_table_cell
+                && std::env::var_os("OXI_S1574_DISABLE").is_none();
+            let metrics = &*self.metrics_for_para_mark_g(&rpr_ref, para_style, s949_ascii || cell_mark_ascii);
             dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
             hhea_natural_max = metrics.natural_line_height_hhea(font_size);
             hhea_natural_family = metrics.family.clone();
@@ -14082,7 +14626,7 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let metrics = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                 let (mut asc, mut des) = if use_standard {
                     let h = metrics.word_line_height_standard(font_size);
                     (
@@ -14177,7 +14721,7 @@ cells={} pitch={:.2} text={:?}",
                 // A mixed line can have a CJK ascent winner and a Latin
                 // hhea winner. Apply each face's natural-height rule BEFORE
                 // taking the maximum, never a CJK factor to another face.
-                let natural_face = self.s1119_run_face(&frag.text, metrics).unwrap_or(metrics);
+                let natural_face = self.s1119_run_face(&frag.text, metrics).unwrap_or_else(|| metrics.into());
                 let face_height = if natural_face.is_cjk_83_64_font() {
                     (natural_face.win_ascent + natural_face.win_descent)
                         * font_size * (83.0 / 64.0) + 2.0 * border_pad
@@ -14212,7 +14756,7 @@ cells={} pitch={:.2} text={:?}",
             for frag in &line.fragments {
                 if Self::s1298_glyphless(frag) { continue; }
                 let fs = frag.style.font_size.unwrap_or(para_font_size);
-                let m = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                 let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
                 let position = if positioned_hhea && frag.style.inline_object_image.is_none() { frag.style.position.unwrap_or(0.0) } else { 0.0 };
                 ascent = ascent.max((m.win_ascent + leading) * fs + position.max(0.0));
@@ -14351,7 +14895,7 @@ cells={} pitch={:.2} text={:?}",
                 let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                 // Use the same no-grid paragraph-mark font as the ascent
                 // and descent fold; a second East Asian lookup inflates blanks.
-                let metrics = self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
+                let metrics = &*self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
                 let formula = metrics.word_line_height_no_grid(font_size);
                 no_grid_max = lookup_no_grid(&metrics.family, font_size, formula);
             } else {
@@ -14366,7 +14910,7 @@ cells={} pitch={:.2} text={:?}",
                         continue;
                     }
                     let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                    let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                    let metrics = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                     let formula = metrics.word_line_height_no_grid(font_size);
                     let h = lookup_no_grid(&metrics.family, font_size, formula)
                         + 2.0 * Self::run_border_height_pad(&frag.style);
@@ -14392,7 +14936,7 @@ cells={} pitch={:.2} text={:?}",
                     };
                     if let Some(frag) = first_vis {
                         let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                        let latin_metrics = self.metrics_for(&frag.style, para_style);
+                        let latin_metrics = &*self.metrics_for(&frag.style, para_style);
                         if latin_metrics.is_cjk_83_64_font() {
                             let formula = latin_metrics.word_line_height_no_grid(font_size);
                             let h = lookup_no_grid(&latin_metrics.family, font_size, formula);
@@ -14739,7 +15283,7 @@ cells={} pitch={:.2} text={:?}",
                         // the heading on its cells (29.2); alone THAT costs −0.0448 as
                         // the blanks' excess is exposed; the two together come out
                         // +0.0063 on the same document. Neither half ships alone.
-                        let metrics = self.metrics_for_para_mark_g(
+                        let metrics = &*self.metrics_for_para_mark_g(
                             &rpr_ref,
                             para_style,
                             std::env::var("OXI_S1305_DISABLE").is_err()
@@ -14759,7 +15303,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                             let font_size = frag.style.font_size.unwrap_or(para_font_size);
                             let metrics =
-                                self.metrics_for_text(&frag.text, &frag.style, para_style);
+                                &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                             let f = metrics.word_line_height_no_grid(font_size);
                             if f > raw_max {
                                 raw_max = f;
@@ -14925,7 +15469,7 @@ cells={} pitch={:.2} text={:?}",
                                 && hhea_natural_max > 0.0
                                 && std::env::var("OXI_S1143_DISABLE").is_err()
                             {
-                                (hhea_natural_max * line_spacing.unwrap_or(1.0)).min(spaced)
+                                hhea_natural_max * line_spacing.unwrap_or(1.0)
                             } else {
                                 spaced
                             };
@@ -14973,7 +15517,7 @@ cells={} pitch={:.2} text={:?}",
                                 let rpr_ref =
                                     para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                                 let fs = rpr_ref.font_size.unwrap_or(para_font_size);
-                                let m = self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
+                                let m = &*self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
                                 m.word_line_height(fs, 96.0).min(cell_basis)
                             } else {
                                 cell_basis
@@ -15007,7 +15551,7 @@ cells={} pitch={:.2} text={:?}",
                                     let rpr_ref =
                                         para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                                     let fs = rpr_ref.font_size.unwrap_or(para_font_size);
-                                    let m = self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
+                                    let m = &*self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
                                     m.word_line_height(fs, 96.0).min(base)
                                 } else {
                                     base
@@ -15530,7 +16074,7 @@ cells={} pitch={:.2} text={:?}",
                         if line.fragments.is_empty() {
                             let rpr = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                             let fs = rpr.font_size.unwrap_or(para_font_size);
-                            let m = self.metrics_for_para_mark_g(&rpr, para_style, true);
+                            let m = &*self.metrics_for_para_mark_g(&rpr, para_style, true);
                             consider(fs, m);
                         } else {
                             // S1357 (2026-09-11, default ON, opt-out
@@ -15557,7 +16101,7 @@ cells={} pitch={:.2} text={:?}",
                                     continue;
                                 }
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
                                 consider(fs, m);
                             }
                         }
@@ -15629,7 +16173,7 @@ cells={} pitch={:.2} text={:?}",
                     // a CJK-theme eastAsia over a Times New Roman ascii — through
                     // the eastAsia chain the cell comes back CJK-classified and
                     // this whole branch would fall back to the point size again.
-                    let m = self.metrics_for_para_mark_g(&rpr, para_style, true);
+                    let m = &*self.metrics_for_para_mark_g(&rpr, para_style, true);
                     if m.is_cjk_83_64_font() {
                         None
                     } else {
@@ -15815,13 +16359,13 @@ cells={} pitch={:.2} text={:?}",
                         .and_then(|r| r.font_size)
                         .unwrap_or(para_font_size);
                     let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                    let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+                    let metrics = &*self.metrics_for_para_mark(&rpr_ref, para_style);
                     max_ascent = metrics.word_ascent_pt(font_size);
                     max_descent = metrics.word_descent_pt(font_size);
                 } else {
                     for frag in &line.fragments {
                         let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                        let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                        let metrics = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                         let asc = metrics.word_ascent_pt(font_size);
                         let des = metrics.word_descent_pt(font_size);
                         if asc > max_ascent {
@@ -15902,13 +16446,13 @@ cells={} pitch={:.2} text={:?}",
                         if !line.fragments.is_empty() {
                             for f in &line.fragments {
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
                                 nat = nat.max(m.natural_line_height_hhea(fs));
                                 cell = cell.max(m.word_line_height_table_cell(fs));
                             }
                         } else {
                             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                            let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                            let m = &*self.metrics_for_para_mark(&rpr_ref, para_style);
                             nat = m.natural_line_height_hhea(para_font_size);
                             cell = m.word_line_height_table_cell(para_font_size);
                         }
@@ -15956,13 +16500,13 @@ cells={} pitch={:.2} text={:?}",
                             .iter()
                             .map(|f| {
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
                                 m.word_line_height_table_cell(fs)
                             })
                             .fold(0.0_f32, f32::max)
                     } else {
                         let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                        let m = &*self.metrics_for_para_mark(&rpr_ref, para_style);
                         m.word_line_height_table_cell(para_font_size)
                     };
                     let pitch = grid_pitch.unwrap_or(0.0);
@@ -16008,7 +16552,7 @@ cells={} pitch={:.2} text={:?}",
                             if !line.fragments.is_empty() {
                                 for f in &line.fragments {
                                     let fs = f.style.font_size.unwrap_or(para_font_size);
-                                    let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                    let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
                                     if m.is_cjk_83_64_font() {
                                         let win_sum = m.win_ascent + m.win_descent;
                                         if (win_sum - 1.0).abs() < 0.05 {
@@ -16023,7 +16567,7 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 let rpr_ref =
                                     para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                                let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                                let m = &*self.metrics_for_para_mark(&rpr_ref, para_style);
                                 if m.is_cjk_83_64_font() {
                                     let win_sum = m.win_ascent + m.win_descent;
                                     if (win_sum - 1.0).abs() < 0.05 {
@@ -16230,13 +16774,13 @@ cells={} pitch={:.2} text={:?}",
                             .iter()
                             .map(|f| {
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
                                 m.word_line_height_table_cell(fs)
                             })
                             .fold(0.0_f32, f32::max)
                     } else {
                         let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                        let m = &*self.metrics_for_para_mark(&rpr_ref, para_style);
                         m.word_line_height_table_cell(para_font_size)
                     };
                     // S1366 (2026-09-13, OPT-IN `OXI_S1366=1` -- the PDF says factor-invariant, the word_png pixels say x1.15 sits 1pt lower; held until a pixel capture of the probe decides): a
@@ -16677,7 +17221,7 @@ cells={} pitch={:.2} text={:?}",
                             for run in &p.runs {
                                 let fs = self.resolve_font_size(&run.style, &p.style);
                                 let metrics =
-                                    self.metrics_for_text(&run.text, &run.style, &p.style);
+                                    &*self.metrics_for_text(&run.text, &run.style, &p.style);
                                 let chars: Vec<char> = run.text.chars().collect();
                                 for (ci, &ch) in chars.iter().enumerate() {
                                     let mut bw =
@@ -17412,16 +17956,36 @@ cells={} pitch={:.2} text={:?}",
     /// Fix C: estimate_para_height previously used break_into_lines (with yakumono
     /// compression) which fit more chars per line than the cell renderer actually
     /// produces. estimate under-counted → render overflowed → page cascade.
+    // Use the same implicit hanging stop as the body tab resolver. The
+    // hanging position is available before a later custom/default stop;
+    // continuation lines have already reached it and cannot use it again.
+    fn cell_next_tab_stop(&self, para: &Paragraph, current: f32,
+        indent_left: f32, first_indent: f32) -> (f32, TabStopAlignment) {
+        let explicit = para.style.tab_stops.iter().find(|t| t.position > current + 0.01);
+        let implied = if std::env::var("OXI_S881_DISABLE").is_err()
+            && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1560_DISABLE").is_none())
+            && first_indent < -0.01 && indent_left > current + 0.01 {
+            Some(indent_left)
+        } else { None };
+        match (explicit, implied) {
+            (Some(t), Some(i)) if i < t.position - 0.01 => (i, TabStopAlignment::Left),
+            (Some(t), _) => (t.position, t.alignment),
+            (None, Some(i)) => (i, TabStopAlignment::Left),
+            (None, None) => (((current/self.default_tab_stop).floor()+1.0)*self.default_tab_stop,
+                TabStopAlignment::Left),
+        }
+    }
+
     #[allow(unused_assignments)]
-    fn cell_tab_word_overflows(&self, para: &Paragraph, pos: usize, current: f32, right: f32) -> bool {
+    fn cell_tab_word_overflows(&self, para: &Paragraph, pos: usize, current: f32, right: f32, indent_left: f32, first_indent: f32) -> bool {
         if std::env::var("OXI_CELL_TAB_WORD_FIT_DISABLE").is_ok() || self.doc_body_has_real_cjk { return false; }
-        let Some(stop) = para.style.tab_stops.iter().find(|t| t.position > current + 0.01) else { return false; };
-        if stop.alignment != TabStopAlignment::Left || (stop.position * 20.0).round() >= (right * 20.0).round() { return false; }
+        let (stop, alignment) = self.cell_next_tab_stop(para, current, indent_left, first_indent);
+        if alignment != TabStopAlignment::Left || (stop * 20.0).round() >= (right * 20.0).round() { return false; }
         let mut index = 0usize;
         let mut width = 0.0;
         'runs: for r in &para.runs {
             let fs = self.resolve_font_size(&r.style, &para.style);
-            let m = self.metrics_for_text(&r.text, &r.style, &para.style);
+            let m = &*self.metrics_for_text(&r.text, &r.style, &para.style);
             for ch in r.text.chars() {
                 let at = index; index += 1;
                 if at <= pos { continue; }
@@ -17430,7 +17994,7 @@ cells={} pitch={:.2} text={:?}",
                     + r.style.character_spacing.unwrap_or(0.0);
             }
         }
-        stop.position + width > right
+        stop + width > right
     }
 
     // S1406 (2026-09-15, default ON, opt-out OXI_CELL_FLOAT_FLOW_DISABLE): the
@@ -17556,7 +18120,7 @@ cells={} pitch={:.2} text={:?}",
         let mut lines: usize = 0;
         let mut line_size_samples: Vec<CellLineSample> = Vec::new();
         let mut line_ruby_samples = Vec::new();
-        let mut diagnostic_tab_sizes: Vec<f32> = Vec::new();
+        let mut diagnostic_tab_runs: Vec<usize> = Vec::new();
         // S1312: lines that carry a ruby run (banked wherever `lines` is).
         let mut ruby_lines: usize = 0;
         let mut line_has_ruby = false;
@@ -17569,6 +18133,7 @@ cells={} pitch={:.2} text={:?}",
         // Without this the line-count estimate under-counts vs render, re-introducing
         // the Fix C estimate<render mismatch this function exists to prevent.
         let mut prev_char_emitted: Option<char> = None;
+        let mut prev_char_gap: Option<f32> = None;
         let mut prev_char_ruby = false; // S1316: the emitted char came from a ruby field
         // Session 123 (2026-05-20): mirror the S118 jc=both wrap-decision lookahead
         // from the cell renderer (mod.rs:6722-6727 and 6864-6895). Without this
@@ -17600,7 +18165,7 @@ cells={} pitch={:.2} text={:?}",
                 || matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
         let s1176_space = std::env::var("OXI_CJKSPACE").ok().as_deref() == Some("1")
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
-        let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
+        let mut current_line_chars: Vec<CellFitChar> = Vec::new();
         // S1082: paragraph-wide char stream + running offset, so the estimate can
         // answer the same "is this the paragraph's last word?" question the render
         // loop answers with s586_para_chars / s586_run_offset.
@@ -17663,13 +18228,13 @@ cells={} pitch={:.2} text={:?}",
                 }
                 if line_x + cw > ew && line_nonempty {
                     if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
-                        let CellLineSample { font_sizes: mut sizes, uses_paragraph_mark } =
-                            CellLineSample::from_chars(current_line_chars.iter(), &diagnostic_tab_sizes, self.doc_body_has_real_cjk);
-                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
-                        line_size_samples.push(CellLineSample { font_sizes: sizes, uses_paragraph_mark });
+                        let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
+                            CellLineSample::from_chars(current_line_chars.iter(), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
+                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                        line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                     }
-                    diagnostic_tab_sizes.clear();
+                    diagnostic_tab_runs.clear();
                     lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -17683,6 +18248,7 @@ cells={} pitch={:.2} text={:?}",
                 line_nonempty = true;
                 line_has_ruby |= s1312_run_ruby;
                 prev_char_emitted = None;
+                prev_char_gap = None;
                 prev_char_ruby = false;
                 s1082_gpos += n;
                 continue;
@@ -17693,7 +18259,7 @@ cells={} pitch={:.2} text={:?}",
                 snap_character_spacing(run.style.character_spacing.unwrap_or(0.0))
             };
             // S123: per-char trial-line for jc=both wrap-decision lookahead.
-            let mut buf_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
+            let mut buf_chars: Vec<CellFitChar> = Vec::new();
             // S1017 (2026-07-26): indexed so the KERNBREAK next-char lookup
             // (below) matches the render loop's s586_run_chars.get(ci+1).
             let s1017_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
@@ -17709,21 +18275,21 @@ cells={} pitch={:.2} text={:?}",
                 let tab_break = ch == '\t' && first_indent_pt < 0.0 && (line_nonempty || buf_nonempty)
                     && self.cell_tab_word_overflows(para, s1082_here,
                         line_x + buf_w + if is_first_line { (indent_l_pt + first_indent_pt).max(0.0) } else { indent_l_pt },
-                        wrap_w + indent_l_pt);
+                        wrap_w + indent_l_pt, indent_l_pt, first_indent_pt);
                 if tab_break && std::env::var("OXI_CELL_TAB_CHAR_PACK_DISABLE").is_err() { cell_tab_char_pack = true; }
                 if ch == '\n' || ch == '\x0B' || ch == '\x0C' || tab_break {
                     cell_edge_tab_nowrap = false;
                     if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
-                        let CellLineSample { font_sizes: mut sizes, uses_paragraph_mark } =
-                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_sizes, self.doc_body_has_real_cjk);
+                        let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
+                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
                         if sizes.is_empty() && !tab_break && !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_CELL_BREAK_FONT_DISABLE").is_err() { sizes.push(font_size); }
+                            && std::env::var("OXI_CELL_BREAK_FONT_DISABLE").is_err() { sizes.push(fit_run_idx); }
 
-                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
-                        line_size_samples.push(CellLineSample { font_sizes: sizes, uses_paragraph_mark });
+                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                        line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark: tab_break && uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                     }
-                    diagnostic_tab_sizes.clear();
+                    diagnostic_tab_runs.clear();
                     lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -17735,6 +18301,7 @@ cells={} pitch={:.2} text={:?}",
                     line_nonempty = false;
                     is_first_line = false;
                     prev_char_emitted = None;
+                prev_char_gap = None;
                     prev_char_ruby = false;
                     current_line_chars.clear();
                     buf_chars.clear();
@@ -17751,38 +18318,27 @@ cells={} pitch={:.2} text={:?}",
                         indent_l_pt
                     };
                     let abs_pos = line_x + buf_w + indent_off;
-                    let next_pos = if !para.style.tab_stops.is_empty() {
-                        para.style
-                            .tab_stops
-                            .iter()
-                            .find(|ts| ts.position > abs_pos + 0.01)
-                            .map(|ts| ts.position)
-                            .unwrap_or_else(|| {
-                                ((abs_pos / self.default_tab_stop).floor() + 1.0)
-                                    * self.default_tab_stop
-                            })
-                    } else {
-                        ((abs_pos / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop
-                    };
+                    let (next_pos, _) = self.cell_next_tab_stop(para, abs_pos, indent_l_pt, first_indent_pt);
                     if std::env::var("OXI_CELL_EDGE_TAB_DISABLE").is_err()
                         && !self.doc_body_has_real_cjk
                         && (next_pos * 20.0).round() >= ((wrap_w + indent_l_pt) * 20.0).round()
                     {
                         cell_edge_tab_nowrap = true;
                     }
-                    diagnostic_tab_sizes.push(font_size);
+                    diagnostic_tab_runs.push(fit_run_idx);
                     buf_w += (next_pos - abs_pos).max(0.0);
                     buf_nonempty = true;
                     line_nonempty = true;
                 line_has_ruby |= s1312_run_ruby;
                     prev_char_emitted = Some(ch);
+                prev_char_gap = Some(self.natural_autospace_after(ch, &run.style, &para.style, font_size, cs));
                     prev_char_ruby = run.style.ruby_field;
                     continue;
                 }
                 // S763 + S1052 estimate mirror — the classification MUST match
                 // the placement loop or the row height diverges from the placed
                 // lines (the S716/S751 three-pass lesson).
-                let cm = self.metrics_for_char_in(
+                let cm = &*self.metrics_for_char_in(
                     ch,
                     !self.s1052_cell_latin_quote(&s1017_chars, s1017_i),
                     &run.style,
@@ -17975,7 +18531,7 @@ cells={} pitch={:.2} text={:?}",
                         && ((de_boundary && para.style.auto_space_de)
                             || (dn_boundary && para.style.auto_space_dn))
                     {
-                        if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
+                        if let Some(gap) = prev_char_gap { gap } else if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
                             s1175_autospace(
                                 font_size,
                                 cs,
@@ -18117,6 +18673,7 @@ cells={} pitch={:.2} text={:?}",
                     // position releases the pool too AND adds its own half em (1.50em
                     // for two marks). No corpus line reaches it, so it is recorded
                     // here rather than coded.
+                    let punctuation_unit = self.cell_punctuation_unit(para, font_size, grid_char_pitch, grid_char_cw_ratio);
                     let yaku = if s1174_yakucomp {
                         let s1208 = std::env::var("OXI_S1208_DISABLE").is_err();
                         let mut has_a = false;
@@ -18135,11 +18692,11 @@ cells={} pitch={:.2} text={:?}",
                             last_ch = Some(c.ch);
                         }
                         let a = if !s1208 {
-                            if has_a { 0.5 * font_size } else { 0.0 }
+                            if has_a { 0.5 * punctuation_unit } else { 0.0 }
                         } else if last_ch == Some('\u{3000}') {
-                            (0.5 * font_size * n_a).min(1.5 * font_size)
+                            (0.5 * punctuation_unit * n_a).min(1.5 * punctuation_unit)
                         } else if n_a > 0.0 {
-                            0.5 * font_size
+                            0.5 * punctuation_unit
                         } else {
                             0.0
                         };
@@ -18216,8 +18773,8 @@ cells={} pitch={:.2} text={:?}",
                     };
                     let mut trial: Vec<crate::layout::jc_both_compress::CharContext> =
                         Vec::with_capacity(current_line_chars.len() + buf_chars.len() + 1);
-                    trial.extend(current_line_chars.iter().cloned());
-                    trial.extend(buf_chars.iter().cloned());
+                    trial.extend(current_line_chars.iter().map(|c| c.compression.clone()));
+                    trial.extend(buf_chars.iter().map(|c| c.compression.clone()));
                     trial.push(ch_ctx);
                     let r = crate::layout::jc_both_compress::compute_compression(
                         &trial,
@@ -18238,23 +18795,24 @@ cells={} pitch={:.2} text={:?}",
                     {
                         buf_w += cw;
                         buf_nonempty = true;
-                        buf_chars.push(crate::layout::jc_both_compress::CharContext {
-                            ch,
-                            natural_advance: cw,
-                            font_size,
-                        });
+                        buf_chars.push(CellFitChar {
+                    compression: crate::layout::jc_both_compress::CharContext {
+                        ch, natural_advance: cw, font_size,
+                    },
+                    run_index: fit_run_idx,
+                });
                         line_x += buf_w;
                         line_nonempty = true;
                 line_has_ruby |= s1312_run_ruby;
                         current_line_chars.extend(buf_chars.drain(..));
                         if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
-                            let CellLineSample { font_sizes: mut sizes, uses_paragraph_mark } =
-                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_sizes, self.doc_body_has_real_cjk);
-                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
-                            line_size_samples.push(CellLineSample { font_sizes: sizes, uses_paragraph_mark });
+                            let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
+                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
+                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                            line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                         }
-                        diagnostic_tab_sizes.clear();
+                        diagnostic_tab_runs.clear();
                         lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -18303,10 +18861,10 @@ cells={} pitch={:.2} text={:?}",
                             &[&p_alnum]
                         };
                         let mut stage_carry: Option<
-                            Vec<crate::layout::jc_both_compress::CharContext>,
+                            Vec<CellFitChar>,
                         > = None;
                         for pred in preds {
-                            let mut carry: Vec<crate::layout::jc_both_compress::CharContext> =
+                            let mut carry: Vec<CellFitChar> =
                                 Vec::new();
                             let mut hit_boundary = false;
                             loop {
@@ -18358,13 +18916,13 @@ cells={} pitch={:.2} text={:?}",
                         }
                         if let Some(carry) = stage_carry {
                             if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
-                                let CellLineSample { font_sizes: mut sizes, uses_paragraph_mark } =
-                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_sizes, self.doc_body_has_real_cjk);
-                                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
-                                line_size_samples.push(CellLineSample { font_sizes: sizes, uses_paragraph_mark });
+                                let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
+                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
+                                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                                line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                             }
-                            diagnostic_tab_sizes.clear();
+                            diagnostic_tab_runs.clear();
                             lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -18405,13 +18963,13 @@ cells={} pitch={:.2} text={:?}",
                             current_line_chars.extend(buf_chars.drain(..));
                         }
                         if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
-                            let CellLineSample { font_sizes: mut sizes, uses_paragraph_mark } =
-                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_sizes, self.doc_body_has_real_cjk);
-                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
-                            line_size_samples.push(CellLineSample { font_sizes: sizes, uses_paragraph_mark });
+                            let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
+                            CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
+                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                            line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                         }
-                        diagnostic_tab_sizes.clear();
+                        diagnostic_tab_runs.clear();
                         lines += 1;
                 if line_has_ruby {
                     ruby_lines += 1;
@@ -18425,12 +18983,14 @@ cells={} pitch={:.2} text={:?}",
                 }
                 buf_w += cw;
                 buf_nonempty = true;
-                buf_chars.push(crate::layout::jc_both_compress::CharContext {
-                    ch,
-                    natural_advance: cw,
-                    font_size,
+                buf_chars.push(CellFitChar {
+                    compression: crate::layout::jc_both_compress::CharContext {
+                        ch, natural_advance: cw, font_size,
+                    },
+                    run_index: fit_run_idx,
                 });
                 prev_char_emitted = Some(ch);
+                prev_char_gap = Some(self.natural_autospace_after(ch, &run.style, &para.style, font_size, cs));
                 prev_char_ruby = run.style.ruby_field;
             }
             if buf_nonempty {
@@ -18442,15 +19002,22 @@ cells={} pitch={:.2} text={:?}",
                 current_line_chars.extend(buf_chars.drain(..));
             }
         }
-        if line_nonempty {
+        let trailing_soft_break = para.runs.iter().rev()
+            .flat_map(|r| r.text.chars().rev()).next()
+            .is_some_and(|c| matches!(c, '\n' | '\x0B' | '\x0C'));
+        if line_nonempty || trailing_soft_break {
             if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
-                let CellLineSample { font_sizes: mut sizes, uses_paragraph_mark } =
-                            CellLineSample::from_chars(current_line_chars.iter(), &diagnostic_tab_sizes, self.doc_body_has_real_cjk);
-                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} sizes={:?}", lines, sizes); }
-                line_size_samples.push(CellLineSample { font_sizes: sizes, uses_paragraph_mark });
+                let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
+                            CellLineSample::from_chars(current_line_chars.iter(), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
+                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                let final_mark_only = current_line_chars.iter()
+                    .all(|c| Self::mark_spacing_only_char(c.ch));
+                if final_mark_only { sizes.clear(); }
+                line_size_samples.push(CellLineSample {
+                    run_indices: sizes, uses_paragraph_mark: uses_paragraph_mark || final_mark_only });
                 line_ruby_samples.push(line_has_ruby);
             }
-            diagnostic_tab_sizes.clear();
+            diagnostic_tab_runs.clear();
             lines += 1;
             if line_has_ruby {
                 ruby_lines += 1;
@@ -18514,7 +19081,7 @@ cells={} pitch={:.2} text={:?}",
             para.runs.first().map(|r| r.style.clone()).unwrap_or_default()
         });
         let fs = self.resolve_font_size(&marker_style, &para.style);
-        let m = self.metrics_for(&marker_style, &para.style);
+        let m = &*self.metrics_for(&marker_style, &para.style);
         marker.chars().map(|c| {
             if m.char_widths.contains_key(&c) && m.synthetic_bold_advance <= 0.0 {
                 m.char_width_em(c) * fs
@@ -18594,6 +19161,44 @@ cells={} pitch={:.2} text={:?}",
     /// the row came out +13. S751 already zeroed the ALL-empty hideMark cell; this
     /// subsumes it (a lone empty paragraph is the tail) and corrects the
     /// multi-empty case, where S751's "all zero" undercounts by N-1 lines.
+    // A hidden end-of-cell mark removes a final break-terminated blank
+    // line and that paragraph's after spacing. A trailing space or visible
+    // text keeps the line; intermediate paragraphs keep every line.
+    fn hidden_cell_final_line(cell: &TableCell, block_pos: usize, para: &Paragraph) -> bool {
+        cell.hide_mark && block_pos + 1 == cell.blocks.len()
+            && para.runs.iter().all(|r| r.style.inline_object_extent.is_none()
+                && r.style.inline_object_image.is_none() && r.footnote_ref.is_none()
+                && r.endnote_ref.is_none() && r.field_type.is_none()
+                && r.ruby.is_none() && !r.style.ruby_field && !r.is_math)
+            && para.runs.iter().rev().flat_map(|r| r.text.chars().rev()).next()
+                .is_some_and(|c| matches!(c, '\n' | '\x0B' | '\x0C'))
+    }
+
+    fn without_hidden_cell_after(para: &Paragraph) -> Paragraph {
+        let mut result = para.clone();
+        result.style.space_after = Some(0.0);
+        result.style.space_after_from_doc_defaults = false;
+        result.style.after_lines = None;
+        result.style.after_autospacing = false;
+        result.style.after_autospacing_off = true;
+        result
+    }
+
+    fn hidden_cell_final_mark_height(&self, para: &Paragraph,
+        table_para_style: Option<&ParagraphStyle>, grid_pitch: Option<f32>) -> f32 {
+        // Resolve the same mark-only line through the shared estimator;
+        // preserve the paragraph's exact/minimum/automatic spacing and face.
+        let mut mark = Self::without_hidden_cell_after(para);
+        mark.runs.clear();
+        mark.style.space_before = Some(0.0);
+        mark.style.space_before_from_doc_defaults = false;
+        mark.style.before_lines = None;
+        mark.style.before_autospacing = false;
+        mark.style.before_autospacing_off = true;
+        self.estimate_para_height_emit(&mark, 100_000.0, grid_pitch,
+            table_para_style, true, None, None)
+    }
+
     fn s1311_hidemark_tail_pos(&self, cell: &TableCell) -> Option<usize> {
         if !cell.hide_mark || std::env::var("OXI_S1311_DISABLE").is_ok() {
             return None;
@@ -18886,7 +19491,7 @@ cells={} pitch={:.2} text={:?}",
                     let mark = host.style.ppr_rpr.clone().unwrap_or_default();
                     let size = mark.font_size.unwrap_or_else(||
                         self.resolve_font_size(&RunStyle::default(), &host.style));
-                    let metrics = self.metrics_for_para_mark_g(&mark, &host.style, true);
+                    let metrics = &*self.metrics_for_para_mark_g(&mark, &host.style, true);
                     let natural = if metrics.is_cjk_83_64_font() {
                         metrics.word_line_height_no_grid(size)
                     } else { metrics.natural_line_height_hhea(size) };
@@ -19215,6 +19820,22 @@ cells={} pitch={:.2} text={:?}",
         )
     }
 
+    fn row_vertical_padding_defaults(
+        row: &TableRow,
+        table_top: f32,
+        table_bottom: f32,
+    ) -> (f32, f32) {
+        let margins = if std::env::var("OXI_S1215_DISABLE").is_err() {
+            row.cell_margins_override.as_ref()
+        } else {
+            None
+        };
+        (
+            margins.and_then(|m| m.top).unwrap_or(table_top),
+            margins.and_then(|m| m.bottom).unwrap_or(table_bottom),
+        )
+    }
+
     fn estimate_table_row_natural_h_with_border_padding(
         &self,
         row: &TableRow,
@@ -19230,6 +19851,8 @@ cells={} pitch={:.2} text={:?}",
         include_border_padding: bool,
     ) -> f32 {
         let _s1429_guard = TableLayoutGuard::new();
+        let (row_default_pad_t, row_default_pad_b) =
+            Self::row_vertical_padding_defaults(row, default_pad_t, default_pad_b);
         let mut row_height: f32 = 0.0;
         let mut grid_idx = row.grid_before as usize;
         for cell in row.cells.iter() {
@@ -19262,12 +19885,12 @@ cells={} pitch={:.2} text={:?}",
                 .margins
                 .as_ref()
                 .and_then(|m| m.top)
-                .unwrap_or(default_pad_t);
+                .unwrap_or(row_default_pad_t);
             let pad_b = cell
                 .margins
                 .as_ref()
                 .and_then(|m| m.bottom)
-                .unwrap_or(default_pad_b);
+                .unwrap_or(row_default_pad_b);
             // S1575 (2026-09-26, default ON, opt-out OXI_S1575_DISABLE): a cell's
             // top/bottom margin is ROW-wide -- every cell of the row takes the
             // row's largest. reference__009644b1: only the label cells carry tcMar
@@ -19275,8 +19898,8 @@ cells={} pitch={:.2} text={:?}",
             // baseline (PDF 256.13 both) and the 3-line row is 5 + 43.92 + 5,
             // Oxi's content cell had no margin (43.9) and page 2 ran ~50pt short.
             let (pad_t, pad_b) = if std::env::var_os("OXI_S1575_DISABLE").is_none() {
-                let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t)).fold(pad_t, f32::max);
-                let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b)).fold(pad_b, f32::max);
+                let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(row_default_pad_t)).fold(pad_t, f32::max);
+                let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b)).fold(pad_b, f32::max);
                 (mt, mb)
             } else { (pad_t, pad_b) };
             #[allow(unused_mut)]
@@ -19348,6 +19971,11 @@ cells={} pitch={:.2} text={:?}",
                 .rposition(Self::is_cell_spacing_paragraph);
             // S716: the post-nested-table stub paragraph contributes no height.
             let s716_stub_nat = self.nested_table_stub_pos(cell);
+            let hidden_tail_para = cell.blocks.last().and_then(|block| match block {
+                Block::Paragraph(para) if Self::hidden_cell_final_line(cell, cell.blocks.len() - 1, para) =>
+                    Some(Self::without_hidden_cell_after(para)),
+                _ => None,
+            });
             let s1311_tail_nat = self.s1311_hidemark_tail_pos(cell);
             for (block_pos, block) in cell.blocks.iter().enumerate() {
                 if s751_hide_empty && s1311_tail_nat.is_none() {
@@ -19358,6 +19986,9 @@ cells={} pitch={:.2} text={:?}",
                 }
                 match block {
                     Block::Paragraph(para) => {
+                        let hidden_final_mark = !vert_writing_active
+                            && Self::hidden_cell_final_line(cell, block_pos, para);
+                                                let para = if hidden_final_mark { hidden_tail_para.as_ref().unwrap() } else { para };
                         let mut para_h = if vert_writing_active {
                             if s753_vert {
                                 if s753_first_done {
@@ -19400,6 +20031,10 @@ cells={} pitch={:.2} text={:?}",
                             para_h = self.measure_cell_float_para(para, inner_w, table_grid_pitch,
                                 table.style.para_style.as_ref(), grid_char_pitch, grid_char_cw_ratio,
                                 true, false, top, &obstacles).0;
+                        }
+                        if hidden_final_mark {
+                            para_h = (para_h - self.hidden_cell_final_mark_height(para,
+                                table.style.para_style.as_ref(), table_grid_pitch)).max(0.0);
                         }
                         cell_content_h += para_h;
                         // S753: no spacing bookkeeping for vert-cell paragraphs
@@ -19758,7 +20393,6 @@ cells={} pitch={:.2} text={:?}",
         // the render side already lays it out (13.5 estimated vs 9.617 laid).
         let s1574_glyphless = in_cell
             && self.doc_body_has_real_cjk
-            && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)
             && std::env::var_os("OXI_S1574_DISABLE").is_none()
             && !para.runs.is_empty()
             && para.runs.iter().all(|r| r.text.is_empty()
@@ -19766,7 +20400,8 @@ cells={} pitch={:.2} text={:?}",
                 && r.style.inline_object_image.is_none()
                 && r.footnote_ref.is_none() && r.endnote_ref.is_none()
                 && r.field_type.is_none() && r.ruby.is_none() && !r.is_math);
-        if para.runs.is_empty() || s1394_ws || s1574_glyphless {
+        let cell_mark_only = in_cell && Self::paragraph_mark_only(para);
+        if para.runs.is_empty() || s1394_ws || s1574_glyphless || cell_mark_only {
             // Use pPr/rPr font for empty paragraph height
             let empty_fs = para
                 .style
@@ -19785,11 +20420,11 @@ cells={} pitch={:.2} text={:?}",
             // rules): three text paragraphs 31.56, empty/space first+last 30.12
             // = 2 x (10.375 - 9.62), Century's hhea line 2462/2048 x 8.
             let s1574_cell = in_cell && self.doc_body_has_real_cjk
-                && (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid));
+                && std::env::var_os("OXI_S1574_DISABLE").is_none();
             let s940_mark_ascii =
                 (!self.doc_body_has_real_cjk || s1574_cell) && std::env::var("OXI_S940_DISABLE").is_err();
             let s1394_ascii = s1394_ws && !(para.style.snap_to_grid && grid_pitch.is_some());
-            let metrics = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii || s1394_ascii);
+            let metrics = &*self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii || s1394_ascii);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             // S943 (bundle member with S940): an auto-rule MULTIPLE (line=276)
             // Latin empty takes hhea × factor — the bare rule test routed
@@ -19797,7 +20432,7 @@ cells={} pitch={:.2} text={:?}",
             // byte-identical; only the S940-gated path forks).
             let s943_mult = std::env::var("OXI_S940_DISABLE").is_err()
                 && std::env::var("OXI_S943_DISABLE").is_err()
-                && !self.doc_body_has_real_cjk
+                && (!self.doc_body_has_real_cjk || s1574_cell)
                 && !metrics.is_cjk_83_64_font()
                 && (eff_lr.is_none() || eff_lr == Some("auto"))
                 && eff_ls.map_or(false, |f| (f - 1.0).abs() > 0.01);
@@ -19858,15 +20493,32 @@ cells={} pitch={:.2} text={:?}",
             } else {
                 self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true)
             };
+            // Empty CJK cell marks obey their actual automatic multiplier and
+            // the table's grid policy, just like the emitted line. The legacy
+            // single-line table metric loses fractional and multiple spacing.
+            let empty_cell_grid = in_cell && self.adjust_line_height_in_table
+                && para.style.snap_to_grid && grid_pitch.is_some();
+            let h_added = if in_cell && (metrics.is_cjk_83_64_font()
+                || empty_cell_grid) {
+                self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics,
+                    para.style.snap_to_grid,
+                    if self.adjust_line_height_in_table { grid_pitch } else { None },
+                    true)
+            } else {
+                h_added
+            };
             // S1574: whichever estimate branch ran, a CJK document's ascii-face
             // empty cell line is its hhea natural (the render side's value).
             let h_added = if s1574_cell && s940_mark_ascii && is_single_empty
-                && !snap_in_cell && !metrics.is_cjk_83_64_font()
+                && !empty_cell_grid && !metrics.is_cjk_83_64_font()
             {
                 metrics.natural_line_height_hhea(empty_fs) * eff_ls.unwrap_or(1.0)
             } else {
                 h_added
             };
+            let h_added = if cell_mark_only {
+                self.cell_mark_line_height(para, eff_ls, eff_lr, grid_pitch).1
+            } else { h_added };
             if std::env::var("OXI_DBG_CELLEMPTY").is_ok() {
                 eprintln!("[CELLEMPTY] fam={} fs={:.2} cjk={} snap_in_cell={} use_render_lh={} grid={:?} ls={:?} lr={:?} h_added={:.3}",
                     metrics.family, empty_fs, metrics.is_cjk_83_64_font(), snap_in_cell, use_render_lh, grid_pitch, eff_ls, eff_lr, h_added);
@@ -19928,7 +20580,21 @@ cells={} pitch={:.2} text={:?}",
             } else {
                 first_indent_raw
             };
-            let raw_effective_width = available_width - indent_l - indent_r;
+            // Footnote reservation must use the same horizontal character
+            // grid as its paragraph emitter. snapToGrid governs vertical
+            // spacing; the horizontal grid follows the shared S342 policy.
+            let note_grid = !in_cell && IN_FOOTNOTE_LAYOUT.with(|c| c.get());
+            let snap_pass = std::env::var("OXI_S342_NO_SNAP_GATE")
+                .map(|v| v != "0" && v != "false").unwrap_or(true)
+                || std::env::var("OXI_S344_FS_LT_DEFAULT")
+                    .map(|v| v != "0" && v != "false").unwrap_or(false);
+            let note_pitch = (note_grid && (snap_pass || para.style.snap_to_grid))
+                .then_some(grid_char_pitch).flatten();
+            let note_ratio = note_pitch.and(grid_char_cw_ratio);
+            let note_width = if note_pitch.is_some() {
+                self.s1211c_floor_body_width(para, available_width, note_pitch, note_ratio)
+            } else { available_width };
+            let raw_effective_width = note_width - indent_l - indent_r;
             let effective_width = if !in_cell && std::env::var("OXI_DEGENERATE_CJK_SPACES").is_ok() { raw_effective_width } else { raw_effective_width.max(1.0) };
 
             // Fix C (2026-04-22): in cell context, count lines using the same
@@ -19962,7 +20628,7 @@ cells={} pitch={:.2} text={:?}",
                             .unwrap_or_default()
                     });
                     let mk_fs = self.resolve_font_size(&marker_style, &para.style);
-                    let mk_metrics = self.metrics_for(&marker_style, &para.style);
+                    let mk_metrics = &*self.metrics_for(&marker_style, &para.style);
                     let mk_w: f32 = para
                         .style
                         .list_marker
@@ -20030,7 +20696,7 @@ cells={} pitch={:.2} text={:?}",
                 // uses.
                 s1099_first_fits = para.runs.first().map_or(false, |r| {
                     let fs = self.resolve_font_size(&r.style, &para.style);
-                    let m = self.metrics_for_text(&r.text, &r.style, &para.style);
+                    let m = &*self.metrics_for_text(&r.text, &r.style, &para.style);
                     let w: f32 = r
                         .text
                         .trim()
@@ -20068,10 +20734,10 @@ cells={} pitch={:.2} text={:?}",
                     effective_width,
                     first_indent,
                     &para.style,
-                    None,
-                    None,
+                    note_pitch,
+                    note_ratio,
                     true,
-                    false,
+                    note_pitch.is_some(),
                     matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
                     false,
                     false,
@@ -20155,7 +20821,7 @@ cells={} pitch={:.2} text={:?}",
                     continue;
                 }
                 let font_size = self.resolve_font_size(&run.style, &para.style);
-                let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
+                let metrics = &*self.metrics_for_text(&run.text, &run.style, &para.style);
                 let is_single_run = match (eff_lr, eff_ls) {
                     (Some("exact"), _) | (Some("atLeast"), _) => false,
                     (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
@@ -20295,7 +20961,7 @@ cells={} pitch={:.2} text={:?}",
                 let mut natural_max = 0.0f32;
                 for run in para.runs.iter().filter(|r| !r.text.trim().is_empty()) {
                     let fs = self.resolve_font_size(&run.style, &para.style);
-                    let m = self.metrics_for_text(&run.text, &run.style, &para.style);
+                    let m = &*self.metrics_for_text(&run.text, &run.style, &para.style);
                     let leading = (m.ascent + m.descent + m.line_gap - m.win_ascent - m.win_descent).max(0.0);
                     natural_max = natural_max.max(m.natural_line_height_hhea(fs));
                     ascent = ascent.max((m.win_ascent + leading) * fs);
@@ -20451,16 +21117,15 @@ cells={} pitch={:.2} text={:?}",
             } else {
                 max_line_height * line_count as f32
             };
-            // Use the runs present on each counted line for ordinary Latin text.
-            // A size shared by different runs uses their largest existing line height;
-            // this preserves a conservative estimate without inventing run identity.
+            // Price each line from the formatting runs actually present there.
+            // Equal font sizes in different faces do not share a metric box.
             let per_line_eligible = in_cell && !self.doc_body_has_real_cjk
                 && !snap_in_cell && para.style.list_marker.is_none()
                 && std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err()
                 && cell_line_sizes.len() == line_count
                 && para.runs.iter().all(|r| r.ruby.is_none() && !r.style.combine
                     && r.style.inline_object_extent.is_none()
-                    && r.style.vertical_align.is_none() && r.text.is_ascii());
+                    && r.style.vertical_align.is_none());
             let mut measured_height = 0.0_f32;
             let mut measured_lines = Vec::new();
             let mut measured_valid = per_line_eligible;
@@ -20469,14 +21134,20 @@ cells={} pitch={:.2} text={:?}",
                     let lh = if sample.uses_paragraph_mark {
                         let mark = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                         let fs = self.resolve_font_size(&mark, &para.style);
-                        let metrics = self.metrics_for_para_mark_g(&mark, &para.style, true);
+                        let metrics = &*self.metrics_for_para_mark_g(&mark, &para.style, true);
                         self.line_height_inner(fs, eff_ls, eff_lr, metrics, false, None, true)
                     } else {
                         s1099_lhs.iter().filter(|(ri, _)| {
-                            let fs = self.resolve_font_size(&para.runs[*ri].style, &para.style);
-                            sample.font_sizes.iter().any(|size| (*size - fs).abs() < 0.001)
+                            sample.run_indices.contains(ri)
                         }).map(|(_, lh)| *lh).fold(0.0_f32, f32::max)
                     };
+                    // A single visible line already has a composed box above,
+                    // including the shared baseline of its participating runs.
+                    // Per-line size selection must not discard that composition.
+                    // Tab-only lines retain their measured paragraph-mark basis.
+                    let lh = if line_count == 1 && !sample.uses_paragraph_mark {
+                        lh.max(max_line_height)
+                    } else { lh };
                     if lh <= 0.0 { measured_valid = false; break; }
                     measured_height += lh;
                     measured_lines.push(lh);
@@ -20521,7 +21192,7 @@ cells={} pitch={:.2} text={:?}",
             // prices via S795/S1112).
             if in_cell
                 && !self.doc_body_has_real_cjk
-                && !matches!(eff_lr, Some("exact") | Some("atLeast"))
+                && !matches!(eff_lr, Some("exact"))
                 && (para
                     .style
                     .list_marker
@@ -20531,6 +21202,7 @@ cells={} pitch={:.2} text={:?}",
                 && std::env::var("OXI_S1125_DISABLE").is_err()
             {
                 let mut s1125_asc: f32 = 0.0;
+                let mut s1125_desc: f32 = 0.0;
                 let mut s1125_best_sum: f32 = 0.0;
                 let mut s1125_ext: f32 = 0.0;
                 for run in para.runs.iter() {
@@ -20538,8 +21210,9 @@ cells={} pitch={:.2} text={:?}",
                         continue;
                     }
                     let fs = self.resolve_font_size(&run.style, &para.style);
-                    let m = self.metrics_for_text(&run.text, &run.style, &para.style);
+                    let m = &*self.metrics_for_text(&run.text, &run.style, &para.style);
                     s1125_asc = s1125_asc.max(m.win_ascent * fs);
+                    s1125_desc = s1125_desc.max(m.win_descent * fs);
                     let win_sum = (m.win_ascent + m.win_descent) * fs;
                     let fext = (m.natural_line_height_hhea(fs) - win_sum).max(0.0);
                     if win_sum > s1125_best_sum {
@@ -20558,7 +21231,9 @@ cells={} pitch={:.2} text={:?}",
                         });
                     let mfs = self.resolve_font_size(&marker_style, &para.style);
                     let marker_asc = self.s1614_aum_marker_asc(para).unwrap_or(2059.0 / 2048.0 * mfs);
-                    let extra = (marker_asc - s1125_asc - s1125_ext).max(0.0);
+                    let extra = Self::minimum_marker_entry_overflow(
+                        (marker_asc - s1125_asc - s1125_ext).max(0.0),
+                        s1125_asc + s1125_desc + s1125_ext, max_line_height, eff_lr);
                     height += extra;
                     if let Some(first) = float_measure.as_deref_mut().and_then(|m| m.heights.first_mut()) {
                         *first += extra;
@@ -20601,7 +21276,7 @@ cells={} pitch={:.2} text={:?}",
                             .filter(|r| !r.text.trim().is_empty())
                             .map(|r| {
                                 let fs = self.resolve_font_size(&r.style, &para.style);
-                                let m = self.metrics_for_text(&r.text, &r.style, &para.style);
+                                let m = &*self.metrics_for_text(&r.text, &r.style, &para.style);
                                 self.line_height_inner(fs, eff_ls, eff_lr, m, para.style.snap_to_grid, None, true)
                             })
                             .fold(0.0_f32, f32::max);
@@ -20706,6 +21381,16 @@ cells={} pitch={:.2} text={:?}",
                 (b - a).max(0.0)
             });
         (a.max(b) - gap_target).max(0.0)
+    }
+
+    // A minimum line box absorbs marker ascent only to the extent that
+    // its floor exceeds the natural text box. Exact spacing clips instead.
+    fn minimum_marker_entry_overflow(overflow: f32, natural: f32, line: f32, rule: Option<&str>) -> f32 {
+        match rule {
+            Some("exact") => 0.0,
+            Some("atLeast") => (overflow - (line - natural).max(0.0)).max(0.0),
+            _ => overflow,
+        }
     }
 
     /// S1075 (2026-08-06, default ON, opt-out OXI_S1075_DISABLE): the CELL
@@ -20854,6 +21539,22 @@ cells={} pitch={:.2} text={:?}",
             .is_some_and(|lang| lang.eq_ignore_ascii_case("en") || lang.to_ascii_lowercase().starts_with("en-"))
     }
 
+    // A legacy cell's punctuation allowance is measured in its physical
+    // character-grid unit. Word retains the ninth character at +0.50/+0.51pt
+    // charSpace and wraps it at +0.52pt; changing the document default from
+    // 10.5pt to 12pt leaves that boundary unchanged for the same 10pt cell.
+    fn cell_punctuation_unit(&self, para: &Paragraph, font_size: f32,
+        grid_char_pitch: Option<f32>, grid_char_cw_ratio: Option<f32>) -> f32 {
+        if self.compat_mode <= 14 && para.style.snap_to_grid {
+            if let (Some(pitch), Some(ratio)) = (grid_char_pitch, grid_char_cw_ratio) {
+                if pitch > 0.0 && ratio > 0.0 {
+                    return font_size + (pitch - pitch / ratio).max(0.0);
+                }
+            }
+        }
+        font_size
+    }
+
     fn cell_english_pair_capacity(para: &Paragraph, style: &RunStyle,
         chars: impl Iterator<Item = char>, font_size: f32, pool: f32) -> f32 {
         if !Self::cell_english_ea_natural(para, style) { return pool; }
@@ -20900,6 +21601,118 @@ cells={} pitch={:.2} text={:?}",
     // Footnote estimates omit inherited spacing per side. Restore the resolved
     // paragraph gap independently of how either side was specified, and remove
     // any after-spacing already included before adding the final trailing gap.
+    /// Lay out one footnote once; reservation and placement consume this same plan.
+    fn footnote_layout_plan(
+        &self, note: &Footnote, seq: u32, page: &Page, grid_pitch: Option<f32>,
+    ) -> (Vec<LayoutElement>, f32) {
+        let _footnote_context = FnLayoutGuard::new();
+        let mut cy = LayoutCursor::new(0.0);
+        let footnote_width = page.size.width - page.margin.left - page.margin.right;
+        let footnote_page_height_huge = 1e6_f32;
+        let footnote_page_top = 0.0;
+        let mut elements = Vec::new();
+        let mut first = true;
+        // Word keeps the ordinary max(after, before) paragraph gap across
+        // note boundaries, including when the preceding note is on another
+        // page. The first note in the story retains its full before spacing.
+        // Point-valued spacing is resolved here; line-based and automatic
+        // spacing still require their font-dependent story context.
+        let preceding = self.footnote_previous_style.get(&note.number)
+            .filter(|style| style.after_lines.is_none() && !style.after_autospacing);
+        let mut previous_after = preceding.and_then(|p| p.space_after).unwrap_or(0.0);
+        let mut previous_style = preceding.and_then(|p| p.style_id.as_deref());
+        let mut previous_contextual = preceding.is_some_and(|p| p.contextual_spacing);
+        for block in &note.blocks {
+            if let Block::Paragraph(para) = block {
+                let mut para_to_render = para.clone();
+                if first {
+                    first = false;
+                    if note.automatic_numbering {
+                    let prefix = seq.to_string();
+                    if let Some(run) = para_to_render.runs.first_mut() {
+                        run.text = format!("{}{}", prefix, run.text);
+                    } else {
+                        para_to_render.runs.push(Run {
+                                                text: prefix,
+                                                style: RunStyle::default(),
+                                                url: None,
+                                                footnote_ref: None,
+                                                endnote_ref: None,
+                                                comment_range_start: Vec::new(),
+                                                comment_range_end: Vec::new(),
+                                                comment_references: Vec::new(),
+                                                tracked_change: None,
+                                                rpr_change: None,
+                                                ruby: None,
+                                                bookmark_name: None,
+                                                is_math: false,
+                                                field_type: None,
+                                                has_last_rendered_page_break: false,
+                                            });
+                    }
+                    }
+                }
+        let empty_fn_h_note = std::collections::HashMap::new();
+        // The paragraph helper returns the complete max(after, before) gap.
+        // Previous after-space has already been advanced by the story owner
+        // (or belongs to the preceding note's plan), so credit it exactly once.
+        cy.advance(-previous_after);
+        let (note_elements, after, _) = self.layout_paragraph(
+            &para_to_render,
+            page.margin.left,
+            &mut cy,
+            footnote_width,
+            footnote_page_height_huge,
+            footnote_page_top,
+            page,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            // S828: no-type grids render footnote lines at
+            // natural hhea, not the pitch (est==place==render).
+            if para_to_render.style.snap_to_grid { grid_pitch } else { None },
+            previous_style,
+            previous_contextual,
+            None,
+            None,
+            false,
+            false,
+            previous_after,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            0.0,
+            &empty_fn_h_note,
+            1,
+            0,
+            &[], &[],
+            0.0,   // S749: band top unused (1-col)
+            false, // S691: footnote context
+            false, // S726
+            None,  // S755
+            None,  // S758
+            None,  // S-TWOSEG
+            false, // S835
+            0.0,
+            None,  // S900
+            None,  // S903
+            false, // S916
+            None,
+        );
+                elements.extend(note_elements);
+                // Paragraph layout returns trailing spacing to its story owner.
+                // Advance it once, then let the next paragraph collapse its before.
+                cy.advance(after);
+                previous_after = after;
+                previous_style = para.style.style_id.as_deref();
+                previous_contextual = para.style.contextual_spacing;
+            }
+        }
+        (elements, cy.cursor_y)
+    }
+
     fn footnote_twip_spacing_supported(&self, style: &ParagraphStyle) -> bool {
         style.before_lines.is_none() && style.after_lines.is_none()
             && !style.before_autospacing && !style.after_autospacing
@@ -21092,7 +21905,12 @@ cells={} pitch={:.2} text={:?}",
         let same_end_style = para.style.style_id.as_deref()
             .or(self.cell_default_style_id.as_deref())
             .is_some_and(|id| self.cell_end_style_id.as_deref() == Some(id));
-        let est_sa = if is_last && para.style.contextual_spacing && same_end_style {
+        // The source-context pass resolves row-end and next-cell identity
+        // before both painting and nested measurement. A middle Normal cell
+        // may keep its after spacing when the next cell uses another style.
+        let est_sa = if is_last && para.style.contextual_spacing && same_end_style
+            && std::env::var_os("OXI_CELL_SOURCE_CONTEXT_DISABLE").is_some()
+        {
             0.0
         } else {
             est_sa
@@ -21106,7 +21924,10 @@ cells={} pitch={:.2} text={:?}",
         // Style1 cells 13.875 (before gone against the Style1 cell above, after
         // kept against the Normal end mark); row 1 keeps its before when the
         // paragraph above the table has another style. Oxi kept the before.
+        // Source-order normalization replaces the grid-column predecessor.
+        // Retain the old model only when diagnosing without the new pass.
         let est_sb = if is_first && para.style.contextual_spacing
+            && std::env::var_os("OXI_CELL_SOURCE_CONTEXT_DISABLE").is_some()
             && std::env::var_os("OXI_S1612_DISABLE").is_none()
         {
             let own = para.style.style_id.as_deref().or(self.cell_default_style_id.as_deref());
@@ -21207,6 +22028,12 @@ cells={} pitch={:.2} text={:?}",
 
 #[derive(Default)]
 struct Line {
+    /// The actual source control terminating the row. Keep it during reflow,
+    /// including a row consisting solely of a page or column boundary.
+    break_source: Option<(usize, usize, RunStyle)>,
+    /// A blank line terminated by an explicit soft break takes that run's
+    /// formatting; the final empty line takes the paragraph mark instead.
+    empty_break_style: Option<RunStyle>,
     /// A lexical segment was forced to break between characters.
     emergency_word_break: bool,
     /// Whether the complete source paragraph contains only whitespace.
@@ -21226,6 +22053,31 @@ struct Line {
     /// 2-pass wrap: true if yakumono compression was actually applied to any fragment.
     /// Used by render stage to decide 「 leading-gap direction (-3pt tight / +6pt loose).
     was_compressed: bool,
+}
+
+impl Line {
+    fn source_start(&self) -> Option<(usize, usize)> {
+        self.fragments.first().map(|fragment| (fragment.run_index, fragment.char_offset))
+            .or_else(|| self.break_source.as_ref().map(|(run, offset, _)| (*run, *offset)))
+    }
+
+    fn source_fragments(&self) -> Vec<(String, RunStyle, Option<FieldType>, usize, usize)> {
+        let mut fragments: Vec<_> = self.fragments.iter().map(|fragment|
+            (fragment.text.clone(), fragment.style.clone(), fragment.field_type.clone(),
+             fragment.run_index, fragment.char_offset)).collect();
+        if let Some((run, offset, style)) = &self.break_source {
+            let control = match self.break_type {
+                LineBreakType::PageBreak => "\x0C",
+                LineBreakType::ColumnBreak => "\x0B",
+                LineBreakType::SoftBreak => "\n",
+                LineBreakType::Normal => "",
+            };
+            if !control.is_empty() {
+                fragments.push((control.to_owned(), style.clone(), None, *run, *offset));
+            }
+        }
+        fragments
+    }
 }
 
 impl Default for LineBreakType {
@@ -21741,3 +22593,576 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod source_boundary_reflow_tests {
+    use super::*;
+    #[test]
+    fn reflow_preserves_empty_page_and_column_boundaries_with_source_positions() {
+        let style=RunStyle { font_size: Some(12.0), ..RunStyle::default() };
+        for (kind, control) in [(LineBreakType::PageBreak,"\x0C"), (LineBreakType::ColumnBreak,"\x0B"), (LineBreakType::SoftBreak,"\n")] {
+            let row=Line { break_type: kind, break_source: Some((3,8,style.clone())), ..Line::default() };
+            assert_eq!(row.source_start(),Some((3,8)));
+            let fragments=row.source_fragments();
+            assert_eq!(fragments.len(),1);
+            assert_eq!(fragments[0].0,control);
+            assert_eq!((fragments[0].3,fragments[0].4),(3,8));
+            assert_eq!(fragments[0].1.font_size,Some(12.0));
+        }
+    }
+}
+
+#[cfg(test)]
+mod two_segment_source_boundary_tests {
+    use super::*;
+    #[test]
+    fn two_strips_preserve_leading_and_consecutive_explicit_controls() {
+        let engine=LayoutEngine::new();
+        let style=RunStyle { font_size:Some(12.0), ..RunStyle::default() };
+        let para=ParagraphStyle::default();
+        for (control,kind) in [('\x0C',LineBreakType::PageBreak),('\x0B',LineBreakType::ColumnBreak),('\n',LineBreakType::SoftBreak)] {
+            for prefix in ["", "ALPHA BETA"] {
+                let text=format!("{prefix}{control}{control}AFTER MARKER");
+                let fragments=vec![(text.as_str(),&style,None,4,7)];
+                let rows=engine.break_two_segment_lines(&fragments,90.0,90.0,0.0,&para,None,None,false,true,false,true,false,false);
+                let controls:Vec<_>=rows.iter().filter(|r|r.break_type==kind).collect();
+                assert_eq!(controls.len(),2,"{text:?}");
+                for (i,row) in controls.iter().enumerate() {
+                    let source=row.break_source.as_ref().expect("actual source control");
+                    assert_eq!((source.0,source.1),(4,7+prefix.chars().count()+i));
+                }
+                let visible:String=rows.iter().flat_map(|r|r.fragments.iter()).flat_map(|f|f.text.chars()).filter(|c|!c.is_whitespace()).collect();
+                assert_eq!(visible,format!("{prefix}AFTER MARKER").chars().filter(|c|!c.is_whitespace()).collect::<String>());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod empty_boundary_caret_tests {
+    use super::*;
+    #[test]
+    fn empty_boundary_caret_preserves_source_without_painting_control_glyphs() {
+        let bytes=include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),"/../../tests/fixtures/basic_test.docx"));
+        let mut document=crate::parser::parse_docx(bytes).unwrap();
+        let mut paragraph=document.pages[0].blocks.iter().find_map(|b|match b {
+            Block::Paragraph(p) if !p.runs.is_empty()=>Some(p.clone()),_=>None }).unwrap();
+        paragraph.style=ParagraphStyle::default();
+        paragraph.alignment=Alignment::Left;
+        paragraph.shapes.clear();
+        paragraph.runs.truncate(1);
+        paragraph.runs[0].style=RunStyle {font_size:Some(12.0),..RunStyle::default()};
+        paragraph.runs[0].text="BEFORE".into();
+        let mut boundary=paragraph.clone();boundary.runs[0].text="\x0CMARKER".into();
+        let mut empty=paragraph.clone();empty.runs[0].text.clear();
+        document.pages.truncate(1);
+        document.pages[0].blocks=vec![Block::Paragraph(paragraph),Block::Paragraph(boundary),Block::Paragraph(empty)];
+        let layout=LayoutEngine::for_document(&document).layout(&document);
+        assert_eq!(layout.pages.len(),2);
+        let caret=layout.pages[0].elements.iter().find(|e|e.paragraph_index==Some(1)
+            &&e.run_index==Some(0)&&e.char_offset==Some(0)).expect("boundary caret on the source page");
+        assert!(caret.source_text.is_none());
+        assert_eq!((caret.run_index,caret.char_offset),(Some(0),Some(0)));
+        assert_eq!(caret.width,0.0);
+        assert!(matches!(&caret.content,LayoutContent::Text{text,..}if text.is_empty()));
+        assert!(layout.pages[1].elements.iter().any(|e|e.paragraph_index==Some(1)
+            &&matches!(&e.content,LayoutContent::Text{text,..}if text.contains("MARKER"))));
+        assert!(layout.pages[1].elements.iter().filter(|e|e.paragraph_index==Some(2))
+            .all(|e|e.source_text.is_none()));
+        for offset in [0,1] {
+            let mut copy=document.clone();
+            let image:Image=serde_json::from_value(serde_json::json!({
+                "data":[],"width":0.0,"height":0.0,"anchor_block_index":1,
+                "position":{"x":0.0,"y":0.0,"flow_page_offset":offset,"flow_boundary_offset":offset}
+            })).unwrap();
+            copy.pages[0].floating_images.push(image);
+            let result=LayoutEngine::for_document(&copy).layout(&copy);
+            let caret=result.pages[0].elements.iter().find(|e|e.paragraph_index==Some(1)
+                &&e.run_index==Some(0)&&e.char_offset==Some(0)).unwrap();
+            assert!(caret.source_text.is_none());
+            assert_eq!(caret.source_boundary_attachment, offset == 0);
+            assert_eq!(caret.source_container_index, Some(0));
+            assert_eq!(caret.source_paragraph_extent, Some((7, 1)));
+            assert_eq!(caret.source_paragraph_column_controls, Some(0));
+            assert_eq!(caret.source_paragraph_prefix.as_deref(), Some("\x0CMARKER"));
+            assert_eq!(caret.source_char_len.unwrap_or(0), 0);
+            assert!(matches!(&caret.content,LayoutContent::Text{text,..}if text.is_empty()));
+        }
+        // A later blank control after visible text is an editable source
+        // position, not a new paragraph opener.
+        let mut copy=document.clone();
+        if let Block::Paragraph(p)=&mut copy.pages[0].blocks[1] {
+            p.runs[0].text="PRETEXT\x0C\x0CMARKER".into();
+        }
+        let image:Image=serde_json::from_value(serde_json::json!({
+            "data":[],"width":0.0,"height":0.0,"anchor_block_index":1,
+            "position":{"x":0.0,"y":0.0,"flow_page_offset":1,"flow_boundary_offset":1}
+        })).unwrap();
+        copy.pages[0].floating_images.push(image);
+        let result=LayoutEngine::for_document(&copy).layout(&copy);
+        let caret=result.pages[1].elements.iter().find(|e|e.paragraph_index==Some(1)
+            &&e.run_index==Some(0)&&e.char_offset==Some(8)).unwrap();
+        assert!(caret.source_text.is_none());
+        assert!(matches!(&caret.content,LayoutContent::Text{text,..}if text.is_empty()));
+    }
+}
+
+
+#[cfg(test)]
+#[test]
+fn source_anchor_row_fitting_reserves_declared_height_before_column_control(){
+    let data=std::fs::read("../../tests/fixtures/basic_test.docx").unwrap();
+    let mut doc=crate::parser::parse_docx(&data).unwrap();doc.pages.truncate(1);
+    let original=doc.pages[0].blocks.iter().find_map(|block|match block{Block::Paragraph(p)=>Some(p.clone()),_=>None}).unwrap();
+    let mut before=original.clone();before.runs.truncate(1);before.runs[0].text="BEFORE".into();
+    before.runs[0].style.font_size=Some(12.0);before.style=ParagraphStyle::default();
+    before.style.space_before=Some(0.0);before.style.space_after=Some(0.0);
+    before.style.line_spacing_rule=Some("exact".into());before.style.line_spacing=Some(14.0);
+    let mut target=before.clone();target.runs[0].text="PRE\x0BAFTER".into();target.style.line_spacing=Some(32.0);
+    let page=&mut doc.pages[0];page.blocks=vec![Block::Paragraph(before),Block::Paragraph(target)];
+    page.size.height=188.0;page.margin.top=72.0;page.margin.bottom=72.0;
+    page.grid_line_pitch=None;page.grid_char_pitch=None;page.doc_grid_no_type=true;
+    page.floating_images.clear();page.text_boxes.clear();
+    let image:Image=serde_json::from_value(serde_json::json!({
+        "data":[],"width":60.0,"height":10.0,"anchor_block_index":1,"wrap_type":"Square",
+        "position":{"x":500.0,"y":0.0,"h_relative":"page","v_relative":"paragraph",
+            "flow_boundary_offset":1,"flow_source":{"run_index":0,"char_offset":4}}
+    })).unwrap();page.floating_images.push(image);
+    let layout=LayoutEngine::for_document(&doc).layout(&doc);
+    let locate=|prefix:&str|layout.pages.iter().position(|page|page.elements.iter().any(|element|
+        matches!(&element.content,LayoutContent::Text{text,..}if text.starts_with(prefix)))).unwrap();
+    assert_eq!(locate("BEFORE"),0);
+    assert_eq!(locate("PRE"),1,"the 32pt text row needs a fresh page despite the following column control");
+    assert_eq!(locate("AFTER"),2,"the explicit control follows the fitted text row");
+    assert!(layout.pages[2].elements.iter().any(|element|matches!(element.content,LayoutContent::Image{..})));
+}
+
+
+#[cfg(test)]
+#[test]
+fn explicit_column_tail_keeps_two_printed_rows_under_widow_control(){
+    let data=std::fs::read("../../tests/fixtures/basic_test.docx").unwrap();
+    for widow in [true,false]{
+        let mut doc=crate::parser::parse_docx(&data).unwrap();doc.pages.truncate(1);
+        let mut before=doc.pages[0].blocks.iter().find_map(|block|match block{Block::Paragraph(p)=>Some(p.clone()),_=>None}).unwrap();
+        before.runs.truncate(1);before.runs[0].text="BEFORE".into();before.runs[0].style.font_size=Some(12.0);
+        before.style=ParagraphStyle::default();before.style.space_before=Some(0.0);before.style.space_after=Some(0.0);
+        before.style.line_spacing_rule=Some("exact".into());before.style.line_spacing=Some(14.0);
+        let mut target=before.clone();target.runs[0].text="ONE\nTWO\x0BAFTER".into();
+        target.style.widow_control=widow;target.style.has_explicit_widow_control=true;
+        let page=&mut doc.pages[0];page.blocks=vec![Block::Paragraph(before),Block::Paragraph(target)];
+        page.size.height=183.0;page.margin.top=72.0;page.margin.bottom=72.0;
+        page.grid_line_pitch=None;page.grid_char_pitch=None;page.doc_grid_no_type=true;
+        page.floating_images.clear();page.text_boxes.clear();
+        let layout=LayoutEngine::for_document(&doc).layout(&doc);
+        let locate=|prefix:&str|layout.pages.iter().position(|page|page.elements.iter().any(|element|
+            matches!(&element.content,LayoutContent::Text{text,..}if text.starts_with(prefix)))).unwrap();
+        assert_eq!(locate("ONE"),usize::from(widow));
+        assert_eq!(locate("TWO"),1);assert_eq!(locate("AFTER"),2);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn empty_page_control_does_not_require_a_second_page_at_the_bottom(){
+    let data=std::fs::read("../../tests/fixtures/basic_test.docx").unwrap();
+    let mut doc=crate::parser::parse_docx(&data).unwrap();doc.pages.truncate(1);
+    let mut before=doc.pages[0].blocks.iter().find_map(|block|match block{Block::Paragraph(p)=>Some(p.clone()),_=>None}).unwrap();
+    before.runs.truncate(1);before.runs[0].text="BEFORE".into();before.runs[0].style.font_size=Some(12.0);
+    before.style=ParagraphStyle::default();before.style.space_before=Some(0.0);before.style.space_after=Some(0.0);
+    before.style.line_spacing_rule=Some("exact".into());before.style.line_spacing=Some(32.0);
+    let mut target=before.clone();target.runs[0].text="\x0CAFTER".into();target.style.line_spacing=Some(14.0);
+    let page=&mut doc.pages[0];page.blocks=vec![Block::Paragraph(before),Block::Paragraph(target)];
+    page.size.height=180.0;page.margin.top=72.0;page.margin.bottom=72.0;
+    page.grid_line_pitch=None;page.grid_char_pitch=None;page.doc_grid_no_type=true;
+    page.floating_images.clear();page.text_boxes.clear();
+    let layout=LayoutEngine::for_document(&doc).layout(&doc);
+    let after=layout.pages.iter().position(|page|page.elements.iter().any(|element|
+        matches!(&element.content,LayoutContent::Text{text,..}if text.starts_with("AFTER")))).unwrap();
+    assert_eq!(after,1,"an empty page control must not produce an implicit page followed by an explicit page");
+}
+
+
+#[cfg(test)]
+#[test]
+fn three_row_widow_constraints_prioritize_the_first_pair_when_no_page_fits_all(){
+    let data=std::fs::read("../../tests/fixtures/basic_test.docx").unwrap();
+    let mut doc=crate::parser::parse_docx(&data).unwrap();doc.pages.truncate(1);
+    let mut before=doc.pages[0].blocks.iter().find_map(|block|match block{Block::Paragraph(p)=>Some(p.clone()),_=>None}).unwrap();
+    before.runs.truncate(1);before.runs[0].text="BEFORE".into();before.runs[0].style.font_size=Some(12.0);
+    before.style=ParagraphStyle::default();before.style.space_before=Some(0.0);before.style.space_after=Some(0.0);
+    before.style.line_spacing_rule=Some("exact".into());before.style.line_spacing=Some(14.0);
+    let mut target=before.clone();target.runs[0].text="ONE\nTWO\nAFTER".into();
+    target.style.widow_control=true;target.style.has_explicit_widow_control=true;
+    let page=&mut doc.pages[0];page.blocks=vec![Block::Paragraph(before),Block::Paragraph(target)];
+    page.size.height=183.0;page.margin.top=72.0;page.margin.bottom=72.0;
+    page.grid_line_pitch=None;page.grid_char_pitch=None;page.doc_grid_no_type=true;
+    page.floating_images.clear();page.text_boxes.clear();
+    let layout=LayoutEngine::for_document(&doc).layout(&doc);
+    let locate=|prefix:&str|layout.pages.iter().enumerate().find_map(|(i,page)|page.elements.iter().find_map(|element|
+        matches!(&element.content,LayoutContent::Text{text,..}if text.starts_with(prefix)).then_some((i,element.y)))).unwrap();
+    let one=locate("ONE");let two=locate("TWO");let after=locate("AFTER");
+    assert_eq!((one.0,two.0,after.0),(1,1,2));
+    assert!((two.1-one.1-14.0).abs()<0.01,"the retained rows must remain distinct instead of overlapping");
+}
+
+
+#[cfg(test)]
+#[test]
+fn paragraph_relative_drawing_origin_is_independent_of_text_space_before() {
+    let bytes=include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),"/../../tests/fixtures/basic_test.docx"));
+    for prefix in [false,true] {
+        for before in [0.0,6.0,12.0] {
+            let mut doc=crate::parser::parse_docx(bytes).unwrap();doc.pages.truncate(1);
+            let mut p=doc.pages[0].blocks.iter().find_map(|b|match b {
+                Block::Paragraph(p)=>Some(p.clone()),_=>None}).unwrap();
+            p.runs.truncate(1);p.runs[0].text="ANCHOR TEXT".into();
+            p.runs[0].style=RunStyle {font_size:Some(12.0),..RunStyle::default()};
+            p.shapes.clear();p.style=ParagraphStyle::default();
+            p.style.space_before=Some(before);p.style.space_after=Some(0.0);
+            p.style.line_spacing_rule=Some("exact".into());p.style.line_spacing=Some(14.0);
+            let mut blocks=Vec::new();
+            if prefix {let mut prior=p.clone();prior.style.space_before=Some(0.0);prior.runs[0].text="PREFIX".into();blocks.push(Block::Paragraph(prior));}
+            blocks.push(Block::Paragraph(p));
+            let page=&mut doc.pages[0];page.blocks=blocks;
+            page.size.height=792.0;page.margin.top=72.0;page.margin.bottom=72.0;
+            page.grid_line_pitch=None;page.grid_char_pitch=None;page.doc_grid_no_type=true;
+            page.floating_images.clear();page.text_boxes.clear();
+            let image:Image=serde_json::from_value(serde_json::json!({
+                "data":[],"width":60.0,"height":20.0,"anchor_block_index":usize::from(prefix),
+                "position":{"x":300.0,"y":20.0,"h_relative":"page","v_relative":"paragraph"}
+            })).unwrap();page.floating_images.push(image);
+            let layout=LayoutEngine::for_document(&doc).layout(&doc);
+            let drawing=layout.pages[0].elements.iter().find(|e|matches!(e.content,LayoutContent::Image{..})).unwrap();
+            assert!((drawing.y-(92.0+if prefix {14.0}else{0.0})).abs()<0.01,
+                "text before-spacing must not change the paragraph-relative container: {}",drawing.y);
+        }
+    }
+}
+
+
+fn wrap_contour_bounds(kind: Option<crate::ir::WrapType>, points: &[(f32,f32)]) -> (f32,f32,f32,f32) {
+    if kind!=Some(crate::ir::WrapType::Tight) || points.len()<3
+        || points.iter().any(|&(x,y)| !x.is_finite() || !y.is_finite()) {
+        return (0.0,0.0,1.0,1.0);
+    }
+    let bounds=points.iter().fold((f32::INFINITY,f32::INFINITY,f32::NEG_INFINITY,f32::NEG_INFINITY),
+        |(x0,y0,x1,y1),&(x,y)| (x0.min(x),y0.min(y),x1.max(x),y1.max(y)));
+    if bounds.2<=bounds.0 || bounds.3<=bounds.1 { (0.0,0.0,1.0,1.0) } else { bounds }
+}
+
+#[cfg(test)]
+#[test]
+fn tight_contours_preserve_interior_edges_and_negative_outline_bounds() {
+    let top_rule=[(0.0,-0.175),(1.0,-0.175),(1.0,0.0),(0.0,0.0)];
+    assert_eq!(wrap_contour_bounds(Some(crate::ir::WrapType::Tight),&top_rule),(0.0,-0.175,1.0,0.0));
+    let inset=[(0.0,0.0),(0.9966,0.0),(0.9966,0.9746),(0.0,0.9746)];
+    assert_eq!(wrap_contour_bounds(Some(crate::ir::WrapType::Tight),&inset),(0.0,0.0,0.9966,0.9746));
+    assert_eq!(wrap_contour_bounds(Some(crate::ir::WrapType::Square),&inset),(0.0,0.0,1.0,1.0));
+    assert_eq!(wrap_contour_bounds(Some(crate::ir::WrapType::Tight),&[]),(0.0,0.0,1.0,1.0));
+    let invalid=[(0.0,0.0),(f32::NAN,1.0),(1.0,1.0)];
+    assert_eq!(wrap_contour_bounds(Some(crate::ir::WrapType::Tight),&invalid),(0.0,0.0,1.0,1.0));
+}
+
+
+#[cfg(test)]
+#[test]
+fn first_flow_box_reserves_leading_space_against_full_width_drawing() {
+    let bytes=include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),"/../../tests/fixtures/basic_test.docx"));
+    let doc=crate::parser::parse_docx(bytes).unwrap();
+    let engine=LayoutEngine::for_document(&doc);
+    let page=&doc.pages[0];
+    let mut p=page.blocks.iter().find_map(|b|match b {
+        Block::Paragraph(p)=>Some(p.clone()),_=>None}).unwrap();
+    p.runs.truncate(1);p.runs[0].text="FLOW".into();
+    p.runs[0].style=RunStyle {font_size:Some(12.0),..RunStyle::default()};
+    p.style=ParagraphStyle::default();p.style.snap_to_grid=false;
+    p.style.space_before=Some(6.0);p.style.line_spacing_rule=Some("exact".into());
+    p.style.line_spacing=Some(14.0);
+    let band=[(0,152.0,153.0,72.0,528.0,true,BodyWrapPolicy::TEXT_FRAME)];
+    let (lane,_,advance)=engine.body_paragraph_wrap_bands(&p,page,&band,0,151.0,72.0,456.0);
+    assert!((advance-20.0).abs()<0.01,"leading-space intersection must reserve the first flow box: {advance}");
+    assert!(lane.is_none());
+    let (_,_,clear)=engine.body_paragraph_wrap_bands(&p,page,&band,0,154.0,72.0,456.0);
+    assert_eq!(clear,0.0,"a band behind the paragraph's entry has no flow claim");
+}
+
+#[cfg(test)]
+#[test]
+fn source_container_identity_distinguishes_repeated_local_paragraph_indices() {
+    let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/basic_test.docx"));
+    let mut document = crate::parser::parse_docx(bytes).unwrap();
+    let mut paragraph = document.pages[0].blocks.iter().find_map(|block| {
+        if let Block::Paragraph(p) = block { Some(p.clone()) } else { None }
+    }).unwrap();
+    paragraph.runs.truncate(1);
+    paragraph.runs[0].text = "SOURCE".into();
+    paragraph.style = ParagraphStyle::default();
+    let mut container = document.pages[0].clone();
+    container.blocks = vec![Block::Paragraph(paragraph)];
+    container.floating_images.clear();
+    container.text_boxes.clear();
+    document.pages = vec![container.clone(), container];
+    let layout = LayoutEngine::for_document(&document).layout(&document);
+    let origins: std::collections::HashSet<_> = layout.pages.iter()
+        .flat_map(|p| &p.elements)
+        .filter(|e| e.paragraph_index == Some(0)
+            && matches!(&e.content, LayoutContent::Text { text, .. } if text == "SOURCE"))
+        .map(|e| (e.source_container_index, e.source_paragraph_extent)).collect();
+    assert_eq!(origins.len(), 2);
+    assert!(origins.contains(&(Some(0), Some((6, 0)))));
+    assert!(origins.contains(&(Some(1), Some((6, 0)))));
+}
+
+#[cfg(test)]
+#[test]
+fn source_prefix_retains_column_control_and_unicode_character_extent() {
+    let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/basic_test.docx"));
+    let mut document = crate::parser::parse_docx(bytes).unwrap();
+    let mut paragraph = document.pages[0].blocks.iter().find_map(|block| {
+        if let Block::Paragraph(p) = block { Some(p.clone()) } else { None }
+    }).unwrap();
+    paragraph.runs.truncate(1);
+    paragraph.style = ParagraphStyle::default();
+    let text = format!("\u{3042}\n\x0B{}", "A".repeat(70));
+    paragraph.runs[0].text = text.clone();
+    document.pages.truncate(1);
+    document.pages[0].blocks = vec![Block::Paragraph(paragraph)];
+    document.pages[0].floating_images.clear();
+    document.pages[0].text_boxes.clear();
+    let layout = LayoutEngine::for_document(&document).layout(&document);
+    let source: Vec<_> = layout.pages.iter().flat_map(|page| &page.elements)
+        .filter(|e| e.paragraph_index == Some(0) && matches!(&e.content, LayoutContent::Text { .. }))
+        .collect();
+    assert!(!source.is_empty());
+    for element in source {
+        assert_eq!(element.source_paragraph_extent, Some((73, 2)));
+        assert_eq!(element.source_paragraph_column_controls, Some(1));
+        assert_eq!(element.source_paragraph_prefix.as_deref(), Some(text.chars().take(64).collect::<String>().as_str()));
+    }
+}
+
+
+
+
+#[cfg(test)]
+#[test]
+fn paragraph_relative_drawing_retains_preceding_after_spacing() {
+    let bytes=include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),"/../../tests/fixtures/basic_test.docx"));
+    for after in [0.0,6.0,12.0] {
+        for before in [0.0,6.0,12.0] {
+            let mut doc=crate::parser::parse_docx(bytes).unwrap();doc.pages.truncate(1);
+            let mut p=doc.pages[0].blocks.iter().find_map(|b|match b {
+                Block::Paragraph(p)=>Some(p.clone()),_=>None}).unwrap();
+            p.runs.truncate(1);p.runs[0].text="ANCHOR TEXT".into();
+            p.runs[0].style=RunStyle{font_size:Some(12.0),..RunStyle::default()};
+            p.shapes.clear();p.style=ParagraphStyle::default();
+            p.style.space_before=Some(before);p.style.space_after=Some(0.0);
+            p.style.line_spacing_rule=Some("exact".into());p.style.line_spacing=Some(14.0);
+            let mut prefix=p.clone();prefix.runs[0].text="PREFIX".into();
+            prefix.style.space_before=Some(0.0);prefix.style.space_after=Some(after);
+            let page=&mut doc.pages[0];page.blocks=vec![Block::Paragraph(prefix),Block::Paragraph(p)];
+            page.size.height=792.0;page.margin.top=72.0;page.margin.bottom=72.0;
+            page.grid_line_pitch=None;page.grid_char_pitch=None;page.doc_grid_no_type=true;
+            page.floating_images.clear();page.text_boxes.clear();
+            page.floating_images.push(serde_json::from_value(serde_json::json!({
+                "data":[],"width":60.0,"height":20.0,"anchor_block_index":1,
+                "position":{"x":300.0,"y":20.0,"h_relative":"page","v_relative":"paragraph"}
+            })).unwrap());
+            let layout=LayoutEngine::for_document(&doc).layout(&doc);
+            let image=layout.pages[0].elements.iter().find(|e|matches!(e.content,LayoutContent::Image{..})).unwrap();
+            assert!((image.y-(106.0+after)).abs()<0.01,
+                "after {after}, before {before}: drawing Y {}",image.y);
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+fn blocks_have_math_font_runs(blocks:&[Block])->bool {
+    blocks.iter().any(|block|match block {
+        Block::Math(_)=>true,
+        Block::Paragraph(p)=>p.runs.iter().any(|r|r.style.inline_math.is_some()),
+        Block::Table(t)=>t.rows.iter().any(|row|row.cells.iter().any(|cell|blocks_have_math_font_runs(&cell.blocks))),
+        _=>false,
+    })
+}
+
+fn document_has_math_font_runs(doc:&Document)->bool {
+    doc.pages.iter().any(|page| {
+        [&page.blocks,&page.header,&page.footer].iter().any(|blocks|blocks_have_math_font_runs(blocks))
+            || page.footnotes.iter().any(|note|blocks_have_math_font_runs(&note.blocks))
+            || page.endnotes.iter().any(|note|blocks_have_math_font_runs(&note.blocks))
+            || page.text_boxes.iter().any(|tb|blocks_have_math_font_runs(&tb.blocks))
+    })
+}
+
+impl LayoutEngine {
+    fn resolve_math_block_fonts(&self, block:&mut crate::ir::MathBlock, para:&ParagraphStyle) {
+        math::map_math_runs(block,&mut |text,style| {
+            let Some(source)=style.run_style.as_ref()else {
+                return vec![crate::ir::MathExpr::Run{text:text.to_owned(),style:style.clone()}];
+            };
+            let mut groups:Vec<(String,String)>=Vec::new();
+            for c in text.chars() {
+                let token=c.to_string();
+                let family=self.resolve_font_family_for_text_g(&token,source,para,true)
+                    .unwrap_or("Cambria Math").to_owned();
+                if let Some((last,text))=groups.last_mut() {
+                    if *last==family {text.push(c);continue;}
+                }
+                groups.push((family,token));
+            }
+            if groups.is_empty() {
+                return vec![crate::ir::MathExpr::Run{text:text.to_owned(),style:style.clone()}];
+            }
+            groups.into_iter().map(|(family,text)| {
+                let mut resolved=style.clone();
+                resolved.run_style.as_mut().unwrap().font_family=Some(family);
+                crate::ir::MathExpr::Run{text,style:resolved}
+            }).collect()
+        });
+    }
+
+    fn resolve_math_fonts_in_blocks(&self, blocks:&mut [Block]) {
+        for block in blocks {
+            match block {
+                Block::Paragraph(p)=> {
+                    for run in &mut p.runs {
+                        let fs=run.style.font_size.or_else(||p.style.default_run_style.as_ref().and_then(|s|s.font_size))
+                            .unwrap_or(self.default_font_size);
+                        if let Some(math)=run.style.inline_math.as_deref_mut() {
+                            self.resolve_math_block_fonts(math,&p.style);
+                            let (advance,ascent,descent)=crate::layout::math::inline_math_ink(math,fs);
+                            run.style.inline_object_extent=Some((advance,ascent+descent));
+                        }
+                    }
+                }
+                Block::Math(math)=> {
+                    let para=match math {
+                        crate::ir::MathBlock::Display {host:Some(host),..}=>host.as_ref().clone(),
+                        _=>ParagraphStyle::default(),
+                    };
+                    self.resolve_math_block_fonts(math,&para);
+                }
+                Block::Table(table)=>for row in &mut table.rows {for cell in &mut row.cells {self.resolve_math_fonts_in_blocks(&mut cell.blocks);}},
+                _=>{},
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod math_font_slot_regression_tests {
+    use super::*;
+    #[test]
+    fn mixed_math_leaf_uses_script_slots_without_changing_the_author_style() {
+        let engine=LayoutEngine::new();
+        let source=crate::ir::MathRunStyle {math_style:Some(crate::ir::MathStyleVariant::Plain),run_style:Some(RunStyle {
+            font_family:Some("Cambria Math".into()),font_family_east_asia:Some("MS Mincho".into()),font_hint_east_asia:Some(true),east_asia_hint:true,..Default::default()}),..Default::default()};
+        let mut block=crate::ir::MathBlock::Inline(vec![crate::ir::MathExpr::Run {text:"αa天地".into(),style:source.clone()}]);
+        engine.resolve_math_block_fonts(&mut block,&ParagraphStyle::default());
+        let mut families=Vec::new();math::map_math_runs(&mut block,&mut |text,style| {
+            families.push((text.to_owned(),style.run_style.as_ref().unwrap().font_family.clone().unwrap()));
+            vec![crate::ir::MathExpr::Run {text:text.to_owned(),style:style.clone()}]
+        });
+        assert_eq!(families,vec![("α".into(),"MS Mincho".into()),("a".into(),"Cambria Math".into()),("天地".into(),"MS Mincho".into())]);
+        assert_eq!(source.run_style.unwrap().font_family.as_deref(),Some("Cambria Math"));
+    }
+}
+
+
+#[cfg(test)]
+mod additive_paragraph_spacing_painted_regression_tests {
+    use super::*;
+
+    #[test]
+    fn saved_word_single_baseline_gaps_include_both_spacing_contributions() {
+        // Original Word PDF baselines, independently matched to nineteen
+        // source-adjacent body pairs. Includes five zero-overlap controls.
+        // The font offset is needed when the neighboring sizes differ;
+        // Word Range.Start caret positions cannot replace painted baselines.
+        let bytes=include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),"/../../tests/fixtures/basic_test.docx"));
+        let document=crate::parser::parse_docx(bytes).unwrap();
+        let page=&document.pages[0];
+        let mut para=page.blocks.iter().find_map(|block| match block {
+            Block::Paragraph(p)=>Some(p.clone()), _=>None }).unwrap();
+        para.style=ParagraphStyle::default();
+        let mut engine=LayoutEngine::new();
+        let asc=engine.registry.get("Arial").baseline_ascent();
+        for (after,before,height,previous_size,following_size,word_gap) in [
+            (3.000000000_f32, 3.000000000_f32, 16.099000000_f32, 14.000000000_f32, 12.000000000_f32, 20.280000000_f32),
+            (3.000000000_f32, 24.000000000_f32, 13.799000000_f32, 12.000000000_f32, 12.000000000_f32, 40.800000000_f32),
+            (12.000000000_f32, 0.000000000_f32, 13.799000000_f32, 12.000000000_f32, 9.000000000_f32, 22.950000000_f32),
+            (0.000000000_f32, 24.000000000_f32, 10.349000000_f32, 9.000000000_f32, 12.000000000_f32, 37.200000000_f32),
+            (12.000000000_f32, 0.000000000_f32, 13.799000000_f32, 12.000000000_f32, 9.000000000_f32, 22.920000000_f32),
+            (6.750000000_f32, 6.000000000_f32, 10.349000000_f32, 9.000000000_f32, 7.500000000_f32, 21.720000000_f32),
+            (3.000000000_f32, 9.000000000_f32, 8.624000000_f32, 7.500000000_f32, 9.000000000_f32, 21.960000000_f32),
+            (6.750000000_f32, 6.000000000_f32, 10.349000000_f32, 9.000000000_f32, 7.500000000_f32, 21.720000000_f32),
+            (3.000000000_f32, 9.000000000_f32, 8.624000000_f32, 7.500000000_f32, 9.000000000_f32, 21.960000000_f32),
+            (6.750000000_f32, 6.000000000_f32, 10.349000000_f32, 9.000000000_f32, 7.500000000_f32, 21.840000000_f32),
+            (3.000000000_f32, 9.000000000_f32, 8.624000000_f32, 7.500000000_f32, 9.000000000_f32, 21.960000000_f32),
+            (6.750000000_f32, 12.000000000_f32, 10.349000000_f32, 9.000000000_f32, 9.000000000_f32, 29.040000000_f32),
+            (3.000000000_f32, 0.000000000_f32, 10.349000000_f32, 9.000000000_f32, 7.500000000_f32, 12.000000000_f32),
+            (3.000000000_f32, 6.000000000_f32, 10.349000000_f32, 9.000000000_f32, 7.500000000_f32, 18.000000000_f32),
+            (3.000000000_f32, 6.000000000_f32, 10.349000000_f32, 9.000000000_f32, 7.500000000_f32, 18.000000000_f32),
+            (3.000000000_f32, 12.000000000_f32, 8.624000000_f32, 7.500000000_f32, 9.000000000_f32, 24.960000000_f32),
+            (3.000000000_f32, 6.000000000_f32, 10.349000000_f32, 9.000000000_f32, 7.500000000_f32, 18.000000000_f32),
+            (3.000000000_f32, 9.000000000_f32, 8.624000000_f32, 7.500000000_f32, 9.000000000_f32, 21.960000000_f32),
+            (3.000000000_f32, 0.000000000_f32, 10.349000000_f32, 9.000000000_f32, 9.000000000_f32, 13.320000000_f32),
+        ] {
+            para.style.space_before=Some(before);
+            engine.additive_paragraph_spacing=true;
+            let (gap,_) = engine.paragraph_spacing_before(&para,page,None,None,false,None,
+                after,None,&[],&[],200.0,72.0);
+            let painted=height+gap+asc*(following_size-previous_size);
+            assert!((painted-word_gap).abs()<=0.35,
+                "after={after}, before={before}, sizes={previous_size}/{following_size}: {painted} vs {word_gap}");
+            // When either side is zero, opting into the legacy policy must
+            // not perturb the five measured negative control boundaries.
+            if after.min(before)==0.0 {
+                engine.additive_paragraph_spacing=false;
+                let (normal,_) = engine.paragraph_spacing_before(&para,page,None,None,false,None,
+                    after,None,&[],&[],200.0,72.0);
+                assert!((normal-gap).abs()<0.001);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod public_regression_tests;
