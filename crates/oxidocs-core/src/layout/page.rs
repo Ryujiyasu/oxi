@@ -425,17 +425,11 @@ impl<'a> PageLayouter<'a> {
         // regressed b837); bunkacontract is the corpus's ONLY no-docGrid
         // footnote doc, so gating on grid_pitch.is_none() scopes this to it.
         // Default ON, opt-out OXI_S596B_DISABLE.
-        let special_footnote_height = |num: u32| -> f32 {
-                    page.footnotes
-                        .iter()
-                        .find(|n| n.number == num)
-                        .and_then(|note| {
-                            note.blocks.iter().find_map(|b| match b {
-                                Block::Paragraph(p) => Some(p),
-                                _ => None,
-                            })
-                        })
-                        .map(|p| {
+        // Every paragraph of the separator / continuationNotice footnote reserves
+        // its line: each extra paragraph costs one body line (cppp Goods: 2-para
+        // separator + 2-para notice; unitH fn 3x3 grid). Opt-out
+        // OXI_SPECIAL_FN_ALL_PARAS_DISABLE (first paragraph only, as before).
+        let special_para_height = |p: &Paragraph| -> f32 {
                             let _fng = FnLayoutGuard::new();
                             let mut h =
                                 self.estimate_para_height(p, page.size.width - page.margin.left - page.margin.right, None, None, false, None, None);
@@ -469,8 +463,17 @@ impl<'a> PageLayouter<'a> {
                                     + p.style.space_after.unwrap_or(0.0);
                             }
                             h
-                        })
-                        .unwrap_or(0.0)
+        };
+        let special_footnote_height = |num: u32| -> f32 {
+                    let Some(note) = page.footnotes.iter().find(|n| n.number == num) else { return 0.0 };
+                    let mut paras = note.blocks.iter().filter_map(|b| match b {
+                        Block::Paragraph(p) => Some(p),
+                        _ => None,
+                    });
+                    if std::env::var_os("OXI_SPECIAL_FN_ALL_PARAS_DISABLE").is_some() {
+                        return paras.next().map_or(0.0, special_para_height);
+                    }
+                    paras.map(special_para_height).sum()
                 };
         let legacy_notice_height = || -> f32 {
             // A document that declares no compatibilityMode keeps the legacy

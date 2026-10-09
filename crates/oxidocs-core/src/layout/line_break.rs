@@ -70,8 +70,13 @@ impl<'a> LineBreaker<'a> {
         // Legacy Latin lines without justification use the same exact advance
         // sum as modern layout. Word boundary sweeps across five proportional
         // and monospaced fonts distinguish this from per-word twip rounding.
-        let legacy_latin_exact = self.compat_mode == 14
-            && self.compat_mode_explicit
+        // A document that declares no compatibilityMode fits left-aligned Latin
+        // lines on the exact design-metric sum too (cppp Services p69: Word keeps
+        // "Rules" only at avail >= 8311 tw = exact ceil; the rounded accumulator
+        // said 8303; 4-font repro, unitH/mini3). Opt-out OXI_IMPLICIT_COMPAT_EXACT_DISABLE.
+        let legacy_latin_exact = ((self.compat_mode == 14 && self.compat_mode_explicit)
+            || (!self.compat_mode_explicit
+                && std::env::var_os("OXI_IMPLICIT_COMPAT_EXACT_DISABLE").is_none()))
             && !is_justified
             && !vertical
             && std::env::var_os("OXI_LEGACY_EXACT_DISABLE").is_none()

@@ -2683,7 +2683,27 @@ impl<'a> ParagraphLayouter<'a> {
                         } else {
                             self.metrics_for(ms, &para.style)
                         };
-                        m.win_ascent * mfs
+                        // A non-AUM marker's top is its BOX top: all of the line
+                        // gap sits above the baseline (cppp Goods Heading4 Arial-Bold
+                        // 11 marker over Calibri-Bold 10.5: Word +0.30/line; repro
+                        // Arial 11/13, TNR 11 = model +-0.04). Opt-out OXI_MARKER_BOX_TOP_DISABLE.
+                        if !aum_marker && !matches!(m.family.as_str(), "Symbol" | "Wingdings" | "Wingdings 2" | "Wingdings 3")
+                            && std::env::var_os("OXI_MARKER_BOX_TOP_DISABLE").is_none()
+                            // Measured for SINGLE auto spacing only; under a line multiple
+                            // (administrative__0046f255, line 259) Word does not raise it.
+                            && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                            && (para.style.line_spacing.unwrap_or(1.0) - 1.0).abs() < 0.01 {
+                            // The raise is the hhea top (ascent + gap) above winAscent,
+                            // capped by how much the hhea box exceeds the win box:
+                            // Arial/TNR +gap, Calibri 0 (hhea = win), Century Gothic 0
+                            // (its larger hhea box is a deeper DESCENT --
+                            // administrative__0046f255).
+                            let raise = (m.ascent + m.line_gap - m.win_ascent).max(0.0)
+                                .min((m.natural_line_height_hhea(1.0) - (m.win_ascent + m.win_descent)).max(0.0));
+                            (m.win_ascent + raise) * mfs
+                        } else {
+                            m.win_ascent * mfs
+                        }
                     }
                     None => 0.0,
                 }

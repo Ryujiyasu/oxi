@@ -132,6 +132,19 @@ impl NumberingDefinitions {
     /// arms: starts 7/8/1 -> 7.8.1, 1/1/1 -> 1.1.1, 3/5/4 -> 3.5.4, and a used
     /// parent keeps its running count). `legal__001a2c7f07cd358f` is the corpus
     /// case. `OXI_S1250_DISABLE` restores the old zero.
+    /// Counter namespace: w:num instances that share one abstractNum share its
+    /// level counters (cppp Goods p57: num 101 restarts at 1, then List-style
+    /// num 38 continues 3).. "Specification" = 25), not 139)). Opt-out
+    /// OXI_SHARED_ABS_COUNTERS_DISABLE keys counters per numId as before.
+    fn counter_key(&self, num_id: &str) -> String {
+        if std::env::var_os("OXI_SHARED_ABS_COUNTERS_DISABLE").is_none() {
+            if let Some(abs) = self.num_map.get(num_id) {
+                return format!("abs:{abs}");
+            }
+        }
+        num_id.to_string()
+    }
+
     fn other_level_count(
         &self,
         num_id: &str,
@@ -139,7 +152,7 @@ impl NumberingDefinitions {
         other_level: &NumberingLevel,
         counters: &HashMap<(String, u8), u32>,
     ) -> u32 {
-        if let Some(c) = counters.get(&(num_id.to_string(), lvl_i)) {
+        if let Some(c) = counters.get(&(self.counter_key(num_id), lvl_i)) {
             return *c;
         }
         if std::env::var("OXI_S1250_DISABLE").is_ok() {
@@ -203,7 +216,20 @@ impl NumberingDefinitions {
         }
 
         // Numbered list: increment counter
-        let key = (num_id.to_string(), ilvl);
+        let ck = self.counter_key(num_id);
+        // A num's startOverride restarts the shared counter at that num's first use.
+        if ck != num_id {
+            let seen = (format!("seen:{num_id}"), ilvl);
+            if !counters.contains_key(&seen) {
+                counters.insert(seen, 0);
+                if let Some(ov_start) = self.level_overrides.get(num_id)
+                    .and_then(|m| m.get(&ilvl)).and_then(|ov| ov.start)
+                {
+                    counters.insert((ck.clone(), ilvl), ov_start - 1);
+                }
+            }
+        }
+        let key = (ck.clone(), ilvl);
         let count = counters.entry(key).or_insert_with(|| {
             // startOverride takes priority over abstractNum start
             if let Some(ov) = self.level_overrides.get(num_id).and_then(|m| m.get(&ilvl)) {
@@ -240,7 +266,7 @@ impl NumberingDefinitions {
                     None => true,
                 };
                 if restart_ok {
-                    counters.remove(&(num_id.to_string(), deeper));
+                    counters.remove(&(ck.clone(), deeper));
                 }
             }
         }

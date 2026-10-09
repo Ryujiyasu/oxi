@@ -10259,6 +10259,17 @@ cells={} pitch={:.2} text={:?}",
                     } else {
                         metrics.word_line_height(fs, 96.0)
                     };
+                    // An empty header paragraph whose ascii font is the missing Arial
+                    // Unicode MS takes a 1.76em line, as in the footer (cppp Services
+                    // header4: Word 21.14 at 12pt; 8/10/16pt 14.18/17.66/28.22).
+                    // Opt-out OXI_AUM_HEADER_MARK_LH_DISABLE.
+                    if visible_run.is_none()
+                        && std::env::var_os("OXI_AUM_HEADER_MARK_LH_DISABLE").is_none()
+                        && self.resolve_font_family(mark_style, &para.style) == Some("Arial Unicode MS")
+                        && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
+                    {
+                        lh = 1.76 * fs;
+                    }
                     // Fixed header lines reserve the declared box even when the
                     // paragraph is empty. Font metrics only determine glyph placement.
                     if para.style.line_spacing_rule.as_deref() == Some("exact") {

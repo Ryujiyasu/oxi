@@ -4552,6 +4552,21 @@ fn parse_paragraph_with_inline_images_impl(
     // style-inherited numPr(9) with style ind left=1152tw=57.6pt but numbering
     // level ind left=5490tw=274.5pt; Word uses 57.6, Oxi was applying 274.5 →
     // sub-bullets over-indented ~200pt → wrap to a narrow column → +2 pages.
+    // A DIRECT `<w:numId w:val="0"/>` zeroes every indent not set in the
+    // paragraph's own pPr -- style, docDefaults and numbering alike (cppp Goods
+    // "01-Spec" cells; unitH n0/n1/n2, 8 arms). Opt-out OXI_NUMID0_ZERO_IND_DISABLE.
+    if num_pr_ref.as_ref().is_some_and(|n| n.num_id == "0")
+        && std::env::var_os("OXI_NUMID0_ZERO_IND_DISABLE").is_none()
+    {
+        if !ppr_explicit_indent_left {
+            style.indent_left = Some(0.0);
+            style.indent_left_chars = None;
+        }
+        if !ppr_explicit_first_line {
+            style.indent_first_line = Some(0.0);
+            style.indent_first_line_chars = None;
+        }
+    }
     let num_pr_is_direct = num_pr_ref.is_some();
     // Inherit numPr from style definition if paragraph doesn't have its own
     if num_pr_ref.is_none() {
