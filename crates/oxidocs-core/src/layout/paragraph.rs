@@ -639,6 +639,8 @@ impl<'a> ParagraphLayouter<'a> {
         // computes text_y_off). Only set for NON-bullet markers (number markers
         // like ①/(1)); bullets keep their own marker_y_offset tuning untouched.
         let mut s517_marker_el_idx: Option<usize> = None;
+        // G5: the marker's page check was left to line 0 (see the marker site).
+        let mut g5_marker_deferred = false;
         // S776 (2026-07-10, opt-out OXI_S776_DISABLE): suff="nothing" — Word
         // renders the number CONTIGUOUS with the first line's text AT the
         // first-line position (nyserda «3.NON-COLLUSIVE BIDDING…», lvl suff
@@ -954,7 +956,30 @@ impl<'a> ParagraphLayouter<'a> {
             } else {
                 marker_break_h
             };
-            if cursor.cursor_y + marker_break_h > page_top + content_height {
+            // G5 (opt-out OXI_G5_DISABLE): with footnote references in the
+            // paragraph, `content_height` already reserves ALL of the
+            // paragraph's notes, while the first body line is tested against
+            // its own notes only (footnote_fit_bottom). The marker shares line
+            // 0, so it must not move the paragraph on the full reservation:
+            // leave the decision to line 0 (which also knows the S900 roll)
+            // and carry the marker if line 0 itself breaks. cppp Goods p24:
+            // «1) Any bidder…» line 1 (ref 1) stays in Word; the marker check
+            // moved the whole paragraph on refs 1..3.
+            let marker_overflow = cursor.cursor_y + marker_break_h > page_top + content_height;
+            if marker_overflow
+                && std::env::var("OXI_G5_DISABLE").is_err()
+                && !para_fn_heights.is_empty()
+                && first_line_extra_content_h > 0.0
+                && num_columns <= 1
+                && !in_textbox
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S833_DISABLE").is_err()
+                && cursor.cursor_y + marker_break_h
+                    <= page_top + content_height + first_line_extra_content_h
+            {
+                g5_marker_deferred = true;
+            }
+            if marker_overflow && !g5_marker_deferred {
                 let marker_columns = num_columns > 1
                     && (std::env::var("OXI_MARKER_COLUMN_FLOW").is_ok()
                 || std::env::var("OXI_S1473_DISABLE").is_err());
@@ -5171,7 +5196,20 @@ impl<'a> ParagraphLayouter<'a> {
                             deferred.push(*id);
                         }
                     }
-                    if !deferred.is_empty() && (placed > 0.0 || prior_fill > 0.0) {
+                    // G5 (opt-out OXI_G5_DISABLE): when none of the line's
+                    // own notes can start, earlier notes alone keep the line
+                    // only if it is the paragraph's FIRST line; a later line
+                    // moves to the next page with its notes. Faithful Goods
+                    // slice, compat 12 (Word PDF): ref line = line 2/4 with
+                    // the prior note from the same or an earlier paragraph ->
+                    // line moves (A, B, B4, F); the same text split so the
+                    // ref line opens its own paragraph -> line stays, notes
+                    // roll under a continuation separator (D, E; fna_00200);
+                    // one of two notes fits -> line stays, tail rolls (F-16,
+                    // 81e80).
+                    let g5_prior_keeps = prior_fill > 0.0
+                        && (line_idx == 0 || std::env::var("OXI_G5_DISABLE").is_ok());
+                    if !deferred.is_empty() && (placed > 0.0 || g5_prior_keeps) {
                         let new_committed = committed_prev + sep_needed + placed;
                         let new_lenient = (first_line_extra_content_h - new_committed).max(0.0);
                         let new_bottom = effective_break_bottom - line_lenient_extra + new_lenient;
@@ -6076,7 +6114,12 @@ impl<'a> ParagraphLayouter<'a> {
                     }
                     // Mid-paragraph page break: keep already-laid-out lines on current page,
                     // only the overflowing line (and subsequent) go to the next page.
-                    current_elements.extend(std::mem::take(&mut elements));
+                    // G5: a deferred marker travels with line 0.
+                    let g5_carry_marker = g5_marker_deferred && line_idx == 0;
+                    let g5_old_visual = cursor.visual_y;
+                    if !g5_carry_marker {
+                        current_elements.extend(std::mem::take(&mut elements));
+                    }
                     dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
@@ -6089,6 +6132,16 @@ impl<'a> ParagraphLayouter<'a> {
                     }
                     cursor.set(page_top);
                     s842_apply(cursor);
+                    if g5_carry_marker {
+                        let dy = cursor.visual_y - g5_old_visual;
+                        for e in elements.iter_mut() {
+                            e.y += dy;
+                            if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
+                                *y1 += dy;
+                                *y2 += dy;
+                            }
+                        }
+                    }
                     if std::env::var("OXI_DBG_EMITY").is_ok() {
                         eprintln!("[EMITY] midpara push: page_top={:.2} cursor={:.2} line_idx={}", page_top, cursor.cursor_y, line_idx);
                     }
