@@ -10729,8 +10729,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         };
 
                         let separator_h_pre: f32 = 2.0;
+                        // `footnote_bottom` above already sits a legacy continuation
+                        // notice higher; the separator allocation includes that notice
+                        // too, so take it out here or it is subtracted twice and no
+                        // note fits (cppp Goods p24/p25: fit=0, Word draws note 1 at
+                        // 742.0). Opt-out OXI_FN_NOTICE_ONCE_DISABLE.
+                        let notice_once = if std::env::var_os("OXI_FN_NOTICE_ONCE_DISABLE").is_none() {
+                            legacy_notice_height()
+                        } else { 0.0 };
                         let separator_pad_pre = notes.first().map(|note|
-                            (footnote_sep_alloc(note.number) - separator_h_pre).max(0.0)
+                            (footnote_sep_alloc(note.number) - notice_once - separator_h_pre).max(0.0)
                         ).unwrap_or(4.0);
                         // Determine how many notes fit: add notes one by one from the
                         // bottom; stop when area_top would overlap body content.
