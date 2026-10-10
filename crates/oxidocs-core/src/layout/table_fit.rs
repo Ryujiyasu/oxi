@@ -8632,6 +8632,47 @@ impl<'a> TableFitLayouter<'a> {
                                             }
                                             _ => cell_text_y_off,
                                         };
+                                        // OXI_CJK_NATBOX (cell side of the body rule in
+                                        // text_y_offset_for_line): a single-spaced CJK cell line not
+                                        // snapped to a typed grid centres its win box in the 83/64
+                                        // box -- replaces the S453/S664/S698 offsets for this scope
+                                        // (`_pb_cjk_cell_top_gen.py`, 21 arms within 0.08pt).
+                                        let cell_text_y_off = if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
+                                            && matches!(effective_line_rule, None | Some("auto"))
+                                            && effective_line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
+                                            && para.style.list_marker.is_none()
+                                            && !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid)
+                                            && !line.iter().any(|t| t.15)
+                                        {
+                                            let mut asc = 0.0f32;
+                                            let mut desc = 0.0f32;
+                                            let mut all_cjk = true;
+                                            for (text, fs, _, bold, italic, _, _, _, font_family, _, _, _, _, _, ea, _, _) in line.iter() {
+                                                if text.trim().is_empty() {
+                                                    continue;
+                                                }
+                                                let mut rs = RunStyle::default();
+                                                rs.font_size = Some(*fs);
+                                                rs.bold = *bold;
+                                                rs.italic = *italic;
+                                                if let Some(ff) = font_family { rs.font_family = Some(ff.clone()); }
+                                                if let Some(e) = ea {
+                                                    rs.font_family_east_asia = Some(e.clone());
+                                                    rs.has_explicit_east_asia = true;
+                                                }
+                                                let m = &*self.metrics_for_text(text, &rs, &para.style);
+                                                all_cjk &= m.is_cjk_83_64_font();
+                                                asc = asc.max(m.win_ascent * fs);
+                                                desc = desc.max(m.win_descent * fs);
+                                            }
+                                            if all_cjk && asc > 0.0 {
+                                                1.0 + ((lh - (asc + desc)) / 2.0).max(0.0)
+                                            } else {
+                                                cell_text_y_off
+                                            }
+                                        } else {
+                                            cell_text_y_off
+                                        };
                                         // Ordinary horizontal text on one cell line shares a
                                         // baseline even when its faces or sizes differ. Preserve
                                         // the logical line box and express the paint baseline

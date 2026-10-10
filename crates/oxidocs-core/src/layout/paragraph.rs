@@ -2726,6 +2726,8 @@ impl<'a> ParagraphLayouter<'a> {
                             let raise = (m.ascent + m.line_gap - m.win_ascent).max(0.0)
                                 .min((m.natural_line_height_hhea(1.0) - (m.win_ascent + m.win_descent)).max(0.0));
                             (m.win_ascent + raise) * mfs
+                        } else if aum_marker {
+                            LayoutEngine::aum_marker_ascent_em(m.win_ascent) * mfs
                         } else {
                             m.win_ascent * mfs
                         }

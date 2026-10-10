@@ -58,11 +58,17 @@ def group_lines(items):
     out = []
     for y, x0, x1, ch in items:
         if out and abs(out[-1]["y"] - y) < 1.5:
-            L = out[-1]; L["x1"] = max(L["x1"], x1); L["x0"] = min(L["x0"], x0); L["t"] += ch
+            L = out[-1]; L["x1"] = max(L["x1"], x1); L["x0"] = min(L["x0"], x0); L["g"].append((x0, y, ch))
         else:
-            out.append({"y": y, "x0": x0, "x1": x1, "t": ch})
+            out.append({"y": y, "x0": x0, "x1": x1, "g": [(x0, y, ch)]})
+    # 2026-10-10: the line's baseline is the MEDIAN of its glyphs, not the
+    # first one -- a numbering marker in a missing face (policies__0097fbf2's
+    # Arial Unicode MS "2") read the whole line 1.2pt off. Text in x order.
     for L in out:
-        L["t"] = L["t"].replace(" ", "")
+        g = sorted(L.pop("g"))
+        ys = sorted(y for _, y, _ in g)
+        L["y"] = ys[len(ys) // 2]
+        L["t"] = "".join(ch for _, _, ch in g).replace(" ", "")
     return out
 
 
@@ -98,6 +104,11 @@ def win_ascent(family):
         _ASC.setdefault("ＭＳ ゴシック", _ASC.get("MS Gothic", 0.859))
         _ASC.setdefault("ＭＳ Ｐ明朝", _ASC.get("MS PMincho", 0.859))
         _ASC.setdefault("ＭＳ Ｐゴシック", _ASC.get("MS PGothic", 0.859))
+        # 2026-10-10: Meiryo fell through to 0.859 (its winAscent is 1.060 -> 2.4pt at 12pt)
+        for jp, en in (("メイリオ", "Meiryo"), ("Meiryo UI", "Meiryo UI"), ("游ゴシック Medium", "Yu Gothic Medium"),
+                       ("游明朝 Demibold", "Yu Mincho Demibold"), ("ＭＳ ＵＩ ゴシック", "MS UI Gothic")):
+            if en in _ASC:
+                _ASC.setdefault(jp, _ASC[en])
     if family in _ASC:
         return _ASC[family]
     for k, v in _ASC.items():

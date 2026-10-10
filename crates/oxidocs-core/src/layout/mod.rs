@@ -5387,7 +5387,24 @@ impl LayoutEngine {
             self.resolve_bold(ms, &para.style),
             self.resolve_italic(ms, &para.style),
         );
-        Some(m.win_ascent * fs)
+        Some(Self::aum_marker_ascent_em(m.win_ascent) * fs)
+    }
+
+    /// OXI_AUM_MARKER_BOX (2026-10-10, default ON, opt-out _DISABLE): with Arial
+    /// Unicode MS absent, an AUM numbering marker raises its line to 1.3828em above
+    /// the baseline -- the box OXI_AUM_DEVA_TAIL and the 1.76em empty marks use --
+    /// not AUM's own winAscent (1.332em). `_pb_aum_marker_box_gen.py` (Calibri 10
+    /// text, body and cell): Word grows +1.50 / 4.26 / 7.02 / 12.66 at 8/10/12/16pt
+    /// = 1.3828·s − Calibri-Bold winAscent within 0.06; policies__0097fbf2's
+    /// heading rows +4.20/4.32/4.32 (Oxi gave +3.84).
+    pub(crate) fn aum_marker_ascent_em(win_ascent: f32) -> f32 {
+        if std::env::var_os("OXI_AUM_MARKER_BOX_DISABLE").is_none()
+            && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
+        {
+            1.3828
+        } else {
+            win_ascent
+        }
     }
 
     // The preceding Latin face supplies half its average advance when SB/DB
@@ -9287,7 +9304,17 @@ cells={} pitch={:.2} text={:?}",
                     let mean_law: f32 = per_line.iter().map(|(_, _, l)| *l).sum::<f32>() / n;
                     mean_cur - mean_law
                 } else {
-                    abs_y + inset_t + v_corner_inset + first_asc
+                    // OXI_CLNSP_FIRST_BEFORE (2026-10-10, default ON, opt-out _DISABLE):
+                    // the first paragraph's space-before counts at the box top too
+                    // (`_pb_txbx_before_gen.py` cB_g1: Word +12 / +24 for 240 / 480tw
+                    // with compatLnSpc, as without it; ja/reference__5593c6a7 Title box
+                    // −12.2).
+                    let first_sb = if std::env::var_os("OXI_CLNSP_FIRST_BEFORE_DISABLE").is_none() {
+                        clnsp_line_specs.first().map_or(0.0, |s| s.2)
+                    } else {
+                        0.0
+                    };
+                    abs_y + inset_t + v_corner_inset + first_sb + first_asc
                 };
                 for (idxs, cur_base, law_rel) in &per_line {
                     let shift = (anchor + law_rel) - cur_base;
@@ -16693,6 +16720,42 @@ cells={} pitch={:.2} text={:?}",
                         }
                     }
                     return 0.0;
+                }
+                // OXI_CJK_NATBOX (2026-10-10, default ON, opt-out _DISABLE): a single-
+                // spaced CJK line that is not snapped to a typed grid centres its win
+                // box in the 83/64 natural box: baseline = top + (lh − win_sum)/2 +
+                // win_ascent. `_pb_cjk_cell_top_gen.py` (21 arms: BIZ UD明朝/ゴシック,
+                // ＭＳ 明朝, 游明朝, メイリオ × 10.5/12/16pt, typed grid with
+                // snapToGrid 0, no grid, no-type grid; cell and body): all within
+                // 0.08pt; Oxi was 0.3..5.6pt high (forms__02281020 cells −0.6).
+                if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
+                    && !in_shape_context
+                    && para_style.list_marker.is_none()
+                    && para_style.line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
+                    && (doc_grid_no_type
+                        || !(grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid))
+                {
+                    let mut asc = 0.0f32;
+                    let mut desc = 0.0f32;
+                    let mut all_cjk = true;
+                    let mut take = |m: &crate::font::FontMetrics, fs: f32| {
+                        all_cjk &= m.is_cjk_83_64_font();
+                        asc = asc.max(m.win_ascent * fs);
+                        desc = desc.max(m.win_descent * fs);
+                    };
+                    if line.fragments.is_empty() {
+                        let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let fs = rpr_ref.font_size.unwrap_or(para_font_size);
+                        take(&self.metrics_for_para_mark(&rpr_ref, para_style), fs);
+                    } else {
+                        for f in &line.fragments {
+                            let fs = f.style.font_size.unwrap_or(para_font_size);
+                            take(&self.metrics_for_text(&f.text, &f.style, para_style), fs);
+                        }
+                    }
+                    if all_cjk && asc > 0.0 {
+                        return 1.0 + ((line_height - (asc + desc)) / 2.0).max(0.0);
+                    }
                 }
                 // Grid-snapped lines: text is vertically centered within the grid cell.
                 // COM-confirmed: P1 20pt in 35.7pt grid cell → 4.9pt offset above text.

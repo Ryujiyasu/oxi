@@ -6445,6 +6445,8 @@ fn parse_run(
     let mut drawing_source_text:Option<String> = None;
     let mut depth = 0;
     let mut in_text = false;
+    // Where the open `<w:t>`'s own content starts in `text` (S848 trims only that).
+    let mut t_start = 0usize;
     let mut preserve_text_whitespace = false;
     let mut toc_result_for_run = None;
     let mut in_instr_text = false;
@@ -6472,6 +6474,7 @@ fn parse_run(
                     }
                     "t" | "delText" if depth == 0 => {
                         in_text = true;
+                        t_start = text.len();
                         preserve_text_whitespace = e.attributes().flatten().any(|attr| {
                             attr.key.as_ref() == b"xml:space" && attr.value.as_ref() == b"preserve"
                         });
@@ -6719,8 +6722,13 @@ fn parse_run(
                     // \n AFTER </w:t>, so genuine wrap breaks are preserved
                     // (the first cut, which stripped the merged run text, ate
                     // trailing `<w:br/>` breaks — creative doc regressed).
+                    // OXI_T_TRIM_OWN (2026-10-10, default ON, opt-out _DISABLE): trim
+                    // only past this `<w:t>`'s start. An EMPTY `<w:t></w:t>` between two
+                    // `<w:br/>` (creative__03bf8c5f: `2017<w:br/><w:t></w:t><w:br/>On`)
+                    // popped the first break's \n, losing Word's blank line (−14.5pt).
+                    let floor = if std::env::var_os("OXI_T_TRIM_OWN_DISABLE").is_none() { t_start } else { 0 };
                     if local == "t" && std::env::var("OXI_S848_DISABLE").is_err() {
-                        while text.ends_with('\n') || text.ends_with('\r') {
+                        while text.len() > floor && (text.ends_with('\n') || text.ends_with('\r')) {
                             text.pop();
                         }
                     }
