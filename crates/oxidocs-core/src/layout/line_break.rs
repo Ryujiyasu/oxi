@@ -1251,7 +1251,7 @@ impl<'a> LineBreaker<'a> {
                         // identical. Opt-out OXI_OPENWRAP_DISABLE.
                         if std::env::var("OXI_OPENWRAP_DISABLE").is_err()
                             && preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && current_line.fragments.len() > 1 && !para_all_whitespace {
                             let mut carried: Vec<LineFragment> = Vec::new();
                             while current_line.fragments.len() > 1 {
@@ -1278,7 +1278,7 @@ impl<'a> LineBreaker<'a> {
                             }
                         }
                         if !preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             let lp_carry = leadpunct_take!(word, word_fit_width_tw, available_tw);
                             wrap_and_seed!(ws);
@@ -1357,7 +1357,7 @@ impl<'a> LineBreaker<'a> {
                             // final ','/'.' (one segment) then wraps here despite the KEEP
                             // decision («revenues,»: decision KEEP, segment wrapped).
                             // Apply the same exclusive-boundary hang to the LAST segment.
-                            if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), seg_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                            if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), seg_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, None) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 + segment_hang_tw
                                 && !current_line.fragments.is_empty() && !para_all_whitespace
                                 && !s1059_overlong {
@@ -1390,7 +1390,7 @@ impl<'a> LineBreaker<'a> {
                                 let piece_w_tw = pt_to_tw(piece_w);
                                 let limit = available_tw
                                     + if std::env::var("OXI_SEGMENT_CREDIT_DISABLE").is_err() { s1346_credit_tw } else { 0 }
-                                    + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), piece_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) })
+                                    + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), piece_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, None) })
                                     + right_tab_slack_tw
                                     + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                     + segment_hang_tw;
@@ -1466,7 +1466,7 @@ impl<'a> LineBreaker<'a> {
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
                     let mut hyphenated = false;
-                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         // S1128 (2026-08-15, SHIPPED default-ON, opt-out
                         // OXI_S1128_DISABLE): `<w:autoHyphenation/>`.

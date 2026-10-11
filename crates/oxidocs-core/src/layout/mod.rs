@@ -2254,9 +2254,17 @@ fn s1486_wrap_bottom(path_bottom: f32, stroke_width: Option<f32>) -> f32 {
 /// Default ON (opt-out OXI_JSHRINK_TOKEN_DISABLE): the justify-shrink "last word" is the WHOLE
 /// whitespace-delimited token and its "space" the whole whitespace run before it
 /// (igrsup_md_v19 «5000/-.»: Word allows 21.0, the '.'-only piece gave 6.5).
-fn s1475_token_tail(frags: &[LineFragment]) -> Option<(i32, i32)> {
+/// OXI_JSHRINK_HYPHEN (2026-10-12, default ON, opt-out _DISABLE): the token stops
+/// at a hyphen that is a break opportunity -- one followed by a character that may
+/// start a line. blind-H legal__00519653 p10 «...pursuant to I.C. 36-5-2-9.8.»: Word
+/// wraps «36-5-2-» / «9.8.» (the whole-token cap kept «9.8.» by shrinking the
+/// spaces and lost a line); «5000/-.» stays whole because '.' cannot start a line.
+fn s1475_token_tail(frags: &[LineFragment], cand_first: Option<char>) -> Option<(i32, i32)> {
     let tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
+    let hyphen_breaks = std::env::var_os("OXI_JSHRINK_HYPHEN_DISABLE").is_none();
+    let trailing_punct = |c: char| matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201d}');
     let (mut tok, mut sp, mut in_space) = (0.0f32, 0.0f32, false);
+    let mut later_first = cand_first;
     for f in frags.iter().rev() {
         if f.text.is_empty() { continue; }
         let all_ws = f.text.chars().all(char::is_whitespace);
@@ -2264,7 +2272,12 @@ fn s1475_token_tail(frags: &[LineFragment]) -> Option<(i32, i32)> {
         if !in_space {
             if all_ws { in_space = true; sp += f.width; continue; }
             if any_ws { return None; }
+            if hyphen_breaks && f.text.ends_with('-') && later_first.map_or(true, |c| !trailing_punct(c)) {
+                // the line may break after this hyphen: the token is what follows it
+                return Some((tw(tok), 0));
+            }
             tok += f.width;
+            later_first = f.text.chars().next();
         } else if all_ws {
             sp += f.width;
         } else {
@@ -2275,9 +2288,9 @@ fn s1475_token_tail(frags: &[LineFragment]) -> Option<(i32, i32)> {
 }
 
 fn s1475_token_cap(credit_tw: i32, word_tw: i32, space_tw: i32, on: bool,
-    frags: &[LineFragment], token_on: bool) -> i32 {
+    frags: &[LineFragment], token_on: bool, cand_first: Option<char>) -> i32 {
     if on && token_on {
-        if let Some((tok_tw, run_tw)) = s1475_token_tail(frags) {
+        if let Some((tok_tw, run_tw)) = s1475_token_tail(frags, cand_first) {
             let sp = if run_tw > 0 { run_tw } else { space_tw };
             return s1475_last_word_cap(credit_tw, tok_tw + word_tw, sp, on);
         }
