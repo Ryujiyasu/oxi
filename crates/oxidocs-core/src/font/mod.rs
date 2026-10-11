@@ -680,6 +680,14 @@ impl FontMetrics {
         )
     }
 
+    /// Kana advances narrower than the em (a proportional-kana face such as
+    /// UD デジタル 教科書体 NK or the P-faces), read off ト / ル / あ.
+    pub fn has_proportional_kana(&self) -> bool {
+        ['\u{30C8}', '\u{30EB}', '\u{3042}'].iter().any(|&c| {
+            self.char_widths.contains_key(&c) && self.char_width_em(c) < 0.95
+        })
+    }
+
     pub fn is_cjk_83_64_font(&self) -> bool {
         if let Some(codepages) = self.codepage_range1 {
             // Japanese, simplified/traditional Chinese and Korean code pages.
@@ -2004,6 +2012,26 @@ impl FontMetricsRegistry {
                 && (metrics.family == "MS PMincho"
                     || metrics.family == "MS PGothic"
                     || metrics.family == "HGPGothicM")
+            {
+                return advance_em * font_size;
+            }
+            // OXI_PROP_CJK_EXACT (2026-10-11, default ON, opt-out _DISABLE): the same
+            // finding for outline (upm != 256) CJK faces whose kana are
+            // proportional. ja/educational__21a3b151 (UD デジタル 教科書体 NK-R 9pt,
+            // a 86.45pt cell): Word sets «ボールをコントロールし» on one line = the
+            // hmtx sum 85.41; the 10tw-rounded widths sum to 86.6 and pushed «し»
+            // (and one char per line after it) down a line. Word's PDF advances
+            // follow hmtx (ト 5.87 vs 5.85; ボ ー ル を コ ン within 0.1-0.17).
+            // Kana and ideographs only: punctuation widths stay with the 約物
+            // compression machinery, which is calibrated on them (BIZ UDPGothic
+            // 11pt «甲乙、「丙丁戊己庚辛» in a 91pt cell: exact 、「 let 辛 fit where
+            // Word wraps -- tests/fixtures/cell_pair_boundaries).
+            if std::env::var_os("OXI_PROP_CJK_EXACT_DISABLE").is_none()
+                && matches!(c, '\u{3041}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}'
+                    | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}')
+                && metrics.units_per_em != 256
+                && metrics.is_cjk_83_64_font()
+                && metrics.has_proportional_kana()
             {
                 return advance_em * font_size;
             }
