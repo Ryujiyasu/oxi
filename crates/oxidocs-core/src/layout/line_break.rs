@@ -3870,8 +3870,23 @@ impl<'a> LineBreaker<'a> {
                     && std::env::var("OXI_S1317_DISABLE").is_err())
                     || char_metrics.synthetic_bold_advance > 0.0;
                 let s1317_inc = |cum: f32, cw: f32| -> i32 { pt_to_tw(cum + cw) - pt_to_tw(cum) };
+                // OXI_NBSP_SPACE_BIND (2026-10-11, default ON, opt-out _DISABLE): a
+                // space right after a NO-BREAK SPACE is not a break opportunity --
+                // Word keeps «once.\u{a0} The» together (`_pb_nbsp_tail_gen.py`, TNR
+                // 15pt right-indent sweep: the «once.» flip sits 625tw before the
+                // plain-space arm's = once.+nbsp+space+The, model 616; breaking at
+                // that space would put it ~75tw before). en/correspondence__00aee476
+                // lost a line there and moved the page's tail up 17.3pt.
+                let nbsp_bound_space = ch == ' '
+                    && std::env::var_os("OXI_NBSP_SPACE_BIND_DISABLE").is_none()
+                    && if char_index > 0 {
+                        chars_vec[char_index - 1] == '\u{00A0}'
+                    } else {
+                        fragments[..frag_outer_idx].iter().rev()
+                            .flat_map(|f| f.0.chars().rev()).next() == Some('\u{00A0}')
+                    };
 
-                if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
+                if (ch == ' ' && !nbsp_bound_space) || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
                     // Whitespace: flush word, then handle the whitespace
                     flush_word!(style);
 
