@@ -7044,8 +7044,11 @@ impl<'a> ParagraphLayouter<'a> {
             // cells): all 20 arms within 0.12. MS faces (hhea == win) already sat
             // there; the 游 faces (win 0.995/0.292 vs hhea 0.880/0.222+0.5) were
             // 1.6..4.0pt low (ja/administrative__199dab4d's 22pt title +3.08).
+            // Text boxes too (box lines snap to a typed grid like body lines): the
+            // probe's box_* arms (游明朝 / 游ゴシック / MS ゴシック 16/22/28 in a wps box)
+            // sit the same constant above their body twins for every face.
             let text_y_off = if std::env::var_os("OXI_GRID_WINBOX_BASE_DISABLE").is_none()
-                && !in_textbox
+                && (!in_textbox || std::env::var_os("OXI_GRID_WINBOX_BASE_BOX_DISABLE").is_none())
                 && !page.doc_grid_no_type
                 && para.style.snap_to_grid
                 && grid_pitch.is_some_and(|p| p > 0.1)

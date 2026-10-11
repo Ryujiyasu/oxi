@@ -24,6 +24,8 @@ OUT = REPO / "pipeline_data" / "_pb_gridline_base"
 FACES = {"yum": "游明朝", "msm": "ＭＳ 明朝", "yug": "游ゴシック", "msg": "ＭＳ ゴシック"}
 SIZES = (12, 16, 20, 22, 28)
 ARMS = {f"{f}_{s}": (f, s) for f in FACES for s in SIZES}
+# the same first paragraph inside a wps text box (box lines snap to a typed grid too)
+BOX_ARMS = {f"box_{f}_{s}": (f, s) for f in ("yum", "yug", "msg") for s in (16, 22, 28)}
 TOP = 1440 / 20.0
 TOKEN = "永字八法"
 
@@ -37,11 +39,19 @@ def body(face, size):
             f'<w:p><w:pPr>{rpr2}</w:pPr><w:r>{rpr2}<w:t>参照</w:t></w:r></w:p>')
 
 
+def box_body(face, size):
+    import re
+    a = T.anchor(160, 1, False)
+    first = body(face, size).split("</w:p>")[0] + "</w:p>"
+    a = re.sub(r"<w:txbxContent>.*</w:txbxContent>", "<w:txbxContent>" + first + "</w:txbxContent>", a, flags=re.S)
+    return "<w:p>" + a + "</w:p>" + "".join(f"<w:p><w:r><w:t>L{i:02d}</w:t></w:r></w:p>" for i in range(1, 12))
+
+
 def gen():
     OUT.mkdir(parents=True, exist_ok=True)
-    for arm, (face, size) in ARMS.items():
+    for arm, (face, size) in list(ARMS.items()) + list(BOX_ARMS.items()):
         doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ' + T.NS + "><w:body>" +
-               body(face, size) +
+               (box_body(face, size) if arm.startswith("box_") else body(face, size)) +
                '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440"'
                ' w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="425"/>'
                '<w:docGrid w:type="lines" w:linePitch="360"/></w:sectPr></w:body></w:document>')
@@ -56,14 +66,14 @@ def word():
     import win32com.client, fitz
     w = win32com.client.DispatchEx("Word.Application"); w.Visible = False; w.DisplayAlerts = 0
     try:
-        for arm in ARMS:
+        for arm in list(ARMS) + list(BOX_ARMS):
             t = os.path.join(tempfile.mkdtemp(), arm + ".docx"); shutil.copy(OUT / f"{arm}.docx", t)
             d = w.Documents.Open(t, ReadOnly=False, AddToRecentFiles=False)
             d.SaveAs2(str((OUT / f"{arm}.pdf").resolve()), 17); d.Close(0)
     finally:
         w.Quit()
     res = {}
-    for arm in ARMS:
+    for arm in list(ARMS) + list(BOX_ARMS):
         ys = {}
         for b in fitz.open(OUT / f"{arm}.pdf")[0].get_text("rawdict")["blocks"]:
             for l in b.get("lines", []):
@@ -79,7 +89,7 @@ def word():
 def oxi(exe):
     import line_census as L
     word = json.loads((OUT / "word.json").read_text(encoding="utf-8"))
-    for arm in ARMS:
+    for arm in list(ARMS) + list(BOX_ARMS):
         ys = {}
         for o in L.oxi_lines(os.path.abspath(exe), OUT / f"{arm}.docx"):
             for ch in "永参":
