@@ -8756,9 +8756,25 @@ cells={} pitch={:.2} text={:?}",
         let mut dummy_elements: Vec<LayoutElement> = Vec::new();
         // CLNSP: ordered per-LINE (line_spacing_rule, line_spacing,
         // space_before[first-line-only]) captured for the compat law chain.
-        let mut clnsp_line_specs: Vec<(Option<String>, Option<f32>, f32)> = Vec::new();
+        // (rule, value, before on the first line, after on the last line)
+        let mut clnsp_line_specs: Vec<(Option<String>, Option<f32>, f32, f32)> = Vec::new();
+        // OXI_TXBX_AFTER (2026-10-11, default ON, opt-out _DISABLE): layout_paragraph
+        // returns a paragraph's space-after for the CALLER to collapse with the next
+        // paragraph's before (it never advances the cursor by it); this loop dropped
+        // it, so every text-box paragraph lost its after. `_pb_clnsp_latin_gen.py`
+        // (Word PDF, one box, three paragraphs): Arial 14 line 240 after 160 steps
+        // 24.12 = 16.08 + 8 with and without compatLnSpc, compat 14/15 alike; Oxi
+        // 16.10. Threaded like the footer loop (prev style / contextualSpacing too).
+        let txbx_after_on = std::env::var_os("OXI_TXBX_AFTER_DISABLE").is_none();
+        let mut txbx_prev_para: Option<&Paragraph> = None;
+        let mut txbx_prev_after: f32 = 0.0;
 
         for block in &text_box.blocks {
+            if txbx_after_on && !matches!(block, Block::Paragraph(_)) {
+                cursor.advance(txbx_prev_after);
+                txbx_prev_after = 0.0;
+                txbx_prev_para = None;
+            }
             // Stop if we've exceeded the text box bounds
             if cursor.cursor_y > abs_y + text_box.height - inset_b - v_corner_inset {
                 break;
@@ -8777,7 +8793,7 @@ cells={} pitch={:.2} text={:?}",
                     let clnsp_mark = ();
                     let _ = clnsp_mark;
                     let empty_fn_h_txbx = std::collections::HashMap::new();
-                    let (para_elements, _, _) = self.layout_paragraph(
+                    let (para_elements, para_after, _) = self.layout_paragraph(
                         para,
                         inner_x,
                         &mut cursor,
@@ -8793,13 +8809,15 @@ cells={} pitch={:.2} text={:?}",
                         } else {
                             page.grid_line_pitch
                         },
-                        None,
-                        false,
-                        None,  // no prev style/contextual/autospacing tracking
+                        txbx_prev_para.and_then(|p| p.style.style_id.as_deref()),
+                        txbx_prev_para.is_some_and(|p| p.style.contextual_spacing),
+                        txbx_prev_para
+                            .filter(|p| p.style.after_autospacing)
+                            .and_then(|p| p.style.num_id.as_deref()),
                         None,  // S658: no border-merge tracking in textboxes
                         false, // S739: no keepNext-follower tracking in textboxes
                         true,  // in_textbox: suppress CJK compression
-                        0.0,
+                        txbx_prev_after,
                         None,
                         None,
                         None,
@@ -8835,6 +8853,7 @@ cells={} pitch={:.2} text={:?}",
                             .collect();
                         ys.sort_unstable();
                         ys.dedup();
+                        let n_lines = ys.len();
                         for (li, _) in ys.iter().enumerate() {
                             clnsp_line_specs.push((
                                 para.style.line_spacing_rule.clone(),
@@ -8844,8 +8863,13 @@ cells={} pitch={:.2} text={:?}",
                                 } else {
                                     0.0
                                 },
+                                if li + 1 == n_lines { para_after } else { 0.0 },
                             ));
                         }
+                    }
+                    if txbx_after_on {
+                        txbx_prev_para = Some(para);
+                        txbx_prev_after = para_after;
                     }
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -9179,14 +9203,38 @@ cells={} pitch={:.2} text={:?}",
         // whose blocks are ALL paragraphs (clnsp_line_specs is captured per
         // paragraph line — a table/image block would desync the order-based
         // mapping, so mixed boxes keep the S662 path).
+        // OXI_CLNSP_TYPED_GRID (2026-10-11, default ON, opt-out _DISABLE): Word
+        // snaps a compatLnSpc box's lines to a typed (lines) grid exactly as it
+        // does without compatLnSpc (`_pb_clnsp_latin_gen.py` *_g arms: MS Gothic
+        // 12 steps 18.0, Arial 14 line 259 after 160 27.36-27.48, c == n), which
+        // the regular box layout already does; the CLNSP chain (derived on
+        // snapToGrid=0 boxes) re-placed them off the grid. Leave such boxes alone.
+        // An exact line never snaps, so a box with one keeps the chain (its 13:3
+        // split is right; ja/administrative__19d467ed's line=400 exact footer box
+        // moved +2.3 on the regular path).
+        let clnsp_box_on_grid = std::env::var_os("OXI_CLNSP_TYPED_GRID_DISABLE").is_none()
+            && page.grid_char_pitch.is_none()
+            && page.grid_line_pitch.is_some()
+            && text_box.blocks.iter().all(|b| {
+                matches!(b, Block::Paragraph(p) if p.style.snap_to_grid
+                    && p.style.line_spacing_rule.as_deref() != Some("exact"))
+            });
         if text_box.compat_line_spacing
             && std::env::var("OXI_CLNSP_DISABLE").is_err()
+            && !clnsp_box_on_grid
             && matches!(v_anchor, "t" | "" | "top")
             && text_box
                 .blocks
                 .iter()
                 .all(|b| matches!(b, Block::Paragraph(_)))
         {
+            let clnsp_font_law = std::env::var_os("OXI_CLNSP_FONT_LAW_DISABLE").is_none();
+            fn clnsp_line_face(elements: &[LayoutElement], idxs: &[usize]) -> Option<String> {
+                idxs.first().and_then(|&i| match &elements[i].content {
+                    LayoutContent::Text { font_family, .. } => font_family.clone(),
+                    _ => None,
+                })
+            }
             // group text elements into lines by y
             use std::collections::BTreeMap;
             let mut lines: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
@@ -9215,6 +9263,7 @@ cells={} pitch={:.2} text={:?}",
             {
                 let mut law_pos = 0.0f32;
                 let mut prev_desc = 0.0f32;
+                let mut prev_after = 0.0f32;
                 let mut first = true;
                 for (line_no, (_, idxs)) in lines.iter().enumerate() {
                     let mut fs = 0.0f32;
@@ -9228,19 +9277,12 @@ cells={} pitch={:.2} text={:?}",
                     if fs <= 0.0 {
                         continue;
                     }
-                    let (rule, val, sb) = clnsp_line_specs
+                    let (rule, val, sb, after) = clnsp_line_specs
                         .get(line_no)
-                        .map(|(r, v, sb)| (r.clone(), *v, *sb))
-                        .unwrap_or((None, None, 0.0));
-                    let nat = 1.27 * fs + 0.25;
-                    let (asc, desc) = match (rule.as_deref(), val) {
-                        (Some("exact"), Some(v)) => (13.0 / 16.0 * v, 3.0 / 16.0 * v),
-                        (Some("atLeast"), Some(v)) => {
-                            let boxh = nat.max(v);
-                            (boxh - 0.27 * fs, 0.27 * fs)
-                        }
-                        _ => (fs + 0.25, 0.27 * fs),
-                    };
+                        .map(|(r, v, sb, a)| (r.clone(), *v, *sb, *a))
+                        .unwrap_or((None, None, 0.0, 0.0));
+                    let (asc, desc) =
+                        self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs));
                     let cur_base = {
                         let i0 = idxs[0];
                         let (efs, fam) = match &elements[i0].content {
@@ -9261,10 +9303,11 @@ cells={} pitch={:.2} text={:?}",
                         first = false;
                         law_pos = 0.0;
                     } else {
-                        law_pos += prev_desc + sb + asc;
+                        law_pos += prev_desc + prev_after + sb + asc;
                     }
                     per_line.push((idxs.clone(), cur_base, law_pos));
                     prev_desc = desc;
+                    prev_after = if clnsp_font_law { after } else { 0.0 };
                 }
             }
             if !per_line.is_empty() {
@@ -9286,16 +9329,11 @@ cells={} pitch={:.2} text={:?}",
                             }
                         }
                     }
-                    let (rule, val, _sb) = clnsp_line_specs
+                    let (rule, val) = clnsp_line_specs
                         .first()
-                        .map(|(r, v, sb)| (r.clone(), *v, *sb))
-                        .unwrap_or((None, None, 0.0));
-                    let nat = 1.27 * fs + 0.25;
-                    match (rule.as_deref(), val) {
-                        (Some("exact"), Some(v)) => 13.0 / 16.0 * v,
-                        (Some("atLeast"), Some(v)) => nat.max(v) - 0.27 * fs,
-                        _ => fs + 0.25,
-                    }
+                        .map(|(r, v, _, _)| (r.clone(), *v))
+                        .unwrap_or((None, None));
+                    self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0)).0
                 };
                 let mode = std::env::var("OXI_CLNSP_ANCHOR").unwrap_or_default();
                 let anchor = if mode == "mean" {
@@ -21800,6 +21838,46 @@ cells={} pitch={:.2} text={:?}",
             Some("exact") => 0.0,
             Some("atLeast") => (overflow - (line - natural).max(0.0)).max(0.0),
             _ => overflow,
+        }
+    }
+
+    /// CLNSP line box (ascent above the baseline, descent below) for one line
+    /// of a compatLnSpc text box. Exact lines split 13:3 and atLeast floors
+    /// grow above the text's natural descent, whatever the face. The auto
+    /// branch was derived on MS Mincho / MS Gothic (1.27fs + 0.25, ascent
+    /// fs + 0.25) and ignored the line multiple; OXI_CLNSP_FONT_LAW (2026-10-11,
+    /// default ON, opt-out _DISABLE) keeps that box for CJK 83/64 faces, gives
+    /// other faces their own box (win ascent + external leading above, win
+    /// descent below), and puts the multiple's extra below the baseline.
+    /// `_pb_clnsp_latin_gen.py` (Word PDF): Arial 14 line 259 steps 17.40
+    /// (model 17.36, old law 18.03), MS Gothic 12 line 259 after 160 24.78
+    /// (24.72, old 15.49); first baselines of Arial / Calibri / TNR within 0.1.
+    /// Word gives the same results with and without compatLnSpc (compat 12/14/15,
+    /// typed grid too).
+    pub(crate) fn clnsp_line_box(
+        &self,
+        rule: Option<&str>,
+        val: Option<f32>,
+        fs: f32,
+        face: Option<String>,
+    ) -> (f32, f32) {
+        let font_law = std::env::var_os("OXI_CLNSP_FONT_LAW_DISABLE").is_none();
+        let m = face.as_deref().map(|f| self.registry.get_with_bold(f, false));
+        let (a_nat, d_nat) = match &m {
+            Some(m) if font_law && !m.is_cjk_83_64_font() => {
+                let ext = (m.natural_line_height_hhea(fs) - (m.win_ascent + m.win_descent) * fs).max(0.0);
+                (m.win_ascent * fs + ext, m.win_descent * fs)
+            }
+            _ => (fs + 0.25, 0.27 * fs),
+        };
+        match (rule, val) {
+            (Some("exact"), Some(v)) => (13.0 / 16.0 * v, 3.0 / 16.0 * v),
+            (Some("atLeast"), Some(v)) => ((a_nat + d_nat).max(v) - d_nat, d_nat),
+            (_, v) if font_law => {
+                let mult = v.filter(|v| *v > 0.0).unwrap_or(1.0);
+                (a_nat, (a_nat + d_nat) * mult - a_nat)
+            }
+            _ => (a_nat, d_nat),
         }
     }
 
