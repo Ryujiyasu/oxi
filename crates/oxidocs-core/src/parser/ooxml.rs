@@ -4345,12 +4345,22 @@ fn parse_paragraph_with_inline_images_impl(
             // the style's autospacing must NOT leak past it (ECMA property
             // override; the first cut leaked and flipped 4 EN PASS docs whose
             // NormalWeb paras carry direct spacing).
+            // OXI_AUTOSP_FLAG_GUARD (2026-10-12, default ON, opt-out _DISABLE): only a
+            // DIRECT beforeAutospacing / afterAutospacing="0" stops the style's
+            // autospacing; a direct before/after VALUE does not. `_pb_autosp_direct_gen.py`
+            // (Word PDF, style before/after 100 + both autospacing=1, Arial 12): no
+            // direct / direct 0,0 / direct 120,120 all step 27.8 (= 13.8 + auto 14);
+            // direct autospacing=0 18.8 (the style's 5pt); 0,0 + autospacing=0 13.8.
+            // en/administrative__0069bb27 (direct before=0 after=0) lost 14pt a gap.
+            let flag_guard = std::env::var_os("OXI_AUTOSP_FLAG_GUARD_DISABLE").is_none();
+            let blocks_before = if flag_guard { style.before_autospacing_off } else { style.has_direct_before };
+            let blocks_after = if flag_guard { style.after_autospacing_off } else { style.has_direct_after };
             if std::env::var("OXI_S895_DISABLE").is_err() {
-                if ds.before_autospacing && !style.before_autospacing && !style.has_direct_before {
+                if ds.before_autospacing && !style.before_autospacing && !blocks_before {
                     style.before_autospacing = true;
                     style.autospacing_from_style = true;
                 }
-                if ds.after_autospacing && !style.after_autospacing && !style.has_direct_after {
+                if ds.after_autospacing && !style.after_autospacing && !blocks_after {
                     style.after_autospacing = true;
                     style.autospacing_from_style = true;
                 }
