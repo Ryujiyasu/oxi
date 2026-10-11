@@ -552,7 +552,15 @@ impl<'a> ParagraphLayouter<'a> {
             .unwrap_or(false);
         let snap_pass_through = s342_no_snap_gate || s344_fs_gate;
         let snap_gate_active = !snap_pass_through && !para.style.snap_to_grid;
-        let effective_char_pitch = if in_textbox || snap_gate_active {
+        // OXI_TXBX_CHARGRID (2026-10-11, default ON, opt-out _DISABLE): a
+        // linesAndChars charSpace reaches text-box text exactly as body text
+        // (`_pb_txbx_chargrid_gen.py`, Word PDF: MS Gothic / MS PGothic 10 & 12pt
+        // x charSpace -3930 / 1966 / 0 -- the 12 box arms advance identically to
+        // their body twins, e.g. 12pt kanji 11.04 at -3930). Oxi dropped the
+        // pitch in boxes, so ja/correspondence__14012ac2's boxed heading wrapped
+        // one word early (+17 on every later line of the box).
+        let txbx_chargrid = std::env::var_os("OXI_TXBX_CHARGRID_DISABLE").is_none();
+        let effective_char_pitch = if (in_textbox && !txbx_chargrid) || snap_gate_active {
             None
         } else {
             page.grid_char_pitch
@@ -1290,7 +1298,7 @@ impl<'a> ParagraphLayouter<'a> {
             + s789_stop_extra
             + s893_stop_extra;
         // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
-        let effective_cw_ratio = if in_textbox || snap_gate_active {
+        let effective_cw_ratio = if (in_textbox && !txbx_chargrid) || snap_gate_active {
             None
         } else {
             page.grid_char_cw_ratio
