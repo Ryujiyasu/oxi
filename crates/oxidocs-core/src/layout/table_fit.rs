@@ -9866,6 +9866,16 @@ impl<'a> TableFitLayouter<'a> {
                             let opt_in = std::env::var("OXI_S305_ENABLE").is_ok();
                             const OVERFLOW_GATE_PT: f32 = 20.0;
                             let mut should_relax = false;
+                            // OXI_VMERGE_SPAN_NATURAL (2026-10-11, default ON, opt-out
+                            // _DISABLE): a declared trHeight is a FLOOR (atLeast), so a
+                            // merged cell centres in the span's real rows, not in the sum
+                            // of their floors. en/forms__005d851e's «Trainee» / «Sending
+                            // Institution» / «Receiving Organisation» labels (vMerge
+                            // restart, vAlign center, rows with trHeight 213-237tw that
+                            // their text outgrows) sat 3-5pt above Word.
+                            if std::env::var_os("OXI_VMERGE_SPAN_NATURAL_DISABLE").is_none() {
+                                should_relax = true;
+                            }
                             if opt_in {
                                 for ri in (row_idx + 1)..(row_idx + span_count) {
                                     let r = &table.rows[ri];
