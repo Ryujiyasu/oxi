@@ -629,6 +629,10 @@ pub struct RunStyle {
     /// Text shadow effect (w:shadow)
     #[serde(default)]
     pub shadow: bool,
+    /// Word 2010 text-effect shadow (w14:shadow): (blurRad pt, dist pt, dir
+    /// degrees clockwise from +x). Layout only — it grows the line box.
+    #[serde(default)]
+    pub text_shadow: Option<(f32, f32, f32)>,
     /// Text emboss effect (w:emboss)
     #[serde(default)]
     pub emboss: bool,
@@ -781,6 +785,7 @@ impl Default for RunStyle {
             vanish_off: false,
             outline: false,
             shadow: false,
+            text_shadow: None,
             emboss: false,
             imprint: false,
             no_fill: false,

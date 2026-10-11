@@ -3153,6 +3153,41 @@ impl LayoutEngine {
     }
 }
 
+impl LayoutEngine {
+    /// OXI_TEXT_SHADOW_LINE (2026-10-11, default ON, opt-out _DISABLE): how far a
+    /// w14:shadow text effect pushes the line box up and down. The shadow box is
+    /// the glyph box moved `dist` along `dir` and grown by `blurRad`, so it leaves
+    /// the glyph box by max(0, blur - dy) above and max(0, blur + dy) below
+    /// (dy = dist·sin dir); Word grows the line by those extents scaled by
+    /// 0.05·fs^0.70. `_pb_shadow_line_gen.py` (Word PDF, MS Gothic, 21 arms:
+    /// 8..40pt × extent sums 3/8/16, plus dir right/up, dist 0/6, blur 0/8):
+    /// every arm within 0.05pt (the 96dpi quantum); the first baseline moves by the
+    /// upper part alone. ja/reference__5593c6a7 (blur 4 dist 3 down, 22pt):
+    /// Word 31.11 per line, plain 28.56. Measured for single auto lines.
+    pub(crate) fn text_shadow_ext<'a>(
+        &self,
+        runs: impl Iterator<Item = (&'a RunStyle, &'a str)>,
+        para_style: &ParagraphStyle,
+    ) -> (f32, f32) {
+        if std::env::var_os("OXI_TEXT_SHADOW_LINE_DISABLE").is_some() {
+            return (0.0, 0.0);
+        }
+        let (mut top, mut bottom) = (0.0f32, 0.0f32);
+        for (st, text) in runs {
+            let Some((blur, dist, dir)) = st.text_shadow else { continue };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let fs = self.resolve_font_size(st, para_style);
+            let scale = 0.05 * fs.powf(0.70);
+            let dy = dist * dir.to_radians().sin();
+            top = top.max((blur - dy).max(0.0) * scale);
+            bottom = bottom.max((blur + dy).max(0.0) * scale);
+        }
+        (top, bottom)
+    }
+}
+
 pub(crate) fn apply_cs_run_flag(runs: &mut [Run], para_style: &ParagraphStyle) {
     apply_cs_run_flag_with(runs, para_style, None)
 }
@@ -8756,8 +8791,9 @@ cells={} pitch={:.2} text={:?}",
         let mut dummy_elements: Vec<LayoutElement> = Vec::new();
         // CLNSP: ordered per-LINE (line_spacing_rule, line_spacing,
         // space_before[first-line-only]) captured for the compat law chain.
-        // (rule, value, before on the first line, after on the last line)
-        let mut clnsp_line_specs: Vec<(Option<String>, Option<f32>, f32, f32)> = Vec::new();
+        // (rule, value, before on the first line, after on the last line,
+        //  w14:shadow growth above / below)
+        let mut clnsp_line_specs: Vec<(Option<String>, Option<f32>, f32, f32, (f32, f32))> = Vec::new();
         // OXI_TXBX_AFTER (2026-10-11, default ON, opt-out _DISABLE): layout_paragraph
         // returns a paragraph's space-after for the CALLER to collapse with the next
         // paragraph's before (it never advances the cursor by it); this loop dropped
@@ -8766,6 +8802,13 @@ cells={} pitch={:.2} text={:?}",
         // 24.12 = 16.08 + 8 with and without compatLnSpc, compat 14/15 alike; Oxi
         // 16.10. Threaded like the footer loop (prev style / contextualSpacing too).
         let txbx_after_on = std::env::var_os("OXI_TXBX_AFTER_DISABLE").is_none();
+        // OXI_CLNSP_EMPTY_PARA (2026-10-11, default ON, opt-out _DISABLE): a paragraph
+        // with no text lines has no entry in the CLNSP chain, so its whole height
+        // vanished (ja/reference__5593c6a7: the empty line between «何が有名なの？» and
+        // the list, Word 47.76 between the two baselines, Oxi 36.7). Carry it as space
+        // before the next text line.
+        let clnsp_empty_on = std::env::var_os("OXI_CLNSP_EMPTY_PARA_DISABLE").is_none();
+        let mut clnsp_pending_gap: f32 = 0.0;
         let mut txbx_prev_para: Option<&Paragraph> = None;
         let mut txbx_prev_after: f32 = 0.0;
 
@@ -8854,16 +8897,30 @@ cells={} pitch={:.2} text={:?}",
                         ys.sort_unstable();
                         ys.dedup();
                         let n_lines = ys.len();
+                        if n_lines == 0 && clnsp_empty_on {
+                            // the previous text line's after (passed in as
+                            // txbx_prev_after) is already a term of the chain
+                            clnsp_pending_gap += (cursor.cursor_y - para_start_y) - txbx_prev_after + para_after;
+                        }
+                        let shadow = if matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                            && (para.style.line_spacing.unwrap_or(1.0) - 1.0).abs() < 0.01
+                        {
+                            self.text_shadow_ext(para.runs.iter().map(|r| (&r.style, r.text.as_str())), &para.style)
+                        } else {
+                            (0.0, 0.0)
+                        };
                         for (li, _) in ys.iter().enumerate() {
                             clnsp_line_specs.push((
                                 para.style.line_spacing_rule.clone(),
                                 para.style.line_spacing,
                                 if li == 0 {
                                     para.style.space_before.unwrap_or(0.0)
+                                        + std::mem::take(&mut clnsp_pending_gap)
                                 } else {
                                     0.0
                                 },
                                 if li + 1 == n_lines { para_after } else { 0.0 },
+                                shadow,
                             ));
                         }
                     }
@@ -9229,11 +9286,27 @@ cells={} pitch={:.2} text={:?}",
                 .all(|b| matches!(b, Block::Paragraph(_)))
         {
             let clnsp_font_law = std::env::var_os("OXI_CLNSP_FONT_LAW_DISABLE").is_none();
+            // The face of the line's largest text run -- not its first element,
+            // which on a list line is the marker (a Symbol bullet read as the line
+            // face gave en/policies__009ab5c3's Arial 14 bullets 17.15, Word 16.08).
             fn clnsp_line_face(elements: &[LayoutElement], idxs: &[usize]) -> Option<String> {
-                idxs.first().and_then(|&i| match &elements[i].content {
+                let mut best: Option<(f32, String)> = None;
+                for &i in idxs {
+                    if let LayoutContent::Text { font_family: Some(f), font_size, text, .. } = &elements[i].content {
+                        let symbolic = matches!(f.as_str(), "Symbol" | "Wingdings" | "Wingdings 2" | "Wingdings 3")
+                            || text.chars().all(|c| ('\u{E000}'..='\u{F8FF}').contains(&c) || c.is_whitespace());
+                        if symbolic {
+                            continue;
+                        }
+                        if best.as_ref().map_or(true, |(s, _)| *font_size > *s) {
+                            best = Some((*font_size, f.clone()));
+                        }
+                    }
+                }
+                best.map(|(_, f)| f).or_else(|| idxs.first().and_then(|&i| match &elements[i].content {
                     LayoutContent::Text { font_family, .. } => font_family.clone(),
                     _ => None,
-                })
+                }))
             }
             // group text elements into lines by y
             use std::collections::BTreeMap;
@@ -9277,12 +9350,13 @@ cells={} pitch={:.2} text={:?}",
                     if fs <= 0.0 {
                         continue;
                     }
-                    let (rule, val, sb, after) = clnsp_line_specs
+                    let (rule, val, sb, after, (sh_t, sh_b)) = clnsp_line_specs
                         .get(line_no)
-                        .map(|(r, v, sb, a)| (r.clone(), *v, *sb, *a))
-                        .unwrap_or((None, None, 0.0, 0.0));
+                        .map(|(r, v, sb, a, sh)| (r.clone(), *v, *sb, *a, *sh))
+                        .unwrap_or((None, None, 0.0, 0.0, (0.0, 0.0)));
                     let (asc, desc) =
                         self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs));
+                    let (asc, desc) = (asc + sh_t, desc + sh_b);
                     let cur_base = {
                         let i0 = idxs[0];
                         let (efs, fam) = match &elements[i0].content {
@@ -9329,11 +9403,11 @@ cells={} pitch={:.2} text={:?}",
                             }
                         }
                     }
-                    let (rule, val) = clnsp_line_specs
+                    let (rule, val, sh_t) = clnsp_line_specs
                         .first()
-                        .map(|(r, v, _, _)| (r.clone(), *v))
-                        .unwrap_or((None, None));
-                    self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0)).0
+                        .map(|(r, v, _, _, sh)| (r.clone(), *v, sh.0))
+                        .unwrap_or((None, None, 0.0));
+                    self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0)).0 + sh_t
                 };
                 let mode = std::env::var("OXI_CLNSP_ANCHOR").unwrap_or_default();
                 let anchor = if mode == "mean" {

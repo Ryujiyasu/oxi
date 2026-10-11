@@ -1941,6 +1941,10 @@ impl<'a> ParagraphLayouter<'a> {
                     && para.runs.iter().any(|r| r.style.inline_object_image.is_some())));
         let header_exact_inline = header_inline_geometry
             && para.style.line_spacing_rule.as_deref() == Some("exact");
+        // OXI_TEXT_SHADOW_LINE scope: single auto lines off a typed grid (measured).
+        let shadow_line_scope = (grid_pitch.is_none() || page.doc_grid_no_type)
+            && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+            && (para.style.line_spacing.unwrap_or(1.0) - 1.0).abs() < 0.01;
         // Initial breaking and later band-exit reflow must use the same line
         // boxes, including font unions, inline objects, occupied ink and leading.
         let line_boxes = |lines: &[Line]| {
@@ -2411,6 +2415,20 @@ impl<'a> ParagraphLayouter<'a> {
                 }
             }
         }
+            // OXI_TEXT_SHADOW_LINE: a w14:shadow run grows its line (see text_shadow_ext).
+            if shadow_line_scope {
+                for (li, line) in lines.iter().enumerate() {
+                    let (t, b) = self.text_shadow_ext(
+                        line.fragments.iter().map(|f| (&f.style, f.text.as_str())), &para.style);
+                    let extra = t + b;
+                    if extra > 0.0 {
+                        line_heights[li] += extra;
+                        natural_line_heights[li] += extra;
+                        if li < ink_line_heights.len() { ink_line_heights[li] += extra; }
+                        if li < s779_win_heights.len() { s779_win_heights[li] += extra; }
+                    }
+                }
+            }
             (line_heights, natural_line_heights, s779_win_heights,
                 ink_line_heights, text_only_line_heights, s1116_line0_target, story_image_leading)
         };
@@ -3655,6 +3673,15 @@ impl<'a> ParagraphLayouter<'a> {
             && lines.len() == 1
         {
             raw_spaced_tw.max(s1116_line0_target * 20.0)
+        } else {
+            raw_spaced_tw
+        };
+        // OXI_TEXT_SHADOW_LINE: the cumulative basis is rebuilt from the first
+        // line's fonts, not from line_heights, so it needs the shadow growth too.
+        let raw_spaced_tw: f32 = if shadow_line_scope && raw_spaced_tw > 0.0 && !lines.is_empty() {
+            let (t, b) = self.text_shadow_ext(
+                lines[0].fragments.iter().map(|f| (&f.style, f.text.as_str())), &para.style);
+            raw_spaced_tw + (t + b) * 20.0
         } else {
             raw_spaced_tw
         };
@@ -6985,15 +7012,22 @@ impl<'a> ParagraphLayouter<'a> {
             // helps = horizontal/layout). gen2 p1 absolute SSIM ≈ 0.91. S614 (+0.1424) was a
             // real win but the vertical stack is NOT exhausted — the drift is a real fixable
             // error whose source must be isolated per-element (each block's height vs Word).
+            // OXI_TEXT_SHADOW_LINE: place the text in the line box without the
+            // shadow's growth, then drop it by the part above.
+            let (shadow_top, shadow_bottom) = if shadow_line_scope {
+                self.text_shadow_ext(line.fragments.iter().map(|f| (&f.style, f.text.as_str())), &para.style)
+            } else {
+                (0.0, 0.0)
+            };
             let text_y_off = self.text_y_offset_for_line(
                 line,
                 &para.style,
                 para_font_size,
-                line_height,
+                line_height - shadow_top - shadow_bottom,
                 grid_pitch,
                 in_textbox,
                 page.doc_grid_no_type,
-            );
+            ) + shadow_top;
             // The grid capacity and the painted baseline use separate boxes.
             // Center the composed host/math placement box on this actual line;
             // retain established placement for other stories and MATH-only runs.

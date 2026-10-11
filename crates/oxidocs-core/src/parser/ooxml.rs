@@ -10679,6 +10679,20 @@ fn parse_run_properties(
                 if local == "textFill" {
                     in_text_fill = true;
                 }
+                // OXI_TEXT_SHADOW_LINE: <w14:shadow blurRad dist dir> (EMU / 60000ths deg).
+                if local == "shadow" && e.name().as_ref().starts_with(b"w14:") {
+                    let (mut blur, mut dist, mut dir) = (0.0f32, 0.0f32, 0.0f32);
+                    for attr in e.attributes().flatten() {
+                        let v = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0);
+                        match local_name(attr.key.as_ref()).as_str() {
+                            "blurRad" => blur = v / 12700.0,
+                            "dist" => dist = v / 12700.0,
+                            "dir" => dir = v / 60000.0,
+                            _ => {}
+                        }
+                    }
+                    style.text_shadow = Some((blur, dist, dir));
+                }
                 // rPrChange carries a full prior <w:rPr> body. If we fell through
                 // to the normal handlers, every prior property (bold, italic,
                 // color, font) would silently merge into the *current* style.
