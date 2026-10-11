@@ -7036,6 +7036,45 @@ impl<'a> ParagraphLayouter<'a> {
                 in_textbox,
                 page.doc_grid_no_type,
             ) + shadow_top;
+            // OXI_GRID_WINBOX_BASE (2026-10-11, default ON, opt-out _DISABLE): a CJK
+            // line snapped to a TYPED lines grid centres the face's WIN box
+            // (usWinAscent + usWinDescent) in its cells: baseline = top + H/2 -
+            // win_sum·fs/2 + win_ascent·fs. `_pb_gridline_base_gen.py` (Word PDF,
+            // 18pt grid, 游明朝 / 游ゴシック / MS 明朝 / MS ゴシック x 12..28pt, 1-3
+            // cells): all 20 arms within 0.12. MS faces (hhea == win) already sat
+            // there; the 游 faces (win 0.995/0.292 vs hhea 0.880/0.222+0.5) were
+            // 1.6..4.0pt low (ja/administrative__199dab4d's 22pt title +3.08).
+            let text_y_off = if std::env::var_os("OXI_GRID_WINBOX_BASE_DISABLE").is_none()
+                && !in_textbox
+                && !page.doc_grid_no_type
+                && para.style.snap_to_grid
+                && grid_pitch.is_some_and(|p| p > 0.1)
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                && shadow_top + shadow_bottom == 0.0
+            {
+                let big = line.fragments.iter()
+                    .filter(|f| !f.text.trim().is_empty())
+                    .max_by(|a, b| a.style.font_size.unwrap_or(para_font_size)
+                        .total_cmp(&b.style.font_size.unwrap_or(para_font_size)));
+                match big {
+                    Some(f) if line.fragments.iter().filter(|g| !g.text.trim().is_empty()).all(|g| {
+                        self.metrics_for_text(&g.text, &g.style, &para.style).is_cjk_83_64_font()
+                    }) => {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
+                        let win = m.win_ascent + m.win_descent;
+                        if (m.natural_line_height_hhea(1.0) - win).abs() > 0.01 {
+                            // rendered baseline = y + text_y_off - 1 + win_ascent·fs
+                            line_height / 2.0 - win * fs / 2.0 + 1.0
+                        } else {
+                            text_y_off
+                        }
+                    }
+                    _ => text_y_off,
+                }
+            } else {
+                text_y_off
+            };
             // The grid capacity and the painted baseline use separate boxes.
             // Center the composed host/math placement box on this actual line;
             // retain established placement for other stories and MATH-only runs.
