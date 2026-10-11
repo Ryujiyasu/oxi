@@ -5042,7 +5042,23 @@ impl<'a> TableFitLayouter<'a> {
                                             // identical p.1 L14 mismatch across a1d6e4 / d4d126 /
                                             // de6e32 tokumei docs (S109).
                                             if matches!(ch, ' ' | '\t' | '\n' | '\x0B' | '\x0C') { cell_tab_char_pack = false; }
-                                            let tab_break = ch == '\t' && p_first_line_indent < 0.0
+                                            // OXI_CELL_TAB_ALL covers LEFT stops only: a right / centre /
+                                            // decimal stop keeps the old glyph-width tab in a non-hanging
+                                            // cell paragraph (policies__00148f8d's 567tw cells «\t50» with
+                                            // a right stop at 514: Word right-aligns 50 at 333.2 on one
+                                            // line; advancing the tab to the stop pushed 50 to line 2).
+                                            let cell_tab_all = !self.doc_body_has_real_cjk
+                                                && std::env::var_os("OXI_CELL_TAB_ALL_DISABLE").is_none()
+                                                && (p_first_line_indent < 0.0 || (ch == '\t' && {
+                                                    let indent_off = if is_first_line {
+                                                        (p_indent_left + p_first_line_indent).max(0.0)
+                                                    } else { p_indent_left };
+                                                    self.cell_next_tab_stop(para, line_x + buf_w + indent_off,
+                                                        p_indent_left, p_first_line_indent).1
+                                                        == TabStopAlignment::Left
+                                                }));
+                                            let tab_break = ch == '\t'
+                                                && (p_first_line_indent < 0.0 || cell_tab_all)
                                                 && (!current_line.is_empty() || !buf.is_empty())
                                                 && self.cell_tab_word_overflows(para, s586_run_offset + s586_ci,
                                                     line_x + buf_w + if is_first_line { (p_indent_left + p_first_line_indent).max(0.0) } else { p_indent_left },
@@ -5114,9 +5130,18 @@ impl<'a> TableFitLayouter<'a> {
                                             // blast radius; combined with the para_has_tab oikomi gate below
                                             // this is perfectly isolated (only d77a moves: +0.0306; 3a4f and
                                             // all other 54 docs EXACTLY unchanged; Phase 1 54/55).
+                                            // OXI_CELL_TAB_ALL (2026-10-12, default ON, opt-out
+                                            // _DISABLE): every cell paragraph, not only hanging
+                                            // ones. `_pb_tab_overflow_gen.py` cell arms (281pt cell,
+                                            // «No» + k tabs + «END», default 36pt stops): Word sets
+                                            // END at 216.8 / 252.8 / 288.8 / 324.8 for k = 4..7 and
+                                            // wraps from k = 8, exactly like the body; Oxi advanced
+                                            // each tab ~5pt (a glyph) and never wrapped.
+                                            // en/forms__00619ac4's «☐ No» + 8 tabs + «If yes…» cell
+                                            // lost its second line.
                                             if ch == '\t'
                                                 && std::env::var("OXI_S443_DISABLE").is_err()
-                                                && p_first_line_indent < 0.0
+                                                && (p_first_line_indent < 0.0 || cell_tab_all)
                                             {
                                                 let indent_off = if is_first_line {
                                                     (p_indent_left + p_first_line_indent).max(0.0)

@@ -18511,6 +18511,27 @@ cells={} pitch={:.2} text={:?}",
     fn cell_tab_word_overflows(&self, para: &Paragraph, pos: usize, current: f32, right: f32, indent_left: f32, first_indent: f32) -> bool {
         if std::env::var("OXI_CELL_TAB_WORD_FIT_DISABLE").is_ok() || self.doc_body_has_real_cjk { return false; }
         let (stop, alignment) = self.cell_next_tab_stop(para, current, indent_left, first_indent);
+        // OXI_CELL_TAB_ALL: a left tab resolved to a DEFAULT-grid stop strictly
+        // BEYOND the cell's right edge wraps (`_pb_tab_overflow_gen.py` cell_k8..k15:
+        // Word moves the tab to the next line and re-resolves it from the line
+        // start, END at 108.7 = start + 36). An EXPLICIT stop beyond the edge keeps
+        // the clamp (S883 / S1044's forms__00042714 562.5pt stop; the first cut
+        // wrapped legal__001410a8's «\t\t....» fee rows at their 3821tw leader stop
+        // inside a 3969tw cell and cost two PASSes). A stop exactly at the edge
+        // keeps the old clamp too.
+        // A line that already runs past the edge never wraps at a tab: Word places an
+        // explicit stop beyond the cell as-is (legal__001410a8 p70: leader stop 191pt
+        // in a 129pt cell, the dots drawn into the next column) and the default stop
+        // after it merely clamps, the rest of the line overflowing (clipped).
+        let explicit_next = para.style.tab_stops.iter().any(|t| t.position > current + 0.01);
+        if alignment == TabStopAlignment::Left
+            && !explicit_next
+            && current < right - 0.01
+            && stop > right + 0.01
+            && std::env::var_os("OXI_CELL_TAB_ALL_DISABLE").is_none()
+        {
+            return true;
+        }
         if alignment != TabStopAlignment::Left || (stop * 20.0).round() >= (right * 20.0).round() { return false; }
         let mut index = 0usize;
         let mut width = 0.0;
