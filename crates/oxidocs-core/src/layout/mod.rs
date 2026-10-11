@@ -21803,6 +21803,34 @@ cells={} pitch={:.2} text={:?}",
         }
     }
 
+    /// OXI_TXALIGN_MARKER (2026-10-11, default ON, opt-out _DISABLE): how far a
+    /// Symbol bullet reaches above the text baseline under the paragraph's
+    /// w:textAlignment. The marker still adds its ascent only (S820b), but where
+    /// it sits moves: `center` puts its (asc - desc)/2 midpoint on the text's,
+    /// so its baseline drops by ((A - D) - (a - d)) / 2; `top` hangs it from the
+    /// text's ascent, so it never overflows. `_pb_txalign_bullet_gen.py` (Word
+    /// PDF, 20 items/arm): Arial 12 + Symbol 12 per item baseline 14.610,
+    /// center 14.055 (model 14.054), top 13.803 = plain; center across Arial
+    /// 10/12, Calibri 11/14, TNR 12 and 9/16pt markers within 0.006
+    /// (educational__005c3a80 "Body copy" list: Word 14.04, Oxi was 14.50).
+    /// `bottom` (14.654) is not derived and keeps the baseline rule.
+    pub(crate) fn txalign_marker_ascent(
+        text_alignment: Option<&str>,
+        marker_asc: f32,
+        marker_desc: f32,
+        text_asc: f32,
+        text_desc: f32,
+    ) -> f32 {
+        if std::env::var_os("OXI_TXALIGN_MARKER_DISABLE").is_some() {
+            return marker_asc;
+        }
+        match text_alignment {
+            Some("center") => marker_asc - ((marker_asc - marker_desc) - (text_asc - text_desc)) / 2.0,
+            Some("top") => marker_asc.min(text_asc),
+            _ => marker_asc,
+        }
+    }
+
     /// S1075 (2026-08-06, default ON, opt-out OXI_S1075_DISABLE): the CELL
     /// counterpart of S931 — HTML autospacing is suppressed between adjacent
     /// list items of the SAME list, so the boundary gap is ZERO (line pitch

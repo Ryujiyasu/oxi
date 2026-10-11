@@ -132,7 +132,12 @@ def oxi_lines(exe, docx):
     items = []
     for g in d["pages"][0]["glyphs"]:
         fs = g.get("font_size", 0) or 0
-        base = g["top"] + win_ascent(g.get("font_family", "")) * fs
+        # 2026-10-11: the renderer's own drawn baseline when it reports one -- a
+        # face GDI cannot resolve is drawn in a substitute with another ascent,
+        # so top + winAscent(layout face) misread policies__0098c921 by +2.14.
+        base = g.get("baseline")
+        if base is None:
+            base = g["top"] + win_ascent(g.get("font_family", "")) * fs
         items.append((base, g["x"], g["x"] + fs, g["char"]))
     items.sort(key=lambda it: (round(it[0]), it[1]))
     return group_lines(items)

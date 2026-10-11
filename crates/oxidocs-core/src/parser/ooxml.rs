@@ -4246,6 +4246,18 @@ fn parse_paragraph_with_inline_images_impl(
             } else if ds.keep_next {
                 style.keep_next = true;
             }
+            // OXI_TXALIGN_STYLE (2026-10-11, default ON, opt-out _DISABLE):
+            // textAlignment comes down the paragraph-style chain like any other
+            // pPr. Only direct pPr and pPrDefault reached it, so
+            // educational__005c3a80's "Body copy" (center) bullets kept the
+            // baseline marker rule (_pb_txalign_bullet_gen.py bodycopy arm:
+            // Word 14.055 = the direct-center arm, Oxi 14.608).
+            if style.text_alignment.is_none()
+                && ds.text_alignment.is_some()
+                && std::env::var_os("OXI_TXALIGN_STYLE_DISABLE").is_none()
+            {
+                style.text_alignment = ds.text_alignment.clone();
+            }
             // S1544 (2026-09-25): a DIRECT `<w:keepLines w:val="0"/>` wins over
             // the style's keepLines, as keepNext already does above (S782
             // class: the merge clobbered the explicit OFF back to true).
@@ -13759,6 +13771,13 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
             }
         } else if ds.keep_next {
             style.keep_next = true;
+        }
+        // OXI_TXALIGN_STYLE: see the paragraph merge above.
+        if style.text_alignment.is_none()
+            && ds.text_alignment.is_some()
+            && std::env::var_os("OXI_TXALIGN_STYLE_DISABLE").is_none()
+        {
+            style.text_alignment = ds.text_alignment.clone();
         }
         // S1544: see the paragraph merge above.
         if !style.has_explicit_keep_lines && ds.keep_lines {

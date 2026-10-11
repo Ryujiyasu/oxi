@@ -448,6 +448,10 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
         child.widow_control = parent.widow_control;
         child.has_explicit_widow_control = true;
     }
+    // OXI_TXALIGN_STYLE: textAlignment through basedOn (see the paragraph merge).
+    if child.text_alignment.is_none() && std::env::var_os("OXI_TXALIGN_STYLE_DISABLE").is_none() {
+        child.text_alignment = parent.text_alignment.clone();
+    }
     // S985: CT_OnOff three-state (mirrors keepNext/keepLines/widowControl above).
     // A child style that EXPLICITLY set pageBreakBefore (incl. val="0") keeps its
     // own value; only a child that did NOT set it inherits — the parent's value +
@@ -2069,6 +2073,10 @@ fn parse_style_definition(
                                     style.outline_level = val.parse::<u8>().ok();
                                 }
                             }
+                        }
+                        // OXI_TXALIGN_STYLE: a style's own textAlignment (dropped before).
+                        "textAlignment" if std::env::var_os("OXI_TXALIGN_STYLE_DISABLE").is_none() => {
+                            apply_para_property_empty(&e, &mut style);
                         }
                         _ => {}
                     }

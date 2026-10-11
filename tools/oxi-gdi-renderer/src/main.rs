@@ -225,8 +225,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
     let scale = render_dpi as f64 / 72.0;
 
     // S494: per-page collected glyphs for --dump-glyphs. Each is
-    // (char, x_pt, top_pt, font_size_pt, font_family).
-    let mut glyph_pages: Vec<(f32, f32, Vec<(char, f32, f32, f32, String)>)> = Vec::new();
+    // (char, x_pt, top_pt, font_size_pt, font_family, baseline_pt).
+    let mut glyph_pages: Vec<(f32, f32, Vec<(char, f32, f32, f32, String, f32)>)> = Vec::new();
 
     for (page_idx, page) in result.pages.iter().enumerate() {
         let out_w = (page.width as f64 * dpi as f64 / 72.0).round() as u32;
@@ -234,7 +234,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
         let w = (page.width as f64 * scale).round() as i32;
         let h = (page.height as f64 * scale).round() as i32;
         // S494: per-page glyph buffer (only filled when dump_glyphs is set)
-        let mut page_glyphs: Vec<(char, f32, f32, f32, String)> = Vec::new();
+        let mut page_glyphs: Vec<(char, f32, f32, f32, String, f32)> = Vec::new();
 
         unsafe {
             // Create memory DC and bitmap
@@ -352,6 +352,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         // underline, strikethrough, the shadow/outline passes) follows.
                         // Vertical (S489 upright CJK) text stacks by the em, not off a
                         // baseline, so it keeps the raw origin.
+                        // The unrounded baseline the layout meant (S1264), for --dump-glyphs.
+                        let mut layout_baseline_pt: Option<f32> = None;
                         if !*is_vertical && (elem.baseline_offset.is_some() || std::env::var("OXI_S1264_DISABLE").is_err()) {
                             let mut tm = TEXTMETRICW::default();
                             if GetTextMetricsW(mem_dc, &mut tm).as_bool() {
@@ -361,6 +363,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                         .unwrap_or(elem.y + elem.text_y_off - 1.0 + asc * *font_size);
                                 glyph_y = (baseline_pt as f64 * scale).round() as i32
                                     - tm.tmAscent;
+                                layout_baseline_pt = Some(baseline_pt);
                             }
                         }
 
@@ -483,6 +486,20 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                 let ok = GetTextExtentExPointW(
                                     mem_dc, PCWSTR(text_wide.as_ptr()), n, i32::MAX,
                                     Some(&mut fit), Some(dx.as_mut_ptr()), &mut sz).as_bool();
+                                // The baseline the glyphs sit on: S1264's (unrounded), else
+                                // glyph_y + the SELECTED face's tmAscent. A face GDI cannot
+                                // resolve (e.g. Open Sans held only in Word's cloud-font
+                                // cache) is drawn in a substitute whose ascent differs from
+                                // the layout face's, so top + winAscent(layout face)
+                                // misreads the line (policies__0098c921: +2.14).
+                                let mut tm = TEXTMETRICW::default();
+                                let base_pt = if let Some(b) = layout_baseline_pt {
+                                    b
+                                } else if GetTextMetricsW(mem_dc, &mut tm).as_bool() {
+                                    ((glyph_y + tm.tmAscent) as f64 / scale) as f32
+                                } else {
+                                    f32::NAN
+                                };
                                 if ok {
                                     // map chars -> UTF-16 index; left edge of char =
                                     // x_draw + dx[u16_idx-1] + cs_px*(char_index)
@@ -502,6 +519,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                                 (glyph_y as f64 / scale) as f32,
                                                 *font_size,
                                                 family.to_string(),
+                                                base_pt,
                                             ));
                                         }
                                         u16i += ch.len_utf16();
@@ -1178,8 +1196,9 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
 /// S494: write per-char EXACT glyph positions (pt) for the MuPDF render-truth tool.
 /// Schema: {"pages":[{"page":N,"width":W,"height":H,"glyphs":[
-///   {"char":"あ","x":X,"top":T,"font_size":FS,"font_family":"MS Mincho"}, ...]}]}
-fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String)>)], path: &str) {
+///   {"char":"あ","x":X,"top":T,"font_size":FS,"font_family":"MS Mincho","baseline":B}, ...]}]}
+/// `baseline` is the drawn baseline (top + the selected GDI face's tmAscent).
+fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String, f32)>)], path: &str) {
     use std::fmt::Write;
     let mut out = String::from("{\n  \"pages\": [\n");
     for (pi, (pw, ph, glyphs)) in pages.iter().enumerate() {
@@ -1187,7 +1206,7 @@ fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String)>)], pa
         write!(&mut out, "    {{\"page\": {}, \"width\": {:.3}, \"height\": {:.3}, \"glyphs\": [\n",
                pi + 1, pw, ph).unwrap();
         let mut first = true;
-        for (ch, x, top, fs, fam) in glyphs {
+        for (ch, x, top, fs, fam, base) in glyphs {
             let esc_ch = match *ch {
                 '\\' => "\\\\".to_string(),
                 '"' => "\\\"".to_string(),
@@ -1197,8 +1216,12 @@ fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String)>)], pa
             if !first { out.push_str(",\n"); }
             first = false;
             write!(&mut out,
-                "      {{\"char\": \"{}\", \"x\": {:.3}, \"top\": {:.3}, \"font_size\": {:.2}, \"font_family\": \"{}\"}}",
+                "      {{\"char\": \"{}\", \"x\": {:.3}, \"top\": {:.3}, \"font_size\": {:.2}, \"font_family\": \"{}\"",
                 esc_ch, x, top, fs, esc_fam).unwrap();
+            if base.is_finite() {
+                write!(&mut out, ", \"baseline\": {:.3}", base).unwrap();
+            }
+            out.push('}');
         }
         out.push_str("\n    ]}");
     }

@@ -2462,6 +2462,7 @@ impl<'a> ParagraphLayouter<'a> {
             let mut body_nat: f32 = 0.0;
             let mut body_desc: f32 = 0.0;
             let mut body_box_asc: f32 = 0.0;
+            let mut body_asc: f32 = 0.0;
             let mut all_latin = true;
             for f in &lines[0].fragments {
                 let fs = f.style.font_size.unwrap_or(para_font_size);
@@ -2478,6 +2479,7 @@ impl<'a> ParagraphLayouter<'a> {
                     body_desc = d;
                 }
                 let a = m.win_ascent * fs;
+                body_asc = body_asc.max(a);
                 // The box's TOP is the text ascent plus its external leading
                 // (hhea natural − win sum), which is where a taller marker
                 // starts to overflow.
@@ -2547,8 +2549,14 @@ impl<'a> ParagraphLayouter<'a> {
                 // probes stay satisfied: uklocalspending Arial 11 + Symbol =
                 // 12.649 + 0.741 = 13.390 vs the recorded differential 13.386.
                 let s1112 = std::env::var("OXI_S1112_DISABLE").is_err();
-                let marker_overflow =
-                    (SYM_ASC_R * s1263_marker_fs - body_box_asc).max(0.0);
+                let marker_overflow = (LayoutEngine::txalign_marker_ascent(
+                    para.style.text_alignment.as_deref(),
+                    SYM_ASC_R * s1263_marker_fs,
+                    450.0 / 2048.0 * s1263_marker_fs,
+                    body_asc,
+                    body_desc,
+                ) - body_box_asc)
+                    .max(0.0);
                 let s689_target = match para.style.line_spacing_rule.as_deref() {
                     Some("exact") if s947 => line_heights[0],
                     Some("atLeast") if s947 => line_heights[0].max(marker_nat),
@@ -2593,7 +2601,7 @@ impl<'a> ParagraphLayouter<'a> {
         let mut s795_entry_extra: f32 = 0.0;
         if std::env::var("OXI_DBG795").is_ok() && para.style.list_marker.is_some() {
             eprintln!(
-                "[DBG795] marker={:?} gp_none={} no_type={} cjk={} rule={:?} ls={:?} nlines={}",
+                "[DBG795] marker={:?} gp_none={} no_type={} cjk={} rule={:?} ls={:?} nlines={} ta={:?}",
                 para.style
                     .list_marker
                     .as_deref()
@@ -2603,7 +2611,8 @@ impl<'a> ParagraphLayouter<'a> {
                 self.doc_body_has_real_cjk,
                 para.style.line_spacing_rule,
                 para.style.line_spacing,
-                lines.len()
+                lines.len(),
+                para.style.text_alignment
             );
         }
         if std::env::var("OXI_S795_DISABLE").is_err()
@@ -2681,7 +2690,13 @@ impl<'a> ParagraphLayouter<'a> {
                 .as_deref()
                 .map_or(false, |m| m.contains('\u{F0B7}'));
             let marker_asc = if is_symbol_marker {
-                SYM_ASC * marker_fs
+                LayoutEngine::txalign_marker_ascent(
+                    para.style.text_alignment.as_deref(),
+                    SYM_ASC * marker_fs,
+                    SYM_DESC * marker_fs,
+                    asc,
+                    desc,
+                )
             } else {
                 match s1037_marker_style(para) {
                     Some(ms) => {
@@ -2735,7 +2750,6 @@ impl<'a> ParagraphLayouter<'a> {
                     None => 0.0,
                 }
             };
-            let _ = SYM_DESC;
             let _ = best_sum;
             // The TEXT fonts' own external leading, kept for the S1112 box top
             // (S820 drops `ext` from the legacy target when the marker wins).
