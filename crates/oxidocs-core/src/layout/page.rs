@@ -8872,7 +8872,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         image_section_spacing.unwrap_or(0.0)
                     };
-                    if cursor.cursor_y <= start_y + 0.1 {
+                    // OXI_IMAGE_PAGE1_BEFORE (2026-10-11, default ON, opt-out
+                    // _DISABLE): like a text paragraph (paragraph_spacing_before:
+                    // page 1 keeps space-before, page 2+ suppresses), an
+                    // image-only paragraph at the top of the document's FIRST page
+                    // keeps its before. en/legal__004f362a: the logo paragraph
+                    // (Normal before=60tw) draws at 60.6 = margin 57.6 + 3 in Word;
+                    // Oxi put it at the margin and the whole page sat 3.08pt high.
+                    // Word with that before set to 0 (COM edit) draws at 57.6.
+                    let img_page1_top = std::env::var_os("OXI_IMAGE_PAGE1_BEFORE_DISABLE").is_none()
+                        && pages.is_empty()
+                        && elements.is_empty()
+                        && !super::S816_PAST_FIRST_SECTION.with(|c| c.get());
+                    if cursor.cursor_y <= start_y + 0.1 && !img_page1_top {
                         img_before = image_section_top_spacing;
                     }
                     // S1418b (2026-09-23, opt-out OXI_IMAGE_INK_FIT_DISABLE):

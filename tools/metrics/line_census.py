@@ -17,7 +17,8 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "pipeline_data" / "line_census"
-BLIND = REPO / "pipeline_data" / "blindG_20260929"
+# CENSUS_BLIND selects the document set (default blind-G; e.g. blindH_20261002).
+BLIND = REPO / "pipeline_data" / os.environ.get("CENSUS_BLIND", "blindG_20260929")
 
 
 def docs():
