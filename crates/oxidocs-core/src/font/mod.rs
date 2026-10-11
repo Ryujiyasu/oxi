@@ -2072,8 +2072,33 @@ impl FontMetricsRegistry {
             }
         }
 
+        if let Some(w) = self.runtime_width_fallback(c, font_size, metrics) {
+            return w;
+        }
         // Default: use the font's own heuristic
         metrics.char_width_pt(c, font_size)
+    }
+
+    /// OXI_RUNTIME_WIDTH_FALLBACK (2026-10-12, default ON, opt-out _DISABLE): a
+    /// character the compact table / catalog / GDI map do not carry takes the
+    /// installed face's own hmtx advance before the heuristic half-em.
+    /// en/technical__0186a34e «Pītau» (Calibri 11): the catalog's Calibri record
+    /// has no char_widths and the GDI map stops short of Latin Extended-A, so ī
+    /// (U+012B) fell to 5.5pt where Calibri advances it 2.524 like i (Word's PDF:
+    /// «Pītau» 22.93 = Oxi's «Pitau»); the +3pt wrapped «Administrator.» and
+    /// shifted the rest of the page 13.4pt. é / ā were off by 0.5 / 3.0 the same way.
+    fn runtime_width_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> Option<f32> {
+        if std::env::var_os("OXI_RUNTIME_WIDTH_FALLBACK_DISABLE").is_some() {
+            return None;
+        }
+        let f = metrics.family.as_str();
+        let (fam, bold, italic) = if let Some(b) = f.strip_suffix(" Bold Italic") { (b, true, true) }
+            else if let Some(b) = f.strip_suffix(" Bold") { (b, true, false) }
+            else if let Some(b) = f.strip_suffix(" Italic") { (b, false, true) }
+            else { (f, false, false) };
+        let rt = crate::font::runtime::resolve(fam, bold, italic)?;
+        let &em = rt.char_widths.get(&c)?;
+        Some(em * font_size)
     }
 
     /// Pre-resolve the GDI character width map for a given font family and font size.
@@ -2269,6 +2294,9 @@ impl FontMetricsRegistry {
             }
         }
 
+        if let Some(w) = self.runtime_width_fallback(c, font_size, metrics) {
+            return w;
+        }
         // Default: use the font's own heuristic
         metrics.char_width_pt(c, font_size)
     }
