@@ -10160,7 +10160,16 @@ cells={} pitch={:.2} text={:?}",
                             Block::Paragraph(p) => p.style.has_direct_tabs_or_ind
                                 || p.style.has_direct_alignment_off_style
                                 || p.style.has_direct_spacing
-                                || p.style.has_direct_ppr_other,
+                                || p.style.has_direct_ppr_other
+                                // OXI_HDR_WS_RUN_TOUCH (2026-10-12, default ON, opt-out
+                                // _DISABLE): a run holding only whitespace (tab / space)
+                                // touches the header. en/policies__00a739a9's header XML
+                                // variants (Word COM body top, margin 36, header 28.35):
+                                // no run / mark rPr only / an empty <w:r/> -> 36.0; two
+                                // <w:tab/> runs -> 41.25, one tab -> 42.0, one space ->
+                                // 42.0 (header + that line). Oxi kept the margin.
+                                || (std::env::var_os("OXI_HDR_WS_RUN_TOUCH_DISABLE").is_none()
+                                    && p.runs.iter().any(|r| !r.text.is_empty())),
                             _ => false,
                         }));
                 if !s1649_touched {
