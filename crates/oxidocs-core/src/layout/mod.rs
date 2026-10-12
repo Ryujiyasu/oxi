@@ -19705,6 +19705,68 @@ cells={} pitch={:.2} text={:?}",
         }).sum()
     }
 
+    /// The numbering label's RENDER width: a full-width character at the em
+    /// (the CJK render rule) unless the face is proportional-kana
+    /// (OXI_MARKER_PROP_FACE); the width the body marker site draws with.
+    pub(super) fn num_marker_render_w(&self, para: &Paragraph) -> f32 {
+        let Some(marker) = para.style.list_marker.as_ref() else { return 0.0; };
+        let marker_style = s1037_marker_style(para).cloned().unwrap_or_else(|| {
+            para.runs.first().map(|r| r.style.clone()).unwrap_or_default()
+        });
+        let fs = self.resolve_font_size(&marker_style, &para.style);
+        let m = &*self.metrics_for(&marker_style, &para.style);
+        let marker_cjk = std::env::var("OXI_MARKERCJK_DISABLE").is_err();
+        let prop = std::env::var_os("OXI_MARKER_PROP_FACE_DISABLE").is_none() && m.has_proportional_kana();
+        marker.chars().map(|c| {
+            if marker_cjk && crate::font::is_fullwidth(c) && !prop {
+                fs
+            } else {
+                self.registry.char_width_pt_with_fallback(c, fs, m)
+            }
+        }).sum()
+    }
+
+    /// OXI_NUM_FL_STOP (2026-10-13, default ON, opt-out _DISABLE): a tab-suffix
+    /// numbered paragraph whose first line is NOT a hanging (first line >= 0: a
+    /// direct firstLine="0" or a positive one over a level with hanging, or a
+    /// level without hanging) draws its label at L + firstLine and tabs the
+    /// text to the first CUSTOM stop past the label's end (the paragraph's tabs
+    /// and the level's num tab; custom stops remove the default stops left of
+    /// them), else to the next default-tab multiple. Returns the text's
+    /// margin-relative x. `_pb_numfl0_gen.py` (16 arms x body / 3a4f's tblInd
+    /// cell / Calibri): level 1836/360 + direct leftChars=202 left=424
+    /// firstLine=0 -> label 21.3, text 42.05; firstLine=210 -> label 31.85,
+    /// text 84 (the label ends past 42); a left or num tab at 700 -> 35.1; a
+    /// left tab at 1100 -> 55 (not the 42 default left of it); a num tab at
+    /// 426 / 490 (before the label end) -> 42; a level without hanging -> the
+    /// same. Oxi kept the level's hanging (label at L-18, text at L) in the
+    /// body and the cell alike. golden 3a4f p470 «① 一般勤務» (cell) / p974 /
+    /// p1058 (body): label +18.2 / text +20.6 vs Word.
+    pub(super) fn num_fl_text_x(&self, para: &Paragraph, indent_l: f32, first_line_raw: f32, marker_w: f32) -> Option<f32> {
+        if std::env::var_os("OXI_NUM_FL_STOP_DISABLE").is_some() {
+            return None;
+        }
+        para.style.list_marker.as_ref()?;
+        if first_line_raw < 0.0 || !matches!(para.style.list_suff.as_deref(), None | Some("tab")) {
+            return None;
+        }
+        let end = indent_l + first_line_raw + marker_w;
+        let mut custom: Vec<f32> = para.style.tab_stops.iter().filter(|t| !t.clear).map(|t| t.position).collect();
+        if let Some(t) = para.style.list_tab_stop {
+            custom.push(t);
+        }
+        if let Some(stop) = custom.iter().copied().filter(|p| *p > end + 0.01).min_by(|a, b| a.total_cmp(b)) {
+            return Some(stop);
+        }
+        let dts = self.default_tab_stop;
+        if dts <= 1.0 {
+            return Some(end);
+        }
+        let last_custom = custom.iter().copied().fold(f32::MIN, f32::max);
+        let from = end.max(last_custom);
+        Some(((from / dts + 1e-4).floor() + 1.0) * dts)
+    }
+
     fn s718_list_tab_pull(&self, indent_l: f32, list_indent: f32, marker_w: f32, hanging: f32, marker_w_exact: f32, tabs: &[TabStop]) -> f32 {
         if std::env::var("OXI_S718_DISABLE").is_ok() {
             return 0.0;
@@ -21193,6 +21255,12 @@ cells={} pitch={:.2} text={:?}",
                 0.0
             } else {
                 first_indent_raw
+            };
+            // OXI_NUM_FL_STOP: the first line starts at the suffix tab's stop
+            // (see num_fl_text_x); the estimate must wrap line 0 there too.
+            let first_indent = match self.num_fl_text_x(para, indent_l, first_indent_raw, self.num_marker_render_w(para)) {
+                Some(text_x) => text_x - indent_l,
+                None => first_indent,
             };
             // Footnote reservation must use the same horizontal character
             // grid as its paragraph emitter. snapToGrid governs vertical

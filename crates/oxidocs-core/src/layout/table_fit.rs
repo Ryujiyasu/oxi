@@ -3801,6 +3801,15 @@ impl<'a> TableFitLayouter<'a> {
                                     } else {
                                         p_first_line_indent_raw
                                     };
+                                    // OXI_NUM_FL_STOP: a non-hanging numbered first line
+                                    // starts its text at the suffix tab's stop; the label
+                                    // sits at L + firstLine (see num_fl_text_x).
+                                    let p_num_fl_text_x = self.num_fl_text_x(
+                                        para, p_indent_left, p_first_line_indent_raw, self.num_marker_render_w(para));
+                                    let p_first_line_indent = match p_num_fl_text_x {
+                                        Some(text_x) => text_x - p_indent_left,
+                                        None => p_first_line_indent,
+                                    };
                                     // Day 33 part 57 (2026-05-12): use cell_w (not inner_w with padding
                                     // subtracted) for wrap width. Matches estimate path comment at
                                     // mod.rs:5677: "Word allows text to extend into cell margins for
@@ -4540,6 +4549,7 @@ impl<'a> TableFitLayouter<'a> {
                                     } else {
                                         0.0
                                     };
+                                    let s718_pull = if p_num_fl_text_x.is_some() { 0.0 } else { s718_pull };
                                     first_line_wrap_w += s718_pull;
                                     let cell_float_wrap = if cell_float_flow {
                                         let obstacles = if let Some(positions) = fixed_float_positions {
@@ -8780,6 +8790,9 @@ impl<'a> TableFitLayouter<'a> {
                                                 // S592: place a space-suffix number at cell-left (no outdent).
                                                 let marker_x = if s592_cell_space {
                                                     cell_x + pad_l + line_indent
+                                                } else if p_num_fl_text_x.is_some() {
+                                                    // OXI_NUM_FL_STOP: the label at L + firstLine
+                                                    cell_x + pad_l + p_indent_left + p_first_line_indent_raw
                                                 } else {
                                                     cell_x + pad_l + line_indent - list_indent
                                                 };

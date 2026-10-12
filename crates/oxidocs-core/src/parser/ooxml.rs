@@ -4141,6 +4141,10 @@ fn parse_paragraph_with_inline_images_impl(
         && (style.indent_left.is_some() || style.indent_left_chars.is_some());
     let ppr_explicit_first_line =
         style.indent_first_line.is_some() || style.indent_first_line_chars.is_some();
+    // OXI_NUM_FL_STOP: the direct pPr's <w:tab w:val="clear"/> positions, read
+    // before the S977 merge drops them -- a clear at the level's num tab removes
+    // that stop (3a4f p974: level tab 2316 cleared, num tab 426 added).
+    let ppr_cleared_tabs: Vec<f32> = style.tab_stops.iter().filter(|t| t.clear).map(|t| t.position).collect();
 
     // Apply style inheritance from StyleSheet (basedOn already resolved)
     // ECMA-376: paragraph with no pStyle implicitly uses the default paragraph style (w:default="1")
@@ -4687,7 +4691,10 @@ fn parse_paragraph_with_inline_images_impl(
                 style.list_marker = Some(resolved.text);
             }
             style.list_suff = Some(resolved.suff);
-            style.list_tab_stop = resolved.tab_stop;
+            style.list_tab_stop = resolved.tab_stop.filter(|t| {
+                std::env::var_os("OXI_NUM_FL_STOP_DISABLE").is_some()
+                    || !ppr_cleared_tabs.iter().any(|c| (c - t).abs() < 0.05)
+            });
             style.list_marker_size = resolved.marker_size;
             // S778 gate = the S771 discriminator: the level ind acts as the
             // suffix-tab stop only for a DIRECT numPr (style-inherited lists

@@ -706,7 +706,7 @@ impl<'a> ParagraphLayouter<'a> {
         let s853_zero_stop = std::env::var("OXI_S853_DISABLE").is_err()
             && list_consumes_hanging
             && (indent_left + first_line_indent_raw >= 0.0);
-        let s778_stop_extra: f32 = if std::env::var("OXI_S778_DISABLE").is_err()
+        let mut s778_stop_extra: f32 = if std::env::var("OXI_S778_DISABLE").is_err()
             && !self.doc_body_has_real_cjk
             && para.style.list_suff.as_deref() == Some("tab")
             && !s853_zero_stop
@@ -859,6 +859,16 @@ impl<'a> ParagraphLayouter<'a> {
                     marker_x = start_x + indent_left + first_line_indent;
                     s789_stop_extra = (stop - first_line_indent).max(marker_width);
                 }
+            }
+            // OXI_NUM_FL_STOP (2026-10-13): a non-hanging first line puts the
+            // label at L + firstLine and the text at the first stop past the
+            // label's end (num_fl_text_x). Subsumes the S778 level-left stop and
+            // the S789 num-tab stop in their derivation cases (nyserda: label end
+            // 18 -> the 36 default = level left; num tab 14.4 > 'N.' end).
+            if let Some(text_x) = self.num_fl_text_x(para, indent_left, first_line_indent_raw, marker_width) {
+                marker_x = start_x + indent_left + first_line_indent;
+                s778_stop_extra = 0.0;
+                s789_stop_extra = (text_x - indent_left - first_line_indent).max(marker_width);
             }
             let marker_text = match suff {
                 "space" => format!("{} ", marker),
