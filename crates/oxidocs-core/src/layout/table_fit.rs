@@ -9308,6 +9308,17 @@ impl<'a> TableFitLayouter<'a> {
                                                     );
                                                     se.text_y_off = cell_text_y_off;
                                                     se.baseline_offset = shared_cell_baseline;
+                                                    // OXI_CELL_SPLIT_EXACT_BASE (2026-10-12, default ON, opt-out
+                                                    // _DISABLE): the auto-space split segments take the exact-line
+                                                    // baseline (0.8 x line) like the unsplit element above; they
+                                                    // kept the raw offset, so a mixed Latin/kana line in an exact
+                                                    // cell sat on the Latin face's hhea ascent. blind-H
+                                                    // ja/legal__0f67d319 «Eメール» (游明朝 12, line 440 exact):
+                                                    // 2.53pt above its pure-kana neighbours; Word keeps the rows'
+                                                    // 22.5 pitch.
+                                                    if std::env::var_os("OXI_CELL_SPLIT_EXACT_BASE_DISABLE").is_none() {
+                                                        self.set_cell_exact_baseline(&mut se, effective_line_rule, effective_line_spacing.unwrap_or(lh));
+                                                    }
                                                     se.paragraph_index = block_idx;
                                                     se.cell_paragraph_index =
                                                         Some(cell_para_counter);
