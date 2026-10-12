@@ -9177,6 +9177,31 @@ fn parse_drawing(
         None
     };
 
+    // OXI_BEVEL_TEXT_INSET (2026-10-13, default ON, opt-out _DISABLE): a bevel
+    // preset's text rect is its INNER face -- inset adj * min(w, h) (default adj
+    // 12500 = 1/8) on every side, on top of the bodyPr insets. blind-G
+    // ja/correspondence__139e74eb's title box (355.2x80.5, adj 12500): Word's PDF
+    // draws the 10.06pt bevel strips and puts the 32pt HGS創英角ﾎﾟｯﾌﾟ体 title's
+    // baseline 32.66 below the INNER top (the natural-box law's 32.25 + bearing);
+    // Oxi measured from the outer top (-6.72, the reading line -5.8).
+    // `_pb_txbxatleast_gen.py` (10 arms: line=0 atLeast / upright / insets /
+    // fitText / spacing / grid): 43.47 from the outer top in EVERY arm = 10.06 +
+    // 0.7 + 32.7, so none of those properties is the cause. 5 corpus docs carry
+    // prst="bevel". The strips themselves are not painted yet (open).
+    let bevel_inset = if shape_type.as_deref() == Some("bevel")
+        && std::env::var_os("OXI_BEVEL_TEXT_INSET_DISABLE").is_none()
+    {
+        width.min(height) * corner_radius_adj.unwrap_or(12500.0) / 100000.0
+    } else {
+        0.0
+    };
+    if bevel_inset > 0.0 {
+        text_inset_left = Some(text_inset_left.unwrap_or(7.2) + bevel_inset);
+        text_inset_right = Some(text_inset_right.unwrap_or(7.2) + bevel_inset);
+        text_inset_top = Some(text_inset_top.unwrap_or(3.6) + bevel_inset);
+        text_inset_bottom = Some(text_inset_bottom.unwrap_or(3.6) + bevel_inset);
+    }
+
     // Build text box if we have text content OR visual appearance (fill/border) in a shape.
     // Preset shapes without text content (e.g. bracketPair outlines) should NOT generate
     // a TextBox — they are rendered via PresetShape only. A TextBox with white fill would
