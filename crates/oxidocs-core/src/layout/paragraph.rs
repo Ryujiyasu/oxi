@@ -3320,8 +3320,23 @@ impl<'a> ParagraphLayouter<'a> {
                             s1363_box_max = s1363_box_of(m, font_size);
                         }
                     }
+                    // OXI_WS_RUN_NOGRID (2026-10-12, default ON, opt-out _DISABLE): a
+                    // glyphless (whitespace / tab) fragment never drives this no-grid
+                    // basis when the line draws something -- the S1298 rule, which the
+                    // per-line fold already applies, but this cursor basis still took
+                    // the whitespace run's font. `_pb_wsrun_lh_gen.py` (Arial 10 bold
+                    // text + a Times New Roman 12 « » run, Word PDF pitch): lead /
+                    // trail / mid / tab / 20pt all 11.52 = the Arial line; Oxi advanced
+                    // 13.8 (23.0 for 20pt) while `line_height_for_line` said 11.50.
+                    // blind-H forms__00613e6b: footer « » (TNR 12) + Arial 10 bold line
+                    // sat 2.36 high. A line of only whitespace keeps the S902 mark rule.
+                    let ws_run_skip = std::env::var_os("OXI_WS_RUN_NOGRID_DISABLE").is_none()
+                        && LayoutEngine::s1298_has_visible(&first_line.fragments);
                     for frag in &first_line.fragments {
                         if s902_all_ws {
+                            continue;
+                        }
+                        if ws_run_skip && LayoutEngine::s1298_glyphless(frag) {
                             continue;
                         }
                         let fs = frag.style.font_size.unwrap_or(para_font_size);

@@ -21408,6 +21408,16 @@ cells={} pitch={:.2} text={:?}",
                 if s1380_visible && run.text.is_empty() && run.style.inline_object_extent.is_none() {
                     continue;
                 }
+                // OXI_WS_RUN_NOGRID: a whitespace-only run does not size a line
+                // with visible text here either (the estimate feeds the footer
+                // stack: forms__00613e6b's footer kept 13.8 for an 11.5 line).
+                if s1380_visible && !in_cell && std::env::var_os("OXI_WS_RUN_NOGRID_DISABLE").is_none()
+                    && !run.text.is_empty()
+                    && run.text.chars().all(|c| matches!(c, ' ' | '\t' | '\u{00A0}' | '\u{3000}'))
+                    && run.style.inline_object_extent.is_none() && run.style.inline_object_image.is_none()
+                {
+                    continue;
+                }
                 if cellpair_ws_est && run.text.trim().is_empty() {
                     continue;
                 }
