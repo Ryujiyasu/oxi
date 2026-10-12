@@ -10463,6 +10463,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let hf_tbl_after = std::env::var_os("OXI_HF_TBL_AFTER_DISABLE").is_none();
                 let mut hf_prev_after = 0.0f32;
                 for block in ftr_blocks {
+                    // OXI_FTR_FRAME_PAINT (2026-10-12, default ON, opt-out _DISABLE): a
+                    // footer framePr paragraph is placed by its frame (xAlign / hAnchor /
+                    // vAnchor), as the header loop has done since the header frame rule;
+                    // the footer loop ran it through the flow at the left margin. blind-H
+                    // ja/legal__0f631d46: the page number «1» (framePr xAlign=center
+                    // vAnchor=text) drew at x=85 (Word 302.7) and 2.3pt high.
+                    if let Block::Paragraph(para) = block {
+                        if LayoutEngine::is_floating_header_frame(para)
+                            && std::env::var_os("OXI_FTR_FRAME_PAINT_DISABLE").is_none()
+                        {
+                            let (elements, _, _) = self.layout_header_frame(para, page, cy.cursor_y);
+                            lp.elements.extend(elements);
+                            continue;
+                        }
+                    }
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_ftr = std::collections::HashMap::new();
                         let (ftr_elements, after, _) = self.layout_paragraph(
