@@ -8866,7 +8866,18 @@ cells={} pitch={:.2} text={:?}",
                         &mut dummy_pages,
                         &mut dummy_elements,
                         // TextBox grid snap: enabled for "lines" grid, disabled for "linesAndChars"
-                        if page.grid_char_pitch.is_some() {
+                        // OXI_TXBX_LAC_GRID (2026-10-13, default ON, opt-out _DISABLE): a text
+                        // box's lines snap to a linesAndChars grid exactly as to a lines grid.
+                        // `_pb_txbxgrid_gen.py` (six faces 10.5..52pt in 480x100 boxes; lines
+                        // 360 / linesAndChars 360+855 / 290-2271 / none): the lac855 baselines
+                        // are IDENTICAL to lines360 (メイリオ 22 37.70, HG創英角ﾎﾟｯﾌﾟ体 52 58.54,
+                        // ＭＳ 明朝 24 30.51 ...) and lacneg follows the 14.5 pitch; Oxi's lac
+                        // boxes sat at the no-grid values (30.03 / 55.89 / 27.13). blind-G
+                        // ja/policies__20069856 (lac 360/855, a poster of boxes): every box −4
+                        // to −12 before.
+                        if page.grid_char_pitch.is_some()
+                            && std::env::var_os("OXI_TXBX_LAC_GRID_DISABLE").is_some()
+                        {
                             None
                         } else {
                             page.grid_line_pitch
@@ -9289,7 +9300,9 @@ cells={} pitch={:.2} text={:?}",
         // split is right; ja/administrative__19d467ed's line=400 exact footer box
         // moved +2.3 on the regular path).
         let clnsp_box_on_grid = std::env::var_os("OXI_CLNSP_TYPED_GRID_DISABLE").is_none()
-            && page.grid_char_pitch.is_none()
+            // OXI_TXBX_LAC_GRID: a linesAndChars grid snaps the box's lines too
+            && (page.grid_char_pitch.is_none()
+                || std::env::var_os("OXI_TXBX_LAC_GRID_DISABLE").is_none())
             && page.grid_line_pitch.is_some()
             && text_box.blocks.iter().all(|b| {
                 matches!(b, Block::Paragraph(p) if p.style.snap_to_grid
@@ -16920,8 +16933,14 @@ cells={} pitch={:.2} text={:?}",
                 let mult_text_top_body = std::env::var_os("OXI_MULT_TEXT_TOP_DISABLE").is_none()
                     && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
                     && para_style.line_spacing.map_or(false, |v| v > 1.01);
+                // OXI_NATBOX_SHAPE (2026-10-13, default ON, opt-out _DISABLE): the same
+                // law inside a text box. `_pb_txbxgrid_gen.py` nogrid arm: Word baseline −
+                // content top = (win·83/64 − win)/2 + winAscent on all six faces (メイリオ
+                // 22 32.18, 游ゴシック 18 25.22, ＭＳ 明朝 10.5 14.45); the shape path was
+                // 2.2 high on メイリオ and 3.8 low on 游ゴシック (its hhea box), 0.4 high
+                // on the ＭＳ / HG faces.
                 if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
-                    && !in_shape_context
+                    && (!in_shape_context || std::env::var_os("OXI_NATBOX_SHAPE_DISABLE").is_none())
                     && para_style.list_marker.is_none()
                     && (para_style.line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01) || mult_text_top_body)
                     && (doc_grid_no_type
@@ -17356,7 +17375,33 @@ cells={} pitch={:.2} text={:?}",
                                 .map(|f| f.style.font_size.unwrap_or(para_font_size))
                                 .fold(0.0_f32, f32::max)
                                 .max(0.1);
-                            let em_centred = (line_height - line_fs).max(0.0) / 2.0 + 1.0;
+                            // OXI_S1354_WINBOX (2026-10-13, default ON, opt-out _DISABLE): the
+                            // box Word centres in the n grid lines is the face's WIN box
+                            // (ascent + descent), which equals the em only for the ＭＳ / HG
+                            // faces S1354 was derived on. `_pb_gridbox_probe.py` on 1ec1
+                            // (pitch 17.85) with GB_FONT=メイリオ (win 1.5) / 游ゴシック (1.287)
+                            // at 12/18/22/24pt: baseline − block top = (n·pitch − win)/2 +
+                            // winAscent within 0.2pt in all 8 arms (メイリオ 22: 33.56 =
+                            // (53.55 − 33)/2 + 23.32); the em model is 5.5 / 5.1 low on
+                            // メイリオ / 游ゴシック 22pt. Same law in `_pb_txbxgrid_gen.py`
+                            // (text boxes, three grids).
+                            let line_box = if std::env::var_os("OXI_S1354_WINBOX_DISABLE").is_none() {
+                                line.fragments
+                                    .iter()
+                                    .map(|f| {
+                                        let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
+                                        if m.is_cjk_83_64_font() {
+                                            f.style.font_size.unwrap_or(para_font_size) * (m.win_ascent + m.win_descent)
+                                        } else {
+                                            0.0
+                                        }
+                                    })
+                                    .fold(0.0_f32, f32::max)
+                                    .max(line_fs)
+                            } else {
+                                line_fs
+                            };
+                            let em_centred = (line_height - line_box).max(0.0) / 2.0 + 1.0;
                             if std::env::var("OXI_DBG_TYO").is_ok() {
                                 eprintln!("[TYO] fs={:.2} line_h={:.2} pitch={:.2} centering_h={:.2} old={:.2} -> S1354 {:.2}",
                                     line_fs, line_height, pitch, centering_height, grid_base + s457_dy, em_centred);
