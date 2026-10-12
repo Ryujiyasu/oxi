@@ -7549,8 +7549,23 @@ fn parse_drawing(
         no_fill: bool,
         lnref: (i32, Option<String>),
         fillref: (i32, Option<String>),
+        /// OXI_WPG_TEXT_CHILDREN: the member's own txbxContent paragraphs.
+        blocks: Vec<Block>,
     }
     let mut s839_vector_shapes: Vec<crate::ir::VectorShape> = Vec::new();
+    // OXI_WPG_TEXT_CHILDREN (2026-10-13, default ON, opt-out _DISABLE): a
+    // text-bearing member of a wpg group becomes its own child box at the
+    // member's transformed position instead of pouring its paragraphs into
+    // one group-sized box. blind-G ja/policies__20069856 (a poster: one
+    // page-sized group, 13 nested groups, 43 shapes, every line of text in a
+    // member box): Word's title box sits at group (12.6,50.2) + sub-group
+    // (36.8,0) + member (0,32.7) = (49.4,82.9) 510.6x90.4, its 52pt text
+    // centred at x 69..538.6; Oxi stacked all 16 texts from the page top.
+    // The group transform is a STACK (wgp + each nested grpSp: off/ext/
+    // chOff/chExt), applied innermost first: p = off + (p - chOff) * ext/chExt.
+    let wpg_children_on = std::env::var_os("OXI_WPG_TEXT_CHILDREN_DISABLE").is_none();
+    let mut s839_grp_stack: Vec<(((f32, f32), (f32, f32), (f32, f32), (f32, f32)), bool)> = Vec::new();
+    let mut s839_text_children: Vec<TextBox> = Vec::new();
     let mut s839_in_wgp = false;
     let mut s839_in_grpsppr = false;
     // group xfrm: off, ext, chOff, chExt (EMU)
@@ -7610,8 +7625,24 @@ fn parse_drawing(
                     }
                     "grpSpPr" if s839_in_wgp => {
                         s839_in_grpsppr = true;
+                        if wpg_children_on {
+                            // each group's own xfrm (the legacy single slot kept
+                            // the LAST grpSpPr seen -- a sibling's, for nests)
+                            s839_grp = ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 1.0));
+                            s839_grp_seen = false;
+                        }
                     }
                     "wsp" if s839_in_wgp => {
+                        if wpg_children_on {
+                            // per-member text body properties (the globals are
+                            // last-win; a member without a bodyPr keeps defaults)
+                            text_inset_left = None;
+                            text_inset_right = None;
+                            text_inset_top = None;
+                            text_inset_bottom = None;
+                            text_body_anchor = None;
+                            text_auto_fit = false;
+                        }
                         s839_wsp = Some(S839Wsp {
                             off: (0.0, 0.0),
                             ext: (0.0, 0.0),
@@ -7628,6 +7659,7 @@ fn parse_drawing(
                             no_fill: false,
                             lnref: (-1, None),
                             fillref: (-1, None),
+                            blocks: Vec::new(),
                         });
                     }
                     "path" if s839_wsp.is_some() => {
@@ -8055,6 +8087,8 @@ fn parse_drawing(
                     // DrawingML shape text content
                     "txbxContent" => {
                         // Parse text blocks inside shape
+                        // OXI_WPG_TEXT_CHILDREN: a group member's text is its own
+                        let mut txbx_blocks: Vec<Block> = Vec::new();
                         loop {
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
@@ -8063,7 +8097,7 @@ fn parse_drawing(
                                         if let Ok(pr) =
                                             parse_paragraph(reader, ctx, styles, false, false, None)
                                         {
-                                            shape_text_blocks.push(Block::Paragraph(pr.paragraph));
+                                            txbx_blocks.push(Block::Paragraph(pr.paragraph));
                                             // S1223 (2026-08-26, opt-out `OXI_S1223_DISABLE`):
                                             // an image-only paragraph inside a TEXT BOX parses
                                             // into sibling Block::Image entries -- and this loop
@@ -8073,7 +8107,7 @@ fn parse_drawing(
                                             // one paragraph) is the specimen; layout_text_box_at
                                             // has drawn Block::Image since S488.
                                             if std::env::var("OXI_S1223_DISABLE").is_err() {
-                                                shape_text_blocks.extend(pr.inline_images);
+                                                txbx_blocks.extend(pr.inline_images);
                                             }
                                         }
                                     }
@@ -8091,7 +8125,7 @@ fn parse_drawing(
                                     if local_name(se.name().as_ref()) == "p"
                                         && std::env::var("OXI_S1043_DISABLE").is_err() =>
                                 {
-                                    shape_text_blocks
+                                    txbx_blocks
                                         .push(Block::Paragraph(empty_para_with_defaults(styles)));
                                 }
                                 Ok(Event::End(se)) => {
@@ -8102,6 +8136,10 @@ fn parse_drawing(
                                 Ok(Event::Eof) => break,
                                 _ => {}
                             }
+                        }
+                        match s839_wsp.as_mut() {
+                            Some(w) if wpg_children_on => w.blocks.extend(txbx_blocks),
+                            _ => shape_text_blocks.extend(txbx_blocks),
                         }
                         // We consumed the txbxContent end tag, so decrement depth
                         depth -= 1;
@@ -8780,7 +8818,7 @@ fn parse_drawing(
                     }
                     // S839: classify + record the finished group member shape.
                     "wsp" if s839_in_wgp => {
-                        if let Some(w) = s839_wsp.take() {
+                        if let Some(mut w) = s839_wsp.take() {
                             let stroke = if w.ln_nofill {
                                 None
                             } else {
@@ -8902,21 +8940,93 @@ fn parse_drawing(
                             };
                             let s1120_curve = !s1120_path.is_empty()
                                 && (stroke.is_some() || fill.is_some());
+                            // OXI_WPG_TEXT_CHILDREN: the member's rect through the
+                            // whole group stack (innermost first); the legacy
+                            // single slot when the rule is off.
+                            let member_rect = |off: (f32, f32), ext: (f32, f32)| -> (f32, f32, f32, f32) {
+                                let e2p = 1.0 / 12700.0;
+                                if wpg_children_on {
+                                    let (mut x, mut y, mut cw, mut ch) = (off.0, off.1, ext.0, ext.1);
+                                    for (((gx, gy), (gex, gey), (cx0, cy0), (cex, cey)), seen) in s839_grp_stack.iter().rev() {
+                                        let (sx, sy) = if *seen && *cex > 0.0 && *cey > 0.0 {
+                                            (gex / cex, gey / cey)
+                                        } else {
+                                            (1.0, 1.0)
+                                        };
+                                        x = gx + (x - cx0) * sx;
+                                        y = gy + (y - cy0) * sy;
+                                        cw *= sx;
+                                        ch *= sy;
+                                    }
+                                    (x * e2p, y * e2p, cw * e2p, ch * e2p)
+                                } else {
+                                    let ((gx, gy), (gex, gey), (cx0, cy0), (cex, cey)) = s839_grp;
+                                    let (sx, sy) = if s839_grp_seen && cex > 0.0 && cey > 0.0 {
+                                        (gex / cex, gey / cey)
+                                    } else {
+                                        (1.0, 1.0)
+                                    };
+                                    ((gx + (off.0 - cx0) * sx) * e2p, (gy + (off.1 - cy0) * sy) * e2p,
+                                     ext.0 * sx * e2p, ext.1 * sy * e2p)
+                                }
+                            };
+                            if wpg_children_on && !w.blocks.is_empty() {
+                                let (cx, cy, cw, ch) = member_rect(w.off, w.ext);
+                                s839_text_children.push(TextBox {
+                                    wrap_polygon: Vec::new(),
+                                    text_outline_inset: 0.0,
+                                    vertical_text: text_vertical,
+                                    blocks: std::mem::take(&mut w.blocks),
+                                    inline: false,
+                                    font_ref_color: font_ref_color.clone(),
+                                    width: cw,
+                                    height: ch,
+                                    position: Some(FloatingPosition {
+                                        flow_page_offset: 0,
+                                        flow_boundary_offset: 0,
+                                        flow_source: None,
+                                        x: cx,
+                                        y: cy,
+                                        h_relative: Some("group".to_string()),
+                                        v_relative: Some("group".to_string()),
+                                        h_align: None,
+                                        v_align: None,
+                                        dist_l: None,
+                                        dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
+                                    }),
+                                    // the member's fill / outline are painted by its
+                                    // vector shape below (when it has any)
+                                    border: false,
+                                    stroke_color: None,
+                                    stroke_width: None,
+                                    fill: None,
+                                    anchor_block_index: 0,
+                                    corner_radius: None,
+                                    inset_left: text_inset_left,
+                                    inset_right: text_inset_right,
+                                    inset_top: text_inset_top,
+                                    auto_fit: text_auto_fit,
+                                    inset_bottom: text_inset_bottom,
+                                    wrap_type: Some(crate::ir::WrapType::None),
+                                    v_text_anchor: text_body_anchor.clone(),
+                                    relative_height,
+                                    behind_doc,
+                                    vert_overflow: text_vert_overflow.clone(),
+                                    compat_line_spacing: text_compat_ln_spc,
+                                    vector_shapes: Vec::new(),
+                                    host_break_after: false,
+                                    children: Vec::new(),
+                                });
+                            }
                             if (stroke.is_some() || fill.is_some()) && (is_line || is_rect)
                                 || s1120_curve
                             {
-                                let ((gx, gy), (gex, gey), (cx0, cy0), (cex, cey)) = s839_grp;
-                                let (sx, sy) = if s839_grp_seen && cex > 0.0 && cey > 0.0 {
-                                    (gex / cex, gey / cey)
-                                } else {
-                                    (1.0, 1.0)
-                                };
-                                let e2p = 1.0 / 12700.0;
+                                let (vx, vy, vw, vh) = member_rect(w.off, w.ext);
                                 s839_vector_shapes.push(crate::ir::VectorShape {
-                                    x: (gx + (w.off.0 - cx0) * sx) * e2p,
-                                    y: (gy + (w.off.1 - cy0) * sy) * e2p,
-                                    w: w.ext.0 * sx * e2p,
-                                    h: w.ext.1 * sy * e2p,
+                                    x: vx,
+                                    y: vy,
+                                    w: vw,
+                                    h: vh,
                                     fill,
                                     stroke,
                                     stroke_width: w.ln_w.unwrap_or(0.75).max(0.25),
@@ -8929,9 +9039,16 @@ fn parse_drawing(
                     "wgp" => {
                         s839_in_wgp = false;
                         s839_wsp = None;
+                        s839_grp_stack.clear();
                     }
                     "grpSpPr" => {
                         s839_in_grpsppr = false;
+                        if s839_in_wgp && wpg_children_on {
+                            s839_grp_stack.push((s839_grp, s839_grp_seen));
+                        }
+                    }
+                    "grpSp" if s839_in_wgp && wpg_children_on => {
+                        s839_grp_stack.pop();
                     }
                     _ => {}
                 }
@@ -9064,7 +9181,7 @@ fn parse_drawing(
     // Preset shapes without text content (e.g. bracketPair outlines) should NOT generate
     // a TextBox — they are rendered via PresetShape only. A TextBox with white fill would
     // cover the underlying body text that Word renders behind/through the shape.
-    let is_outline_shape = shape.is_some() && shape_text_blocks.is_empty();
+    let is_outline_shape = shape.is_some() && shape_text_blocks.is_empty() && s839_text_children.is_empty();
     let has_visual = !has_no_fill || !has_no_stroke;
     // S535 (2026-06-10): an INLINE drawing (wp:inline, no wp:anchor position)
     // that carries a text box — e.g. a wordprocessingCanvas (wpc) figure with
@@ -9086,7 +9203,7 @@ fn parse_drawing(
     // wp:extent — flow reservation needed) from a merely-visual inline shape
     // (line/bracket decorations — S535b's revert case: reserving those
     // regressed 3a4f by 282 paras).
-    let s741_has_txbx_text = !shape_text_blocks.is_empty();
+    let s741_has_txbx_text = !shape_text_blocks.is_empty() || !s839_text_children.is_empty();
     let tb_position = position.clone().or_else(|| {
         if inline_tb {
             Some(FloatingPosition {
@@ -9118,7 +9235,9 @@ fn parse_drawing(
         eprintln!("[TBPARSE] font_ref={:?} fill={:?} blocks={} outline={} visual={}",
             font_ref_color, shape_fill, shape_text_blocks.len(), is_outline_shape, has_visual);
     }
-    let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
+    let text_box = if !is_outline_shape
+        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty())
+    {
         Some(TextBox {
             wrap_polygon: wrapping_points.clone(),
             text_outline_inset: stroke_width_saved.unwrap_or(0.0) * 0.5,
@@ -9177,6 +9296,7 @@ fn parse_drawing(
             // S1270: set by the paragraph loop once it knows whether a page
             // break follows this drawing's run.
             host_break_after: false,
+            children: std::mem::take(&mut s839_text_children),
         })
     } else {
         None
@@ -10075,6 +10195,7 @@ fn parse_vml_pict(
             compat_line_spacing: false,
             vector_shapes: Vec::new(),
             host_break_after: false,
+            children: Vec::new(),
         });
         let placeholder = Some(Image {
             paragraph_space_before: 0.0,

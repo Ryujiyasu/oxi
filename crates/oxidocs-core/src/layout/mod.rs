@@ -8655,6 +8655,12 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
+            // OXI_WPG_TEXT_CHILDREN: the group's text members, over its shapes
+            for child in &text_box.children {
+                let (cx, cy) = child.position.as_ref().map_or((0.0, 0.0), |p| (p.x, p.y));
+                elements.extend(self.layout_text_box_at(
+                    child, page, block_y_positions, block_col_x, Some((abs_x + cx, abs_y + cy))));
+            }
             return elements;
         }
 
@@ -9484,6 +9490,14 @@ cells={} pitch={:.2} text={:?}",
             actual_height,
             LayoutContent::ClipEnd,
         ));
+
+        // OXI_WPG_TEXT_CHILDREN: a group without drawable members still owns
+        // its text children (placed at the group's origin + their offset).
+        for child in &text_box.children {
+            let (cx, cy) = child.position.as_ref().map_or((0.0, 0.0), |p| (p.x, p.y));
+            elements.extend(self.layout_text_box_at(
+                child, page, block_y_positions, block_col_x, Some((abs_x + cx, abs_y + cy))));
+        }
 
         elements
     }

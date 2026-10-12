@@ -1243,6 +1243,13 @@ pub struct TextBox {
     /// cover pages) keep their legacy merged-textbox behavior byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vector_shapes: Vec<VectorShape>,
+    /// OXI_WPG_TEXT_CHILDREN (2026-10-13): the text-bearing member shapes of a
+    /// wpg group, each its own box. `position.x/y` is the member's top-left
+    /// RELATIVE to the group's top-left (pt, the group transform stack
+    /// applied); the layout places each child at the group's resolved origin
+    /// plus that offset. Empty for every non-group drawing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<TextBox>,
     /// S1270 (2026-09-02): the host paragraph ends with an explicit page break
     /// that sits AFTER this drawing's run.
     ///
