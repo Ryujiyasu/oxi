@@ -21488,7 +21488,7 @@ cells={} pitch={:.2} text={:?}",
                         }
                     } else if (!in_cell
                             || (std::env::var_os("OXI_CELL_RENDER_LH_DISABLE").is_none()
-                                && !metrics.is_cjk_83_64_font()))
+                                && metrics.units_per_em != 256))
                         && self.doc_body_has_real_cjk
                         && std::env::var_os("OXI_S1568_DISABLE").is_none()
                     {
@@ -21498,7 +21498,11 @@ cells={} pitch={:.2} text={:?}",
                         // estimated 4 x 14.5 (S499's cell tombstone) and rendered 4 x 15.6; the
                         // row grew after its cells were centred against the estimate, so the
                         // «業種» label sat 2.2pt high (Word 309.29, Oxi 306.73). Census: blind-G
-                        // 43 -> 38 (02281020 5 -> 0, legal__0e9cf147 max 1.21 -> 0.16).
+                        // 43 -> 38 (02281020 5 -> 0, legal__0e9cf147 max 1.21 -> 0.16). Scope: outline
+                        // faces (upm != 256); the 256-upm ＭＳ 明朝 / ゴシック forms keep S499's
+                        // calibrated tombstone (golden 3a4f / tokyoshugyo / probeqhidemk2 regressed
+                        // without the scope; the 83/64 predicate is codepage-based and does not
+                        // separate BIZ UD明朝 from them).
                         // S1568 (2026-09-26, default ON, opt-out OXI_S1568_DISABLE): a
                         // BODY paragraph of a CJK document is estimated with the line
                         // height it will actually render at. The table-cell value
