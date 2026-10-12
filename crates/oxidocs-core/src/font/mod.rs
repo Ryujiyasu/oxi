@@ -2694,8 +2694,84 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         "Liberation Serif" => "Liberation Serif".to_string(),
         "Noto Sans JP" | "Noto Sans CJK JP" => "Noto Sans JP".to_string(),
         "Noto Serif JP" | "Noto Serif CJK JP" => "Noto Serif JP".to_string(),
-        _ => name.to_string(),
+        _ => postscript_family_name(name).unwrap_or_else(|| name.to_string()),
     }
+}
+
+/// OXI_PSNAME_FAMILY (2026-10-12, default ON, opt-out _DISABLE): a run whose
+/// rFonts carries a PostScript name (text pasted from a PDF: «ArialMT»,
+/// «TimesNewRomanPSMT», «Arial-BoldMT») takes the family's metrics. Word
+/// resolves such names to the installed family and ignores the style suffix
+/// (`_pb_psname_gen.py`, Word PDF span face / 12pt pitch: ArialMT, Arial-BoldMT,
+/// Arial-ItalicMT, ArialNarrow, Helvetica-Bold → ArialMT 13.8; TimesNewRomanPSMT,
+/// TimesNewRomanPS-BoldMT, TimesNewRoman → TimesNewRomanPSMT 13.8;
+/// CourierNewPSMT → Courier New 13.63; Verdana-Bold → Verdana 14.58;
+/// Calibri-Bold → Calibri 14.64). Oxi fell to the default metrics (14.07 pitch,
+/// Calibri-class widths): blind-G correspondence__00a8fa6b's ArialMT signature
+/// block drifted +0.85 per line. The name is split at lower→upper case
+/// boundaries and must resolve to an installed face; «ArialNarrow» lands on
+/// Arial when Arial Narrow is absent, as Word's did.
+pub(crate) fn postscript_family_name(name: &str) -> Option<String> {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("OXI_PSNAME_FAMILY_DISABLE").is_none()) {
+        return None;
+    }
+    if name.is_empty() || name.contains(' ') || !name.is_ascii() {
+        return None;
+    }
+    let mut core = name;
+    for suffix in ["PSMT", "MT", "PS"] {
+        if let Some(c) = core.strip_suffix(suffix) {
+            core = c;
+            break;
+        }
+    }
+    if let Some(dash) = core.find('-') {
+        let style = &core[dash + 1..];
+        let known = ["Bold", "Italic", "BoldItalic", "Regular", "Roman", "BoldMT", "ItalicMT", "BoldItalicMT", "Oblique", "BoldOblique"];
+        if known.contains(&style) {
+            core = &core[..dash];
+        } else {
+            return None;
+        }
+    }
+    for suffix in ["PSMT", "MT", "PS"] {
+        if let Some(c) = core.strip_suffix(suffix) {
+            core = c;
+            break;
+        }
+    }
+    if core == name || core.is_empty() {
+        // no PostScript decoration at all; nothing to resolve
+        if !name.chars().any(|c| c.is_ascii_uppercase()) || name == core {
+            // still try a camel-case family («TimesNewRoman»)
+        }
+    }
+    // «TimesNewRoman» → «Times New Roman»: a space before an upper-case letter that follows a lower-case one
+    let mut spaced = String::with_capacity(core.len() + 4);
+    let mut prev_lower = false;
+    for ch in core.chars() {
+        if ch.is_ascii_uppercase() && prev_lower {
+            spaced.push(' ');
+        }
+        prev_lower = ch.is_ascii_lowercase();
+        spaced.push(ch);
+    }
+    if spaced == name {
+        return None;
+    }
+    let fam = match spaced.as_str() {
+        "Helvetica" => "Arial".to_string(),
+        _ => spaced,
+    };
+    if crate::font::runtime::resolve(&fam, false, false).is_some() {
+        return Some(fam);
+    }
+    // the family is not installed: an Arial-prefixed name (Arial Narrow absent) falls to Arial, as in Word
+    if fam.starts_with("Arial ") {
+        return Some("Arial".to_string());
+    }
+    None
 }
 
 /// Day 34 part 23 (2026-05-13): does the CJK font have an OpenType `hwid`
