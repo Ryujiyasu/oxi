@@ -10380,6 +10380,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         footer_h += self.estimate_para_height(
                             para, hdr_width, grid_pitch, None, false, None, None,
                         );
+                        footer_h += self.ftr_pbdr_paint_extent(ftr_blocks, para);
                         }
                     }
                 }
@@ -10625,6 +10626,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     footer_h += self.estimate_para_height(
                                         para, hdr_width, grid_pitch, None, false, None, None,
                                     );
+                                    footer_h += self.ftr_pbdr_paint_extent(ftr_blocks, para);
                                 }
                             }
                             page.size.height - footer_dist - footer_h - 4.0

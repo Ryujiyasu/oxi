@@ -10959,6 +10959,28 @@ cells={} pitch={:.2} text={:?}",
         (cy.cursor_y, after)
     }
 
+    /// OXI_FTR_PBDR_PAINT (2026-10-12, default ON, opt-out _DISABLE): the
+    /// paint-side footer stack counts a paragraph's pBdr room (space + line
+    /// width) as the reservation does (S886), so the footer's top moves up by
+    /// it and the text stays on the footer line. `_pb_ftrpbdr_gen.py` (Calibri
+    /// 9 footer paragraph, Word baseline): none 804.24, top sz6/space3 804.24,
+    /// bottom 800.52, both 800.52, top sz24/space12 804.24 -- Oxi painted
+    /// 807.83 / 804.08 / 807.83 / 819.08 (the border room went below the
+    /// stack). blind-G creative__03bf8c5f (pBdr top sz6 space3): its footer
+    /// line sat +3.59. Header arms already match (a header grows downward).
+    /// Latin scope as S886.
+    fn ftr_pbdr_paint_extent(&self, blocks: &[Block], para: &Paragraph) -> f32 {
+        if self.doc_body_has_real_cjk || std::env::var_os("OXI_FTR_PBDR_PAINT_DISABLE").is_some() {
+            return 0.0;
+        }
+        let Some(b) = para.style.borders.as_ref() else { return 0.0 };
+        let i = blocks.iter().position(|blk| matches!(blk, Block::Paragraph(p) if std::ptr::eq(p, para)));
+        let merges_with_prev = i.map_or(false, |i| i > 0
+            && matches!(&blocks[i - 1], Block::Paragraph(prev) if prev.style.borders.as_ref() == Some(b)));
+        let ext = |d: Option<&BorderDef>| d.filter(|d| d.style != "none" && d.style != "nil").map_or(0.0, |d| d.space + d.width);
+        (if merges_with_prev { 0.0 } else { ext(b.top.as_ref()) }) + ext(b.bottom.as_ref())
+    }
+
     /// S755: (footer_reserved, footer_has_text) for one footer variant's
     /// blocks (the extracted reservation incl the Day-33 empty-para and
     /// framePr rules) so first/even/odd variants share one code path.
