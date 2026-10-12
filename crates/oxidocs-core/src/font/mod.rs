@@ -1729,6 +1729,16 @@ impl FontMetricsRegistry {
     }
 
     /// Get metrics for a font family. Falls back to default (Calibri) if not found.
+    /// OXI_DWRITE_TABLE_ASCENT (2026-10-13): whether `get(family)` answers from
+    /// the family's OWN table entry (its exact, normalized or base name) rather
+    /// than a fallback face -- the renderer may then trust that entry's
+    /// `baseline_ascent` over DirectWrite's.
+    pub fn knows_family(&self, family: &str) -> bool {
+        self.fonts.contains_key(family)
+            || self.fonts.contains_key(&normalize_family_name(family))
+            || self.fonts.contains_key(&base_family_name(family))
+    }
+
     pub fn get(&self, family: &str) -> FontMetricsRef<'_> {
         if let Some(metrics) = runtime::resolve_registered(family, false, false) { return metrics; }
         // S1272: a CJK table entry with no CJK advances answers the wrong

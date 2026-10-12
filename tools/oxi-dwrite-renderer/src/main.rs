@@ -1418,14 +1418,29 @@ unsafe fn render_text(
     // pages. So the trigger is "DWrite does not know this family", not "the two
     // numbers differ", and the registry must know the face itself (otherwise we
     // would swap DWrite's fallback for the table's fallback, no better).
+    // OXI_DWRITE_TABLE_ASCENT (2026-10-13, default ON, opt-out _DISABLE): the
+    // baseline the LAYOUT meant (S1264's table ascent) for every face the
+    // registry knows by its own entry (exact / normalized / base name), not only
+    // the ones DirectWrite cannot match. 游ゴシック: DWrite's ascent is 1.30 em
+    // (its hhea box), the table's 0.995 (usWin) -- Word's PDF puts the baseline
+    // at top + 0.98 em (`_pb_gridbox_probe.py` GB_FONT=游ゴシック 12/18/22/24 on
+    // 1ec1: the GDI renderer within 0.4, DWrite +3.8 / +5.7 / +7.3 / +7.8 =
+    // 0.315 em; `_pb_txbxgrid_gen.py` 游ゴシック 18 +5.2 in all four grids). The
+    // S1265 caveat (bunkacontract −0.0999 when the shift was unconditional)
+    // predates S1354 / NATBOX / S1261, which place CJK lines from Word's PDFs
+    // rather than on top of DWrite's number. Where the two tables agree (the
+    // ＭＳ / HG / Latin faces) the shift is 0 and the output is byte-identical.
+    let table_ascent_on = std::env::var_os("OXI_DWRITE_TABLE_ASCENT_DISABLE").is_none();
     let y_pt = if is_vertical
         || std::env::var("OXI_S1265_DISABLE").is_ok()
-        || dwrite_knows_family(dwrite_factory, font_family)
+        || (!table_ascent_on && dwrite_knows_family(dwrite_factory, font_family))
     {
         y_pt
     } else {
         let m = font_registry().get(font_family);
-        if m.family.eq_ignore_ascii_case(font_family) {
+        let own_entry = m.family.eq_ignore_ascii_case(font_family)
+            || (table_ascent_on && font_registry().knows_family(font_family));
+        if own_entry {
             let want = m.baseline_ascent() * font_size_pt;
             let have = font_ascent_pt(dwrite_factory, font_family, font_size_pt, bold, italic);
             y_pt + (want - have)
