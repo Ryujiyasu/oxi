@@ -10381,6 +10381,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let mut measured_previous = None;
                 let mut measured_after = 0.0;
                 let mut footer_h: f32 = 0.0;
+                // OXI_FTR_PAINT_SPACING (2026-10-12, default ON, opt-out _DISABLE): the
+                // painted footer stack carries the paragraphs' before / after like the
+                // reservation (S803 / S806): first before + collapsed max(after, before)
+                // gaps + last after. `estimate_para_height` drops STYLE-sourced spacing
+                // (the shared cell reset keyed on direct sides) and keeps direct spacing
+                // uncollapsed, so a Footer style's after=80 never reached this stack while
+                // the paragraph paint now advances by it (OXI_FTR_PARA_AFTER): the lower
+                // lines spilled below the footer line. `_pb_ftrafter_exact_gen.py`
+                // ftr_auto: Word A 793.18 / B 804.84 / C 812.16; lastafter (C after=80):
+                // A 789.22 -- a trailing after lifts the stack too.
+                let ftr_paint_spacing = std::env::var_os("OXI_FTR_PAINT_SPACING_DISABLE").is_none();
+                let mut ftr_prev_sa: Option<f32> = None;
                 for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
                         if para.style.frame_pr.is_some() {
@@ -10392,14 +10404,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             measured_previous = Some(para);
                             measured_after = after;
                         } else {
-                        footer_h += self.estimate_para_height(
+                        let est = self.estimate_para_height(
                             para, hdr_width, grid_pitch, None, false, None, None,
                         );
+                        if ftr_paint_spacing {
+                            let explicit_rule = matches!(para.style.line_spacing_rule.as_deref(), Some("exact" | "atLeast"));
+                            let (rb, ra) = self.cell_spacing_reset_sides(&para.style, explicit_rule, false);
+                            let sb = para.style.space_before.unwrap_or(0.0);
+                            let sa = para.style.space_after.unwrap_or(0.0);
+                            // the lines alone, then the stack's own spacing model
+                            let lines_only = est - if rb { 0.0 } else { sb } - if ra { 0.0 } else { sa };
+                            footer_h += lines_only + ftr_prev_sa.map_or(sb, |prev| prev.max(sb));
+                            ftr_prev_sa = Some(sa);
+                        } else {
+                            footer_h += est;
+                        }
                         footer_h += self.ftr_pbdr_paint_extent(ftr_blocks, para);
                         }
                     }
                 }
                 if image_flow { footer_h += measured_after; }
+                if ftr_paint_spacing { footer_h += ftr_prev_sa.unwrap_or(0.0); }
                 // S1104: this paint-side `footer_h` is Paragraph-only, so a footer
                 // holding a TABLE placed its content far too low (the table's height
                 // never entered footer_top). S868 already computes the full stack —
@@ -10484,6 +10509,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         );
                         lp.elements.extend(ftr_elements);
                         if image_flow { previous_para = Some(para); previous_after = after; }
+                        // OXI_FTR_PARA_AFTER (2026-10-12, default ON, opt-out _DISABLE): the next
+                        // footer paragraph receives this one's space-after, as the header loop
+                        // passes it (`previous.and_then(|p| p.style.space_after)`). The footer
+                        // loop handed layout_paragraph previous_after = 0 unless an image flowed,
+                        // so every inter-paragraph gap in a footer collapsed while the stack
+                        // (estimate) still counted it -- the first lines sat low by the sum.
+                        // `_pb_ftrafter_exact_gen.py` (Footer para Calibri 7 after=80, then
+                        // Calibri 6 lines exact / auto / atLeast): Word A->B 11.54 / 11.66 /
+                        // 11.66 in the footer = the body's 11.52 / 11.64 / 11.64; Oxi footer
+                        // 7.48 / 7.59 / 7.59 (body right). blind-H technical__0186a34e: the
+                        // first-page footer's first line 3.8pt low.
+                        else if std::env::var_os("OXI_FTR_PARA_AFTER_DISABLE").is_none() {
+                            previous_para = Some(para);
+                            previous_after = para.style.space_after.unwrap_or(0.0);
+                        }
                         hf_prev_after = para.style.space_after.unwrap_or(0.0);
                     } else if let Block::Table(tbl) = block {
                         if image_flow { cy.advance(previous_after); previous_after = 0.0; previous_para = None; }
