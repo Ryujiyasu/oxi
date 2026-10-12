@@ -16893,10 +16893,23 @@ cells={} pitch={:.2} text={:?}",
                 // ＭＳ 明朝, 游明朝, メイリオ × 10.5/12/16pt, typed grid with
                 // snapToGrid 0, no grid, no-type grid; cell and body): all within
                 // 0.08pt; Oxi was 0.3..5.6pt high (forms__02281020 cells −0.6).
+                // OXI_MULT_TEXT_TOP (2026-10-12, default ON, opt-out _DISABLE): a multiple-
+                // spaced CJK line off a typed grid keeps its glyphs where the single-spaced
+                // line has them -- the multiplier's extra leading sits entirely below.
+                // `_pb_aftertbl_mult_gen.py` (compat 15, no docGrid; ＭＳ ゴシック 9 / ＭＳ 明朝
+                // 10.5 after a row or a paragraph): previous baseline → first baseline
+                // 12.72 / 14.16 (12.24 / 13.68) at line 276 AND 360 = the single-spaced
+                // 12.60 / 14.16 (12.12 / 13.68), while the pitch grows 11.66 → 13.46 →
+                // 17.54. Oxi centred the box in the multiplied line (+1.3 at 276, +3.3 at
+                // 360): blind-G ja/legal__0e9cf147 «注１…» (+2.17). S1047 measured the same
+                // for Latin lines. The cell path has the Latin sibling (table_fit.rs).
+                let mult_text_top_body = std::env::var_os("OXI_MULT_TEXT_TOP_DISABLE").is_none()
+                    && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
+                    && para_style.line_spacing.map_or(false, |v| v > 1.01);
                 if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
                     && !in_shape_context
                     && para_style.list_marker.is_none()
-                    && para_style.line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
+                    && (para_style.line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01) || mult_text_top_body)
                     && (doc_grid_no_type
                         || !(grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid))
                 {
@@ -16919,7 +16932,12 @@ cells={} pitch={:.2} text={:?}",
                         }
                     }
                     if all_cjk && asc > 0.0 {
-                        return 1.0 + ((line_height - (asc + desc)) / 2.0).max(0.0);
+                        let lh_single = if mult_text_top_body {
+                            line_height / para_style.line_spacing.unwrap_or(1.0)
+                        } else {
+                            line_height
+                        };
+                        return 1.0 + ((lh_single - (asc + desc)) / 2.0).max(0.0);
                     }
                 }
                 // Grid-snapped lines: text is vertically centered within the grid cell.

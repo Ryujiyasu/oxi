@@ -8386,8 +8386,33 @@ impl<'a> TableFitLayouter<'a> {
                                                     // the cell centering window. Re-localized to the body→table
                                                     // transition cursor advance (the +0.5 extra is in the
                                                     // body→table GAP: Word 19.0pt vs Oxi 19.5pt), not cell internals.
+                                                    // OXI_MULT_TEXT_TOP (cell sibling, 2026-10-12): a multiple-spaced
+                                                    // LATIN cell line off a typed grid keeps the single-spaced
+                                                    // placement; the extra leading sits below the text.
+                                                    // `_pb_cellmult_top_gen.py` (bordered row, Calibri 10 / TNR 12,
+                                                    // line 240/276/360/480, body and header; baseline from the row's
+                                                    // top border): 10.10 / 10.10 / 10.10 / 9.98 and 11.66 at every
+                                                    // factor in Word; Oxi 10.26 / 11.26 / 13.26 / 16.26 and 11.94 /
+                                                    // 12.94 / 15.44 / 18.94. Witness: the header-table +1.3 of
+                                                    // `_pb_ftrtbltail_gen.py` hdr_* arms.
+                                                    let mult_top_cell = std::env::var_os("OXI_MULT_TEXT_TOP_DISABLE").is_none()
+                                                        && matches!(effective_line_rule, None | Some("auto"))
+                                                        && effective_line_spacing.map_or(false, |v| v > 1.01)
+                                                        && !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid)
+                                                        && !line.is_empty()
+                                                        && line.iter().all(|t| {
+                                                            let mut rs = RunStyle::default();
+                                                            rs.font_size = Some(t.1);
+                                                            if let Some(ff) = &t.8 { rs.font_family = Some(ff.clone()); }
+                                                            !self.metrics_for_text(&t.0, &rs, &para.style).is_cjk_83_64_font()
+                                                        });
+                                                    let lh_for_center = if mult_top_cell {
+                                                        lh / effective_line_spacing.unwrap_or(1.0)
+                                                    } else {
+                                                        lh
+                                                    };
                                                     let raw =
-                                                        (lh - cell_centering_height).max(0.0) / 2.0;
+                                                        (lh_for_center - cell_centering_height).max(0.0) / 2.0;
                                                     // S360 (2026-05-27): cell centering uses same CEIL-half-up
                                                     // rounding as body (S328). The +1.0pt table dy cluster
                                                     // (S357: 400 paragraphs / 16 docs) may stem from this CEIL
