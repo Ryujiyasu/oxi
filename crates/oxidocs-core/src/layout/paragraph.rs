@@ -755,7 +755,18 @@ impl<'a> ParagraphLayouter<'a> {
                     // digits) at the eastAsia monospace width (font_size), NOT the Century
                     // proportional 7.5 that metrics_for resolves at break time. Match the
                     // render so the marker width (→ hanging-indent → body start) is correct.
-                    if marker_cjk && crate::font::is_fullwidth(c) {
+                    // OXI_MARKER_PROP_FACE (2026-10-12, default ON, opt-out _DISABLE): a
+                    // PROPORTIONAL East Asian face sets its label at the glyphs' own
+                    // advances, like its runs. blind-G ja/reference__5593c6a7 (HGP創英
+                    // ﾌﾟﾚｾﾞﾝｽEB 22pt list «３，２つの体育館と室内プール»): Word's label
+                    // «３，» is 15.88 + 14.58 = 30.5 (PDF advances), ends before the 36pt
+                    // hanging and the text starts there; the em shortcut made it 44, past
+                    // the hanging, so the text tabbed to the next default stop (84) and
+                    // the line wrapped, growing the box by a line.
+                    if marker_cjk && crate::font::is_fullwidth(c)
+                        && !(std::env::var_os("OXI_MARKER_PROP_FACE_DISABLE").is_none()
+                            && marker_metrics.has_proportional_kana())
+                    {
                         return marker_font_size;
                     }
                     self.registry
