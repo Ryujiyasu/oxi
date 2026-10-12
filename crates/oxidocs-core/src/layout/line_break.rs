@@ -5183,8 +5183,37 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let s1318_cap_final_tw = (s1318_n_solo as i32 * s1318_half_cell_tw).min(s1318_one_cell_tw);
                         let over = current_width_tw + pt_to_tw(font_size) - s1318_avail_tw - s1318_pair_credit_tw;
                         if ch == '・' {
-                            let fit = over - s1318_half_cell_tw / 2 <= s1318_cap_final_tw;
-                            (fit, !fit)
+                            // OXI_MIDDOT_RUN_SQUEEZE (2026-10-12, default ON, opt-out _DISABLE): a RUN
+                            // of middle dots stays on its line, each dot squeezed as far as half a
+                            // cell. `_pb_dotrun_overflow_gen.py` (9.95-cell grid, «あいう» + dots):
+                            // 56 cells end at 572.1 (full pitch), 57 at 581.9, 58..90 ONE line with
+                            // x1 pinned at 584 (uniform squeeze, 62% at 90), 115+ three lines: «あい»
+                            // / «う» + the dots that fit at the half-width floor / the rest (a line
+                            // STARTING with ・). Oxi broke at 59 and then emitted one-dot lines.
+                            // blind-G ja/reports__58dca3b2: 65 × 4.44 in a 283.5 column (1.8%).
+                            let middot_run = std::env::var_os("OXI_MIDDOT_RUN_SQUEEZE_DISABLE").is_none()
+                                && (following_punctuation.first() == Some(&'・')
+                                    || current_line.fragments.last().map_or(false, |f| f.text.ends_with('・')));
+                            if middot_run {
+                                // The squeeze is taken only when it lets the WHOLE remaining
+                                // run end on this line (each dot down to half its em); otherwise
+                                // the line fills at the natural pitch and the run breaks (115:
+                                // «あい» / «う» + 56 dots at full pitch / 56 dots; 150: the last
+                                // line's 91 dots squeezed to 584.3).
+                                let n_dots = current_line.fragments.iter()
+                                    .flat_map(|f| f.text.chars()).filter(|&c| c == '・').count() as i32 + 1;
+                                let run_after = following_punctuation.iter().take_while(|&&c| c == '・').count() as i32;
+                                // the dot's own cell on the grid (9.95 at charSpace -2271), not the em
+                                let dot_cell_tw = pt_to_tw(char_width);
+                                let squeeze_per_dot = (dot_cell_tw - pt_to_tw(font_size) / 2).max(0);
+                                let whole_over = over + run_after * dot_cell_tw;
+                                let fit = whole_over <= (n_dots + run_after) * squeeze_per_dot
+                                    || over - s1318_half_cell_tw / 2 <= s1318_cap_final_tw;
+                                (fit, !fit)
+                            } else {
+                                let fit = over - s1318_half_cell_tw / 2 <= s1318_cap_final_tw;
+                                (fit, !fit)
+                            }
                         } else {
                             // An unkerned final period/closing pair can spend its
                             // structural half-cell and the closing mark's hanging half.
@@ -6372,10 +6401,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 break;
                             }
                             if current_line.fragments.len() <= 1 {
-                                if std::env::var("OXI_KINSOKU_EMERGENCY_BREAK").is_ok() {
+                                // OXI_MIDDOT_RUN_SQUEEZE: a run of ・ longer than the line has no
+                                // legal boundary; Word keeps the fitted line and starts the next
+                                // one with a dot (the N=115 arm's third line).
+                                let middot_run_retain = std::env::var_os("OXI_MIDDOT_RUN_SQUEEZE_DISABLE").is_none()
+                                    && popped.len() >= 2
+                                    && popped.iter().all(|f| !f.text.is_empty() && f.text.chars().all(|c| c == '・'));
+                                if middot_run_retain || std::env::var("OXI_KINSOKU_EMERGENCY_BREAK").is_ok() {
                                     // When the entire prefix has no legal boundary,
                                     // retain the fitted line for an emergency break.
                                     current_line.fragments.extend(popped.drain(..).rev());
+                                    current_width = current_line.fragments.iter().map(|f| f.width).sum();
                                 }
                                 break;
                             }
@@ -7045,6 +7081,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             }
         }
 
+        // OXI_MIDDOT_RUN_SQUEEZE: a line that kept a run of ・ past the edge draws
+        // them uniformly compressed, each no narrower than half its natural width.
+        if std::env::var_os("OXI_MIDDOT_RUN_SQUEEZE_DISABLE").is_none() {
+            let avail = available_tw as f32 / 20.0;
+            for line in &mut lines {
+                let total: f32 = line.fragments.iter().map(|f| f.width).sum();
+                let dots: Vec<usize> = line.fragments.iter().enumerate()
+                    .filter(|(_, f)| !f.text.is_empty() && f.text.chars().all(|c| c == '・'))
+                    .map(|(i, _)| i).collect();
+                if dots.len() >= 2 && total > avail + 0.05 {
+                    let per = (total - avail) / dots.len() as f32;
+                    for i in dots {
+                        let f = &mut line.fragments[i];
+                        let floor = 0.5 * f.style.font_size.unwrap_or(f.natural_width.max(f.width));
+                        f.width = (f.width - per).max(floor);
+                    }
+                }
+            }
+        }
         for line in &mut lines {
             line.whitespace_paragraph = para_all_whitespace;
         }
