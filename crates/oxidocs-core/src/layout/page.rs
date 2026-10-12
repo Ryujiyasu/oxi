@@ -10129,6 +10129,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let header_text_flow = !self.doc_body_has_real_cjk
                     && std::env::var("OXI_HEADER_TEXT_FLOW").is_ok();
                 let mut previous_header_para: Option<&Paragraph> = None;
+                // OXI_HF_TBL_AFTER (2026-10-12, default ON, opt-out _DISABLE): a header /
+                // footer paragraph's space-after separates it from a TABLE that follows,
+                // as it does from a paragraph. `_pb_ftrtbltail_gen.py` *_pre arms (Calibri
+                // 11 lead line, style after 10, then the row): Word hdr lead 46.44 / row
+                // 71.40, ftr lead 740.28 / row 765.36; Oxi painted the rows 8.7 / 9.4
+                // higher (the reservation counted the after -- S813 / S868 flush -- the
+                // paint never advanced by it). blind-G reference__00c9a41e: Header
+                // after=80 then the column-heading table, row text -3.76.
+                let hf_tbl_after = std::env::var_os("OXI_HF_TBL_AFTER_DISABLE").is_none();
+                let mut hf_prev_after = 0.0f32;
                 for block in hdr_blocks {
                     if let Block::Paragraph(para) = block {
                         if LayoutEngine::is_floating_header_frame(para) {
@@ -10191,6 +10201,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             None,
                         );
                         lp.elements.extend(hdr_elements);
+                        hf_prev_after = para.style.space_after.unwrap_or(0.0);
                     } else if let Block::Image(img) = block {
                         // S759 (2026-07-09): a FLOATING header image (wp:anchor,
                         // page-relative — uk_health_form's Ofsted logo) draws at
@@ -10314,6 +10325,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if std::env::var("OXI_S1104_DISABLE").is_err() && tbl.style.position.is_none() {
                             let mut dummy_pages = Vec::new();
                             let mut dummy_elems = Vec::new();
+                            if hf_tbl_after {
+                                cy.advance(hf_prev_after);
+                            }
+                            hf_prev_after = 0.0;
                             let tbl_elements = self.layout_table(
                                 tbl,
                                 hdr_x,
@@ -10419,6 +10434,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let mut cy = LayoutCursor::new(footer_top);
                 let mut previous_para: Option<&Paragraph> = None;
                 let mut previous_after = 0.0;
+                // OXI_HF_TBL_AFTER: see the header loop.
+                let hf_tbl_after = std::env::var_os("OXI_HF_TBL_AFTER_DISABLE").is_none();
+                let mut hf_prev_after = 0.0f32;
                 for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_ftr = std::collections::HashMap::new();
@@ -10466,8 +10484,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         );
                         lp.elements.extend(ftr_elements);
                         if image_flow { previous_para = Some(para); previous_after = after; }
+                        hf_prev_after = para.style.space_after.unwrap_or(0.0);
                     } else if let Block::Table(tbl) = block {
                         if image_flow { cy.advance(previous_after); previous_after = 0.0; previous_para = None; }
+                        else if hf_tbl_after && tbl.style.position.is_none() { cy.advance(hf_prev_after); }
+                        hf_prev_after = 0.0;
                         // S1104 (2026-08-08, default ON, opt-out OXI_S1104_DISABLE):
                         // a TABLE in the footer is PAINTED, not just measured. S868
                         // taught `s755_footer_geom` to count a footer table's height
