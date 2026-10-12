@@ -9126,6 +9126,15 @@ impl<'a> TableFitLayouter<'a> {
                                             cell_el.text_y_off = cell_text_y_off;
                                             cell_el.baseline_offset = shared_cell_baseline;
                                             self.set_cell_exact_baseline(&mut cell_el, effective_line_rule, effective_line_spacing.unwrap_or(lh));
+                                            // OXI_CELL_RUBY_BASE (2026-10-12, default ON, opt-out _DISABLE): the
+                                            // baseline the renderer draws this base fragment on (y + baseline_offset),
+                                            // kept for the S1626 ruby annotation below. An EXACT cell line puts it at
+                                            // 0.8 x the line, not at text_y_off + win ascent, and the annotation
+                                            // followed the latter: `_pb_rubyexact_gen.py` (Word: ruby baseline =
+                                            // base baseline - hpsRaise in all 12 arms) had Oxi's 游明朝 ex440 cell
+                                            // ruby 2.55 high, ex300 1.4 low, MS 明朝 0.3 / 0.2 off; body arms exact.
+                                            // blind-H ja/legal__0f67d319 «（ふりがな）» over 団体名 (-2.6).
+                                            let s1626_base_baseline = cell_el.baseline_offset.map(|b| cell_el.y + b);
                                             // Attribute to the table's source block index so diff tools
                                             // can localize cell text. Without this, para_idx is None and
                                             // docs with many tables produce unusable --dump-layout output.
@@ -9356,7 +9365,9 @@ impl<'a> TableFitLayouter<'a> {
                                                         }).sum();
                                                         let (dx, ruby_cs) = ruby::ruby_position(base_w, ruby_w, ruby_n, ruby_ir.align);
                                                         let base_x = cell_x + pad_l + line_indent + align_offset + rx + aki_leading;
-                                                        let base_baseline = content_h + cell_text_y_off - 1.0 + base_m.win_ascent * base_pt;
+                                                        let cell_ruby_base = std::env::var_os("OXI_CELL_RUBY_BASE_DISABLE").is_none();
+                                                        let base_baseline = s1626_base_baseline.filter(|_| cell_ruby_base)
+                                                            .unwrap_or(content_h + cell_text_y_off - 1.0 + base_m.win_ascent * base_pt);
                                                         let ruby_baseline = base_baseline - raise_pt;
                                                         let mut ruby_el = LayoutElement::new(
                                                             base_x + dx,
@@ -9383,6 +9394,10 @@ impl<'a> TableFitLayouter<'a> {
                                                             },
                                                         );
                                                         ruby_el.text_y_off = ruby_baseline - content_h + 1.0 - ruby_m.win_ascent * hps_pt;
+                                                        if cell_ruby_base {
+                                                            // the renderer places the annotation on this baseline exactly
+                                                            ruby_el.baseline_offset = Some(ruby_baseline - content_h);
+                                                        }
                                                         ruby_el.paragraph_index = block_idx;
                                                         ruby_el.cell_row_index = Some(row_idx);
                                                         ruby_el.cell_col_index = Some(cell_idx);
