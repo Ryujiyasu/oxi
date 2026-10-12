@@ -16586,11 +16586,22 @@ cells={} pitch={:.2} text={:?}",
                 }
             }
         }
+        // OXI_NATBOX_ATLEAST (2026-10-13, default ON, opt-out _DISABLE): a
+        // `line=0 atLeast` line IS the natural line (S1145: natural height, no
+        // grid snap), so its glyphs sit where a single-spaced line's do -- the
+        // win box centred in the natural box (NATBOX / S1354) -- not the
+        // S495/S504 bottom-alignment the exact/atLeast arm below applies.
+        // `_pb_txbxatleast_gen.py` (139e74eb's bevel title box, 32pt HGS創英角
+        // ﾎﾟｯﾌﾟ体 line=0 atLeast): Word's baseline 32.66 below the content top =
+        // (41.5 - 32)/2 + 27.5 (+0.4 bearing); the arm below put it at 36.05.
+        let natbox_atleast_on = std::env::var_os("OXI_NATBOX_ATLEAST_DISABLE").is_none();
         match (
             para_style.line_spacing_rule.as_deref(),
             para_style.line_spacing,
         ) {
-            (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
+            (Some(rule @ ("exact" | "atLeast")), Some(v))
+                if rule == "exact" || v > 0.01 || !natbox_atleast_on =>
+            {
                 // S1261 (2026-08-30, OPT-IN `OXI_S1261=1` pending gates): under
                 // `lineRule="exact"` Word puts the BASELINE at 0.8 x the line
                 // height below the line top -- a constant, independent of the
@@ -16939,10 +16950,16 @@ cells={} pitch={:.2} text={:?}",
                 // 22 32.18, 游ゴシック 18 25.22, ＭＳ 明朝 10.5 14.45); the shape path was
                 // 2.2 high on メイリオ and 3.8 low on 游ゴシック (its hhea box), 0.4 high
                 // on the ＭＳ / HG faces.
+                // OXI_NATBOX_ATLEAST: `line=0 atLeast` is the natural line too
+                let natbox_atleast_zero = natbox_atleast_on
+                    && para_style.line_spacing_rule.as_deref() == Some("atLeast")
+                    && para_style.line_spacing.map_or(false, |v| v <= 0.01);
                 if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
                     && (!in_shape_context || std::env::var_os("OXI_NATBOX_SHAPE_DISABLE").is_none())
                     && para_style.list_marker.is_none()
-                    && (para_style.line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01) || mult_text_top_body)
+                    && (para_style.line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
+                        || mult_text_top_body
+                        || natbox_atleast_zero)
                     && (doc_grid_no_type
                         || !(grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid))
                 {
