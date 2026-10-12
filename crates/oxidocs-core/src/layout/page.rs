@@ -10396,8 +10396,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .iter()
                     .any(|b| matches!(b, Block::Table(t) if t.style.position.is_none()));
                 let footer_top = if s1104_has_tbl {
-                    let (fr, _) = self.s755_footer_geom(ftr_blocks, page);
-                    page.size.height - fr
+                    let (fr, _, stack) = self.s755_footer_geom_stack(ftr_blocks, page);
+                    // OXI_FTR_TBL_PAINT_DIST (2026-10-12, default ON, opt-out _DISABLE): the
+                    // reservation clamps to the bottom margin, but the footer is PAINTED
+                    // dist + stack above the page bottom whatever the margin.
+                    // `_pb_ftrtbltail_gen.py` ftrbm_* (bottom 100pt): Word's row baseline
+                    // stays at 765.36 / 779.4 / 777.36, exactly where bottom 63.8 had it;
+                    // Oxi lifted all three to 752.96 (= page - margin). blind-H
+                    // administrative__0067cba8: bottom 72 > 35.4 + 25.8 -> its footer
+                    // row sat 11.2pt above Word's.
+                    if stack < page.margin.bottom - 0.01
+                        && std::env::var_os("OXI_FTR_TBL_PAINT_DIST_DISABLE").is_none()
+                    {
+                        page.size.height - stack
+                    } else {
+                        page.size.height - fr
+                    }
                 } else {
                     page.size.height - footer_dist - footer_h
                 };

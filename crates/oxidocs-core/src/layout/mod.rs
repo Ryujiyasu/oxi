@@ -10963,6 +10963,14 @@ cells={} pitch={:.2} text={:?}",
     /// blocks (the extracted reservation incl the Day-33 empty-para and
     /// framePr rules) so first/even/odd variants share one code path.
     fn s755_footer_geom(&self, blocks: &[Block], page: &Page) -> (f32, bool) {
+        let (reserved, has_text, _) = self.s755_footer_geom_stack(blocks, page);
+        (reserved, has_text)
+    }
+
+    /// S755 with the UNCLAMPED stack as the third value: footer_dist + the
+    /// footer's own height, before the bottom-margin clamp -- the height the
+    /// footer is painted at (OXI_FTR_TBL_PAINT_DIST).
+    fn s755_footer_geom_stack(&self, blocks: &[Block], page: &Page) -> (f32, bool, f32) {
         // S894 (2026-07-17, default ON, opt-out OXI_S894_DISABLE): an
         // INK-FREE footer (only empty/whitespace paragraphs — no text, no
         // table, no image/drawing) reserves the BOTTOM MARGIN ONLY, like no
@@ -11088,7 +11096,7 @@ cells={} pitch={:.2} text={:?}",
                 }
                 stack += prev_sa.unwrap_or(0.0);
                 let dist = page.footer_distance.unwrap_or(36.0);
-                return ((dist + stack).max(page.margin.bottom), false);
+                return ((dist + stack).max(page.margin.bottom), false, dist + stack);
             }
             // Only a single untouched empty footer paragraph is exempt.
             // Additional empty paragraphs consume footer stack height just
@@ -11128,7 +11136,7 @@ cells={} pitch={:.2} text={:?}",
                     0.0
                 };
                 let dist = page.footer_distance.unwrap_or(36.0);
-                return ((dist - s905_line).max(page.margin.bottom), false);
+                return ((dist - s905_line).max(page.margin.bottom), false, dist - s905_line);
             }
         }
         // S1014 Stage B sibling (2026-09-23, opt-out OXI_FRAME_FOOTER_DISABLE):
@@ -11155,10 +11163,10 @@ cells={} pitch={:.2} text={:?}",
                     eprintln!("[FTR-FRAME] all {} paras framed -> reserve bottom margin {:.2} only",
                         paras.len(), page.margin.bottom);
                 }
-                return (page.margin.bottom, false);
+                return (page.margin.bottom, false, page.margin.bottom);
             }
         }
-        let footer_reserved = if !blocks.is_empty() {
+        let (footer_reserved, footer_stack) = if !blocks.is_empty() {
             let footer_dist = page.footer_distance.unwrap_or(36.0);
             let cw = page.size.width - page.margin.left - page.margin.right;
             let gp = page.grid_line_pitch;
@@ -11520,7 +11528,8 @@ cells={} pitch={:.2} text={:?}",
                     blocks.len(), footer_dist, footer_h, s780_extra, s1542_descent,
                     (footer_dist + footer_h - s1542_descent).max(page.margin.bottom) + s780_extra, page.margin.bottom);
             }
-            (footer_dist + footer_h - s1542_descent).max(page.margin.bottom) + s780_extra
+            let unclamped = footer_dist + footer_h - s1542_descent;
+            (unclamped.max(page.margin.bottom) + s780_extra, unclamped)
         } else {
             if std::env::var("OXI_DBG_FTR").is_ok() {
                 eprintln!(
@@ -11528,7 +11537,7 @@ cells={} pitch={:.2} text={:?}",
                     page.margin.bottom
                 );
             }
-            page.margin.bottom
+            (page.margin.bottom, page.margin.bottom)
         };
         // S726: the body bottom is FOOTER-CONSTRAINED when the footer eats past
         // the bottom margin — the page-bottom leniency must not overhang into
@@ -11546,7 +11555,7 @@ cells={} pitch={:.2} text={:?}",
             if p.style.frame_pr.is_none()
                 && p.runs.iter().any(|r| !r.text.trim().is_empty() || r.style.inline_object_image.is_some()))
         });
-        (footer_reserved, footer_has_text)
+        (footer_reserved, footer_has_text, footer_stack)
     }
 
     fn paragraph_spacing_before(
