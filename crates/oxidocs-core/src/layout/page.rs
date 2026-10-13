@@ -6882,7 +6882,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if std::env::var("OXI_DBG_TBLSTART").is_ok() {
                         eprintln!("[TBLARM] blk={} cur={:.2} prev_space_after={:.2}", block_idx, cursor.cursor_y, prev_space_after);
                     }
-                    cursor.advance(prev_space_after);
+                    // OXI_TBL_AFTER_SPILL (2026-10-13, default ON, opt-out _DISABLE):
+                    // the part of that space-after that falls past the page
+                    // bottom is DROPPED, as it is for a following paragraph --
+                    // Word starts the table on the next page at the page top.
+                    // The raw advance carried the overflow into the next page:
+                    // probenest (after=160 line=278 defaults): 第10条's last line
+                    // box ends at 768.3, + 8 = 776.3 vs bottom 771, and the
+                    // table's first cell line sat 5.88 below Word's (82.44) on
+                    // page 2. after=0, line=240 (box ends 765.4) or the table at
+                    // the document start all render at Word's y (scratch
+                    // tbltop/v_*); a following PARAGRAPH already starts at the
+                    // page top in both (v_paranext: 85.22 / 85.1).
+                    let after_advance = if std::env::var_os("OXI_TBL_AFTER_SPILL_DISABLE").is_none() {
+                        prev_space_after.min((start_y + content_height - cursor.cursor_y).max(0.0))
+                    } else {
+                        prev_space_after
+                    };
+                    cursor.advance(after_advance);
                     prev_space_after = 0.0;
 
                     let is_floating = table.style.position.is_some();
