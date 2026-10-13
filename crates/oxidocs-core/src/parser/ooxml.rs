@@ -1693,10 +1693,20 @@ impl OoxmlParser {
                 // (blind-G ja/creative__6fd5a307, document.xml only, 18pt Hiragino
                 // Mincho Pro: Word's body pitch 27.1 = 18 x 83/64 x 278/240 and the
                 // author line 110.30; Oxi 23.35 and 98.48 with no multiple and no
-                // after). The run defaults keep the application font fallback.
+                // after). OXI_BARE_RUN_DEFAULTS (2026-10-14, default ON, opt-out
+                // _DISABLE): the RUN defaults come along too -- this endpoint's
+                // Normal.dotm sets 12pt (sz 24) on the theme's minor faces, and a
+                // bare package's empty paragraph is sized by them: Word's empty
+                // line between 6fd5a307's author and body is 16.00 = Times New
+                // Roman 12pt hhea 13.79 x 278/240 (`_pb_emptypara_nogrid_gen.py`
+                // bare_blank_ea; every arm WITH a styles part agrees with Oxi
+                // already), Oxi's 14.1 came from the built-in 10.5pt.
                 if let Some(t) = self.normal_dotm_defaults("", theme) {
                     s.app_default_para_style = t.doc_default_para_style;
                     s.app_default_alignment = t.doc_default_alignment;
+                    if std::env::var_os("OXI_BARE_RUN_DEFAULTS_DISABLE").is_none() {
+                        s.app_default_run_style = t.doc_default_run_style;
+                    }
                 }
                 Ok(s)
             }
