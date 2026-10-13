@@ -6386,6 +6386,24 @@ impl<'a> ParagraphLayouter<'a> {
                 if !disable {
                     let captured: Vec<usize> = seen.clone();
                     for &captured_idx in &captured {
+                        // OXI_FN_REF_SWEEP_END (2026-10-13, default ON, opt-out _DISABLE):
+                        // the sweep follows a run only past its END on this line (or
+                        // from a reference run itself, S276's merged-digits case). A
+                        // reference after a text run that continues on later lines was
+                        // credited to EVERY line of that run: probefn 第7条 (after=160
+                        // line=278 defaults) asked for note 7 on page 1 although its
+                        // line was pushed to page 2 -- seven notes drawn there and the
+                        // body one line shorter than Word (first note 582.7 vs 611.7).
+                        if std::env::var_os("OXI_FN_REF_SWEEP_END_DISABLE").is_none() {
+                            let run_ends_here = para.runs.get(captured_idx).map_or(false, |run| {
+                                run.footnote_ref.is_some()
+                                    || line.fragments.iter().any(|f| f.run_index == captured_idx
+                                        && f.char_offset + f.text.chars().count() >= run.text.chars().count())
+                            });
+                            if !run_ends_here {
+                                continue;
+                            }
+                        }
                         let mut i = captured_idx + 1;
                         while i < para.runs.len() {
                             if let Some(id) = para.runs[i].footnote_ref {
