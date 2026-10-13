@@ -515,9 +515,26 @@ impl<'a> PageLayouter<'a> {
             // LRPB mode) are resolved by S835 (fn-boundary fs/16 relief) +
             // S836 (Latin saved-LRPB retirement) — the bundle state measures
             // 6/6 = 1.0000 on the EN gate.
-            if self.fn_special_declared
+            // OXI_FN_SEP_PARA (2026-10-13, default ON, opt-out _DISABLE): the
+            // separator footnote's own paragraph sets the allocation whenever the
+            // package carries one, declared in settings.xml or not. probefn
+            // (after=160 line=278 defaults, separator after=0 line=240, 9pt
+            // notes on lines 360): Word's area = separator line 18 + notes;
+            // the 12pt base let a 7th note and one more body line onto page 1
+            // (Oxi 第7条 line 3 at 536 + 21 = 557 vs area top 557.05; Word's
+            // area top for 7 notes is 551.05, so it pushes). `_pb_fnarea_mult_
+            // gen.py`: the rule sits 19.5 above the first note baseline = one
+            // 18pt separator line above the note stack in every arm.
+            let fn_sep_para = std::env::var_os("OXI_FN_SEP_PARA_DISABLE").is_none()
+                && !self.fn_special_declared
+                && (!page.doc_grid_no_type && page.grid_line_pitch.is_some_and(|p| p > 0.0));
+            if (self.fn_special_declared || fn_sep_para)
                 && std::env::var("OXI_S833_DISABLE").is_err()
             {
+                // The separator paragraph counts at its natural height even on a
+                // typed grid (`_pb_fnarea_mult_gen.py` bottom_1: Word keeps the body
+                // line whose box ends at 726.75 under an area top of 728.7 =
+                // notes 742.3 - 13.6; a snapped 18 would push it).
                 let sep_h = special_footnote_height(u32::MAX);
                 if std::env::var("OXI_FN_PROBE").is_ok() {
                     eprintln!("[FN_SEP] branch=s833 declared={} sep_h={:.3} notice={:.3}",
