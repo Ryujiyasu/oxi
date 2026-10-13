@@ -14833,6 +14833,55 @@ cells={} pitch={:.2} text={:?}",
                 return ascdesc_mix_height(ms.iter().map(|(m, fs)| (&**m, *fs)));
             }
         }
+        // OXI_LINE_UNION_BOX (2026-10-13, default ON, opt-out _DISABLE): the
+        // natural box of a line with a CJK 83/64 face is the UNION of its
+        // faces' boxes about the shared baseline -- max ascent + max descent
+        // with each 83/64 face's win box centred in its 83/64 box (ascent =
+        // win ascent + half the excess) and a Latin face's own split. S1361's
+        // tallest-fragment reading equals this whenever one face is tallest
+        // both ways (its ＭＳ 明朝 10pt + Arial 10/14pt arms: 12.96 / 16.08
+        // either way); `_pb_mixedface_lh_gen.py` mix_split separates them:
+        // Noto Sans JP 12pt (16.58 / 6.06) beside 游明朝 13.5pt (16.09 / 6.45)
+        // is 23.03 natural in Word (34.68 pitch at 278/240 + 8), the tallest
+        // face alone would be 22.64.
+        if std::env::var_os("OXI_LINE_UNION_BOX_DISABLE").is_none()
+            && !line.fragments.is_empty()
+            && line.fragments.iter().any(|f| {
+                !f.text.trim().is_empty()
+                    && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
+            })
+        {
+            let s1298_vis = Self::s1298_has_visible(&line.fragments);
+            let (mut ua, mut ud) = (0.0_f32, 0.0_f32);
+            let mut plain = true;
+            for frag in &line.fragments {
+                if (s1298_vis && Self::s1298_glyphless(frag)) || frag.text.trim().is_empty() {
+                    continue;
+                }
+                if frag.style.position.is_some() || frag.style.emphasis_mark.is_some()
+                    || frag.style.run_border.is_some() || frag.style.vert_in_horz
+                    || frag.style.inline_object_image.is_some()
+                {
+                    plain = false;
+                    break;
+                }
+                let fs = frag.style.font_size.unwrap_or(para_font_size);
+                let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let (asc, des) = (m.word_ascent_pt(fs), m.word_descent_pt(fs));
+                let (a, d) = if m.is_cjk_83_64_font() {
+                    let nat = asc + des;
+                    let a = m.win_ascent * fs + (nat - (m.win_ascent + m.win_descent) * fs) * 0.5;
+                    (a, nat - a)
+                } else {
+                    (asc, des)
+                };
+                ua = ua.max(a);
+                ud = ud.max(d);
+            }
+            if plain && ua + ud > 0.0 {
+                return (ua + ud).max(max_box);
+            }
+        }
         if std::env::var("OXI_S1361_DISABLE").is_err() && max_box > 0.0 {
             return max_box;
         }
@@ -15508,6 +15557,46 @@ cells={} pitch={:.2} text={:?}",
                 let mix = ascdesc_mix_height(ms.iter().map(|(m, fs)| (&**m, *fs)));
                 hhea_natural_max = hhea_natural_max.max(mix);
                 max_combined = max_combined.max(mix);
+            }
+        }
+        // OXI_LINE_UNION_BOX: the same union fold as natural_line_height_for_line_inner
+        // (max ascent + max descent about the shared baseline, 83/64 faces centred)
+        // feeds the line ADVANCE here; mix_split's 23.03 is reached by neither
+        // fold alone.
+        if std::env::var_os("OXI_LINE_UNION_BOX_DISABLE").is_none()
+            && line.fragments.iter().any(|f| {
+                !f.text.trim().is_empty()
+                    && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
+            })
+        {
+            let (mut ua, mut ud) = (0.0_f32, 0.0_f32);
+            let mut plain = true;
+            for frag in &line.fragments {
+                if Self::s1298_glyphless(frag) || frag.text.trim().is_empty() {
+                    continue;
+                }
+                if frag.style.position.is_some() || frag.style.emphasis_mark.is_some()
+                    || frag.style.run_border.is_some() || frag.style.vert_in_horz
+                    || frag.style.inline_object_image.is_some()
+                {
+                    plain = false;
+                    break;
+                }
+                let fs = frag.style.font_size.unwrap_or(para_font_size);
+                let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let (asc, des) = (m.word_ascent_pt(fs), m.word_descent_pt(fs));
+                let (a, d) = if m.is_cjk_83_64_font() {
+                    let nat = asc + des;
+                    let a = m.win_ascent * fs + (nat - (m.win_ascent + m.win_descent) * fs) * 0.5;
+                    (a, nat - a)
+                } else {
+                    (asc, des)
+                };
+                ua = ua.max(a);
+                ud = ud.max(d);
+            }
+            if plain && ua + ud > max_combined {
+                max_combined = ua + ud;
             }
         }
         let run_base = if std::env::var("OXI_S1361_DISABLE").is_err() && max_combined > 0.0 {

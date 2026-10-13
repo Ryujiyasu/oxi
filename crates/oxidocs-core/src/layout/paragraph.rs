@@ -7275,6 +7275,7 @@ impl<'a> ParagraphLayouter<'a> {
             // touched, so a page break that moved the marker out of `elements`
             // makes this a no-op (current behavior) rather than corrupting a body
             // fragment.
+            let s517_marker_copy = s517_marker_el_idx;
             if line_idx == 0 {
                 if let Some(midx) = s517_marker_el_idx.take() {
                     if let Some(mel) = elements.get_mut(midx) {
@@ -7510,8 +7511,25 @@ impl<'a> ParagraphLayouter<'a> {
                 _ => None,
             };
             let flow_elements_start = elements.len();
-            let mixed_auto_baseline = std::env::var_os("OXI_MIXED_CJK_AUTO_BASELINE").is_some()
+            // OXI_MIXED_CJK_AUTO_BASELINE (promoted 2026-10-13, default ON, opt-out
+            // _DISABLE): every fragment of an auto-spaced body line shares ONE
+            // baseline, placed by the tallest face's ascent, where a CJK 83/64
+            // face's ascent is its win ascent plus half the 83/64 excess (the
+            // win box centred in the natural box) and a Latin face's is its
+            // baseline ascent. `_pb_mixedface_lh_gen.py` (21 arms, Word PDF):
+            // ＭＳ 明朝 12pt baseline 12.14 below the line top (10.31 + 1.83),
+            // Noto Sans JP 16.58, Yu Gothic 14.18, Calibri 11.40 / 16pt 15.23;
+            // a mixed line takes the max (Calibri 16 + ＭＳ 明朝 12 → 15.26,
+            // Noto + ＭＳ 明朝 → 16.58, Noto + 游明朝 13.5 → 16.58), and all of
+            // its faces sit on it. Oxi drew each face from its own rule: the
+            // document's «2. 这些 cookie …» line (blind-G 597cb86c) had ＭＳ 明朝
+            // at 207.20, Calibri at 208.31 and the Noto 页 at 210.81 against
+            // Word's single 210.38; the Latin-dominated arm sat 3.1pt low.
+            let mixed_auto_baseline = std::env::var_os("OXI_MIXED_CJK_AUTO_BASELINE_DISABLE").is_none()
                 && !is_header_footer
+                // body flow only: a shape's lines keep their own calibrated
+                // placement (5593c6a7's text-box list sat 1.0pt low under this)
+                && !in_textbox
                 && (grid_pitch.is_none() || !para.style.snap_to_grid)
                 && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
                 && line.fragments.iter().any(|f| {
@@ -7559,6 +7577,17 @@ impl<'a> ParagraphLayouter<'a> {
             } else {
                 None
             };
+            // The list marker shares the body's baseline (S517 gave it the line's
+            // text_y_off; with the shared baseline law the body may sit lower).
+            if line_idx == 0 {
+                if let (Some(midx), Some(b)) = (s517_marker_copy, body_baseline) {
+                    if let Some(mel) = elements.get_mut(midx) {
+                        if mel.paragraph_index.is_none() && matches!(mel.content, LayoutContent::Text { .. }) {
+                            mel.baseline_offset = Some(b);
+                        }
+                    }
+                }
+            }
             let header_baseline = if std::env::var_os("OXI_HEADER_CJK_BASELINE").is_some()
                 && is_header_footer
                 && !para.style.snap_to_grid
