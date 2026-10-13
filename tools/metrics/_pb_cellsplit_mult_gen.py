@@ -30,7 +30,9 @@ REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "pipeline_data" / "_pb_cellsplit_mult"
 RPR = '<w:rPr><w:rFonts w:ascii="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝" w:hAnsi="ＭＳ 明朝"/><w:sz w:val="21"/></w:rPr>'
 CELL = "項目N：本項に定める事項については、関係法令及び本規程の趣旨に照らし、善良なる管理者の注意をもって。"
-SERIES = [("m0", range(1300, 1501, 4), 0, False), ("m60", range(1300, 1501, 4), 60, False), ("m0w", range(1300, 1501, 8), 0, True)]
+SERIES = [("m0", range(1300, 1501, 4), 0, False), ("m60", range(1300, 1501, 4), 60, False), ("m0w", range(1300, 1501, 8), 0, True),
+          # the margin arms where row 5's first line barely fits: free 19-26pt above the bottom
+          ("m60b", range(1100, 1241, 4), 60, False), ("m0b", range(1100, 1241, 4), 0, False)]
 
 
 def styles(widow_on):
