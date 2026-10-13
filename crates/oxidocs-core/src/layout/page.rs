@@ -6018,9 +6018,9 @@ impl<'a> PageLayouter<'a> {
                     // column the float + its 9pt distL eat; requires a real
                     // horizontal overlap so decorative off-column floats stay
                     // inert.
-                    let (s758_para_band, s758_two_seg, wrap_advance) = self.body_paragraph_wrap_bands(
+                    let (s758_para_band, s758_two_seg, wrap_advance) = self.body_paragraph_wrap_bands_after(
                         para, page, &s758_bands, current_page_idx,
-                        cursor.cursor_y, start_x, content_width,
+                        cursor.cursor_y, prev_space_after, start_x, content_width,
                     );
                     cursor.advance(wrap_advance);
                     // S1515 (2026-09-21, default ON, opt-out OXI_S1515_DISABLE): a

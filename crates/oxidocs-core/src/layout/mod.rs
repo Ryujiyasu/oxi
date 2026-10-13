@@ -12112,6 +12112,27 @@ cells={} pitch={:.2} text={:?}",
         start_x: f32,
         content_width: f32,
     ) -> (Option<(f32, f32, f32)>, Option<(f32, f32, f32, f32)>, f32) {
+        self.body_paragraph_wrap_bands_after(para, page, s758_bands, current_page_idx, cursor_y, 0.0, start_x, content_width)
+    }
+
+    fn body_paragraph_wrap_bands_after(
+        &self,
+        para: &Paragraph,
+        page: &Page,
+        s758_bands: &[(usize, f32, f32, f32, f32, bool, BodyWrapPolicy)],
+        current_page_idx: usize,
+        cursor_y: f32,
+        // OXI_BAND_ENTRY_AFTER (2026-10-13, default ON, opt-out _DISABLE): the
+        // flow's pending space-after -- the paragraph's first line starts that
+        // far below the cursor, and Word judges the band by where the line
+        // really is. probeqframepg: 第3条 enters at 204.0 with 8pt pending and
+        // a page-anchored frame band from 225.0; its first line box 212..233
+        // crosses the band and Word wraps every line of it around the frame
+        // (24 + 3 characters), Oxi laid the paragraph full width.
+        pending_after: f32,
+        start_x: f32,
+        content_width: f32,
+    ) -> (Option<(f32, f32, f32)>, Option<(f32, f32, f32, f32)>, f32) {
         // S1456 (2026-09-17, default ON, opt-out OXI_S1456_DISABLE): side-wrap
         // band consumption is not Latin-only. The CJK gate here was a scope
         // guard, not a Word discriminator ([[script_gate_is_not_a_discriminator]]).
@@ -12123,7 +12144,10 @@ cells={} pitch={:.2} text={:?}",
             || std::env::var("OXI_CJK_WRAP_LINE_INTERSECTION").is_ok()
             || std::env::var("OXI_S1456_DISABLE").is_err())
             && std::env::var("OXI_WRAP_LINE_INTERSECTION_DISABLE").is_err();
-        let before = if intersection { para.style.space_before.unwrap_or(0.0).max(0.0) } else { 0.0 };
+        let before = if intersection {
+            let b = para.style.space_before.unwrap_or(0.0).max(0.0);
+            if std::env::var_os("OXI_BAND_ENTRY_AFTER_DISABLE").is_none() { b.max(pending_after.max(0.0)) } else { b }
+        } else { 0.0 };
         let mut line_top = cursor_y + before;
         let mut advance = 0.0;
         let line_height = if intersection && s758_bands.iter().any(|b| b.0 == current_page_idx && b.2 > cursor_y) {
