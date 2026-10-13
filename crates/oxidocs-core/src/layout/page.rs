@@ -2140,12 +2140,26 @@ impl<'a> PageLayouter<'a> {
                             let (gt, gb, gl, gr) = if s1639 {
                                 (ip.dist_t.unwrap_or(0.0).max(0.0), ip.dist_b.unwrap_or(0.0) + ip.eff_b, ip.eff_l, ip.eff_r)
                             } else { (0.0, 0.0, 0.0, 0.0) };
+                            // OXI_PAGE_REL_BAND: see the text-box arm below
+                            let (ialign, ix) = if ip.h_relative.as_deref() == Some("page")
+                                && std::env::var_os("OXI_PAGE_REL_BAND_DISABLE").is_none()
+                            {
+                                let origin = match ip.h_align.as_deref() {
+                                    Some("right") => page.size.width - img.width,
+                                    Some("center") => (page.size.width - img.width) * 0.5,
+                                    Some("left") => 0.0,
+                                    _ => ip.x,
+                                };
+                                (None, origin - page.margin.left)
+                            } else {
+                                (ip.h_align.clone(), ip.x)
+                            };
                             v.push((
                                 ip.y - gt,
                                 img.width + gl + gr,
                                 img.height + gt + gb,
-                                ip.h_align.clone(),
-                                ip.x - gl,
+                                ialign,
+                                ix - gl,
                                 ip.dist_l.unwrap_or(9.0),
                                 ip.dist_r.unwrap_or(9.0),
                                 false,
@@ -2183,6 +2197,29 @@ impl<'a> PageLayouter<'a> {
                                     Some("left")=>0.0,_=>tp.x,
                                 };
                                 (None,origin+bounds.0*tb.width)
+                            };
+                            // OXI_PAGE_REL_BAND (2026-10-13, default ON, opt-out _DISABLE): a
+                            // PAGE-relative horizontal position is page-absolute, but the
+                            // band consumer adds the margin (content_left + px) and aligns
+                            // within the content width -- so a box at posH page 73 got its
+                            // keep-out band at 56.7 + 73 - 9 = 120.7 while it draws at 73,
+                            // and the body flowed into the phantom 64pt lane OVER the box.
+                            // `_pb_lanewidth_gen.py` far_both / far_left (box at page 73, 120pt
+                            // below its anchor): Word 0 lines over the box; Oxi 4. blind-G
+                            // ja/correspondence__14012ac2's «Ⅳ» box (page 73.0). Hand the
+                            // consumer a margin-relative x and no alignment.
+                            let (align, x) = if tp.h_relative.as_deref() == Some("page")
+                                && std::env::var_os("OXI_PAGE_REL_BAND_DISABLE").is_none()
+                            {
+                                let origin = match align.as_deref() {
+                                    Some("right") => page.size.width - tb.width + bounds.0*tb.width,
+                                    Some("center") => (page.size.width - tb.width) * 0.5 + bounds.0*tb.width,
+                                    Some("left") => bounds.0*tb.width,
+                                    _ => x,
+                                };
+                                (None, origin - page.margin.left)
+                            } else {
+                                (align, x)
                             };
                             v.push((
                                 tp.y + bounds.1*tb.height - gt,
