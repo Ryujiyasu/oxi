@@ -2022,7 +2022,37 @@ impl<'a> TableFitLayouter<'a> {
             // window pitch×2.2 (tokyoshugyo 遅刻早退 box fits=27.4=1.52 lines
             // PUSHED; 3a4f box 29.9 PUSHED; 精勤手当 59.9 SPLIT); a MULTI-CELL
             // data row splits with just one line of room (all 4 probe families).
-            let s754_min_fit = if row.cells.len() == 1 {
+            // OXI_S754_WIDOWOFF (2026-10-13, default ON, opt-out _DISABLE): the
+            // single-column "widow-like keep" (pitch x 2.2) is the cell
+            // paragraph's widow/orphan control. With widowControl OFF Word splits
+            // the row after ONE line: probecoltbl (Normal widowControl=0, after=160
+            // line=278 defaults, 2-column section) row 項目3, a 2-line cell with
+            // 17.25pt free: Word keeps line 1 at 765.10 (box bottom 770.3 <= 771)
+            // and continues at the next page top (81.96); Oxi pushed the row
+            // whole. The tokyoshugyo / 3a4f boxes behind the 2.2 keep their
+            // widow control on.
+            let s754_single_widow_off = std::env::var_os("OXI_S754_WIDOWOFF_DISABLE").is_none()
+                && row.cells.len() == 1
+                // a one-row box keeps S754's prose-box keep (tokyoshugyo's （欠勤等の扱い）
+                // etc. are 1-row 1-cell tables Word pushes whole at 1.5 lines free);
+                // the one-line floor is for a multi-row single-column table
+                && num_rows > 1
+                // Word splits only AUTO-height rows (S754's discriminator): a trHeight
+                // row -- tokyoshugyo's （参考） box, atLeast 474 -- moves whole
+                && row.height.is_none()
+                // and no keep rule inside the cell: tokyoshugyo's （参考） row 1 opens with a
+                // one-line heading followed by a heading-2 (keepNext) paragraph, and Word
+                // moves the row whole rather than strand that line (27.6pt free, S754's
+                // 遅刻早退 box)
+                && row.cells[0].blocks.iter().all(|b| match b {
+                    Block::Paragraph(p) => !p.style.keep_next && !p.style.keep_lines,
+                    _ => true,
+                })
+                && row.cells[0].blocks.iter().find_map(|b| match b {
+                    Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.trim().is_empty()) => Some(p),
+                    _ => None,
+                }).is_some_and(|p| !p.style.widow_control);
+            let s754_min_fit = if row.cells.len() == 1 && !s754_single_widow_off {
                 match table_grid_pitch {
                     Some(p) => p * 2.2,
                     // S999 (probe _pb_s754, default ON, opt-out OXI_S999_DISABLE): Word SPLITS a
@@ -2079,6 +2109,24 @@ impl<'a> TableFitLayouter<'a> {
                     legacy
                 }
             };
+            // OXI_S754_WIDOWOFF: the floor is the cell's first line as it RENDERS
+            // (cell lines do not snap to the lines grid: probecoltbl 15.77/line,
+            // 17.06 free, the S1424 one-line estimate carried the 18pt grid slot).
+            let s754_min_fit = if s754_single_widow_off {
+                // the first LINE box alone (no paragraph spacing, no grid slot)
+                let one_line = row.cells[0].blocks.iter().find_map(|b| match b {
+                    Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.trim().is_empty()) => Some(p),
+                    _ => None,
+                }).and_then(|p| {
+                    let mut measure = crate::layout::cell_float::Measurement::default();
+                    let _ = self.estimate_para_height_inner(
+                        p, 1.0e6, None, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio,
+                        false, true, Some(&mut measure),
+                    );
+                    measure.heights.first().copied()
+                }).filter(|h| *h > 0.5);
+                match one_line { Some(h) => s754_min_fit.min(h), None => s754_min_fit }
+            } else { s754_min_fit };
             // A floating table starts its own layout area. If no first cell
             // line fits at its text anchor, Word keeps the first row in that
             // area. Use the measured line and top inset, not a fixed font-size
