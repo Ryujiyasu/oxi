@@ -1688,6 +1688,16 @@ impl OoxmlParser {
                 if std::env::var_os("OXI_S1594_DISABLE").is_none() {
                     s.cjk_substitute_face = s1594_substitute_face(theme);
                 }
+                // OXI_NORMAL_DOTM_DEFAULTS, bare package: a package with NO styles
+                // part takes the endpoint's Normal.dotm paragraph defaults as well
+                // (blind-G ja/creative__6fd5a307, document.xml only, 18pt Hiragino
+                // Mincho Pro: Word's body pitch 27.1 = 18 x 83/64 x 278/240 and the
+                // author line 110.30; Oxi 23.35 and 98.48 with no multiple and no
+                // after). The run defaults keep the application font fallback.
+                if let Some(t) = self.normal_dotm_defaults("", theme) {
+                    s.app_default_para_style = t.doc_default_para_style;
+                    s.app_default_alignment = t.doc_default_alignment;
+                }
                 Ok(s)
             }
             Err(e) => Err(e),
