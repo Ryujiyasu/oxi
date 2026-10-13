@@ -11031,6 +11031,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let separator_pad = separator_pad_pre;
                         let area_top = footnote_bottom - total_h - separator_pad - separator_h
                             + last_line_adjust;
+                        // OXI_FN_BENEATH (2026-10-13, default ON, opt-out _DISABLE):
+                        // footnotePr pos=beneathText puts the notes right under the
+                        // body when they fit; otherwise they sit at the bottom as
+                        // usual. `_pb_fnarea_mult_gen.py` beneath_1/3/6 (after=160
+                        // line=278, lines 360): the separator rule is 14.40 below the
+                        // last body baseline = that line's box bottom + its 8pt after,
+                        // the notes follow at the page-bottom spacing; beneath_2
+                        // overflows and equals bottom_2. Oxi ignored the property
+                        // (probeqfnbeneath +11.4 .. +20).
+                        let area_top = if self.fn_pos_beneath
+                            && std::env::var_os("OXI_FN_BENEATH_DISABLE").is_none()
+                            && body_bottom_y > start_y
+                        {
+                            area_top.min(body_bottom_y)
+                        } else {
+                            area_top
+                        };
 
                         // Draw the footnote separator line. Word's default for a
                         // bare <w:separator/> is a fixed 2-inch (144pt) line at the

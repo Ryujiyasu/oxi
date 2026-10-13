@@ -60,6 +60,11 @@ pub struct Document {
     /// _pb_fnres probe family on uklocalspending (P1-P4 decomposition).
     #[serde(default)]
     pub fn_special_declared: bool,
+    /// OXI_FN_BENEATH (2026-10-13): `<w:footnotePr><w:pos w:val="beneathText"/>`
+    /// (settings.xml or a sectPr): the page's footnotes start right under the
+    /// last body line instead of at the bottom margin when they fit.
+    #[serde(default)]
+    pub fn_pos_beneath: bool,
     /// S1257: `word/endnotes.xml`'s separator note contains `<w:separator/>`.
     /// When it does NOT (the note is a bare empty paragraph) Word draws no
     /// rule above the endnotes at all — `educational__001217ec` p16 has ZERO

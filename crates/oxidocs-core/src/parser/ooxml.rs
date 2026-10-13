@@ -579,6 +579,7 @@ impl OoxmlParser {
         }
         let settings_part_exists = self.read_part("word/settings.xml").is_ok();
         let fn_special_declared = self.parse_fn_special_declared();
+        let fn_pos_beneath = self.parse_fn_pos_beneath();
         let endnote_sep_line = self.parse_endnote_sep_line();
         let compress_punctuation = self.parse_compress_punctuation();
         let wp_justification = self.parse_compat_bool_flag("wpJustification");
@@ -1296,6 +1297,7 @@ impl OoxmlParser {
             compat_mode_explicit,
             settings_part_exists,
             fn_special_declared,
+            fn_pos_beneath,
             endnote_sep_line,
             compress_punctuation,
             wp_justification,
@@ -1334,6 +1336,25 @@ impl OoxmlParser {
             Ok(x) => x.contains("<w:separator/>"),
             Err(_) => false,
         }
+    }
+
+    /// OXI_FN_BENEATH: a `<w:pos w:val="beneathText"/>` inside a footnotePr of
+    /// settings.xml or of the document's section properties.
+    fn parse_fn_pos_beneath(&mut self) -> bool {
+        let has = |xml: &str| -> bool {
+            let mut from = 0;
+            while let Some(i) = xml[from..].find("<w:footnotePr>") {
+                let i = from + i;
+                let end = xml[i..].find("</w:footnotePr>").map(|j| i + j).unwrap_or(xml.len());
+                if xml[i..end].contains("w:val=\"beneathText\"") {
+                    return true;
+                }
+                from = end;
+            }
+            false
+        };
+        self.read_part("word/settings.xml").map_or(false, |x| has(&x))
+            || self.read_part("word/document.xml").map_or(false, |x| has(&x))
     }
 
     fn parse_fn_special_declared(&mut self) -> bool {

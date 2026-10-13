@@ -3341,6 +3341,8 @@ pub struct LayoutEngine {
     /// S833: settings.xml footnotePr declares custom special footnotes ->
     /// the declared-separator reservation model (see footnote_sep_alloc).
     fn_special_declared: bool,
+    /// OXI_FN_BENEATH: footnotes positioned beneathText (see Document).
+    fn_pos_beneath: bool,
     // Footnote paragraphs form one story across body sections and pages.
     // Preserve the preceding note's paragraph spacing when laying out a note.
     footnote_previous_style: std::collections::HashMap<u32, ParagraphStyle>,
@@ -4013,6 +4015,7 @@ impl LayoutEngine {
             hyphenation_zone: 18.0,
             settings_part_exists: true,
             fn_special_declared: false,
+            fn_pos_beneath: false,
             footnote_previous_style: std::collections::HashMap::new(),
             endnote_sep_line: false,
             compress_punctuation: false,
@@ -4217,6 +4220,7 @@ impl LayoutEngine {
             hyphenation_zone: doc.hyphenation_zone.unwrap_or(18.0),
             settings_part_exists: doc.settings_part_exists,
             fn_special_declared: doc.fn_special_declared,
+            fn_pos_beneath: doc.fn_pos_beneath,
             footnote_previous_style: {
                 let mut result = std::collections::HashMap::new();
                 let mut seen = std::collections::HashSet::new();
