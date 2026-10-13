@@ -4080,6 +4080,32 @@ impl<'a> ParagraphLayouter<'a> {
                 .get(line_idx)
                 .copied()
                 .unwrap_or(effective_lh);
+            // OXI_S739_EXACT (2026-10-13, default ON, opt-out _DISABLE): the
+            // centred page-bottom box is compared in Word's own arithmetic --
+            // the multiplied grid line UNROUNDED (417 twips for 360 x 278/240,
+            // not this line's cumulative half-point step of 21.0 / 20.5) and the
+            // natural box at exact win x 83/64 (13.617 for ＭＳ 明朝 10.5pt, not
+            // the quantized 13.5). `_pb_pgbottom_mult_gen.py` single_1314/1315
+            // (explicit pPrDefault after=160 line=278, lines 360): Word keeps 34
+            // lines with 345 twips left and pushes with 344; (417+272.4)/2 =
+            // 344.7. probelac (lac 312): the 12th paragraph's first line has
+            // 315.8 twips, Word needs (361.4+272.4)/2 = 316.9 and pushes it;
+            // Oxi's (18.0+13.5)/2 = 15.75 kept it (one line more than Word).
+            let s739_exact = std::env::var_os("OXI_S739_EXACT_DISABLE").is_none();
+            let eff_exact = if is_multiple_spacing && raw_spaced_tw > 0.0 && !s671_fine {
+                raw_spaced_tw / 20.0
+            } else {
+                effective_lh
+            };
+            // only a typed grid reads nat_exact (S739's centred box); the two metric
+            // folds per line cost legal__0021d29f 242s -> 341s when done everywhere
+            let nat_exact = if grid_pitch.is_some_and(|p| p > 0.0) && !page.doc_grid_no_type {
+                natural_lh
+                    + (self.natural_line_height_for_line_inner(line, &para.style, para_font_size, true)
+                        - self.natural_line_height_for_line_inner(line, &para.style, para_font_size, false))
+            } else {
+                natural_lh
+            };
             // S548b (2026-06-12, opt-out OXI_S548B_DISABLE): the Day-33
             // leniency is the INK-BOTTOM rule and does NOT apply to
             // lineRule=exact. For exact lines the text sits at the BOTTOM of
@@ -4542,7 +4568,7 @@ impl<'a> ParagraphLayouter<'a> {
                     // A grid line places half of its added leading below the
                     // natural line box, including above an occupied footer.
                     centered_box_is_threshold = true;
-                    effective_lh.min((effective_lh + natural_lh) / 2.0)
+                    if s739_exact { eff_exact.min((eff_exact + nat_exact) / 2.0) } else { effective_lh.min((effective_lh + natural_lh) / 2.0) }
                 } else {
                     effective_lh
                 }
@@ -4711,7 +4737,7 @@ impl<'a> ParagraphLayouter<'a> {
                     let phase = (cursor.cursor_y - page_top).rem_euclid(pitch);
                     let on_slot = phase < 1.0 || phase > pitch - 1.0;
                     if on_slot || std::env::var("OXI_S1153_DISABLE").is_err() {
-                        (effective_lh + natural_lh) / 2.0
+                        if s739_exact { (eff_exact + nat_exact) / 2.0 } else { (effective_lh + natural_lh) / 2.0 }
                     } else {
                         0.0
                     }
