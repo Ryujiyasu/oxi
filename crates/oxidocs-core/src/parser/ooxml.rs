@@ -14861,8 +14861,18 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             // face fell to S1146's Yu Gothic, whose 1.673em turns each 11pt line
             // into two 18pt grid cells where Word uses one: 1 page -> 2.
             let s1149 = std::env::var("OXI_S1149_DISABLE").is_err();
+            // OXI_ALTNAME_INSTALLED (2026-10-14, default ON, opt-out _DISABLE):
+            // an altName only substitutes a face this machine HAS; when the
+            // alternate is missing too, the name takes the ordinary missing-font
+            // path. `_pb_aum_cjk_face_gen.py`: «点字線なし» with altName Arial
+            // Unicode MS (absent here) draws its kana in YuGothic-Regular, the
+            // same as without the altName; Oxi sized the line by the AUM /
+            // ＭＳ 明朝 box 2pt too high (blind-G correspondence__139e74eb's title).
+            let alt_installed = std::env::var_os("OXI_ALTNAME_INSTALLED_DISABLE").is_some()
+                || crate::font::runtime::resolve(alt, false, false).is_some();
             if !registry.supports_family(name)
                 && registry.supports_family(alt)
+                && alt_installed
                 && (s1149 || !registry.get(alt).is_cjk_83_64_font())
             {
                 alias.insert(name.clone(), alt.clone());
