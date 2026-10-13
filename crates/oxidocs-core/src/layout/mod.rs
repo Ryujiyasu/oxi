@@ -10561,12 +10561,23 @@ cells={} pitch={:.2} text={:?}",
                     }
                     // Text header lines reserve their declared auto-spacing pitch.
                     // Empty headers already apply the same multiplier in S1064.
-                    if !self.doc_body_has_real_cjk
+                    // OXI_HF_CJK_MULTIPLE (2026-10-13, default ON, opt-out _DISABLE): a
+                    // CJK header line is its exact 83/64 natural x the multiple, as the
+                    // EN side already is (`_pb_hdrafter_gen.py` text2: Word's body top
+                    // 90.1 = 42.55 + 2 x (13.617 x 1.158 + 8); the single-spacing
+                    // 13.5 + 8 per paragraph gave 85.55).
+                    let hf_cjk_mult = self.doc_body_has_real_cjk
+                        && std::env::var_os("OXI_HF_CJK_MULTIPLE_DISABLE").is_none();
+                    if (!self.doc_body_has_real_cjk || hf_cjk_mult)
                         && visible_run.is_some()
                         && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
                         && std::env::var("OXI_HEADER_TEXT_MULTIPLE_DISABLE").is_err()
                     {
-                        lh *= para.style.line_spacing.unwrap_or(1.0).max(1.0);
+                        let factor = para.style.line_spacing.unwrap_or(1.0).max(1.0);
+                        if hf_cjk_mult && factor > 1.0 && metrics.is_cjk_83_64_font() {
+                            lh = (metrics.win_ascent + metrics.win_descent) * fs * (83.0 / 64.0);
+                        }
+                        lh *= factor;
                     }
                     // S1175 (2026-08-20, opt-out OXI_S1175_DISABLE): an `atLeast`
                     // line rule floors the header line like anywhere else.

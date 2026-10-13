@@ -10193,6 +10193,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // after=80 then the column-heading table, row text -3.76.
                 let hf_tbl_after = std::env::var_os("OXI_HF_TBL_AFTER_DISABLE").is_none();
                 let mut hf_prev_after = 0.0f32;
+                // OXI_HF_PARA_AFTER / OXI_HF_NO_GRID (2026-10-13, default ON, opt-out
+                // _DISABLE): a header paragraph's space-after separates it from the
+                // next header paragraph (the paint only threaded it under the EN-only
+                // OXI_HEADER_TEXT_FLOW experiment), and header/footer lines do NOT
+                // snap to the document grid -- the grid is the body area's.
+                // `_pb_hdrafter_gen.py` (ＭＳ 明朝 10.5, lines 360, after=160 line=278):
+                // Word header lines 53.16 / 76.92 (pitch 23.76 = 13.617 x 1.158 + 8),
+                // after=0: 53.16 / 68.88 (15.72); footer 755.38 / 779.14 likewise.
+                // Oxi painted 56.75 / 77.6 in both arms: 20.85 = grid x 1.158,
+                // centred, no after. The body top (s755_header_bottom) already
+                // adds the after; its CJK multiple is OXI_HF_CJK_MULTIPLE.
+                let hf_para_after = std::env::var_os("OXI_HF_PARA_AFTER_DISABLE").is_none();
+                let hf_no_grid = std::env::var_os("OXI_HF_NO_GRID_DISABLE").is_none();
                 for block in hdr_blocks {
                     if let Block::Paragraph(para) = block {
                         if LayoutEngine::is_floating_header_frame(para) {
@@ -10203,7 +10216,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     let previous = previous_header_para;
                     previous_header_para = match block {
-                        Block::Paragraph(p) if header_text_flow => Some(p),
+                        Block::Paragraph(p) if header_text_flow || hf_para_after => Some(p),
                         _ => None,
                     };
                     let this_block_top = cy.cursor_y;
@@ -10222,7 +10235,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             page,
                             &mut Vec::new(),
                             &mut Vec::new(),
-                            grid_pitch,
+                            if hf_no_grid { None } else { grid_pitch },
                             previous.and_then(|p| p.style.style_id.as_deref()),
                             previous.is_some_and(|p| p.style.contextual_spacing),
                             previous.filter(|p| p.style.after_autospacing).and_then(|p| p.style.num_id.as_deref()),
@@ -10563,7 +10576,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             page,
                             &mut Vec::new(),
                             &mut Vec::new(),
-                            grid_pitch,
+                            // OXI_HF_NO_GRID: footer lines are off the document grid too
+                            // (`_pb_hdrafter_gen.py` ftr_text2: Word 755.38 / 779.14, pitch
+                            // 23.76 = 13.617 x 1.158 + 8; Oxi painted 28.85 = grid x 1.158 + 8).
+                            if std::env::var_os("OXI_HF_NO_GRID_DISABLE").is_none() { None } else { grid_pitch },
                             previous_para.and_then(|p| p.style.style_id.as_deref()),
                             previous_para.is_some_and(|p| p.style.contextual_spacing),
                             previous_para.filter(|p| p.style.after_autospacing).and_then(|p| p.style.num_id.as_deref()),
