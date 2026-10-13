@@ -1208,6 +1208,11 @@ pub struct TextBox {
     /// (content lines + top/bottom insets); the declared height is ignored.
     #[serde(default)]
     pub auto_fit: bool,
+    /// OXI_WRAPNONE_WIDTH (2026-10-13): bodyPr wrap="none" -- the shape's text
+    /// does not wrap and, for horizontal ALIGNMENT, the shape is as wide as its
+    /// text plus the insets (see resolve_textbox_position).
+    #[serde(default)]
+    pub body_wrap_none: bool,
     /// Text inset bottom (in points, default 3.6pt)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_bottom: Option<f32>,

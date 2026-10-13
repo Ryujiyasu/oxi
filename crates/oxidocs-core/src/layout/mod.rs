@@ -8337,6 +8337,44 @@ cells={} pitch={:.2} text={:?}",
             })
     }
 
+    /// OXI_WRAPNONE_WIDTH: the widest paragraph of a text box laid out on one
+    /// line (run advances + character spacing + the paragraph's left / first
+    /// line indents), in points.
+    fn textbox_unwrapped_text_width(&self, text_box: &TextBox) -> f32 {
+        let mut widest = 0.0f32;
+        for b in &text_box.blocks {
+            let Block::Paragraph(p) = b else { continue };
+            let mut w = p.style.indent_left.unwrap_or(0.0).max(0.0)
+                + p.style.indent_first_line.unwrap_or(0.0).max(0.0);
+            let mut prev_cjk: Option<bool> = None;
+            for r in &p.runs {
+                let fs = self.resolve_font_size(&r.style, &p.style);
+                let m = &*self.metrics_for_text(&r.text, &r.style, &p.style);
+                let cs = r.style.character_spacing.unwrap_or(0.0);
+                for c in r.text.chars() {
+                    if c == '\n' || c == '\r' {
+                        continue;
+                    }
+                    // the auto space at a CJK / Latin-letter (autoSpaceDE) or CJK / digit
+                    // (autoSpaceDN) boundary: 1/8 em per boundary -- the probe's
+                    // «Ｑ0柴田高校» (two boundaries) measures 138 in Word = 132 + 2 × 3
+                    let cjk = crate::font::is_fullwidth(c);
+                    let latin = (c.is_ascii_alphabetic() && p.style.auto_space_de)
+                        || (c.is_ascii_digit() && p.style.auto_space_dn);
+                    if let Some(pc) = prev_cjk {
+                        if (pc && latin) || (!pc && cjk && prev_cjk == Some(false)) {
+                            w += 0.125 * fs;
+                        }
+                    }
+                    w += self.registry.char_width_pt_with_fallback(c, fs, m) + cs;
+                    prev_cjk = Some(if cjk { true } else if latin { false } else { prev_cjk.unwrap_or(false) });
+                }
+            }
+            widest = widest.max(w);
+        }
+        widest
+    }
+
     fn resolve_textbox_position(
         &self,
         text_box: &TextBox,
@@ -8374,10 +8412,30 @@ cells={} pitch={:.2} text={:?}",
                     ref_width = content_width;
                 }
             }
+            // OXI_WRAPNONE_WIDTH (2026-10-13, default ON, opt-out _DISABLE): a
+            // bodyPr wrap="none" box is aligned as if it were as wide as its
+            // (unwrapped) text plus the insets. `_pb_wrapnone_gen.py` (ＭＳ 明朝 24
+            // «Ｑn柴田高校» 138pt in a 480pt box, margin-relative align): center →
+            // text x 228.65 = margin + (column − 138 − 14.4)/2 + 7.2, right → 393.19
+            // = margin right − 7.2 − 138; the wrap="square" twin centres the 480
+            // box (65.18); offset-positioned boxes and jc are unaffected (x0 7.44 in
+            // every such arm). blind-G ja/reference__5593c6a7 «部活が盛んな柴田高校»
+            // (HGS明朝E 36, 361pt in a 629pt box, align center): Word x 183.6, Oxi
+            // 55.5. Only a text narrower than the box is measured (the wider case
+            // is unprobed and keeps the declared width).
+            let align_w = if text_box.body_wrap_none
+                && std::env::var_os("OXI_WRAPNONE_WIDTH_DISABLE").is_none()
+            {
+                let ins = text_box.inset_left.unwrap_or(7.2) + text_box.inset_right.unwrap_or(7.2);
+                let w = self.textbox_unwrapped_text_width(text_box) + ins;
+                if w > 0.0 && w < text_box.width { w } else { text_box.width }
+            } else {
+                text_box.width
+            };
             match align.as_str() {
                 "left" => ref_left,
-                "center" => ref_left + (ref_width - text_box.width) / 2.0,
-                "right" => ref_left + ref_width - text_box.width,
+                "center" => ref_left + (ref_width - align_w) / 2.0,
+                "right" => ref_left + ref_width - align_w,
                 _ => ref_left,
             }
         } else {
@@ -8828,10 +8886,32 @@ cells={} pitch={:.2} text={:?}",
         // before the next text line.
         let clnsp_empty_on = std::env::var_os("OXI_CLNSP_EMPTY_PARA_DISABLE").is_none();
         let mut clnsp_pending_gap: f32 = 0.0;
+        // OXI_WRAPNONE_WIDTH: an unwrapped line is as wide as its text, so jc
+        // centre / right have nothing to distribute (Word: x0 = the left inset in
+        // every wrap="none" arm of `_pb_wrapnone_gen.py`) -- lay the paragraphs
+        // out left-aligned.
+        let wrapnone_blocks: Vec<Block>;
+        let box_blocks: &Vec<Block> = if text_box.body_wrap_none
+            && std::env::var_os("OXI_WRAPNONE_WIDTH_DISABLE").is_none()
+        {
+            wrapnone_blocks = text_box
+                .blocks
+                .iter()
+                .map(|b| match b {
+                    Block::Paragraph(p) if !matches!(p.alignment, Alignment::Left) => {
+                        Block::Paragraph(Paragraph { alignment: Alignment::Left, ..p.clone() })
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            &wrapnone_blocks
+        } else {
+            &text_box.blocks
+        };
         let mut txbx_prev_para: Option<&Paragraph> = None;
         let mut txbx_prev_after: f32 = 0.0;
 
-        for block in &text_box.blocks {
+        for block in box_blocks {
             if txbx_after_on && !matches!(block, Block::Paragraph(_)) {
                 cursor.advance(txbx_prev_after);
                 txbx_prev_after = 0.0;

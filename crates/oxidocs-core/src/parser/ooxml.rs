@@ -7523,6 +7523,8 @@ fn parse_drawing(
     let mut text_compat_ln_spc = false;
     // S1498: bodyPr <a:spAutoFit/>
     let mut text_auto_fit = false;
+    // OXI_WRAPNONE_WIDTH: bodyPr wrap="none"
+    let mut text_wrap_none = false;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
     // S839 (2026-07-14): wpg vector-group per-shape extraction. The main
@@ -7642,6 +7644,7 @@ fn parse_drawing(
                             text_inset_bottom = None;
                             text_body_anchor = None;
                             text_auto_fit = false;
+                            text_wrap_none = false;
                         }
                         s839_wsp = Some(S839Wsp {
                             off: (0.0, 0.0),
@@ -8057,6 +8060,9 @@ fn parse_drawing(
                             match key.as_str() {
                                 "lIns" => {
                                     text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "wrap" => {
+                                    text_wrap_none = val == "none";
                                 }
                                 "rIns" => {
                                     text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0);
@@ -8692,6 +8698,9 @@ fn parse_drawing(
                                 "lIns" => {
                                     text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0);
                                 }
+                                "wrap" => {
+                                    text_wrap_none = val == "none";
+                                }
                                 "rIns" => {
                                     text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0);
                                 }
@@ -9016,6 +9025,7 @@ fn parse_drawing(
                                     vector_shapes: Vec::new(),
                                     host_break_after: false,
                                     children: Vec::new(),
+                                    body_wrap_none: text_wrap_none,
                                 });
                             }
                             if (stroke.is_some() || fill.is_some()) && (is_line || is_rect)
@@ -9322,6 +9332,7 @@ fn parse_drawing(
             // break follows this drawing's run.
             host_break_after: false,
             children: std::mem::take(&mut s839_text_children),
+            body_wrap_none: text_wrap_none,
         })
     } else {
         None
@@ -10221,6 +10232,7 @@ fn parse_vml_pict(
             vector_shapes: Vec::new(),
             host_break_after: false,
             children: Vec::new(),
+            body_wrap_none: false,
         });
         let placeholder = Some(Image {
             paragraph_space_before: 0.0,
