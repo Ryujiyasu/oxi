@@ -22298,6 +22298,28 @@ cells={} pitch={:.2} text={:?}",
                 let ext = (m.natural_line_height_hhea(fs) - (m.win_ascent + m.win_descent) * fs).max(0.0);
                 (m.win_ascent * fs + ext, m.win_descent * fs)
             }
+            // OXI_CLNSP_CJK_WINBOX (2026-10-13, default ON, opt-out _DISABLE): a
+            // CJK face whose usWin box is not 1 em (游明朝 1.287, メイリオ 1.5)
+            // takes the S1322 natural line (win × 83/64 × fs) with the win box
+            // centred in it, like a body line; the fs + 0.25 / 0.27 fs constants
+            // below are the ＭＳ-face calibration and equal that natural only when
+            // win = 1 em (13.59 vs 13.62 at 10.5). `_pb_clnsp_cjk_gen.py`
+            // (compatLnSpc box, no-type grid, Word PDF): 游明朝 13 pitch 21.74 /
+            // first baseline 19.32 (natural 21.70 / 3.6 + (21.7 − 16.7)/2 + 12.94
+            // = 19.03 + bearing), 游明朝 14 23.43, メイリオ 12 23.40, ＭＳ 明朝 10.5
+            // 13.68, HGP創英ﾌﾟﾚｾﾞﾝｽEB 22 28.44 (+ shadow 31.2, already modelled);
+            // Oxi gave 16.76 / 18.03 / 15.49 on the three. blind-G
+            // ja/reference__5593c6a7's 游明朝 box: Word 22.2 / 21.7, Oxi 18.2 / 16.8.
+            Some(m) if font_law
+                && m.is_cjk_83_64_font()
+                && ((m.win_ascent + m.win_descent) - 1.0).abs() > 0.01
+                && std::env::var_os("OXI_CLNSP_CJK_WINBOX_DISABLE").is_none() =>
+            {
+                let win = (m.win_ascent + m.win_descent) * fs;
+                let natural = m.word_line_height_no_grid(fs).max(win);
+                let a = (natural - win) / 2.0 + m.win_ascent * fs;
+                (a, natural - a)
+            }
             _ => (fs + 0.25, 0.27 * fs),
         };
         match (rule, val) {
