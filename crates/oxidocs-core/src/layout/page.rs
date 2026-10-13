@@ -10334,7 +10334,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         .map(|c| (c.top, c.right, c.bottom, c.left)),
                                 },
                             ));
-                            cy.advance(img.height + self.header_inline_image_leading(img));
+                            cy.advance(img.height + self.header_inline_image_leading(img)
+                                + if std::env::var_os("OXI_HF_IMG_LINE_DISABLE").is_none() { img.paragraph_space_after.max(0.0) } else { 0.0 });
                         } else if img.position.is_some()
                             && std::env::var("OXI_HDRFLOAT_DISABLE").is_err()
                         {

@@ -10036,7 +10036,16 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn header_inline_image_leading(&self, image: &Image) -> f32 {
-        if std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() != Some("1") {
+        // OXI_HF_IMG_LINE (2026-10-13, default ON, opt-out _DISABLE): the
+        // picture line of a header paragraph is the picture plus the multiple's
+        // extra of the paragraph's font, and the paragraph's space-after follows
+        // (`_pb_hdrafter_gen.py` img / img_only, after=160 line=278: Word's text
+        // line 148.34 = 42.55 + 85.04 + 2.15 + 8 + 10.61, body 152.06 with the
+        // picture alone; Oxi gave the picture 85.04 and nothing else, -10.17).
+        // The leading was the opt-in OXI_HEADER_IMAGE_LEADING=1 experiment.
+        if std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() != Some("1")
+            && std::env::var_os("OXI_HF_IMG_LINE_DISABLE").is_some()
+        {
             return 0.0;
         }
         let Some(host) = image.host_paragraph.as_ref() else { return 0.0; };
@@ -10044,9 +10053,14 @@ cells={} pitch={:.2} text={:?}",
             return 0.0;
         }
         let extra_factor = (host.style.line_spacing.unwrap_or(1.0) - 1.0).max(0.0);
-        let Some(run) = host.runs.first() else { return 0.0; };
-        let fs = self.resolve_font_size(&run.style, &host.style);
-        let metrics = &*self.metrics_for_para_mark_g(&run.style, &host.style, !self.doc_body_has_real_cjk);
+        // A header picture paragraph's host keeps no runs (parse_header_footer_xml
+        // clears them): the paragraph mark's style is the line's font then.
+        let fallback = RunStyle::default();
+        let run_style = host.runs.first().map(|r| &r.style)
+            .or(host.style.ppr_rpr.as_ref())
+            .unwrap_or(&fallback);
+        let fs = self.resolve_font_size(run_style, &host.style);
+        let metrics = &*self.metrics_for_para_mark_g(run_style, &host.style, !self.doc_body_has_real_cjk);
         let natural = if !self.doc_body_has_real_cjk && !metrics.is_cjk_83_64_font()
             && std::env::var("OXI_S979_DISABLE").is_err()
         {
@@ -10931,7 +10945,8 @@ cells={} pitch={:.2} text={:?}",
                         if std::env::var("OXI_S1385_DISABLE").is_err() && !self.doc_body_has_real_cjk {
                             hdr_h += self.s971_image_line_h(img, hdr_cw, page.grid_line_pitch, true);
                         } else {
-                            hdr_h += img.height + self.header_inline_image_leading(img);
+                            hdr_h += img.height + self.header_inline_image_leading(img)
+                                + if std::env::var_os("OXI_HF_IMG_LINE_DISABLE").is_none() { img.paragraph_space_after.max(0.0) } else { 0.0 };
                         }
                     }
                     if std::env::var("OXI_DBG_HDR").is_ok() {

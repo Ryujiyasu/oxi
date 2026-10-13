@@ -14106,10 +14106,17 @@ fn parse_header_footer_xml(
                         if image_only && std::env::var("OXI_S1385_DISABLE").is_err() {
                             let mut h = pr.paragraph.clone();
                             h.runs.clear();
-                            for block in pr.inline_images.iter_mut() {
+                            let last = pr.inline_images.len().saturating_sub(1);
+                            for (i, block) in pr.inline_images.iter_mut().enumerate() {
                                 if let Block::Image(img) = block {
                                     if img.host_paragraph.is_none() {
                                         img.host_paragraph = Some(Box::new(h.clone()));
+                                    }
+                                    // OXI_HF_IMG_LINE: the picture paragraph's spacing
+                                    // travels with the block, as in the body path.
+                                    if std::env::var_os("OXI_HF_IMG_LINE_DISABLE").is_none() {
+                                        if i == 0 { img.paragraph_space_before = h.style.space_before.unwrap_or(0.0); }
+                                        if i == last { img.paragraph_space_after = h.style.space_after.unwrap_or(0.0); }
                                     }
                                 }
                             }
