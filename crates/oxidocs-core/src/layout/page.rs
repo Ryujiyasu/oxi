@@ -8629,9 +8629,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             Some("page") => (0.0, page.size.width),
                                             _ => (start_x, content_width),
                                         };
+                                        // OXI_FLOAT_RIGHT_PAD: the band follows the drawn box
+                                        let right_pad = if std::env::var_os("OXI_FLOAT_RIGHT_PAD_DISABLE").is_none() {
+                                            table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(5.4)
+                                        } else { 0.0 };
                                         match ha.as_str() {
                                             "center" => rl + (rw - table_w_pt) * 0.5,
-                                            "right" => rl + rw - table_w_pt,
+                                            "right" => rl + rw - table_w_pt - right_pad,
                                             _ => rl,
                                         }
                                     } else {
@@ -8668,7 +8672,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // wraps flush to the box edge; the align arm keeps
                                 // its shipped 9.0 calibration).
                                 let (dl, dr) = if is_align {
-                                    (9.0, 9.0)
+                                    // OXI_FLOAT_RIGHT_PAD: an aligned table's declared
+                                    // leftFromText / rightFromText (142 twips = 7.1pt in
+                                    // the probes: Word's lane ends 7.1 before the box);
+                                    // 9pt is Word's default when none is declared.
+                                    if std::env::var_os("OXI_FLOAT_RIGHT_PAD_DISABLE").is_none() {
+                                        // measured from the CELL TEXT edge: Word's lane ends at
+                                        // 347.0 beside a box at 348.9 with 5.4 margins and 7.1
+                                        // leftFromText (348.9 + 5.4 - 7.1 = 347.2)
+                                        let (pl, pr) = table.style.default_cell_margins.as_ref()
+                                            .map_or((5.4, 5.4), |m| (m.left.unwrap_or(5.4), m.right.unwrap_or(5.4)));
+                                        table.style.position.as_ref().map_or((9.0 - pl, 9.0 - pr), |tp| {
+                                            ((if tp.left_from_text > 0.0 { tp.left_from_text } else { 9.0 }) - pl,
+                                             (if tp.right_from_text > 0.0 { tp.right_from_text } else { 9.0 }) - pr)
+                                        })
+                                    } else { (9.0, 9.0) }
                                 } else {
                                     table.style.position.as_ref().map_or((0.0, 0.0), |tp| {
                                         (tp.left_from_text, tp.right_from_text)
@@ -8718,6 +8736,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     } else {
                                         (current_page_idx, candidate_y_top)
                                     };
+                                    if std::env::var_os("OXI_DBG_WF").is_some() {
+                                        eprintln!("[TBL-BAND] blk={} pg={} top={:.1} bottom={:.1} x={:.1}..{:.1} pushed={}", block_idx, band_pg, band_top, candidate_y_bottom, band_x0 - dl, band_x0 + table_w_pt + dr, s772_pushed);
+                                    }
                                     s758_bands.push((
                                         band_pg,
                                         band_top,

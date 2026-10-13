@@ -145,9 +145,20 @@ impl<'a> TableFitLayouter<'a> {
                     Some("page") => (0.0, page_width),
                     _ => (start_x, content_width), // "margin" or "text"
                 };
+                // OXI_FLOAT_RIGHT_PAD (2026-10-13, default ON, opt-out _DISABLE): a
+                // right-aligned floating table keeps its LEFT cell-margin overhang
+                // inside the reference edge, so its grid box sits one left cell
+                // margin further left than the edge minus the width.
+                // probexfloattbl / probeqtbloffset (tblpXSpec=right, margin
+                // anchor, 3400 twips, default margins): Word's cell text starts at
+                // 354.7, Oxi's at 359.3 on every row of both tables (+4.6); the
+                // lane beside the table was one character too wide in turn.
+                let right_pad = if std::env::var_os("OXI_FLOAT_RIGHT_PAD_DISABLE").is_none() {
+                    table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(5.4)
+                } else { 0.0 };
                 match h_align.as_str() {
                     "center" => ref_left + (ref_width - table_width) / 2.0,
-                    "right" => ref_left + ref_width - table_width,
+                    "right" => ref_left + ref_width - table_width - right_pad,
                     _ => ref_left,
                 }
             } else {
