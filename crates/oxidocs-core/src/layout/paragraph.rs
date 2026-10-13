@@ -9009,9 +9009,26 @@ impl<'a> ParagraphLayouter<'a> {
                         // rounding-phase mismatches that only the combined-snap model resolves.
                         let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
                         let new_pos = old_pos + raw_spaced_tw;
-                        let cn = (new_pos / 10.0).round() as i32 * 10;
-                        let cc = (old_pos / 10.0).round() as i32 * 10;
-                        (cn, cc)
+                        // OXI_GRIDMULT_EXACT (2026-10-13, default ON, opt-out _DISABLE):
+                        // on a TYPED docGrid a multiple line is pitch x factor in
+                        // whole twips (360 x 278/240 = 417) and Word accumulates it
+                        // exactly; the 10-twip round alternated 420/410 and left the
+                        // cursor one twip high after 33 lines, which flipped the
+                        // page-bottom test of `_pb_pgbottom_mult_gen.py` single_1315
+                        // (Word pushes the 34th line with 344 twips left, keeps with
+                        // 345: cursor 15179 exact, box (417 + 272.4)/2 = 344.7).
+                        // Word's PDF lines land on 0.12pt (600 dpi) steps -- 174/173
+                        // alternating for 20.85 -- not on half points.
+                        if std::env::var_os("OXI_GRIDMULT_EXACT_DISABLE").is_none()
+                            && grid_pitch.is_some_and(|p| p > 0.0)
+                            && !page.doc_grid_no_type
+                        {
+                            (new_pos.round() as i32, old_pos.round() as i32)
+                        } else {
+                            let cn = (new_pos / 10.0).round() as i32 * 10;
+                            let cc = (old_pos / 10.0).round() as i32 * 10;
+                            (cn, cc)
+                        }
                     } else {
                         let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                         let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
