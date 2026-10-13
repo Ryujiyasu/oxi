@@ -8756,11 +8756,22 @@ impl<'a> TableFitLayouter<'a> {
                                         // snapped to a typed grid centres its win box in the 83/64
                                         // box -- replaces the S453/S664/S698 offsets for this scope
                                         // (`_pb_cjk_cell_top_gen.py`, 21 arms within 0.08pt).
+                                        // OXI_CELL_NATBOX_GRID (2026-10-14, default ON, opt-out _DISABLE):
+                                        // the same centring on a TYPED grid. `_pb_cell_valign_base_gen.py`
+                                        // (23 arms, Word PDF rule-to-baseline): with adjustLineHeightInTable
+                                        // the cell line box is the grid pitch (11pt ＭＳ 明朝 on 350: 12.96
+                                        // below the top rule = 0.25 + (17.5 - 11)/2 + 9.45; 12pt 13.32,
+                                        // 10.5pt 12.84), without it the natural 83/64 box (11.40), and
+                                        // vAlign stacks that box in a taller row (trHeight 720: top 12.96 /
+                                        // centre 22.20 / bottom 31.44 = 9.25 and 18.5 lower). Oxi's grid
+                                        // cells sat a uniform 1.0pt higher (blind-G forms__020115bc and
+                                        // administrative__19bb32f7, 65 lines at -1.2).
                                         let cell_text_y_off = if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
                                             && matches!(effective_line_rule, None | Some("auto"))
                                             && effective_line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
                                             && para.style.list_marker.is_none()
-                                            && !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid)
+                                            && (std::env::var_os("OXI_CELL_NATBOX_GRID_DISABLE").is_none()
+                                                || !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid))
                                             && !line.iter().any(|t| t.15)
                                         {
                                             let mut asc = 0.0f32;
