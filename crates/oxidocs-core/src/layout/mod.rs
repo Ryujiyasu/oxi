@@ -22335,6 +22335,21 @@ cells={} pitch={:.2} text={:?}",
                 let a = (natural - win) / 2.0 + m.win_ascent * fs;
                 (a, natural - a)
             }
+            // OXI_CLNSP_CJK_NATURAL_PITCH (2026-10-13, default ON, opt-out _DISABLE):
+            // a 1-em CJK face keeps the calibrated ascent (fs + 0.25) but its line
+            // PITCH is the win × 83/64 natural, not fs + 0.25 + 0.27 fs -- the two
+            // agree at 10.5 (13.62 vs 13.59) and drift apart with the size (22pt:
+            // 28.53 vs 28.19). `_pb_clnsp_cjk_gen.py` hgp22: Word 28.44 / 28.58,
+            // Oxi 28.19; ＭＳ 明朝 10.5: Word 13.68, Oxi 13.58 either way.
+            // 5593c6a7's numbered box (HGP創英ﾌﾟﾚｾﾞﾝｽEB 22 + shadow): Word 31.15, Oxi 30.8.
+            Some(m) if font_law
+                && m.is_cjk_83_64_font()
+                && std::env::var_os("OXI_CLNSP_CJK_NATURAL_PITCH_DISABLE").is_none() =>
+            {
+                let a = fs + 0.25;
+                let natural = m.word_line_height_no_grid(fs);
+                (a, (natural - a).max(0.27 * fs))
+            }
             _ => (fs + 0.25, 0.27 * fs),
         };
         match (rule, val) {
