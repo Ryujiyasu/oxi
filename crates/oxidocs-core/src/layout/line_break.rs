@@ -482,6 +482,10 @@ impl<'a> LineBreaker<'a> {
         // body bottom from 639.3 to 630.10 -> a 4-line paragraph widow-split.
         let mut center_tab_stop_tw: Option<(i32, i32)> = None;
         let mut word_breaks: Vec<(usize, f32)> = Vec::new();
+        // OXI_LEGACY_WRAP_FALLBACK: offsets in `word_breaks` that are face seams
+        // (per-character CJK fallback inside one declared-Latin run): segment
+        // boundaries for the styles, never a place to wrap on their own.
+        let mut word_seams: Vec<usize> = Vec::new();
         // S1059 (2026-08-02): cumulative width after each char of the pending
         // token, so an over-long SEGMENT can be split at the character level.
         // Kept parallel to `word` rather than pushed into `word_breaks` — a
@@ -1294,6 +1298,7 @@ impl<'a> LineBreaker<'a> {
                         let wchars: Vec<char> = word.chars().collect();
                         let total_chars = wchars.len();
                         let mut bounds = std::mem::take(&mut word_breaks);
+                        let seams = std::mem::take(&mut word_seams);
                         if bounds.last().map_or(true, |&(cc, _)| cc < total_chars) {
                             bounds.push((total_chars, word_width));
                         }
@@ -1360,7 +1365,8 @@ impl<'a> LineBreaker<'a> {
                             if current_width_tw + seg_w_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), seg_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, None) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 + segment_hang_tw
                                 && !current_line.fragments.is_empty() && !para_all_whitespace
-                                && !s1059_overlong {
+                                && !s1059_overlong
+                                && !seams.contains(&seg_start) {
                                 wrap_and_seed!(ws);
                             }
                             // Exact run metadata for this segment (matches the default
@@ -1575,7 +1581,7 @@ impl<'a> LineBreaker<'a> {
                     current_capw_tw += word_width_tw; // S475: words have no punct capacity
                     word_width = 0.0;
                     word_natural_width = 0.0;
-                    if latin_wordwrap { word_breaks.clear(); word_seg_meta.clear(); word_char_ws.clear(); }
+                    if latin_wordwrap { word_breaks.clear(); word_seg_meta.clear(); word_char_ws.clear(); word_seams.clear(); }
                     }
                     word_seg_styles.clear();
                     if latin_wordwrap { seg_pending = false; }
@@ -1682,11 +1688,20 @@ impl<'a> LineBreaker<'a> {
                     && previous_style.font_size != style.font_size;
                 // Preserve each source run's metrics, including a note reference
                 // whose inherited size differs inside an unbroken word.
+                // OXI_LEGACY_WRAP_FALLBACK: a fragment cut by the CJK face
+                // fallback from a run whose declared eastAsia face is Latin-only
+                // (compat 12 word wrap) is still one word with its neighbours;
+                // the face change is render-only.
+                let legacy_fallback_pair = std::env::var_os("OXI_LEGACY_WRAP_FALLBACK_DISABLE").is_none()
+                    && (self.compat_mode <= 12 || !self.compat_mode_explicit)
+                    && (previous_style.fallback_declared_latin == Some(true)
+                        || style.fallback_declared_latin == Some(true));
                 let metric_style_boundary = std::env::var_os("OXI_RUN_STYLE_SEGMENTS_DISABLE").is_none()
                     && (previous_style.font_size != style.font_size
-                        || previous_style.font_family != style.font_family
-                        || previous_style.font_family_east_asia != style.font_family_east_asia
-                        || previous_style.font_family_cs != style.font_family_cs
+                        || (!legacy_fallback_pair
+                            && (previous_style.font_family != style.font_family
+                                || previous_style.font_family_east_asia != style.font_family_east_asia
+                                || previous_style.font_family_cs != style.font_family_cs))
                         || previous_style.bold != style.bold
                         || previous_style.italic != style.italic
                         || previous_style.run_border != style.run_border);
@@ -1698,6 +1713,25 @@ impl<'a> LineBreaker<'a> {
                     let offset = word.chars().count();
                     if word_breaks.last().map_or(true, |&(end, _)| end != offset) {
                         word_breaks.push((offset, word_width));
+                    }
+                    word_seg_styles.push((offset, style.clone()));
+                    word_seg_meta.push((offset, frag_run_index, frag_char_start));
+                } else if legacy_fallback_pair
+                    && std::env::var_os("OXI_RUN_STYLE_SEGMENTS_DISABLE").is_none()
+                    && (previous_style.font_family != style.font_family
+                        || previous_style.font_family_east_asia != style.font_family_east_asia
+                        || previous_style.font_family_cs != style.font_family_cs)
+                {
+                    // A face seam: the token keeps its per-face segment styles
+                    // (the glyphs and the line box need the real faces) but the
+                    // seam is no break opportunity -- the segment loop never
+                    // wraps at it, so the whole-token fit decides the placement
+                    // and an over-long token packs to the margin (Word, both
+                    // scripts: `_pb_overlong_token_gen.py`).
+                    let offset = word.chars().count();
+                    if word_breaks.last().map_or(true, |&(end, _)| end != offset) {
+                        word_breaks.push((offset, word_width));
+                        word_seams.push(offset);
                     }
                     word_seg_styles.push((offset, style.clone()));
                     word_seg_meta.push((offset, frag_run_index, frag_char_start));
@@ -2032,7 +2066,9 @@ impl<'a> LineBreaker<'a> {
             // Calibri): the title's five lines sat 17.55pt off.
             let cjk_latin_wrap = std::env::var_os("OXI_CJK_LEGACY_WORDWRAP_DISABLE").is_none()
                 && (self.compat_mode <= 12 || !self.compat_mode_explicit)
-                && cjk_metrics.is_some_and(|m| !m.is_cjk_83_64_font());
+                && style.fallback_declared_latin
+                    .filter(|_| std::env::var_os("OXI_LEGACY_WRAP_FALLBACK_DISABLE").is_none())
+                    .unwrap_or_else(|| cjk_metrics.is_some_and(|m| !m.is_cjk_83_64_font()));
             let substitute_gdi_map = substitute_metrics
                 .and_then(|m| self.registry.get_gdi_char_widths(&m.family, font_size));
             let latin_gdi_map = self

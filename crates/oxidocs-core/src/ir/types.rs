@@ -535,6 +535,13 @@ pub struct RunStyle {
     /// mark's line with the ASCII font when the East Asian slot is only a theme
     /// reference, so the ¶-mark path needs to tell the two apart.
     pub east_asia_from_theme: bool,
+    /// OXI_LEGACY_WRAP_FALLBACK (2026-10-14): this fragment was cut from its run
+    /// by the per-character CJK face fallback (`resolve_cjk_fallback_runs`);
+    /// `Some(latin)` records whether the run's DECLARED eastAsia face is
+    /// Latin-only, which is what the compatibility-mode-12 word-wrap law reads.
+    /// The fallback face is render-only: Word still wraps the run like Latin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_declared_latin: Option<bool>,
     /// S1314: this run's base text was spread (character_spacing) to the width of
     /// its wider ruby, so the spacing is raw (not pixel-snapped) and the base
     /// width already equals the ruby field width.
@@ -756,6 +763,7 @@ impl Default for RunStyle {
             east_asia_hint: false,
             font_hint_east_asia: None,
             east_asia_from_theme: false,
+            fallback_declared_latin: None,
             ruby_spread: false,
             ruby_lead: 0.0,
             ruby_field: false,

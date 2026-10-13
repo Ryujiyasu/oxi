@@ -6198,6 +6198,18 @@ impl LayoutEngine {
                     fragment.style.font_family_cs = Some(family.to_owned());
                     fragment.style.has_explicit_east_asia = true;
                     fragment.style.east_asia_from_theme = false;
+                    // OXI_LEGACY_WRAP_FALLBACK: remember what the run DECLARED,
+                    // so the compat-12 word-wrap law is not read off the
+                    // fallback face. `_pb_overlong_token_gen.py` cjk_c12_th
+                    // (theme ＭＳ 明朝 / 宋体, docDefaults eastAsia Calibri):
+                    // Word leaves «2. » alone and moves the whole Chinese run
+                    // down, Oxi cut it into ＭＳ 明朝 / SimSun fragments whose
+                    // boundaries became break opportunities and whose SimSun
+                    // side wrapped by the character (blind-G 59eadfc4: three
+                    // such items, a 32pt cascade).
+                    fragment.style.fallback_declared_latin = Some(
+                        self.metrics_for_cjk(&run.style, style)
+                            .is_some_and(|m| !m.is_cjk_83_64_font()));
                 }
                 resolved.push(fragment);
             }
