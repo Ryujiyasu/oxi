@@ -3895,7 +3895,15 @@ impl<'a> PageLayouter<'a> {
                                 Some(s898_notbeside_bottom.map_or(b, |p: f32| p.max(b)));
                         }
                         // Float: no flow consumption.
-                        prev_space_after = 0.0;
+                        // OXI_FRAME_KEEP_AFTER (2026-10-13, default ON, opt-out _DISABLE):
+                        // a positioned frame leaves the flow's pending space-after
+                        // alone -- the paragraphs around it space as if it were not
+                        // there. probeqframepg (page-anchored frame between 第2条 and
+                        // 第3条, after=160 line=278 defaults): Word's 第3条 at 226.34 =
+                        // 197.30 + 20.85 + 8.2; Oxi's at 218.20 (the 8pt after lost).
+                        if std::env::var_os("OXI_FRAME_KEEP_AFTER_DISABLE").is_some() {
+                            prev_space_after = 0.0;
+                        }
                         continue;
                     }
                     // S847: a non-frame block breaks the consecutive-frame run.
