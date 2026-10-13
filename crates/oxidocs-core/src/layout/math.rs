@@ -533,8 +533,23 @@ fn nary_geometry(
     // to a connected assembly, not to every ready-made operator glyph.
     let italic = if plan.assembled { plan.italic_correction as f32 * scale }
         else { plan.placements[0].glyph.italic_correction.unwrap_or(0) as f32 * scale };
-    let stacked = matches!(lim_loc, LimLoc::UndOvr)
-        || (ctx.style.is_display() && !('\u{222b}'..='\u{2233}').contains(&op));
+    // OXI_NARY_INLINE_SUBSUP (2026-10-13, default ON, opt-out _DISABLE): limits
+    // stack over / under the operator only in DISPLAY math with limLoc undOvr;
+    // inline (text-style) math sets them as super/subscripts to the right
+    // whatever limLoc says, and display subSup keeps them right too.
+    // `_pb_narylim_gen.py` (Cambria Math 10.5, «∑_{k=0}^{n} k r^{k-1}», Word
+    // PDF, limits relative to the ∑ x / the base baseline): inline undOvr /
+    // subSup / undOvr-setting / none all put n at +7.44 (−4.2) and k=0 at +7.44
+    // (+2.64); display undOvr stacks (n +4.68 / −15.6, k=0 0 / +13.44), display
+    // subSup is right (n +14.04 / −10.68, k=0 +14.04 / +8.76). Oxi stacked every
+    // undOvr and every display non-integral. blind-G ja/educational__20d9968b's
+    // inline «∑_{k=0}^{n}»: the k=0 sat 6.7 low under the operator.
+    let stacked = if std::env::var_os("OXI_NARY_INLINE_SUBSUP_DISABLE").is_none() {
+        ctx.style.is_display() && matches!(lim_loc, LimLoc::UndOvr)
+    } else {
+        matches!(lim_loc, LimLoc::UndOvr)
+            || (ctx.style.is_display() && !('\u{222b}'..='\u{2233}').contains(&op))
+    };
     let script_ctx = ctx.descend_script();
     let sub_box = sub.map(|expr| layout_expr(expr, &script_ctx));
     let sup_box = sup.map(|expr| layout_expr(expr, &script_ctx));
@@ -1451,8 +1466,13 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             // op_size+limit above/below; integrals & inline keep subSup (limits
             // to the right -> height ≈ op_size, width += limits).
             // (op_is_integral computed above for the S653 op_size.)
-            let stacked = matches!(lim_loc, crate::ir::LimLoc::UndOvr)
-                || (ctx.style.is_display() && matches!(lim_loc, crate::ir::LimLoc::SubSup) && !op_is_integral);
+            // OXI_NARY_INLINE_SUBSUP: mirror of nary_geometry's rule
+            let stacked = if std::env::var_os("OXI_NARY_INLINE_SUBSUP_DISABLE").is_none() {
+                ctx.style.is_display() && matches!(lim_loc, crate::ir::LimLoc::UndOvr)
+            } else {
+                matches!(lim_loc, crate::ir::LimLoc::UndOvr)
+                    || (ctx.style.is_display() && matches!(lim_loc, crate::ir::LimLoc::SubSup) && !op_is_integral)
+            };
             if stacked {
                 let limits_w = op_w
                     .max(sub_b.as_ref().map(|b| b.advance).unwrap_or(0.0))

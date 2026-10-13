@@ -751,6 +751,12 @@ fn parse_nary(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser
     use crate::ir::LimLoc;
     let mut op: char = '\u{222b}'; // ISO/IEC 29500-1 22.1.2.20: omitted chr defaults to integral
     let mut lim_loc = LimLoc::SubSup;
+    // OXI_NARY_LIMLOC (2026-10-13): an omitted limLoc takes Word's document
+    // default -- naryLim undOvr for ∑ / ∏ / ⋃ …, intLim subSup for the integral
+    // family (every corpus settings part that names them says so: 5 of 6 docs
+    // with m:nary, the sixth names neither). `_pb_narylim_gen.py` display_nolim:
+    // Word stacks the ∑'s limits exactly as with limLoc=undOvr.
+    let mut lim_loc_explicit = false;
     let mut grow = false;
     let mut operator_color = None;
     let mut sub: Option<Box<MathExpr>> = None;
@@ -786,6 +792,7 @@ fn parse_nary(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser
                                                         "undOvr" => LimLoc::UndOvr,
                                                         _ => LimLoc::SubSup,
                                                     };
+                                                    lim_loc_explicit = true;
                                                 }
                                             }
                                         }
@@ -818,6 +825,9 @@ fn parse_nary(reader: &mut Reader<&[u8]>, run_properties: &mut RunPropertyParser
                 "EOF in m:nary".to_string())),
             _ => {}
         }
+    }
+    if !lim_loc_explicit && std::env::var_os("OXI_NARY_LIMLOC_DISABLE").is_none() {
+        lim_loc = if ('\u{222b}'..='\u{2233}').contains(&op) { LimLoc::SubSup } else { LimLoc::UndOvr };
     }
     Ok(MathExpr::Nary {
         op,
