@@ -1336,7 +1336,7 @@ impl<'a> ParagraphLayouter<'a> {
         let s758_lane_minimum = body_wrap_bands.map_or(30.0, |(bands, entry_page)| {
             bands.iter().filter(|b| b.0 == entry_page && b.2 > cursor.cursor_y
                 && b.3 < start_x + content_width && b.4 > start_x)
-                .map(|b| b.6.minimum_lane_width).fold(30.0, f32::min)
+                .map(|b| b.6.min_lane()).fold(30.0, f32::min)
         });
         // Apply the character-grid boundary to the space left by the float.
         // Subtracting its geometry from a previously rounded column would

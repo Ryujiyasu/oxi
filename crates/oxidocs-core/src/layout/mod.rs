@@ -3061,6 +3061,23 @@ impl BodyWrapPolicy {
     const OBJECT_ABS: Self = Self { minimum_lane_width: 30.0, break_long_words: false, absolute: true };
     const TEXT_FRAME: Self = Self { minimum_lane_width: 72.0, break_long_words: false, absolute: false };
     const FLOATING_TABLE: Self = Self { minimum_lane_width: 18.75, break_long_words: true, absolute: false };
+
+    /// OXI_LANE_MIN18 (2026-10-13, default ON, opt-out _DISABLE): the lane
+    /// beside a wrapSquare OBJECT that Word still flows body text into is 18pt
+    /// wide, not 30. `_pb_lanewidth_gen.py` (a 60pt wrapSquare box at the margin,
+    /// distL/R 9, lane = column − box − 9 ∈ {4..40}, ＭＳ 明朝 10.5 body): Word
+    /// flows «Ａ愛知県» beside the box at 18 / 19 / 20 / 24 / 30 / 40 and moves
+    /// the body below it at 4..17 (first body baseline 129.5 = below the box);
+    /// Oxi rejected 18..24 (the 30 floor). blind-G ja/correspondence__14012ac2's
+    /// 6-7pt lanes are below the floor either way. Text frames keep their 72,
+    /// floating tables their 18.75.
+    fn min_lane(&self) -> f32 {
+        if self.minimum_lane_width == 30.0 && std::env::var_os("OXI_LANE_MIN18_DISABLE").is_none() {
+            18.0
+        } else {
+            self.minimum_lane_width
+        }
+    }
 }
 
 fn document_deva_font_families(doc: &Document) -> std::collections::HashSet<String> {
@@ -12128,7 +12145,7 @@ cells={} pitch={:.2} text={:?}",
                         && b.3 < right && b.4 > left).collect();
                 let required_lane = |policy: &BodyWrapPolicy| {
                     if policy.minimum_lane_width > 30.0 { policy.minimum_lane_width }
-                    else { s1511_thr.min(policy.minimum_lane_width) }
+                    else { s1511_thr.min(policy.min_lane()) }
                 };
                 let forced_single = overl.iter().any(|b|
                     (b.3 - left).max(0.0).max((right - b.4).max(0.0)) < required_lane(&b.6));
@@ -12262,7 +12279,7 @@ cells={} pitch={:.2} text={:?}",
                         (room - (((room * 20.0).round() as i32).max(0) / 20) as f32).max(0.0)
                     } else { 0.0 }
                 };
-                if s772b && left_room.max(right_room) < lane_minimum.minimum_lane_width {
+                if s772b && left_room.max(right_room) < lane_minimum.min_lane() {
                     // Degenerate: the paragraph's own column fits
                     // NEITHER free segment (ed025c's 大口株主の名簿
                     // heading: indent 47.25 > the 33.75pt left strip,
@@ -12320,7 +12337,7 @@ cells={} pitch={:.2} text={:?}",
                     x = x.max(x1);
                 }
                 if pr > x { free.push((x, pr)); }
-                let lane_min = overl.iter().map(|b| b.6.minimum_lane_width).fold(30.0_f32, f32::min);
+                let lane_min = overl.iter().map(|b| b.6.min_lane()).fold(30.0_f32, f32::min);
                 match free.iter().filter(|(a, b)| b - a >= lane_min)
                     .max_by(|a, b| (a.1 - a.0).partial_cmp(&(b.1 - b.0)).unwrap_or(std::cmp::Ordering::Equal)) {
                     Some(&(x0, x1)) => {
