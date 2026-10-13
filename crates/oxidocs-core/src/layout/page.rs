@@ -10971,12 +10971,37 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         ).unwrap_or(4.0);
                         // Determine how many notes fit: add notes one by one from the
                         // bottom; stop when area_top would overlap body content.
+                        // OXI_FN_PLACE_SLACK (2026-10-13, default ON, opt-out _DISABLE):
+                        // the body's last typed-grid line is judged above the area by its
+                        // centred box (OXI_FN_BOUNDARY_CENTRED), so the area may reach up
+                        // into that line's lower padding, (L - natural)/2, before a note is
+                        // dropped. `_pb_fnarea_mult_gen.py` bottom_6: Word keeps six notes
+                        // under a body line whose full box ends 1.2pt below the area top.
+                        let fn_place_slack: f32 = if std::env::var_os("OXI_FN_PLACE_SLACK_DISABLE").is_none()
+                            && self.doc_body_has_real_cjk
+                            && grid_pitch.is_some_and(|p| p > 0.0) && !page.doc_grid_no_type
+                        {
+                            lp.elements[..body_element_count].iter()
+                                .filter(|e| e.y < footnote_bottom)
+                                .filter_map(|e| match &e.content {
+                                    LayoutContent::Text { font_size, .. } if *font_size > 0.0 => Some((e.y + e.height, *font_size, e.height)),
+                                    _ => None,
+                                })
+                                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+                                .map(|(_, fs, h)| {
+                                    let natural = fs * (83.0 / 64.0);
+                                    let mult = if natural > 0.0 { (h / natural).max(1.0) } else { 1.0 };
+                                    let line = grid_pitch.unwrap_or(0.0) * mult;
+                                    ((line - natural) * 0.5).max(0.0)
+                                })
+                                .unwrap_or(0.0)
+                        } else { 0.0 };
                         let mut total_h: f32 = 0.0;
                         let mut fit_count = notes.len();
                         for i in 0..notes.len() {
                             let candidate =
                                 total_h + note_heights[i] + separator_h_pre + separator_pad_pre;
-                            let candidate_top = footnote_bottom - candidate;
+                            let candidate_top = footnote_bottom - candidate + fn_place_slack;
                             // The separator's full allocation is already in
                             // candidate_top. Do not add a second clearance that
                             // discards notes whose body slots actually fit.

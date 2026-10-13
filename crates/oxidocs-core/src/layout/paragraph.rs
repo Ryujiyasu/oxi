@@ -5084,8 +5084,21 @@ impl<'a> ParagraphLayouter<'a> {
                 let hhea = s779_win_heights.get(idx).copied().unwrap_or(threshold);
                 (hhea * factor).max(threshold)
             };
+            // OXI_FN_BOUNDARY_CENTRED (2026-10-13, default ON, opt-out _DISABLE):
+            // above a footnote area a typed-grid line that carries NO reference
+            // of its own is judged by the S739 centred box, like at the page
+            // bottom; a reference line still needs its full slot (its note is
+            // reserved with it). `_pb_fnarea_mult_gen.py` bottom_6 (after=160
+            // line=278, 9pt notes): Word keeps the body line whose full box
+            // ends at 585.6 under an area top of 584.4 (centred 582.0); probefn
+            // 第7条 line 3 with reference 7: full box 556.9 > 555.4, pushed.
             let break_threshold = if typed_grid_fn_boundary {
-                effective_lh
+                let own_note = committed_fn_delta_at_line.get(line_idx).copied().unwrap_or(0.0) > 0.0;
+                if std::env::var_os("OXI_FN_BOUNDARY_CENTRED_DISABLE").is_none() && !own_note {
+                    effective_lh.min((eff_exact + nat_exact) / 2.0)
+                } else {
+                    effective_lh
+                }
             } else {
                 footnote_fit_height(line_idx, break_threshold)
             };
