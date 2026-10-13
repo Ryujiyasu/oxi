@@ -2018,6 +2018,21 @@ impl<'a> LineBreaker<'a> {
                 cjk_metric_owner.clone()
             };
             let substitute_metrics = substitute_metric_owner.as_deref();
+            // OXI_CJK_LEGACY_WORDWRAP (2026-10-13, default ON, opt-out _DISABLE): in
+            // compatibility mode 12 (or none declared, which Word runs as 12) a run
+            // whose eastAsia face is NOT a CJK font (Calibri: the glyphs come from a
+            // substitute) wraps its Japanese like Latin -- only at spaces, and inside
+            // a word only when the word alone exceeds the line. `_pb_cjkwrap_lang_
+            // gen.py` (12 arms): cal_nolang_c12 / cal_ja_c12 break line 1 after
+            // «…防寒ケープ ダウン» (32 chars, the next word «フットカバー付き» moves
+            // whole); compat 14/15, or ＭＳ 明朝 as the eastAsia face at compat 12,
+            // break between characters (36); the run / theme language changes
+            // nothing; without spaces the line fills to the margin (37).
+            // blind-G ja/reports__59eadfc4 (compat 12, docDefaults eastAsia
+            // Calibri): the title's five lines sat 17.55pt off.
+            let cjk_latin_wrap = std::env::var_os("OXI_CJK_LEGACY_WORDWRAP_DISABLE").is_none()
+                && (self.compat_mode <= 12 || !self.compat_mode_explicit)
+                && cjk_metrics.is_some_and(|m| !m.is_cjk_83_64_font());
             let substitute_gdi_map = substitute_metrics
                 .and_then(|m| self.registry.get_gdi_char_widths(&m.family, font_size));
             let latin_gdi_map = self
@@ -4613,7 +4628,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         flush_word!(style);
                     }
-                } else if (kinsoku::is_cjk(ch) && !latin_ctx_quote
+                } else if !cjk_latin_wrap && (kinsoku::is_cjk(ch) && !latin_ctx_quote
                     && !(ch as u32 == 0xFFE5 && chars_vec.get(char_index + 1).copied()
                         .or_else(|| fragments[frag_outer_idx + 1..].iter().find_map(|f| f.0.chars().next()))
                         .is_some_and(|next| next.is_ascii_digit())))
