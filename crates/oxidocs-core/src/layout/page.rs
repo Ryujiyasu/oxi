@@ -10893,7 +10893,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         // overshoot: adjustment = (pitch - natural) / 2 — confirmed
                                         // 2026-04-20 via 6 minimal repros (fn top at page_h -
                                         // margin.bottom - 14.85pt = pitch - 3.15 for 9pt MS Mincho).
-                                        ((pitch - natural_last) * 0.5).max(0.0)
+                                        // OXI_FN_LAST_CENTRE (2026-10-13, default ON, opt-out
+                                        // _DISABLE): that 2026-04-20 reading IS the full last
+                                        // line box ending at the margin with its text centred --
+                                        // the note plans already centre their text, so the
+                                        // extra shift put every note 3.0-3.2pt below Word.
+                                        // `_pb_fnarea_mult_gen.py` (9pt ＭＳ 明朝 on lines 360,
+                                        // n = 1/3/6): single after=0 Oxi 678.4 vs Word 675.34,
+                                        // after=160 line=278 614.72 vs 611.71, after=160 line=240
+                                        // 630.4 vs 627.34, after=0 line=278 +3.0 -- the same
+                                        // +3.1 in every arm; the note pitch and the body's last
+                                        // line agree. Word's stack: (grid line x multiple, text
+                                        // centred) + after, the LAST note's after included,
+                                        // bottom-anchored at the margin (last box 763.18 + 8 =
+                                        // 771.18; single 753.1 + 18 = 771.1).
+                                        if std::env::var_os("OXI_FN_LAST_CENTRE_DISABLE").is_none() {
+                                            0.0
+                                        } else {
+                                            ((pitch - natural_last) * 0.5).max(0.0)
+                                        }
                                     }
                                 } else {
                                     0.0
