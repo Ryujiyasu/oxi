@@ -3710,6 +3710,10 @@ thread_local! {
     /// there regressed b837's word_png −0.0228 (25 sg0 footnotes). Set
     /// around footnote layout/estimate calls to suppress the SG0RAW branch.
     static IN_FOOTNOTE_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_HF_FRAME_LATIN_BASE: set while layout_header_frame lays out a
+    /// header / footer frame paragraph (the Latin baseline law applies there
+    /// even in a CJK document).
+    static IN_HF_FRAME_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// S816 (2026-07-13): true once the document's FIRST IR section has been
     /// laid out. The page-top space-before suppression keys on
     /// `!pages.is_empty() || !current_elements.is_empty()`, but those vecs are
@@ -10111,6 +10115,7 @@ cells={} pitch={:.2} text={:?}",
             Some("page") => 0.0, Some("margin") => page.margin.top, _ => anchor,
         };
         let mut cursor = LayoutCursor::new(top);
+        IN_HF_FRAME_LAYOUT.with(|c| c.set(true));
         let (mut elements, _, _) = self.layout_paragraph(
             para, 0.0, &mut cursor, available, 1.0e6, top, page,
             &mut Vec::new(), &mut Vec::new(), page.grid_line_pitch,
@@ -10119,6 +10124,7 @@ cells={} pitch={:.2} text={:?}",
             &std::collections::HashMap::new(), 1, 0, &[], &[], 0.0,
             true, false, None, None, None, false, 0.0, None, None, false, None,
         );
+        IN_HF_FRAME_LAYOUT.with(|c| c.set(false));
         let min_x = elements.iter().map(|e| e.x).fold(f32::INFINITY, f32::min);
         let max_x = elements.iter().map(|e| e.x + e.width).fold(0.0, f32::max);
         let width = fp.width.unwrap_or_else(|| if min_x.is_finite() { max_x - min_x } else { 0.0 });
@@ -16598,8 +16604,17 @@ cells={} pitch={:.2} text={:?}",
         // and NOT a Symbol-bullet line (S689/S821 grow line 0 for the marker and
         // their placement is separately calibrated), and NOT a pPrDefault
         // textAlignment=baseline/top document (S459's own law).
+        // OXI_HF_FRAME_LATIN_BASE (2026-10-13, default ON, opt-out _DISABLE): a
+        // header / footer FRAME line (the classic framePr page number) follows
+        // the Latin law in a CJK document too. `_pb_ftrpagenum_gen.py`
+        // century_noempty (theme latin Century / Jpan ＭＳ 明朝, no flow
+        // paragraph): Word's «1» baseline 11.95 below the frame top = Century's
+        // win ascent 11.83 (+0.1); Oxi drew it at 10.83 (text_y_off 0 - the
+        // renderer's -1 shift uncancelled). blind-H ja/legal__0f631d46.
         if std::env::var("OXI_S1047_DISABLE").is_err()
-            && !self.doc_body_has_real_cjk
+            && (!self.doc_body_has_real_cjk
+                || (IN_HF_FRAME_LAYOUT.with(|c| c.get())
+                    && std::env::var_os("OXI_HF_FRAME_LATIN_BASE_DISABLE").is_none()))
             && !in_shape_context
             && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
             && !para_style

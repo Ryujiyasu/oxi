@@ -10441,14 +10441,33 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             measured_previous = Some(para);
                             measured_after = after;
                         } else {
-                        let est = self.estimate_para_height(
-                            para, hdr_width, grid_pitch, None, false, None, None,
-                        );
+                        let explicit_rule = matches!(para.style.line_spacing_rule.as_deref(), Some("exact" | "atLeast"));
+                        let (rb, ra) = self.cell_spacing_reset_sides(&para.style, explicit_rule, false);
+                        let sb = para.style.space_before.unwrap_or(0.0);
+                        let sa = para.style.space_after.unwrap_or(0.0);
+                        // OXI_FTR_EMPTY_ASCII (2026-10-13, default ON, opt-out _DISABLE): an
+                        // EMPTY footer paragraph off the grid is one line of its ASCII
+                        // face (S583 / S707: Word measures the ¶ mark as a Latin glyph),
+                        // not the eastAsia face the estimate takes. `_pb_ftrpagenum_gen.py`
+                        // century (theme latin Century / Jpan ＭＳ 明朝 12, frame page
+                        // number + one empty paragraph): Word's frame top 741.6 = footer
+                        // bottom 756 − 14.42 (Century's win box); Oxi 740.5 (−15.5, the
+                        // ＭＳ 明朝 line). blind-H ja/legal__0f631d46's page number −2.2.
+                        let ftr_empty = para.runs.iter().all(|r| r.text.trim().is_empty() && r.style.inline_object_image.is_none());
+                        let est = if ftr_empty
+                            && grid_pitch.is_none()
+                            && std::env::var_os("OXI_FTR_EMPTY_ASCII_DISABLE").is_none()
+                        {
+                            let mark = para.style.ppr_rpr.clone().unwrap_or_default();
+                            let size = self.resolve_font_size(&mark, &para.style);
+                            let line = Line { whitespace_paragraph: true, ..Line::default() };
+                            self.line_height_for_line(&line, &para.style, size, false, None, true)
+                                + if rb { 0.0 } else { sb }
+                                + if ra { 0.0 } else { sa }
+                        } else {
+                            self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None)
+                        };
                         if ftr_paint_spacing {
-                            let explicit_rule = matches!(para.style.line_spacing_rule.as_deref(), Some("exact" | "atLeast"));
-                            let (rb, ra) = self.cell_spacing_reset_sides(&para.style, explicit_rule, false);
-                            let sb = para.style.space_before.unwrap_or(0.0);
-                            let sa = para.style.space_after.unwrap_or(0.0);
                             // the lines alone, then the stack's own spacing model
                             let lines_only = est - if rb { 0.0 } else { sb } - if ra { 0.0 } else { sa };
                             footer_h += lines_only + ftr_prev_sa.map_or(sb, |prev| prev.max(sb));
