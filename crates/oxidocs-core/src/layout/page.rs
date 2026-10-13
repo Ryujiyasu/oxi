@@ -6923,6 +6923,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let mut saved_cursor_y = cursor.cursor_y;
                     let mut committed_float_fit = None;
                     let mut move_float_to_next_page = false;
+                    // OXI_S772_ONCE (2026-10-13, default ON, opt-out _DISABLE): a pushed
+                    // text-anchored float (S772) advanced current_page_idx in its own
+                    // branch AND again in the generic accounting below, which
+                    // recomputes pages_added from the same baseline -- every later
+                    // paragraph then looked for side-wrap bands one page too far.
+                    // probexfloattbl / probeqtbloffset: the second table's band is
+                    // registered for page 4 (index 3) while 第29条 enters with index
+                    // 4 and runs full width through the table; Word wraps beside it
+                    // (lane x1 347). The S772 note recorded zero corpus hits of this
+                    // path, so the double count was never exercised before.
+                    let mut s772_counted = false;
                     // S1468 (2026-09-18, default ON, opt-out OXI_S1468_DISABLE):
                     // promotes the OXI_FLOAT_TABLE_REFLOW checkpoint. A floating
                     // table whose remainder cannot sit in the gap above the page's
@@ -8751,6 +8762,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                             if s772_pushed {
                                 current_page_idx += pages_added;
+                                s772_counted = std::env::var_os("OXI_S772_ONCE_DISABLE").is_none();
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 if let Some(g) = s755_geom.as_ref() {
                                     start_y = g.top(pages.len() + 1);
@@ -8783,7 +8795,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         cursor.advance(s1615_extra);
                     } else {
                         let pages_added = pages.len() - pages_before;
-                        if pages_added > 0 {
+                        if pages_added > 0 && !s772_counted {
                             current_page_idx += pages_added;
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
