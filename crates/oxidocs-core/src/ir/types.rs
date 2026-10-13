@@ -2392,6 +2392,26 @@ impl Default for Margin {
     }
 }
 
+impl StyleSheet {
+    /// The package's rPrDefault, else the application's (Normal.dotm) default.
+    /// Layout and style resolution read THIS; the `doc_default_*` fields stay
+    /// what the package declares (round-trip, `application_font_fallback_keeps_
+    /// undeclared_defaults_out_of_source_ir`).
+    pub fn effective_doc_default_run_style(&self) -> Option<&RunStyle> {
+        self.doc_default_run_style.as_ref().or(self.app_default_run_style.as_ref())
+    }
+
+    /// The package's pPrDefault, else the application's default.
+    pub fn effective_doc_default_para_style(&self) -> Option<&ParagraphStyle> {
+        self.doc_default_para_style.as_ref().or(self.app_default_para_style.as_ref())
+    }
+
+    /// The package's pPrDefault jc, else the application's default.
+    pub fn effective_doc_default_alignment(&self) -> Option<Alignment> {
+        self.doc_default_alignment.or(self.app_default_alignment)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StyleSheet {
     pub styles: HashMap<String, StyleDefinition>,
@@ -2402,6 +2422,16 @@ pub struct StyleSheet {
     /// Default paragraph alignment from w:docDefaults/w:pPrDefault/w:jc
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_default_alignment: Option<Alignment>,
+    /// OXI_NORMAL_DOTM_DEFAULTS (2026-10-13): the endpoint's Normal.dotm
+    /// docDefaults, filled by the parser only for the part (rPrDefault /
+    /// pPrDefault) the package does NOT declare. Application state: never
+    /// serialized, never written back. Read through `effective_doc_default_*`.
+    #[serde(skip)]
+    pub app_default_run_style: Option<RunStyle>,
+    #[serde(skip)]
+    pub app_default_para_style: Option<ParagraphStyle>,
+    #[serde(skip)]
+    pub app_default_alignment: Option<Alignment>,
     /// Table style borders: style_id -> TableStyle (with border info from tblBorders)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub table_styles: HashMap<String, TableStyle>,

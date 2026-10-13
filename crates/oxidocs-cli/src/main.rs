@@ -2738,7 +2738,7 @@ fn build_embedded_fonts(
     }
 
     // Also collect document-level default fonts (from rPrDefault / styles)
-    if let Some(ref drs) = doc.styles.doc_default_run_style {
+    if let Some(drs) = doc.styles.effective_doc_default_run_style() {
         if let Some(ref ff) = drs.font_family_east_asia {
             if !font_names_used.contains(ff) {
                 font_names_used.push(ff.clone());

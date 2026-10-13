@@ -4061,8 +4061,7 @@ impl LayoutEngine {
     pub fn for_document(doc: &Document) -> Self {
         let default_font_size = doc
             .styles
-            .doc_default_run_style
-            .as_ref()
+            .effective_doc_default_run_style()
             .and_then(|s| s.font_size)
             // S636 (2026-06-20, default ON, opt-out OXI_S636_DISABLE): the CLEAN
             // resolution of the S610/S600 "environment-default wall". When
@@ -4101,8 +4100,7 @@ impl LayoutEngine {
             });
         let doc_regime_fs = doc
             .styles
-            .doc_default_run_style
-            .as_ref()
+            .effective_doc_default_run_style()
             .and_then(|s| s.font_size)
             .or_else(|| {
                 doc.styles
@@ -4120,19 +4118,18 @@ impl LayoutEngine {
             .or_else(|| doc.styles.styles.get("a"))
             .and_then(|st| st.paragraph.default_run_style.as_ref())
             .and_then(|rs| rs.font_size)
-            .or_else(|| doc.styles.doc_default_run_style.as_ref().and_then(|s| s.font_size))
+            .or_else(|| doc.styles.effective_doc_default_run_style().and_then(|s| s.font_size))
             .unwrap_or(default_font_size);
         let default_font_family = doc
             .styles
-            .doc_default_run_style
-            .as_ref()
+            .effective_doc_default_run_style()
             .and_then(|s| s.font_family.clone())
             .or_else(|| {
                 // A declared paragraph root without a Latin face uses the
                 // legacy application face. Resolve it without manufacturing
                 // document-declared run properties in the parser's IR.
                 doc.styles.default_paragraph_style_id.as_ref()?;
-                let cjk_language = doc.styles.doc_default_run_style.as_ref()
+                let cjk_language = doc.styles.effective_doc_default_run_style()
                     .and_then(|root| root.latin_lang.as_deref())
                     .is_some_and(|language| {
                         let language = language.to_ascii_lowercase();
@@ -4147,8 +4144,7 @@ impl LayoutEngine {
             .any(|pg| pg.blocks.iter().any(|b| block_has_aum_ja_run(b, default_font_family.as_deref())));
         let default_font_family_east_asia = doc
             .styles
-            .doc_default_run_style
-            .as_ref()
+            .effective_doc_default_run_style()
             .and_then(|s| s.font_family_east_asia.clone());
         let cjk_substitute_face = doc
             .styles
@@ -4160,8 +4156,7 @@ impl LayoutEngine {
         // quotes in the eastAsia font; a Latin lang renders them in the Latin font.
         let doc_east_asia_lang_cjk = doc
             .styles
-            .doc_default_run_style
-            .as_ref()
+            .effective_doc_default_run_style()
             .and_then(|s| s.east_asia_lang.as_deref())
             .map_or(false, |l| {
                 let l = l.to_ascii_lowercase();
@@ -4176,8 +4171,7 @@ impl LayoutEngine {
         // Latin text and the ¶ mark as East Asian.
         let doc_latin_lang_cjk = doc
             .styles
-            .doc_default_run_style
-            .as_ref()
+            .effective_doc_default_run_style()
             .and_then(|s| s.latin_lang.as_deref())
             .map_or(false, |l| {
                 let l = l.to_ascii_lowercase();
@@ -4200,8 +4194,7 @@ impl LayoutEngine {
             s1349_normal_fs,
             doc_default_sz_declared: doc
                 .styles
-                .doc_default_run_style
-                .as_ref()
+                .effective_doc_default_run_style()
                 .and_then(|r| r.font_size)
                 .is_some(),
             s1318_floor_slack: std::cell::Cell::new(0.0),

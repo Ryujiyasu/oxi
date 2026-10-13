@@ -134,7 +134,7 @@ fn main() {
     let data = std::fs::read(docx_path).expect("Cannot read docx file");
     let doc = oxidocs_core::parser::parse_docx(&data).expect("Cannot parse docx");
     DOC_KERN_ACTIVE.store(
-        doc.styles.doc_default_run_style.as_ref().and_then(|r| r.kern).map_or(false, |k| k > 0.0),
+        doc.styles.effective_doc_default_run_style().and_then(|r| r.kern).map_or(false, |k| k > 0.0),
         std::sync::atomic::Ordering::Relaxed,
     );
 

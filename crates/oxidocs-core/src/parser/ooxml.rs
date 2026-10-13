@@ -463,7 +463,7 @@ fn paragraph_base_run_style(styles: &StyleSheet, id: Option<&str>) -> RunStyle {
         .and_then(|id| styles.styles.get(id))
         .and_then(|s| s.paragraph.default_run_style.clone())
         .unwrap_or_default();
-    if let Some(defaults) = &styles.doc_default_run_style {
+    if let Some(defaults) = styles.effective_doc_default_run_style() {
         super::styles::merge_run_style(&mut base, defaults);
     }
     base
@@ -1183,8 +1183,7 @@ impl OoxmlParser {
         // SectionProperties invariants required by future L2 (per-run fs
         // inheritance) and L3 (formula recalibration) work.
         let default_font_size = styles
-            .doc_default_run_style
-            .as_ref()
+            .effective_doc_default_run_style()
             .and_then(|rs| rs.font_size)
             .or_else(|| {
                 styles
@@ -1613,15 +1612,55 @@ impl OoxmlParser {
         Some((theme_xml, styles_xml))
     }
 
+    /// OXI_NORMAL_DOTM_DEFAULTS (2026-10-13, default ON, opt-out
+    /// OXI_NORMAL_DOTM_DEFAULTS_DISABLE once the gate truth of every
+    /// pPrDefault-less doc was re-exported on this machine): a styles part with NO `<w:pPrDefault>`
+    /// (649 corpus docs, 119 with gate truth, 152 golden probes) takes the
+    /// paragraph defaults of the endpoint's Normal.dotm when Word opens it --
+    /// this machine's says after=160 line=278, the old machine's said 0 /
+    /// single. `_pb_cjkfallback_lh_gen.py` before its pPrDefault was pinned:
+    /// 26.04 between two 12pt lines in every arm = 15.56 x 278/240 + 8. The
+    /// same for a missing `<w:rPrDefault>`. Follows S1425's template lookup
+    /// (OXI_NORMAL_TEMPLATE overrides the path).
+    fn normal_dotm_defaults(&mut self, styles_xml: &str, theme: &ThemeColors) -> Option<StyleSheet> {
+        // Unit tests stay deterministic on every machine: no template read.
+        if cfg!(test) || std::env::var_os("OXI_NORMAL_DOTM_DEFAULTS_DISABLE").is_some() {
+            return None;
+        }
+        let need_ppr = !styles_xml.contains("<w:pPrDefault");
+        let need_rpr = !styles_xml.contains("<w:rPrDefault");
+        if !need_ppr && !need_rpr {
+            return None;
+        }
+        let path = std::env::var("OXI_NORMAL_TEMPLATE").ok().filter(|p| !p.trim().is_empty())
+            .or_else(|| std::env::var("APPDATA").ok().map(|a| format!("{}\\Microsoft\\Templates\\Normal.dotm", a)))?;
+        let bytes = std::fs::read(&path).ok()?;
+        let mut tpl = OoxmlParser::new(&bytes).ok()?;
+        let tpl_xml = tpl.read_part("word/styles.xml").ok()?;
+        parse_styles(&tpl_xml, theme).ok()
+    }
+
     fn parse_styles_with_theme(&mut self, theme: &ThemeColors) -> Result<StyleSheet, ParseError> {
         match self.read_part("word/styles.xml") {
             // S1370 (2026-09-13, default ON, opt-out OXI_S1370_DISABLE): see
             // LayoutEngine::cjk_ea_family. The theme's minor Jpan face when the
             // theme declares one; the layout falls back to Word's default 游明朝.
-            Ok(xml) => parse_styles(&xml, theme).map(|mut s| {
-                s.cjk_substitute_face = s1594_substitute_face(theme);
-                s
-            }),
+            Ok(xml) => {
+                let tpl = self.normal_dotm_defaults(&xml, theme);
+                parse_styles(&xml, theme).map(|mut s| {
+                    s.cjk_substitute_face = s1594_substitute_face(theme);
+                    if let Some(t) = tpl {
+                        if !xml.contains("<w:pPrDefault") {
+                            s.app_default_para_style = t.doc_default_para_style;
+                            s.app_default_alignment = t.doc_default_alignment;
+                        }
+                        if !xml.contains("<w:rPrDefault") {
+                            s.app_default_run_style = t.doc_default_run_style;
+                        }
+                    }
+                    s
+                })
+            }
             // S1594: a package without styles.xml still has its theme's face.
             Err(ParseError::MissingPart(_)) => {
                 let mut s = StyleSheet::default();
@@ -1993,7 +2032,7 @@ fn legacy_tblstyle_normal_sz(blocks: &mut [Block], styles: &StyleSheet) {
         .and_then(|r| r.font_size);
     let is_105 = |v: Option<f32>| v.map_or(false, |x| (x - 10.5).abs() < 0.01);
     if !is_105(size_of(normal_id)) { return; }
-    let dd = styles.doc_default_run_style.as_ref().and_then(|r| r.font_size)
+    let dd = styles.effective_doc_default_run_style().and_then(|r| r.font_size)
         .filter(|fs| (fs - 10.0).abs() > 0.01);
     for b in blocks.iter_mut() {
         let Block::Table(t) = b else { continue };
@@ -3408,8 +3447,7 @@ fn parse_paragraph_with_inline_images_impl(
                                 })
                                 .or_else(|| {
                                     styles
-                                        .doc_default_run_style
-                                        .as_ref()
+                                        .effective_doc_default_run_style()
                                         .and_then(|s| s.font_size)
                                 })
                                 .unwrap_or(10.5);
@@ -4218,8 +4256,7 @@ fn parse_paragraph_with_inline_images_impl(
                     .and_then(|r| r.font_size)
                     .is_none()
                 && styles
-                    .doc_default_run_style
-                    .as_ref()
+                    .effective_doc_default_run_style()
                     .and_then(|r| r.font_size)
                     .is_none()
             {
@@ -4444,7 +4481,7 @@ fn parse_paragraph_with_inline_images_impl(
     }
 
     // Apply docDefaults fallback (field-by-field merge per ECMA-376 priority)
-    if let Some(ref doc_rs) = styles.doc_default_run_style {
+    if let Some(doc_rs) = styles.effective_doc_default_run_style() {
         if let Some(ref mut para_rs) = style.default_run_style {
             if para_rs.font_size.is_none() {
                 para_rs.font_size = doc_rs.font_size;
@@ -4476,7 +4513,7 @@ fn parse_paragraph_with_inline_images_impl(
                 para_rs.kern = doc_rs.kern;
             }
         } else {
-            style.default_run_style = styles.doc_default_run_style.clone();
+            style.default_run_style = styles.effective_doc_default_run_style().cloned();
             if let Some(rs) = style.default_run_style.as_mut() {
                 rs.font_size_from_defaults = rs.font_size.is_some();
             }
@@ -4487,7 +4524,7 @@ fn parse_paragraph_with_inline_images_impl(
     // style) supplied -- they never beat a style-linked numbering level's ind.
     let s_nd = std::env::var_os("OXI_NUMIND_OVER_DOCDEFAULTS_DISABLE").is_none();
     let (mut dd_left, mut dd_first) = (false, false);
-    if let Some(ref doc_para) = styles.doc_default_para_style {
+    if let Some(doc_para) = styles.effective_doc_default_para_style() {
         if !style.has_explicit_auto_space_de && doc_para.has_explicit_auto_space_de {
             style.auto_space_de = doc_para.auto_space_de;
             style.has_explicit_auto_space_de = true;
@@ -4550,7 +4587,7 @@ fn parse_paragraph_with_inline_images_impl(
     // Inherit alignment from docDefaults pPrDefault (jc)
     // (S540: explicit jc=left must not be overridden — see has_explicit_jc)
     if !has_explicit_jc && alignment == Alignment::default() {
-        if let Some(doc_align) = styles.doc_default_alignment {
+        if let Some(doc_align) = styles.effective_doc_default_alignment() {
             alignment = doc_align;
         }
     }
@@ -4565,7 +4602,7 @@ fn parse_paragraph_with_inline_images_impl(
             .as_ref()
             .and_then(|sid| styles.styles.get(sid))
             .and_then(|d| d.alignment)
-            .or(styles.doc_default_alignment)
+            .or(styles.effective_doc_default_alignment())
             .unwrap_or_default();
         style.has_direct_alignment_off_style = alignment != chain;
     }
@@ -5224,7 +5261,7 @@ fn parse_paragraph_with_inline_images_impl(
 
     // Apply document language defaults after the paragraph style so that
     // a default never masks an explicit style or run language.
-    if let Some(defaults) = &styles.doc_default_run_style {
+    if let Some(defaults) = styles.effective_doc_default_run_style() {
         for run in &mut runs {
             if run.style.east_asia_lang.is_none() {
                 run.style.east_asia_lang = defaults.east_asia_lang.clone();
@@ -10968,7 +11005,7 @@ fn parse_run_properties(
                         } else if key == "eastAsiaTheme" {
                             if style.font_family_east_asia.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                let lit = styles.doc_default_run_style.as_ref()
+                                let lit = styles.effective_doc_default_run_style()
                                     .filter(|d| !d.east_asia_from_theme)
                                     .and_then(|d| d.font_family_east_asia.as_deref());
                                 let font = s1397_minor_ea(&val, &ctx.theme, lit);
@@ -11131,7 +11168,7 @@ fn parse_run_properties(
                             } else if key == "eastAsiaTheme" {
                                 if style.font_family_east_asia.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
-                                    let lit = styles.doc_default_run_style.as_ref()
+                                    let lit = styles.effective_doc_default_run_style()
                                         .filter(|d| !d.east_asia_from_theme)
                                         .and_then(|d| d.font_family_east_asia.as_deref());
                                     let font = s1397_minor_ea(&val, &ctx.theme, lit);
@@ -11656,8 +11693,7 @@ fn parse_table(
             // style layer may override. Run provenance distinguishes an
             // inherited size from an equal direct or character-style size.
             let dd_sz = styles
-                .doc_default_run_style
-                .as_ref()
+                .effective_doc_default_run_style()
                 .and_then(|r| r.font_size);
             for row in rows.iter_mut() {
                 for cell in row.cells.iter_mut() {
@@ -13975,9 +14011,9 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
     }
     // Apply docDefaults fallback
     if style.default_run_style.is_none() {
-        style.default_run_style = styles.doc_default_run_style.clone();
+        style.default_run_style = styles.effective_doc_default_run_style().cloned();
     }
-    if let Some(ref doc_para) = styles.doc_default_para_style {
+    if let Some(doc_para) = styles.effective_doc_default_para_style() {
         if !style.has_explicit_auto_space_de && doc_para.has_explicit_auto_space_de {
             style.auto_space_de = doc_para.auto_space_de;
             style.has_explicit_auto_space_de = true;
