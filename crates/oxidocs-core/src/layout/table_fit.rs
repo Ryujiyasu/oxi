@@ -8777,6 +8777,20 @@ impl<'a> TableFitLayouter<'a> {
                                             let mut asc = 0.0f32;
                                             let mut desc = 0.0f32;
                                             let mut all_cjk = true;
+                                            let mut any_cjk = false;
+                                            // OXI_CELL_NATBOX_MIXED (2026-10-14, OPT-IN, see below): a cell line mixing a CJK face with another
+                                            // face (a Segoe UI Symbol check mark beside BIZ UD Mincho)
+                                            // takes the UNION box -- the max centred ascent (CJK: win
+                                            // ascent + half the 83/64 excess; other: baseline ascent)
+                                            // plus the max descent -- centred in the line, and every
+                                            // fragment sits on that one baseline
+                                            // (`_pb_symbol_fallback_face_gen.py` bizud_chk: Word 16.2
+                                            // pitch with the baseline at Segoe's 12.95;
+                                            // forms__02281020's two check-mark rows sat 1.3 high once
+                                            // the row itself was right).
+                                            let mut c_max = 0.0f32;
+                                            let mut d_max = 0.0f32;
+                                            let (mut f8_small, mut f8_large) = (f32::INFINITY, 0.0f32);
                                             for (text, fs, _, bold, italic, _, _, _, font_family, _, _, _, _, _, ea, _, _) in line.iter() {
                                                 if text.trim().is_empty() {
                                                     continue;
@@ -8791,12 +8805,41 @@ impl<'a> TableFitLayouter<'a> {
                                                     rs.has_explicit_east_asia = true;
                                                 }
                                                 let m = &*self.metrics_for_text(text, &rs, &para.style);
-                                                all_cjk &= m.is_cjk_83_64_font();
+                                                let cjk = m.is_cjk_83_64_font();
+                                                all_cjk &= cjk;
+                                                any_cjk |= cjk;
                                                 asc = asc.max(m.win_ascent * fs);
                                                 desc = desc.max(m.win_descent * fs);
+                                                let (c, d) = if cjk {
+                                                    let win = (m.win_ascent + m.win_descent) * fs;
+                                                    let nat = win * (83.0 / 64.0);
+                                                    let c = m.win_ascent * fs + (nat - win) * 0.5;
+                                                    (c, nat - c)
+                                                } else {
+                                                    let c = m.baseline_ascent() * fs;
+                                                    (c, (m.word_line_height_no_grid(*fs) - c).max(0.0))
+                                                };
+                                                c_max = c_max.max(c);
+                                                d_max = d_max.max(d);
+                                                let f8 = &*self.registry.get_with_style(
+                                                    font_family.as_deref().unwrap_or("Calibri"), *bold, *italic);
+                                                let a8 = f8.baseline_ascent() * fs;
+                                                f8_small = f8_small.min(a8);
+                                                f8_large = f8_large.max(a8);
                                             }
                                             if all_cjk && asc > 0.0 {
                                                 1.0 + ((lh - (asc + desc)) / 2.0).max(0.0)
+                                            } else if any_cjk && asc > 0.0
+                                                // opt-in (2026-10-14): on 02157cbe's «(フリガナ)» (Century 8pt
+                                                // parens + ＭＳ 明朝) it moved the line 0.7 the wrong way and the
+                                                // explicit shared baseline did not fire -- re-derive with a cell probe
+                                                && std::env::var_os("OXI_CELL_NATBOX_MIXED").is_some()
+                                                && f8_large > f8_small + 0.001
+                                            {
+                                                // the shared-baseline block below paints every
+                                                // fragment at text_y_off - 1 + f8_large
+                                                let b = ((lh - (c_max + d_max)) / 2.0).max(0.0) + c_max;
+                                                1.0 + b - f8_large
                                             } else {
                                                 cell_text_y_off
                                             }
