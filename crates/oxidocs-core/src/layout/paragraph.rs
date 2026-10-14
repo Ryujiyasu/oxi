@@ -7442,6 +7442,36 @@ impl<'a> ParagraphLayouter<'a> {
                     }
                 })
             };
+            // OXI_LATIN_MIXED_FACE_BASELINE (2026-10-14, default ON, opt-out _DISABLE):
+            // a pure-Latin line whose faces have different ascents shares one
+            // baseline too. `_pb_symbol_fallback_face_gen.py` calibri_chk: Word
+            // draws «a✔b» (Calibri + Segoe UI Symbol, both 12pt) on one baseline
+            // 16.22 below the previous (Segoe's 1.079 em), Oxi put the ✔ 1.53
+            // below its neighbours. CJK lines keep their own law (the body
+            // baseline rule / the calibrated grid stack).
+            let line_has_mixed_sizes = line_has_mixed_sizes
+                || (std::env::var_os("OXI_LATIN_MIXED_FACE_BASELINE_DISABLE").is_none() && {
+                    let mut seen: Option<f32> = None;
+                    let mut cjk = false;
+                    let mixed = line.fragments.iter().any(|f| {
+                        if f.text.trim().is_empty() {
+                            return false;
+                        }
+                        let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                        if m.is_cjk_83_64_font() {
+                            cjk = true;
+                        }
+                        let a = m.baseline_ascent() * f.style.font_size.unwrap_or(para_font_size);
+                        match seen {
+                            None => {
+                                seen = Some(a);
+                                false
+                            }
+                            Some(x) => (a - x).abs() > 0.05,
+                        }
+                    });
+                    mixed && !cjk
+                });
 
             // R-10: track whether any fragment on this line came from a
             // revision-bearing source run; if so we emit one change-bar at
