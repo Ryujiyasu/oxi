@@ -16826,10 +16826,20 @@ cells={} pitch={:.2} text={:?}",
                     && std::env::var_os("OXI_HF_FRAME_LATIN_BASE_DISABLE").is_none()))
             && !in_shape_context
             && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
-            && !para_style
-                .list_marker
-                .as_deref()
-                .map_or(false, |m| m.contains('\u{F0B7}'))
+            // OXI_BULLET_UNION_BASELINE (2026-10-14, default ON, opt-out _DISABLE):
+            // a Symbol-bullet line follows the Latin law too, with the line's
+            // baseline at the larger of the text ascent and the Symbol marker's
+            // ascent. `_pb_symbol_bullet_base_gen.py` (Word PDF, no-type grid
+            // 360): Calibri 11pt bullet lines sit 0.6 lower than a plain line
+            // (the Symbol face's 11.06 ascent over Calibri's 10.47) at every
+            // multiple, Century Gothic's (11.07) do not move. Oxi's calibrated
+            // bullet placement was right only at 1.15x (1.0x: -1.0, 1.08x: -0.5;
+            // blind-G en/correspondence__00afe08d, en/creative__03aea325).
+            && (std::env::var_os("OXI_BULLET_UNION_BASELINE_DISABLE").is_none()
+                || !para_style
+                    .list_marker
+                    .as_deref()
+                    .map_or(false, |m| m.contains('\u{F0B7}')))
             && !(matches!(
                 para_style.text_alignment.as_deref(),
                 Some("baseline") | Some("top")
@@ -16866,15 +16876,20 @@ cells={} pitch={:.2} text={:?}",
                 // en/reports__009e23be (every paragraph line=220) sat 0.8pt low
                 // in the body and 1.4pt in its 18pt title.
                 let factor = para_style.line_spacing.unwrap_or(1.0);
-                if factor < 0.999 && std::env::var_os("OXI_SUBMULT_BASELINE_DISABLE").is_none() {
-                    let a = line.fragments.iter()
-                        .filter(|f| !f.text.trim().is_empty())
-                        .map(|f| {
-                            let fs = f.style.font_size.unwrap_or(para_font_size);
-                            self.metrics_for_text(&f.text, &f.style, para_style).baseline_ascent() * fs
-                        })
-                        .fold(0.0_f32, f32::max);
-                    return comp - a * (1.0 - factor);
+                let a_text = line.fragments.iter()
+                    .filter(|f| !f.text.trim().is_empty())
+                    .map(|f| {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        self.metrics_for_text(&f.text, &f.style, para_style).baseline_ascent() * fs
+                    })
+                    .fold(0.0_f32, f32::max);
+                // (the Symbol marker's larger ascent is already applied by S821 as
+                // line growth at the paragraph entry, so the line's own law suffices)
+                let b = a_text;
+                let m = if factor < 0.999 && std::env::var_os("OXI_SUBMULT_BASELINE_DISABLE").is_none() { factor } else { 1.0 };
+                if a_text > 0.0 {
+                    // renderer: baseline = y + text_y_off - 1 + a_text; wanted y + b * m
+                    return comp + b * m - a_text;
                 }
                 return comp;
             }
