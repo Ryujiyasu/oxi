@@ -16850,10 +16850,33 @@ cells={} pitch={:.2} text={:?}",
                     .is_cjk_83_64_font()
             };
             if all_latin {
-                return std::env::var("OXI_S1047_COMP")
+                let comp = std::env::var("OXI_S1047_COMP")
                     .ok()
                     .and_then(|v| v.parse::<f32>().ok())
                     .unwrap_or(1.0);
+                // OXI_SUBMULT_BASELINE (2026-10-14, default ON, opt-out _DISABLE):
+                // an auto multiple BELOW one scales both parts of the box, so the
+                // baseline sits at ascent x multiple below the line top (the >1
+                // case keeps the ascent and puts the extra below, S1047).
+                // `_pb_submult_line_gen.py` (Arial, Word PDF): first baseline
+                // 10.32 at 240, 9.48 / 8.64 / 7.68 at 220 / 200 / 180 (11pt);
+                // 16.82 -> 15.50 / 14.18 / 12.62 (18pt); the descent part grows
+                // to match (18pt at 220: 3.55 to the next line, Oxi 2.09). Oxi
+                // kept the full ascent and cut the bottom: blind-G
+                // en/reports__009e23be (every paragraph line=220) sat 0.8pt low
+                // in the body and 1.4pt in its 18pt title.
+                let factor = para_style.line_spacing.unwrap_or(1.0);
+                if factor < 0.999 && std::env::var_os("OXI_SUBMULT_BASELINE_DISABLE").is_none() {
+                    let a = line.fragments.iter()
+                        .filter(|f| !f.text.trim().is_empty())
+                        .map(|f| {
+                            let fs = f.style.font_size.unwrap_or(para_font_size);
+                            self.metrics_for_text(&f.text, &f.style, para_style).baseline_ascent() * fs
+                        })
+                        .fold(0.0_f32, f32::max);
+                    return comp - a * (1.0 - factor);
+                }
+                return comp;
             }
         }
         // S670 (2026-06-25, default ON, opt-out OXI_S670_DISABLE): LATIN analog of S614.
