@@ -3126,8 +3126,19 @@ pub(crate) fn ascdesc_mix_height<'a>(items: impl Iterator<Item = (&'a FontMetric
     for (m, fs) in items {
         // The descent of the box that governs the face's line: typo for a
         // USE_TYPO_METRICS face (Cambria Math's win box is 5.58em), else win.
-        let desc = if m.use_typo_metrics && m.typo_descent > 0.0 { m.typo_descent } else { m.win_descent } * fs;
-        a = a.max(m.natural_line_height_hhea(fs) - desc);
+        // OXI_ASCDESC_TYPO_BOX (2026-10-14): the ASCENT part of a USE_TYPO_METRICS
+        // face comes from its typo box too -- Cambria Math's hhea box is 5.58em,
+        // and once a non-breaking hyphen is its own fragment (symbol fallback)
+        // the hhea reading opened a 9pt Arial line to 50pt (en/legal__003ac6a4).
+        let (box_h, desc) = if m.use_typo_metrics && m.typo_descent > 0.0
+            && std::env::var_os("OXI_ASCDESC_TYPO_BOX_DISABLE").is_none()
+        {
+            ((m.typo_ascent + m.typo_descent + m.typo_line_gap) * fs, m.typo_descent * fs)
+        } else {
+            let desc = if m.use_typo_metrics && m.typo_descent > 0.0 { m.typo_descent } else { m.win_descent } * fs;
+            (m.natural_line_height_hhea(fs), desc)
+        };
+        a = a.max(box_h - desc);
         d = d.max(desc);
     }
     a + d
@@ -6151,6 +6162,40 @@ impl LayoutEngine {
                 // them. Coverage and the platform mapping choose the family;
                 // the applied paragraph-mark controls have no glyph font box.
                 let family = family.map(|name| (name.to_owned(), 1.0)).or_else(|| {
+                    // OXI_SYMBOL_FALLBACK_FRAG (2026-10-14, default ON, opt-out
+                    // _DISABLE): a symbol the drawn face lacks becomes its own
+                    // fragment in the S1119 chain face (Courier New -> Cambria
+                    // Math -> Segoe UI Symbol), read off the installed fonts'
+                    // cmaps, in every document. `_pb_symbol_fallback_face_gen.py`
+                    // (30 arms): Word draws U+2714 / U+2611 in SegoeUISymbol
+                    // beside BIZ UD明朝, 游ゴシック and Calibri (ＭＳ 明朝 / ゴシック
+                    // and Meiryo cover them), and the line takes the union box on
+                    // one baseline: BIZ UD 12pt 15.6 -> 16.2, Calibri 14.64 ->
+                    // 16.22 above the baseline. Oxi kept the base face (S1119 is
+                    // gated to Latin documents and pure-symbol runs; BIZ UD has
+                    // no coverage table), so forms__02281020's two «✔» rows were
+                    // 0.6 short and the page below them stepped -1.2.
+                    // A symbol in a CJK-face run keeps the base face: Word draws
+                    // it in Segoe UI Symbol too, but BREAKS it as a full cell --
+                    // `_pb_ambiguous_symbol_capacity_gen.py` (20 arms): ☐, ✔ and
+                    // 庚 all leave the line between cell widths 97.25 and 97.5,
+                    // whatever the document's East Asian language -- which is
+                    // what the base face already gives it here. (Its line box,
+                    // which Word does take from the symbol face, is still open.)
+                    if std::env::var_os("OXI_SYMBOL_FALLBACK_FRAG_DISABLE").is_some()
+                        || crate::font::sym_range_index(ch).is_none()
+                        || ch.is_whitespace()
+                        || crate::font::runtime::font_file_for(base, false, false).is_none()
+                        || crate::font::shape::family_covers(base, ch)
+                        || metrics.is_cjk_83_64_font()
+                    {
+                        return None;
+                    }
+                    ["Courier New", "Cambria Math", "Segoe UI Symbol"]
+                        .iter()
+                        .find(|f| crate::font::shape::family_covers(f, ch))
+                        .map(|f| (f.to_string(), 1.0))
+                }).or_else(|| {
                     // Formatting controls and Unicode line/paragraph
                     // separators belong to flow, not glyph font fallback.
                     if !ch.is_whitespace() || ch.is_control()
@@ -14879,13 +14924,21 @@ cells={} pitch={:.2} text={:?}",
                 }
                 let fs = frag.style.font_size.unwrap_or(para_font_size);
                 let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
-                let (asc, des) = (m.word_ascent_pt(fs), m.word_descent_pt(fs));
+                // Exact faces: the union is measured, not pixel-rounded (a Segoe UI
+                // Symbol ✔ beside BIZ UD明朝 12pt is 12.95 + 3.22 = 16.17 in Word;
+                // the rounded sets gave 15.94, under the symbol face's own 15.96).
                 let (a, d) = if m.is_cjk_83_64_font() {
-                    let nat = asc + des;
-                    let a = m.win_ascent * fs + (nat - (m.win_ascent + m.win_descent) * fs) * 0.5;
+                    let win = (m.win_ascent + m.win_descent) * fs;
+                    let nat = win * (83.0 / 64.0);
+                    let a = m.win_ascent * fs + (nat - win) * 0.5;
                     (a, nat - a)
                 } else {
-                    (asc, des)
+                    // the face's no-grid line (the S1119 fold's own measure: Cambria
+                    // Math 21.09 at 18pt), not its hhea/win box -- Cambria Math's
+                    // 5.6-em hhea box opened a 9pt non-breaking hyphen's line 40pt
+                    let a = m.baseline_ascent() * fs;
+                    let nat = m.word_line_height_no_grid(fs);
+                    (a, (nat - a).max(0.0))
                 };
                 ua = ua.max(a);
                 ud = ud.max(d);
@@ -15596,13 +15649,21 @@ cells={} pitch={:.2} text={:?}",
                 }
                 let fs = frag.style.font_size.unwrap_or(para_font_size);
                 let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
-                let (asc, des) = (m.word_ascent_pt(fs), m.word_descent_pt(fs));
+                // Exact faces: the union is measured, not pixel-rounded (a Segoe UI
+                // Symbol ✔ beside BIZ UD明朝 12pt is 12.95 + 3.22 = 16.17 in Word;
+                // the rounded sets gave 15.94, under the symbol face's own 15.96).
                 let (a, d) = if m.is_cjk_83_64_font() {
-                    let nat = asc + des;
-                    let a = m.win_ascent * fs + (nat - (m.win_ascent + m.win_descent) * fs) * 0.5;
+                    let win = (m.win_ascent + m.win_descent) * fs;
+                    let nat = win * (83.0 / 64.0);
+                    let a = m.win_ascent * fs + (nat - win) * 0.5;
                     (a, nat - a)
                 } else {
-                    (asc, des)
+                    // the face's no-grid line (the S1119 fold's own measure: Cambria
+                    // Math 21.09 at 18pt), not its hhea/win box -- Cambria Math's
+                    // 5.6-em hhea box opened a 9pt non-breaking hyphen's line 40pt
+                    let a = m.baseline_ascent() * fs;
+                    let nat = m.word_line_height_no_grid(fs);
+                    (a, (nat - a).max(0.0))
                 };
                 ua = ua.max(a);
                 ud = ud.max(d);

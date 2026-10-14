@@ -439,7 +439,8 @@ impl FontMetrics {
     /// max(win, hhea) metrics — the raw font line height before any
     /// paragraph-level minimums or spacing multipliers.
     pub fn line_height_ratio(&self) -> f32 {
-        let win_height = self.win_ascent + self.win_descent;
+        let (wa, wd) = self.word_box_parts();
+        let win_height = wa + wd;
         let hhea_height = self.ascent + self.descent + self.line_gap;
         win_height.max(hhea_height)
     }
@@ -481,14 +482,36 @@ impl FontMetrics {
         }
 
         let ppem = (font_size * 96.0 / 72.0).round();
-        let font_ascent = pixel_round(self.win_ascent, ppem);
+        let (wa, wd) = self.word_box_parts();
+        let font_ascent = pixel_round(wa, ppem);
 
-        let win_total = self.win_ascent + self.win_descent;
+        let win_total = wa + wd;
         let hhea_total = self.ascent + self.descent + self.line_gap;
         let hhea_excess = (hhea_total - win_total).max(0.0);
         let extra_leading = pixel_round(hhea_excess, ppem);
 
         (font_ascent + extra_leading) * 15.0 / 20.0
+    }
+
+    /// OXI_WORD_BOX_TYPO (2026-10-14, default ON, opt-out _DISABLE): the box
+    /// `word_ascent_pt` / `word_descent_pt` fold from. A USE_TYPO_METRICS face
+    /// whose win box is more than twice its typo box (Cambria Math: 5.58em
+    /// against 1.17em, the stretchy math glyphs) folds its typo box instead --
+    /// Word sizes an Arial line carrying a Cambria Math non-breaking hyphen at
+    /// 13.94 (12pt), not 50 (en/legal__003ac6a4 once the hyphen became its own
+    /// fragment). Every other face keeps its win box.
+    fn word_box_parts(&self) -> (f32, f32) {
+        let typo = self.typo_ascent + self.typo_descent + self.typo_line_gap;
+        if self.use_typo_metrics
+            && self.typo_descent > 0.0
+            && typo > 0.0
+            && (self.win_ascent + self.win_descent) > 2.0 * typo
+            && std::env::var_os("OXI_WORD_BOX_TYPO_DISABLE").is_none()
+        {
+            (self.typo_ascent + self.typo_line_gap, self.typo_descent)
+        } else {
+            (self.win_ascent, self.win_descent)
+        }
     }
 
     /// Descent component in points.
@@ -501,7 +524,8 @@ impl FontMetrics {
         }
 
         let ppem = (font_size * 96.0 / 72.0).round();
-        let font_descent = pixel_round(self.win_descent, ppem);
+        let (_, wd) = self.word_box_parts();
+        let font_descent = pixel_round(wd, ppem);
 
         font_descent * 15.0 / 20.0
     }
@@ -541,7 +565,8 @@ impl FontMetrics {
             return self.east_asian_design_line_height(font_size);
         }
         // Non-CJK: direct twips calculation, no pixel rounding
-        let win_sum = self.win_ascent + self.win_descent;
+        let (wa, wd) = self.word_box_parts();
+        let win_sum = wa + wd;
         let tw = win_sum * font_size * 20.0;
         (tw / 10.0).floor() * 10.0 / 20.0
     }
@@ -636,8 +661,9 @@ impl FontMetrics {
     /// Used when adjustLineHeightInTable=true (compat65).
     pub fn word_line_height_standard(&self, font_size: f32) -> f32 {
         let ppem = (font_size * 96.0 / 72.0).round();
-        let font_ascent = pixel_round(self.win_ascent, ppem);
-        let win_total = self.win_ascent + self.win_descent;
+        let (wa, wd) = self.word_box_parts();
+        let font_ascent = pixel_round(wa, ppem);
+        let win_total = wa + wd;
         let hhea_total = self.ascent + self.descent + self.line_gap;
         let hhea_excess = (hhea_total - win_total).max(0.0);
         let extra_leading = pixel_round(hhea_excess, ppem);
@@ -650,8 +676,9 @@ impl FontMetrics {
     /// instead of ceil, resulting in 1px smaller height for some font/size combinations.
     pub fn word_line_height_table_cell(&self, font_size: f32) -> f32 {
         let ppem = (font_size * 96.0 / 72.0).round();
-        let font_ascent = pixel_round(self.win_ascent, ppem);
-        let font_descent = (self.win_descent * ppem).floor(); // floor for table cells
+        let (wa, wd) = self.word_box_parts();
+        let font_ascent = pixel_round(wa, ppem);
+        let font_descent = (wd * ppem).floor(); // floor for table cells
         let base = (font_ascent + font_descent) * 72.0 / 96.0;
         if self.is_cjk_83_64_font() {
             let raw = base * 83.0 / 64.0;
