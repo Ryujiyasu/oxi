@@ -7715,6 +7715,12 @@ impl<'a> TableFitLayouter<'a> {
                                                             base + fb.natural_line_height_hhea(*fs)
                                                                 - metrics.natural_line_height_hhea(*fs)
                                                         }
+                                                        // OXI_SYMBOL_CHAIN_FOLD: the cell line box of a run
+                                                        // whose face lacks a symbol grows by the chain
+                                                        // face's extra ascent (forms__02281020's ✔ rows)
+                                                        None if matches!(effective_line_rule, None | Some("auto")) => {
+                                                            base + self.symbol_chain_extra(_text, metrics, *fs)
+                                                        }
                                                         None => base,
                                                     }
                                                 },
@@ -8389,6 +8395,7 @@ impl<'a> TableFitLayouter<'a> {
                                         }
                                         let m = &*self.metrics_for_text(text, &rs, &para.style);
                                         m.word_line_height_table_cell(*fs)
+                                            + self.symbol_chain_extra(text, m, *fs)
                                     })
                                     .fold(0.0_f32, f32::max)
                                         };
@@ -8828,7 +8835,23 @@ impl<'a> TableFitLayouter<'a> {
                                                 f8_large = f8_large.max(a8);
                                             }
                                             if all_cjk && asc > 0.0 {
-                                                1.0 + ((lh - (asc + desc)) / 2.0).max(0.0)
+                                                // OXI_SYMBOL_CHAIN_FOLD: a symbol the face lacks grows the
+                                                // line's ascent; the centred box moves down by half of it
+                                                let chain = line.iter()
+                                                    .filter(|t| !t.0.trim().is_empty())
+                                                    .map(|t| {
+                                                        let mut rs = RunStyle::default();
+                                                        rs.font_size = Some(t.1); rs.bold = t.3; rs.italic = t.4;
+                                                        if let Some(ff) = &t.8 { rs.font_family = Some(ff.clone()); }
+                                                        if let Some(e) = &t.14 {
+                                                            rs.font_family_east_asia = Some(e.clone());
+                                                            rs.has_explicit_east_asia = true;
+                                                        }
+                                                        let m = &*self.metrics_for_text(&t.0, &rs, &para.style);
+                                                        self.symbol_chain_extra(&t.0, m, t.1)
+                                                    })
+                                                    .fold(0.0_f32, f32::max);
+                                                1.0 + ((lh - (asc + desc + chain)) / 2.0).max(0.0) + chain
                                             } else if any_cjk && asc > 0.0
                                                 // opt-in (2026-10-14): on 02157cbe's «(フリガナ)» (Century 8pt
                                                 // parens + ＭＳ 明朝) it moved the line 0.7 the wrong way and the

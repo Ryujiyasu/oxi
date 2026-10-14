@@ -3174,7 +3174,8 @@ impl<'a> ParagraphLayouter<'a> {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         let border_pad = LayoutEngine::run_border_height_pad(&frag.style);
-                        ma = ma.max(m.word_ascent_pt(fs) + border_pad);
+                        // OXI_SYMBOL_CHAIN_FOLD: the fourth site (the cumulative basis)
+                        ma = ma.max(m.word_ascent_pt(fs) + border_pad + self.symbol_chain_extra(&frag.text, m, fs));
                         md = md.max(m.word_descent_pt(fs) + border_pad);
                         if !frag.text.chars().all(|c| kinsoku::is_cjk(c)) {
                             has_latin = true;
@@ -3396,6 +3397,9 @@ impl<'a> ParagraphLayouter<'a> {
                         };
                         let border_extra = 2.0 * LayoutEngine::run_border_height_pad(&frag.style);
                         h += border_extra;
+                        // OXI_SYMBOL_CHAIN_FOLD: the third site (the cursor advance basis)
+                        let chain_extra = self.symbol_chain_extra(&frag.text, &*m, fs);
+                        h += chain_extra;
                         match &s1119_faces {
                             Some(fs_list) => {
                                 let hh = fs_list
@@ -3424,6 +3428,7 @@ impl<'a> ParagraphLayouter<'a> {
                                 .fold(0.0f32, f32::max),
                             None => (m.win_ascent + m.win_descent) * fs,
                         };
+                        raw += chain_extra;
                         // S612z-circle (2026-06-23): embedded Zen Old Mincho renders CIRCLED
                         // NUMBERS (①-⑳) in its deep-win-descent box (1.448em = 17.376@12pt)
                         // while kanji fall back to MS Mincho (15.56). DERIVED from the Word
@@ -3470,7 +3475,8 @@ impl<'a> ParagraphLayouter<'a> {
                             {
                                 b = b.max(fs * 1448.0 / 1000.0);
                             }
-                            b += border_extra;
+                            // OXI_SYMBOL_CHAIN_FOLD: the fifth site (the S1363 box is the basis)
+                            b += border_extra + chain_extra;
                             if b > s1363_box_max {
                                 s1363_box_max = b;
                             }
@@ -7586,7 +7592,8 @@ impl<'a> ParagraphLayouter<'a> {
                     } else {
                         m.baseline_ascent()
                     };
-                    ascent * size
+                    // OXI_SYMBOL_CHAIN_FOLD: a symbol the face lacks lifts the baseline
+                    ascent * size + self.symbol_chain_extra(&f.text, m, size)
                 }).fold(0.0_f32, f32::max))
             } else if std::env::var_os("OXI_BODY_CJK_BASELINE").is_some()
                 && !is_header_footer

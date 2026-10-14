@@ -6143,6 +6143,52 @@ impl LayoutEngine {
         }
     }
 
+    /// OXI_SYMBOL_CHAIN_FOLD (2026-10-14, default ON, opt-out _DISABLE): the ascent
+    /// a run's text needs beyond its own face for the symbols that face lacks.
+    /// Word draws such a symbol in the S1119 chain face (Courier New -> Cambria
+    /// Math -> Segoe UI Symbol), keeps the run's own cell for breaking, and
+    /// sizes the line by the union: `_pb_symbol_fallback_face_gen.py`
+    /// bizud_chk / bizud_box (BIZ UD明朝 12pt + U+2714 / U+2610): the line is
+    /// 16.2 with the baseline at Segoe's 12.95 over BIZ's centred 12.34;
+    /// forms__02281020's two check-mark rows were 0.6 short. Read off the
+    /// installed cmaps (the base must be installed to know it lacks the glyph).
+    pub(crate) fn symbol_chain_extra(&self, text: &str, m: &crate::font::FontMetrics, fs: f32) -> f32 {
+        if text.is_empty()
+            || std::env::var_os("OXI_SYMBOL_CHAIN_FOLD_DISABLE").is_some()
+            || !text.chars().any(|c| crate::font::sym_range_index(c).is_some() && !c.is_whitespace())
+        {
+            return 0.0;
+        }
+        let base = crate::font::render_family_name(&m.family);
+        if crate::font::runtime::font_file_for(base, false, false).is_none() {
+            return 0.0;
+        }
+        let a_base = if m.is_cjk_83_64_font() {
+            let win = (m.win_ascent + m.win_descent) * fs;
+            let nat = win * (83.0 / 64.0);
+            m.win_ascent * fs + (nat - win) * 0.5
+        } else {
+            m.baseline_ascent() * fs
+        };
+        let mut extra = 0.0_f32;
+        for ch in text.chars() {
+            if crate::font::sym_range_index(ch).is_none()
+                || ch.is_whitespace()
+                || crate::font::shape::family_covers(base, ch)
+            {
+                continue;
+            }
+            if let Some(f) = ["Courier New", "Cambria Math", "Segoe UI Symbol"]
+                .iter()
+                .find(|f| crate::font::shape::family_covers(f, ch))
+            {
+                let cm = &*self.registry.get(f);
+                extra = extra.max(cm.baseline_ascent() * fs - a_base);
+            }
+        }
+        extra.max(0.0)
+    }
+
     // Resolve on the private layout copy so measurement and painting agree.
     fn resolve_cjk_fallback_runs(&self, runs: &mut Vec<Run>, style: &ParagraphStyle) {
         let mut resolved = Vec::with_capacity(runs.len());
@@ -14951,7 +14997,7 @@ cells={} pitch={:.2} text={:?}",
                     let nat = m.word_line_height_no_grid(fs);
                     (a, (nat - a).max(0.0))
                 };
-                ua = ua.max(a);
+                ua = ua.max(a + self.symbol_chain_extra(&frag.text, m, fs));
                 ud = ud.max(d);
             }
             if plain && ua + ud > 0.0 {
@@ -15676,7 +15722,7 @@ cells={} pitch={:.2} text={:?}",
                     let nat = m.word_line_height_no_grid(fs);
                     (a, (nat - a).max(0.0))
                 };
-                ua = ua.max(a);
+                ua = ua.max(a + self.symbol_chain_extra(&frag.text, m, fs));
                 ud = ud.max(d);
             }
             if plain && ua + ud > max_combined {
@@ -22055,6 +22101,7 @@ cells={} pitch={:.2} text={:?}",
                             // The cell's device-metric height remains a floor;
                             // actual text layout may require additional height.
                             render_lh.max(metrics.word_line_height_table_cell(font_size))
+                                + self.symbol_chain_extra(&run.text, metrics, font_size)
                         }
                     } else if (!in_cell
                             || (std::env::var_os("OXI_CELL_RENDER_LH_DISABLE").is_none()
@@ -22113,6 +22160,7 @@ cells={} pitch={:.2} text={:?}",
                         metrics.natural_line_height_hhea(font_size)
                     } else {
                         metrics.word_line_height_table_cell(font_size)
+                            + self.symbol_chain_extra(&run.text, metrics, font_size)
                     }
                 } else {
                     // Typed-grid multiple spacing must use the same grid in the
