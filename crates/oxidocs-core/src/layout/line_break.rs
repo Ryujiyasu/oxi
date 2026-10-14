@@ -1692,10 +1692,18 @@ impl<'a> LineBreaker<'a> {
                 // fallback from a run whose declared eastAsia face is Latin-only
                 // (compat 12 word wrap) is still one word with its neighbours;
                 // the face change is render-only.
-                let legacy_fallback_pair = std::env::var_os("OXI_LEGACY_WRAP_FALLBACK_DISABLE").is_none()
+                // OXI_FALLBACK_SEAM (2026-10-14, default ON, opt-out _DISABLE): the
+                // same for EVERY fragment the per-character fallback cut from its run
+                // -- a Cambria Math NON-BREAKING HYPHEN (U+2011) inside an Arial
+                // word must not open the word at the seam (en/legal__003ac6a4:
+                // 7 such hyphens, the page's lines re-broke at them).
+                let legacy_fallback_pair = (std::env::var_os("OXI_LEGACY_WRAP_FALLBACK_DISABLE").is_none()
                     && (self.compat_mode <= 12 || !self.compat_mode_explicit)
                     && (previous_style.fallback_declared_latin == Some(true)
-                        || style.fallback_declared_latin == Some(true));
+                        || style.fallback_declared_latin == Some(true)))
+                    || (std::env::var_os("OXI_FALLBACK_SEAM_DISABLE").is_none()
+                        && (previous_style.fallback_declared_latin.is_some()
+                            || style.fallback_declared_latin.is_some()));
                 let metric_style_boundary = std::env::var_os("OXI_RUN_STYLE_SEGMENTS_DISABLE").is_none()
                     && (previous_style.font_size != style.font_size
                         || (!legacy_fallback_pair
