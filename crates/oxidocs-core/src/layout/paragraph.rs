@@ -7470,7 +7470,11 @@ impl<'a> ParagraphLayouter<'a> {
                             Some(x) => (a - x).abs() > 0.05,
                         }
                     });
-                    mixed && !cjk
+                    // OXI_ATLEAST_UNION_CELL: an exact / atLeast line mixing a CJK face
+                    // shares the baseline too (Word: Times text and its MS-Mincho comma
+                    // at one origin; the 水 arm the same); auto lines have their own law.
+                    mixed && (!cjk || (matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"))
+                        && std::env::var_os("OXI_ATLEAST_UNION_CELL_DISABLE").is_none()))
                 });
 
             // R-10: track whether any fragment on this line came from a

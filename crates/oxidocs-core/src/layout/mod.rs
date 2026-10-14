@@ -17043,6 +17043,24 @@ cells={} pitch={:.2} text={:?}",
                         }
                         if let Some((fs, win_ascent)) = fs_a {
                             let origin_term = if s1356 { 1.0 } else { 0.0 };
+                            // OXI_ATLEAST_UNION_CELL: a MIXED exact line (a CJK face
+                            // beside another) converts through the line's largest
+                            // baseline ascent, the maximum the shared-baseline shift
+                            // (S1358) brings the other faces to -- so ＭＳ 明朝 text and
+                            // a Century «15%» both sit at 0.8 L (blind-G forms__02157cbe;
+                            // `_pb_exact_mixed_desc_gen.py` ex480 / ex300).
+                            let (mut any_cjk, mut any_lat, mut a_max) = (false, false, 0.0_f32);
+                            if std::env::var_os("OXI_ATLEAST_UNION_CELL_DISABLE").is_none() {
+                                for f in line.fragments.iter().filter(|f| !f.text.trim().is_empty()) {
+                                    let ffs = f.style.font_size.unwrap_or(para_font_size);
+                                    let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
+                                    if m.is_cjk_83_64_font() { any_cjk = true; } else { any_lat = true; }
+                                    a_max = a_max.max(m.baseline_ascent() * ffs);
+                                }
+                            }
+                            if any_cjk && any_lat && a_max > 0.0 {
+                                return 0.8 * lh + origin_term - a_max;
+                            }
                             return 0.8 * lh + origin_term - win_ascent * fs;
                         }
                     }
@@ -17118,7 +17136,45 @@ cells={} pitch={:.2} text={:?}",
                 } else {
                     None
                 };
+                // OXI_ATLEAST_UNION_CELL (2026-10-14, default ON, opt-out _DISABLE):
+                // in a LATIN document an atLeast line carrying a CJK fallback glyph
+                // is bottom-aligned on the UNION descent: baseline = top + L - max
+                // descent, with a 83/64 face's descent read from its centred box.
+                // `_pb_exact_mixed_desc_gen.py` (Times New Roman 12pt, atLeast 480,
+                // U+FF0C / 水 drawn in MS-Mincho): the mixed line sits 0.84 above its
+                // plain neighbours (d 3.47 against Times' 2.59), both faces on one
+                // baseline; an exact line does not move (S1356's 0.8 L holds).
+                // Oxi kept the point size as the cell (S504 excludes mixed lines)
+                // and put the line 1.54 LOW (blind-G en/creative__03a7fb6a).
+                let union_cell: Option<f32> = if std::env::var_os("OXI_ATLEAST_UNION_CELL_DISABLE").is_none()
+                    && s1136_cell.is_none()
+                    && !s504_latin_line
+                    && line.fragments.iter().any(|f| !f.text.trim().is_empty()
+                        && !self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font())
+                {
+                    let (mut a_render, mut d_union) = (0.0_f32, 0.0_f32);
+                    for frag in &line.fragments {
+                        if frag.text.trim().is_empty() {
+                            continue;
+                        }
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
+                        a_render = a_render.max(m.baseline_ascent() * fs);
+                        if m.is_cjk_83_64_font() {
+                            let win = (m.win_ascent + m.win_descent) * fs;
+                            let nat = win * (83.0 / 64.0);
+                            d_union = d_union.max(nat - (m.win_ascent * fs + (nat - win) * 0.5));
+                        } else {
+                            d_union = d_union.max(m.win_descent * fs);
+                        }
+                    }
+                    (a_render > 0.0).then_some((a_render + d_union).max(max_font_size))
+                } else {
+                    None
+                };
                 let max_font_cell: f32 = if let Some(c) = s1136_cell {
+                    c
+                } else if let Some(c) = union_cell {
                     c
                 } else if !s504_latin_line {
                     max_font_size
@@ -17204,7 +17260,7 @@ cells={} pitch={:.2} text={:?}",
                     // / CJK / mixed lines. educational__0061215a (every line
                     // atLeast 16.5 over Arial 12-13.5): -1.2..-1.6 on all 28 lines.
                     if para_style.line_spacing_rule.as_deref() == Some("atLeast")
-                        && s504_latin_line
+                        && (s504_latin_line || union_cell.is_some())
                         && std::env::var_os("OXI_S1652_DISABLE").is_none()
                     {
                         return 1.0 + (line_height - max_font_cell).max(0.0);
