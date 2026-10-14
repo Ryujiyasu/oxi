@@ -4164,7 +4164,18 @@ impl LayoutEngine {
             .styles
             .cjk_substitute_face
             .clone()
-            .unwrap_or_else(|| "Yu Mincho".to_string());
+            // OXI_SUBSTITUTE_MS_MINCHO (2026-10-14, default ON, opt-out _DISABLE):
+            // without a theme Jpan face, this endpoint's Word draws CJK glyphs
+            // under a Latin eastAsia face in ＭＳ 明朝, not 游明朝 (S1370's old
+            // measurement): `_pb_cjkfallback_lh_gen.py` no-theme arms and
+            // `_pb_exact_mixed_desc_gen.py` (Times New Roman + U+FF0C -> MS-Mincho
+            // in every arm), blind-G en/creative__03a7fb6a. The truth corpus is
+            // this endpoint's, so the default follows it.
+            .unwrap_or_else(|| if std::env::var_os("OXI_SUBSTITUTE_MS_MINCHO_DISABLE").is_none() {
+                "MS Mincho".to_string()
+            } else {
+                "Yu Mincho".to_string()
+            });
         // S763c: the docDefaults East-Asian language (default en-US per OOXML)
         // decides Word's ambiguous curly-quote font. A CJK lang (ja/zh/ko) keeps
         // quotes in the eastAsia font; a Latin lang renders them in the Latin font.
