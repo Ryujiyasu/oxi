@@ -396,7 +396,7 @@ impl<'a> ParagraphLayouter<'a> {
                         // bordered headings were 2.3pt short, pushing two
                         // paragraphs across page bottoms.
                         let s1504 = std::env::var_os("OXI_S1504_DISABLE").is_none();
-                        let tw = if s1504 && top.style == "double" { top.width * 3.0 } else { top.width };
+                        let tw = if s1504 { pbdr_stroke_extent(&top.style, top.width) } else { top.width };
                         cursor.advance(top.space + tw);
                     }
                 }
@@ -9662,7 +9662,7 @@ impl<'a> ParagraphLayouter<'a> {
 
             if let Some(ref bottom) = borders.bottom {
                 let s1504 = std::env::var_os("OXI_S1504_DISABLE").is_none();
-                let bw = if s1504 && bottom.style == "double" { bottom.width * 3.0 } else { bottom.width };
+                let bw = if s1504 { pbdr_stroke_extent(&bottom.style, bottom.width) } else { bottom.width };
                 let color = bottom.color.clone().unwrap_or_else(|| "000000".to_string());
                 let border_y = para_bottom + bottom.space;
                 // S990A: the interior `between` element below draws this line;
@@ -9828,5 +9828,38 @@ impl<'a> ParagraphLayouter<'a> {
             cursor.advance_split(0.0, s1181_unsnap);
         }
         (elements, space_after, cur_col)
+    }
+}
+
+/// OXI_PBDR_COMPOUND (2026-10-16, default ON, opt-out _DISABLE): the full stroke
+/// extent of a paragraph border, w = sz/8. `_pb_pbdr_compound_gen.py` (Word PDF,
+/// 52 arms: the follower's advance = space + this extent, and the drawn bands):
+///   single w, double 3w, triple 5w (S1504 had double only)
+///   thinThick / thickThin SmallGap  w + 1.5   (thin 0.75 + gap 0.75 beside the w line)
+///   thinThick / thickThin MediumGap 2w        (thin and gap w/2 each)
+///   thinThick / thickThin LargeGap  w + 2.25  (thick 1.5 + thin 0.75, gap w)
+///   thinThickThin SmallGap w + 3, MediumGap 3w, LargeGap 2w + 3
+///   threeDEmboss / threeDEngrave    max(2w, w + 1.5)
+///   dashDotStroked 3, doubleWave 5.25 (fixed, whatever the size)
+/// every arm within 0.1pt. `wave` is not monotone in sz (3.96 / 4.68 / 3.96) and
+/// keeps the single width. blind-H en/correspondence__00c28966's
+/// thinThickSmallGap sz12 group: 3.0 in Word, 1.5 in Oxi, the 29 lines below 1.5 high.
+pub(crate) fn pbdr_stroke_extent(style: &str, w: f32) -> f32 {
+    if std::env::var_os("OXI_PBDR_COMPOUND_DISABLE").is_some() {
+        return if style == "double" { w * 3.0 } else { w };
+    }
+    match style {
+        "double" => 3.0 * w,
+        "triple" => 5.0 * w,
+        "thinThickSmallGap" | "thickThinSmallGap" => w + 1.5,
+        "thinThickMediumGap" | "thickThinMediumGap" => 2.0 * w,
+        "thinThickLargeGap" | "thickThinLargeGap" => w + 2.25,
+        "thinThickThinSmallGap" => w + 3.0,
+        "thinThickThinMediumGap" => 3.0 * w,
+        "thinThickThinLargeGap" => 2.0 * w + 3.0,
+        "threeDEmboss" | "threeDEngrave" => (2.0 * w).max(w + 1.5),
+        "dashDotStroked" => 3.0,
+        "doubleWave" => 5.25,
+        _ => w,
     }
 }
