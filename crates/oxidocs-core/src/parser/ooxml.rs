@@ -14870,7 +14870,19 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             // ＭＳ 明朝 box 2pt too high (blind-G correspondence__139e74eb's title).
             let alt_installed = std::env::var_os("OXI_ALTNAME_INSTALLED_DISABLE").is_some()
                 || crate::font::runtime::resolve(alt, false, false).is_some();
+            // OXI_ALTNAME_PRIMARY_FIRST (2026-10-16, default ON, opt-out _DISABLE):
+            // the altName is a fallback -- a primary face this machine has (the
+            // system, per-user or Office cloud-cache fonts) wins even when the
+            // compiled tables lack it. `_pb_altname_present_gen.py` (Word PDF):
+            // Roboto Condensed / Lato / Candara / Corbel with altName Arial draw in
+            // their own face; only an absent face (Nowhere Sans) takes Arial.
+            // blind-H en/technical__01838a08's Roboto Condensed headings drew in
+            // Arial (18pt off in x, the line 0.7 short).
+            let primary_present = std::env::var_os("OXI_ALTNAME_PRIMARY_FIRST_DISABLE").is_none()
+                && (crate::font::runtime::resolve(name, false, false).is_some()
+                    || crate::font::runtime::resolve(name, true, false).is_some());
             if !registry.supports_family(name)
+                && !primary_present
                 && registry.supports_family(alt)
                 && alt_installed
                 && (s1149 || !registry.get(alt).is_cjk_83_64_font())
