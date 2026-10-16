@@ -4575,6 +4575,26 @@ impl<'a> ParagraphLayouter<'a> {
                     // natural line box, including above an occupied footer.
                     centered_box_is_threshold = true;
                     if s739_exact { eff_exact.min((eff_exact + nat_exact) / 2.0) } else { effective_lh.min((effective_lh + natural_lh) / 2.0) }
+                } else if footer_tight
+                    && brk_branch == "footer_tight"
+                    && !self.doc_body_has_real_cjk
+                    && (grid_pitch.is_none() || page.doc_grid_no_type)
+                    && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                    && para.style.line_spacing.unwrap_or(1.0) > 1.0
+                    && std::env::var_os("OXI_FTR_TIGHT_NATURAL_DISABLE").is_none()
+                {
+                    // OXI_FTR_TIGHT_NATURAL (2026-10-16, default ON, opt-out _DISABLE):
+                    // in a LATIN body the multiplier's added leading may hang over an
+                    // occupied footer too -- the line must fit only with its natural
+                    // (pre-multiple) box. `_pb_ftr_tight_en_gen.py` (Word PDF, Legal,
+                    // footer 36 + Cambria 11 text + empty paragraph, before swept by
+                    // 0.5pt): the last kept page-1 baseline is 943.9 for Arial 10 at
+                    // BOTH line 240 and 276 (Bookman 943.66 / 944.02), so the limit is
+                    // the natural box; S726's full box was ~2.0 strict at 276 and exact
+                    // at 240 (its probe was single-spaced). blind-G corpus
+                    // en/policies__008f68d9 pushed its p1 last line 0.14 over.
+                    let factor = para.style.line_spacing.unwrap_or(1.0).max(1.0);
+                    (effective_lh / factor).max(0.0)
                 } else {
                     effective_lh
                 }
