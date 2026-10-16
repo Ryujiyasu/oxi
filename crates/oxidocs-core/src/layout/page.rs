@@ -10275,6 +10275,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let previous = previous_header_para;
                     previous_header_para = match block {
                         Block::Paragraph(p) if header_text_flow || hf_para_after => Some(p),
+                        // OXI_HDR_ANCHOR_CHAIN (2026-10-14, default ON, opt-out _DISABLE): a
+                        // FLOATING picture is anchored inside a paragraph and does not
+                        // break the header's paragraph chain -- the previous paragraph's
+                        // space-after still separates it from the next paragraph.
+                        // `_pb_hdrafter_anchor_gen.py` (Word PDF, 9 arms): Times 18 bold
+                        // after 0 / 40 / 200 + Times 16, pitch 18.72 / 20.76 / 28.70 with
+                        // the seal anchored in neither, the first or the second paragraph.
+                        // Oxi dropped the after when the picture's block followed the
+                        // first paragraph (18.83 for all three); blind-G
+                        // en/policies__009ad56e's first-page header sat 1.92 high.
+                        // (the reservation, s755_header_bottom, already kept it)
+                        Block::Image(img) if img.position.is_some()
+                            && std::env::var_os("OXI_HDR_ANCHOR_CHAIN_DISABLE").is_none() => previous_header_para,
                         _ => None,
                     };
                     let this_block_top = cy.cursor_y;
