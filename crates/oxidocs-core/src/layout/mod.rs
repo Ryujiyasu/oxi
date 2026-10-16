@@ -17125,8 +17125,15 @@ cells={} pitch={:.2} text={:?}",
                 // Without it (OXI_S1261=1, the historical form): 1ec1 -0.0023,
                 // 459f05 -0.0266, ed025 -0.0026, and only exactclip gains.
                 let s1356 = std::env::var("OXI_S1356_DISABLE").is_err();
+                // OXI_TXBX_EXACT_BASE (2026-10-16, default ON, opt-out _DISABLE): a
+                // text box's exact line sits on 0.8 L too. `_pb_txbx_exact_gen.py`
+                // (Word PDF, 29 arms, ＭＳ 明朝 / Calibri / Meiryo UI x 10.5 / 12 / 16pt
+                // x line 240 / 340 / 480): first baseline 13.18 / 17.26 / 22.78 below
+                // the box top = 3.6 + 0.8 L whatever the face or size. Oxi's shape
+                // path put it 0.6 to 6.4 lower (Meiryo UI 16 at 240); blind-G
+                // ja/correspondence__14012ac2's box (ＭＳ 明朝 12 at 340) sat 0.67 low.
                 if (s1356 || std::env::var("OXI_S1261").ok().as_deref() == Some("1"))
-                    && !in_shape_context
+                    && (!in_shape_context || std::env::var_os("OXI_TXBX_EXACT_BASE_DISABLE").is_none())
                     && para_style.line_spacing_rule.as_deref() == Some("exact")
                 {
                     if let Some(lh) = para_style.line_spacing {
