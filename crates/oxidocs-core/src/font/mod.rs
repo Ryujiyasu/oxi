@@ -652,6 +652,20 @@ impl FontMetrics {
         }
         if self.ascent >= self.win_ascent {
             self.ascent + self.line_gap
+        } else if !self.is_cjk_83_64_font()
+            && std::env::var_os("OXI_WINASC_LEAD_DISABLE").is_none()
+        {
+            // OXI_WINASC_LEAD (2026-10-16, default ON, opt-out _DISABLE): GDI puts the
+            // external leading (hhea box - win box, when positive) ABOVE the win ascent
+            // even when the hhea ascent is the smaller one. `_pb_winasc_lead_gen.py`
+            // (Word PDF, body and text box alike): Modern No. 20 (hhea 791/209/70, win
+            // 815/209 per 1000) 10.32 / 20.66 at 12 / 24pt = 0.861 em, Haettenschweiler
+            // 11.40 / 22.70 = 0.947 em; win ascent alone gave 0.815 / 0.920 (blind-G
+            // en/administrative__0063f992 0.54 low). 83/64 CJK faces keep their own law.
+            let ext = (self.ascent + self.descent + self.line_gap
+                - self.win_ascent - self.win_descent)
+                .max(0.0);
+            self.win_ascent + ext
         } else {
             self.win_ascent
         }
