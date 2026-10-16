@@ -9632,7 +9632,22 @@ cells={} pitch={:.2} text={:?}",
                             .as_deref()
                             .map(|f| self.registry.get_with_bold(f, false))
                             .unwrap_or_else(|| self.registry.default_metrics());
-                        elements[i0].y + elements[i0].text_y_off - 1.0 + m.win_ascent * efs
+                        // OXI_CLNSP_CURBASE (2026-10-16, default ON, opt-out _DISABLE): the
+                        // renderer draws a Latin face at its baseline ascent (win ascent +
+                        // the hhea leading above it), so the current baseline the shift is
+                        // measured from must use the same ascent; win ascent alone read the
+                        // line one leading too high and the chain pushed it that much LOW.
+                        // `_pb_clnsp_latin_gen.py` first-line dy: Arial 14 +0.50, Times 12
+                        // +0.55, Calibri 11 +0.03 (no leading) = the leading 0.46 / 0.51 / 0;
+                        // blind-G en/policies__009ab5c3's Arial Bold 24 title +0.79 (0.785).
+                        let a = if !m.is_cjk_83_64_font()
+                            && std::env::var_os("OXI_CLNSP_CURBASE_DISABLE").is_none()
+                        {
+                            m.baseline_ascent()
+                        } else {
+                            m.win_ascent
+                        };
+                        elements[i0].y + elements[i0].text_y_off - 1.0 + a * efs
                     };
                     if first {
                         first = false;
