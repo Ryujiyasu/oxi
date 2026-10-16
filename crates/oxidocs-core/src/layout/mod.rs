@@ -11129,8 +11129,52 @@ cells={} pitch={:.2} text={:?}",
     /// cap=0.716 (Arial cap-height fraction) → forms exact; other Latin fonts
     /// (Calibri/Times cap 0.64/0.66) are UNDER-estimated = less relief = safer.
     /// Latin-scoped (JP footers keep the calibrated legacy path byte-identical).
+    /// OXI_FTR_FACE_SCOPE (2026-10-14, default ON, opt-out _DISABLE): the
+    /// footer stack's Latin / CJK scope is decided by the FOOTER'S OWN faces,
+    /// not by the body's script. `_pb_ftr_bodyscript_gen.py` (Word PDF, 6
+    /// arms): a Calibri 12 + pBdr footer sits at 792.46 and a Century «1» +
+    /// empty-paragraph footer at 791.02 under a Latin body AND under a body
+    /// with a ＭＳ 明朝 paragraph; a ＭＳ 明朝 footer at 802.92 under both. Oxi
+    /// keyed on the body (blind-G reports__597cb86c / 59eadfc4 +1.01,
+    /// forms__02157cbe -1.13; a ＭＳ 明朝 footer in a Latin document +0.94).
+    /// A footer with no text keeps the document's scope.
+    fn footer_face_latin(&self, blocks: &[Block]) -> bool {
+        let doc_latin = !self.doc_body_has_real_cjk;
+        if std::env::var_os("OXI_FTR_FACE_SCOPE_DISABLE").is_some() {
+            return doc_latin;
+        }
+        fn paras<'a>(blocks: &'a [Block], out: &mut Vec<&'a Paragraph>) {
+            for b in blocks {
+                match b {
+                    Block::Paragraph(p) => out.push(p),
+                    Block::Table(t) => {
+                        for row in &t.rows {
+                            for cell in &row.cells {
+                                paras(&cell.blocks, out);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut ps = Vec::new();
+        paras(blocks, &mut ps);
+        let mut any = false;
+        let mut all_latin = true;
+        for p in ps {
+            for r in p.runs.iter().filter(|r| !r.text.trim().is_empty()) {
+                any = true;
+                if self.metrics_for_text(&r.text, &r.style, &p.style).is_cjk_83_64_font() {
+                    all_latin = false;
+                }
+            }
+        }
+        if any { all_latin } else { doc_latin }
+    }
+
     fn footer_ink_relief(&self, blocks: &[Block]) -> f32 {
-        if self.doc_body_has_real_cjk {
+        if !self.footer_face_latin(blocks) {
             return 0.0;
         }
         if std::env::var("OXI_S992_DISABLE").is_ok() {
@@ -11237,7 +11281,7 @@ cells={} pitch={:.2} text={:?}",
     /// line sat +3.59. Header arms already match (a header grows downward).
     /// Latin scope as S886.
     fn ftr_pbdr_paint_extent(&self, blocks: &[Block], para: &Paragraph) -> f32 {
-        if self.doc_body_has_real_cjk || std::env::var_os("OXI_FTR_PBDR_PAINT_DISABLE").is_some() {
+        if !self.footer_face_latin(blocks) || std::env::var_os("OXI_FTR_PBDR_PAINT_DISABLE").is_some() {
             return 0.0;
         }
         let Some(b) = para.style.borders.as_ref() else { return 0.0 };
@@ -11492,8 +11536,9 @@ cells={} pitch={:.2} text={:?}",
             // model; fE window (51.45, 64.1] ∋ 61.3; real-doc 86.64 exact.
             // Latin scope (!doc_body_has_real_cjk) — JP footers keep the
             // calibrated legacy path (bd90b00/04b88e/ed025) byte-identical.
+            // OXI_FTR_FACE_SCOPE: the footer's own faces decide the scope.
             let s806_latin =
-                !self.doc_body_has_real_cjk && std::env::var("OXI_S806_DISABLE").is_err();
+                self.footer_face_latin(blocks) && std::env::var("OXI_S806_DISABLE").is_err();
             let mut s806_first_before = true;
             let mut s803_prev_sa: Option<f32> = None;
             let image_flow = blocks.iter().any(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().any(|r| r.style.inline_object_image.is_some())));
@@ -11770,7 +11815,7 @@ cells={} pitch={:.2} text={:?}",
             // flips the slice while the footer RENDER stays fixed. Latin scope
             // (!doc_body_has_real_cjk) — JP corpus byte-identical by construction.
             let mut s780_extra = 0.0f32;
-            if !image_flow && !self.doc_body_has_real_cjk && std::env::var("OXI_S780_DISABLE").is_err() {
+            if !image_flow && self.footer_face_latin(blocks) && std::env::var("OXI_S780_DISABLE").is_err() {
                 if let Some(p) = blocks.iter().find_map(|b| match b {
                     Block::Paragraph(p) if p.style.frame_pr.is_none() => Some(p),
                     _ => None,
