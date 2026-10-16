@@ -8923,6 +8923,22 @@ cells={} pitch={:.2} text={:?}",
         let inset_r = text_box.inset_right.unwrap_or(7.2);
         let inset_t = text_box.inset_top.unwrap_or(3.6);
         let inset_b = text_box.inset_bottom.unwrap_or(3.6);
+        // OXI_TXBX_OUTLINE_INSET (2026-10-14, default ON, opt-out _DISABLE): the
+        // text area sits inside the outline's INNER edge -- half the DECLARED
+        // line width (`a:ln w`) on every side, filled or not; a bare <a:ln>
+        // without w moves nothing. `_pb_txbx_cjk_base_gen.py` (Word PDF, ＭＳ
+        // ゴシック 14 anchor t): outline 0.75 / 2 / 4pt moves the first baseline
+        // +0.36 / +1.08 / +2.04, w=2pt with noFill +1.08, no w 0, anchor ctr
+        // unchanged (symmetric). The parser already carried the half width as
+        // `text_outline_inset`; only the vertical-text path consumed it. blind-G
+        // ja/administrative__1a08ddac's 2pt-outlined title box sat 1.06 high.
+        let txbx_outline = if std::env::var_os("OXI_TXBX_OUTLINE_INSET_DISABLE").is_none() {
+            text_box.text_outline_inset.max(0.0)
+        } else {
+            0.0
+        };
+        let (inset_l, inset_r, inset_t, inset_b) =
+            (inset_l + txbx_outline, inset_r + txbx_outline, inset_t + txbx_outline, inset_b + txbx_outline);
         // roundRect corner pushes the inscribed text area inward by r·(1−cos 45°) ≈ 0.293r per side.
         let corner_inset = text_box
             .corner_radius
@@ -8956,7 +8972,8 @@ cells={} pitch={:.2} text={:?}",
         // Initial cursor at top; for middle/bottom, compute content height first,
         // then offset all elements after layout.
         if text_box.vertical_text && std::env::var_os("OXI_VERTICAL_TEXTBOX_LAYOUT").is_some() {
-            let outline = text_box.text_outline_inset.max(0.0);
+            // (already folded into the insets above when OXI_TXBX_OUTLINE_INSET is on)
+            let outline = (text_box.text_outline_inset.max(0.0) - txbx_outline).max(0.0);
             let width = (inner_width - 2.0 * outline).max(0.0);
             let height = (inner_height - 2.0 * outline).max(0.0);
             let mut box_page = page.clone();
