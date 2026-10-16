@@ -77,6 +77,7 @@ def is_new(t):
 def main():
     limit = None
     shard = (0, 1)
+    reverse = False
     preopen = True
     for a in sys.argv[1:]:
         if a.startswith("--limit="):
@@ -86,11 +87,17 @@ def main():
             shard = (int(k), int(n))
         elif a == "--no-preopen":
             preopen = False
+        elif a == "--reverse":
+            # an extra worker walking the queue from the far end; finished files
+            # are skipped right before each measurement, so the two meet cleanly
+            reverse = True
     items = work_list()
     print("gate documents with truth:", len(items), flush=True)
     backup(sorted({t.parent for _, _, t in items}))
     todo = [it for it in items if not is_new(it[2])]
     todo = [it for i, it in enumerate(todo) if i % shard[1] == shard[0]]
+    if reverse:
+        todo = todo[::-1]
     if limit:
         todo = todo[:limit]
     print("to measure:", len(todo), flush=True)
