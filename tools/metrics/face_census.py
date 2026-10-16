@@ -97,6 +97,10 @@ def embedded_families(doc, page):
     24 characters.  Unreadable programs keep the label."""
     import io
     from fontTools.ttLib import TTFont
+    # One label can name SEVERAL programs: Word draws the CJK characters of a
+    # Calibri run in its fallback face and embeds that program under the label
+    # «Calibri» too (ja/reports__59eadfc4: «Calibri» = Calibri + MS PGothic).
+    # Keep every program with the characters it maps, and pick per character.
     out = {}
     for f in page.get_fonts():
         label = re.sub(r"^[A-Z]{6}\+", "", f[3])
@@ -111,11 +115,30 @@ def embedded_families(doc, page):
                 if fam:
                     break
             fam = fam or nt.getDebugName(1)
+            try:
+                cps = set((t.getBestCmap() or {}).keys())
+            except Exception:
+                cps = set()
         except Exception:
-            fam = None
+            fam, cps = None, set()
         if fam:
-            out[label] = "=" + fam.strip()
+            out.setdefault(label, []).append(("=" + fam.strip(), cps))
     return out
+
+
+def pick_program(progs, label, ch):
+    """The program among those sharing a label that maps `ch`; prefer the one
+    whose family is the label itself when both do."""
+    if not progs:
+        return None
+    have = [p for p in progs if ord(ch) in p[1]]
+    if not have:
+        have = [p for p in progs if not p[1]] or progs
+    base = label.split(",")[0].split("-")[0].lower()
+    for fam, _ in have:
+        if fam[1:].replace(" ", "").lower().startswith(base.replace(" ", "")):
+            return fam
+    return have[0][0]
 
 
 def word_chars(pdf, pages):
@@ -123,19 +146,19 @@ def word_chars(pdf, pages):
     doc = fitz.open(pdf); out = []
     for pi in range(min(pages, len(doc))):
         emb = embedded_families(doc, doc[pi])
-        def real(span_font):
+        def real(span_font, ch):
             n = re.sub(r"^[A-Z]{6}\+", "", span_font)
-            if n in emb:
-                return emb[n]
-            hits = [v for k, v in emb.items() if k.startswith(n)]
-            return hits[0] if len(set(hits)) == 1 else span_font
+            progs = emb.get(n)
+            if progs is None:
+                keys = [k for k in emb if k.startswith(n)]
+                progs = [p for k in keys for p in emb[k]] if keys else None
+            return pick_program(progs, n, ch) if progs else span_font
         for b in doc[pi].get_text("rawdict")["blocks"]:
             for l in b.get("lines", []):
                 for s in l["spans"]:
-                    face = real(s["font"])
                     for c in s["chars"]:
                         if c["c"].strip():
-                            out.append((pi, c["c"], c["origin"][0], c["origin"][1], face))
+                            out.append((pi, c["c"], c["origin"][0], c["origin"][1], real(s["font"], c["c"])))
     return out
 
 
