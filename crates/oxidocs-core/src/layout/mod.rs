@@ -16943,7 +16943,17 @@ cells={} pitch={:.2} text={:?}",
             && (!self.doc_body_has_real_cjk
                 || (IN_HF_FRAME_LAYOUT.with(|c| c.get())
                     && std::env::var_os("OXI_HF_FRAME_LATIN_BASE_DISABLE").is_none()))
-            && !in_shape_context
+            // OXI_TXBX_LATIN_BASE (2026-10-16, default ON, opt-out _DISABLE): a text
+            // box's lines follow the same Latin law as the body -- baseline = line
+            // top + the face's baseline ascent (win ascent + the hhea leading above
+            // it), whatever the multiple. `_pb_txbx_latin_mult_gen.py` (Word PDF,
+            // 26 arms, box top + 3.6 inset): Times 24 22.42, Arial 24 22.54, Calibri
+            // 24 22.78, Times 11 10.30, identical at line 240 / 259 / 276 / 360 and
+            // compat 14 / 15. The shape exclusion sent these lines to S670's
+            // >= 18pt calibration (Times 24 +1.60, Arial 24 +1.25) and the 11pt
+            // Times line +0.47; blind-G en/policies__009ab5c3's Calibri 24 title box
+            // sat 0.78 low.
+            && (!in_shape_context || std::env::var_os("OXI_TXBX_LATIN_BASE_DISABLE").is_none())
             && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
             // OXI_BULLET_UNION_BASELINE (2026-10-14, default ON, opt-out _DISABLE):
             // a Symbol-bullet line follows the Latin law too, with the line's
