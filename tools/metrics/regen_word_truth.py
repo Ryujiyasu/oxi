@@ -18,6 +18,7 @@ file already stamped newpc is skipped.
 
     python tools/metrics/regen_word_truth.py            # all gate documents
     python tools/metrics/regen_word_truth.py --limit=5  # first five (smoke test)
+    python tools/metrics/regen_word_truth.py --shard=0/3 --no-preopen   # one of three parallel workers
 """
 import datetime, json, os, shutil, sys, time
 from pathlib import Path
@@ -75,13 +76,21 @@ def is_new(t):
 
 def main():
     limit = None
+    shard = (0, 1)
+    preopen = True
     for a in sys.argv[1:]:
         if a.startswith("--limit="):
             limit = int(a.split("=", 1)[1])
+        elif a.startswith("--shard="):
+            k, n = a.split("=", 1)[1].split("/")
+            shard = (int(k), int(n))
+        elif a == "--no-preopen":
+            preopen = False
     items = work_list()
     print("gate documents with truth:", len(items), flush=True)
     backup(sorted({t.parent for _, _, t in items}))
     todo = [it for it in items if not is_new(it[2])]
+    todo = [it for i, it in enumerate(todo) if i % shard[1] == shard[0]]
     if limit:
         todo = todo[:limit]
     print("to measure:", len(todo), flush=True)
@@ -94,7 +103,7 @@ def main():
         env["editing"] = {k: bool(ls.LanguagePreferredForEditing(v)) for k, v in (("ja-JP", 1041), ("en-US", 1033), ("zh-CN", 2052), ("ko-KR", 1042))}
         env["ui_lang"] = ls.LanguageID(2)
         # pre-open pass: let Word fetch the cloud fonts the documents name
-        for i, (did, p, t) in enumerate(todo):
+        for i, (did, p, t) in enumerate(todo if preopen else []):
             try:
                 d = word.Documents.Open(p, ReadOnly=True, AddToRecentFiles=False); d.Close(0)
             except Exception as e:
@@ -105,6 +114,8 @@ def main():
         (REPO / "pipeline_data" / f"truth_env_{datetime.datetime.now():%Y%m%d_%H%M}.json").write_text(json.dumps(env, ensure_ascii=False, indent=1), encoding="utf-8")
         print("cloud fonts added by pre-open:", sorted(set(env["cloud_after_preopen"]) - set(env["cloud_before"])), flush=True)
         for i, (did, p, t) in enumerate(todo):
+            if is_new(t):
+                continue
             t0 = time.time()
             try:
                 res = MW.measure_doc(word, p)
