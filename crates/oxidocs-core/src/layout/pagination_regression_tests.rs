@@ -635,10 +635,10 @@ fn empty_runs_do_not_override_the_paragraph_mark_size() {
 #[test]
 fn latin_segment_punctuation_matches_word_line_breaks() {
     let cases: &[(&[u8], &[&str])] = &[
-        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_comma.docx"), &["AAA AAAAA,", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_comma.docx"), &["AAA", "AAAAA,", "NEXT"]),
         (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_letter.docx"), &["AAA", "AAAAAx", "NEXT"]),
         (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_long_comma.docx"), &["AAAAAAAAA", "AAAAAAAAA", "AA, NEXT"]),
-        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_period.docx"), &["AAA AAAAA.", "NEXT"]),
+        (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_period.docx"), &["AAA", "AAAAA.", "NEXT"]),
         (include_bytes!("../../../../tests/fixtures/latin_segment_hang/14_semicolon.docx"), &["AAA", "AAAAA;", "NEXT"]),
         (include_bytes!("../../../../tests/fixtures/latin_segment_hang/15_comma.docx"), &["AAA", "AAAAA,", "NEXT"]),
         (include_bytes!("../../../../tests/fixtures/latin_segment_hang/15_letter.docx"), &["AAA", "AAAAAx", "NEXT"]),

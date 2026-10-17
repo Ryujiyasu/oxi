@@ -186,7 +186,7 @@ impl<'a> LineBreaker<'a> {
             .and_then(|b| b.right.as_ref())
             .map_or(false, |d| d.style != "none")
             && std::env::var("OXI_S929_DISABLE").is_err();
-        // S1262 (2026-08-30, default ON, opt-out OXI_S1262_DISABLE): the hang
+        // S1262 (2026-08-30, opt-in OXI_S1262=1 since 2026-10-18): the hang
         // also applies at compatibilityMode 15 when the paragraph is JUSTIFIED,
         // and the mark set includes the closing quotes.
         // WORD TRUTH (`tools/metrics/_pb_hangpunct_{gen,read}.py`, 156 arms =
@@ -212,9 +212,16 @@ impl<'a> LineBreaker<'a> {
         // `... Bankers Ghana.` by hanging the period at 523.38..526.17 past the
         // 523.32 column edge; Oxi counted it, broke a word early, spent an extra
         // line and pushed 4 paragraphs onto the next page.
-        let s1262 = std::env::var("OXI_S1262_DISABLE").is_err();
-        let s809_legacy = self.compat_mode < 15
-            || (s1262 && !self.compat_mode_explicit);
+        // 2026-10-18, the 2026-10 Word: a legacy document (compat <= 14 or no
+        // compatibilityMode) hangs a line-end '.', ',', U+201D, U+2019 in a
+        // PROPORTIONAL face only, left or justified alike; a fixed-pitch face
+        // (Courier New, Consolas, Lucida Console) hangs nothing, and compat 15
+        // hangs nothing in any face or alignment (`_pb_hangmark_prop_gen.py`,
+        // `_pb_hangpunct` re-run). The old Word also hung Courier and the
+        // compat-15 justified line: S1262's justified arm and S953 are opt-ins
+        // for that truth.
+        let s1262 = std::env::var("OXI_S1262").is_ok();
+        let s809_legacy = self.compat_mode < 15 || !self.compat_mode_explicit;
         let s809_hang = !self.doc_body_has_real_cjk
             && (s809_legacy || (s1262 && is_justified))
             && !s929_right_fence
@@ -330,7 +337,7 @@ impl<'a> LineBreaker<'a> {
         let s799_space_shrink = std::env::var("OXI_S799_DISABLE").is_err()
             && is_justified
             && !self.doc_body_has_real_cjk;
-        // S953 (2026-07-20, opt-out OXI_S953_DISABLE): a COMPAT-15 JUSTIFIED
+        // S953 (2026-07-20, opt-in OXI_S953=1 since 2026-10-18): a COMPAT-15 JUSTIFIED
         // line hangs its trailing '.'/',' past the right edge — the S809 rule's
         // modern-justified arm. DERIVED (hang_probe, Arial-12, 12-space line,
         // 2tw margin sweeps against the RENDER-measured natural 444.14):
@@ -370,7 +377,7 @@ impl<'a> LineBreaker<'a> {
                 && s799_space_shrink
                 && !s929_right_fence
                 && !s1018_decimal_paren_list
-                && std::env::var("OXI_S953_DISABLE").is_err());
+                && std::env::var("OXI_S953").is_ok());
         let s809_hang = s953_hang;
         // S1630 (2026-10-01, OPT-IN OXI_S1630=1 -- held, see the end): in the
         // compat-15 justified arm only the '.' hangs; S953 measured a period
@@ -4608,9 +4615,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if s809_hang || cjk_latin_period_hang {
                         // Existing Latin policy also admits comma/closing quotes;
                         // the separately measured mixed-text policy admits period.
-                        word_trail_hang_w = if ch == '.'
+                        let fixed_pitch = s809_hang
+                            && (char_metrics.char_width_em('i') - char_metrics.char_width_em('M')).abs() < 0.001;
+                        word_trail_hang_w = if fixed_pitch {
+                            0.0
+                        } else if ch == '.'
                             || (s809_hang && ch == ',' && !s1630_no_comma)
-                            || (s809_hang && s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
+                            || (s809_hang && (s1262 || s809_legacy) && matches!(ch, '\u{201D}' | '\u{2019}'))
                         {
                             char_width
                         } else {
@@ -6641,9 +6652,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if s809_hang || cjk_latin_period_hang {
                         // Existing Latin policy also admits comma/closing quotes;
                         // the separately measured mixed-text policy admits period.
-                        word_trail_hang_w = if ch == '.'
+                        let fixed_pitch = s809_hang
+                            && (char_metrics.char_width_em('i') - char_metrics.char_width_em('M')).abs() < 0.001;
+                        word_trail_hang_w = if fixed_pitch {
+                            0.0
+                        } else if ch == '.'
                             || (s809_hang && ch == ',' && !s1630_no_comma)
-                            || (s809_hang && s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
+                            || (s809_hang && (s1262 || s809_legacy) && matches!(ch, '\u{201D}' | '\u{2019}'))
                         {
                             char_width
                         } else {
