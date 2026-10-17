@@ -18,14 +18,21 @@ glyph starting inside the right indent and ending past it.
 import json, os, shutil, subprocess, sys, tempfile, zipfile
 sys.stdout.reconfigure(encoding="utf-8")
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-OUT = os.path.join(REPO, "pipeline_data", "_pb_hangmark_prop")
-MARKS = {"period": ".", "comma": ",", "semi": ";", "colon": ":", "bang": "!", "query": "?",
+OUT = os.path.join(REPO, "pipeline_data", os.environ.get("PB_OUT", "_pb_hangmark_prop"))
+# PB_TAIL: what follows the mark ("" = the mark ends the paragraph)
+TAIL = os.environ.get("PB_TAIL", " NEXT")
+# PB_LEAD: a first line (ended by <w:br/>) so the filler + mark is line 2
+LEAD = os.environ.get("PB_LEAD", "")
+MARKS_ALL = {"period": ".", "comma": ",", "semi": ";", "colon": ":", "bang": "!", "query": "?",
          "rparen": ")", "rbracket": "]", "rdquote": "”", "rsquote": "’", "apos": "'",
          "quot": '"', "hyphen": "-", "letter": "x"}
-FONTS = ("Arial", "Courier New")
-COMPAT = ("14", "none", "15")
+MARKS = {k: v for k, v in MARKS_ALL.items() if k in os.environ.get("PB_MARKS", ",".join(MARKS_ALL)).split(",")}
+FONTS = tuple(os.environ.get("PB_FONTS", "Arial,Courier New").split(","))
+COMPAT = tuple(os.environ.get("PB_COMPAT", "14,none,15").split(","))
 JC = ("left", "both")
 RIGHTS = list(range(2050, 2301, 5))   # «twenty<mark>» reaches the edge near 2180tw
+if os.environ.get("PB_RIGHTS"):   # "start,stop,step" in twips (narrower faces need a wider sweep)
+    RIGHTS = list(range(*map(int, os.environ["PB_RIGHTS"].split(","))))
 TEXT = "The regional team reviewed the latest results for participants aged fifteen to twenty"
 
 CT = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -55,7 +62,9 @@ def build(font, cm, jc, mark):
     for i, r in enumerate(RIGHTS):
         pb = "<w:pageBreakBefore/>" if i else ""
         jcx = '<w:jc w:val="both"/>' if jc == "both" else ""
-        t = (TEXT + ch + " NEXT").replace("&", "&amp;").replace('"', "&quot;")
+        esc = lambda x: x.replace("&", "&amp;").replace('"', "&quot;")
+        # PB_LEAD ends with a hard line break, so the filler + mark is the paragraph's LINE 2
+        t = (esc(LEAD) + '</w:t><w:br/><w:t xml:space="preserve">' if LEAD else "") + esc(TEXT + ch + TAIL)
         paras.append('<w:p><w:pPr>%s%s<w:ind w:right="%d"/><w:spacing w:before="0" w:after="0"/></w:pPr>'
                      '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/><w:sz w:val="22"/></w:rPr>'
                      '<w:t xml:space="preserve">%s</w:t></w:r></w:p>' % (pb, jcx, r, font, font, t))
