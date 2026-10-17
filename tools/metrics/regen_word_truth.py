@@ -75,6 +75,13 @@ def is_new(t):
         return False
 
 
+def is_fresh(t):
+    try:
+        return bool(json.loads(t.read_text(encoding="utf-8")).get("fresh_process"))
+    except Exception:
+        return False
+
+
 def main():
     limit = None
     shard = (0, 1)
@@ -135,6 +142,8 @@ def main():
         print("cloud fonts added by pre-open:", sorted(set(env["cloud_after_preopen"]) - set(env["cloud_before"])), flush=True)
         for i, (did, p, t) in enumerate(todo):
             if is_new(t) and not force:
+                continue
+            if fresh and is_fresh(t):
                 continue
             t0 = time.time()
             if fresh:
