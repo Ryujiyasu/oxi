@@ -1411,7 +1411,7 @@ impl<'a> ParagraphLayouter<'a> {
             true,
             matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
                 || (matches!(para.alignment, Alignment::Center)
-                    && std::env::var("OXI_S1028_CT_DISABLE").is_err()
+                    && std::env::var("OXI_S1028_CT").is_ok()
                     && self.compat_mode == 14
                     && self.compat_mode_explicit
                     && !self.doc_body_has_real_cjk),
@@ -1483,7 +1483,7 @@ impl<'a> ParagraphLayouter<'a> {
                     true,
                     matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
                         || (matches!(para.alignment, Alignment::Center)
-                            && std::env::var("OXI_S1028_CT_DISABLE").is_err()
+                            && std::env::var("OXI_S1028_CT").is_ok()
                             && self.compat_mode == 14
                             && self.compat_mode_explicit
                             && !self.doc_body_has_real_cjk),
