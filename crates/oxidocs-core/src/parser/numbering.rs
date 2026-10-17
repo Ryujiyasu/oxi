@@ -49,10 +49,27 @@ pub struct NumberingLevel {
     /// the TOP of the marker-formatting priority (Word probe, 22 arms:
     /// level rPr > direct paragraph-mark rPr > paragraph style rPr).
     pub marker_font: Option<String>,
+    /// The level rPr's w:hAnsi. `marker_font` holds w:ascii only: Word draws an
+    /// all-ASCII marker in the ascii face, so a level naming only hAnsi leaves
+    /// '1.' in the paragraph's face (reference__0066cc34: hAnsi="Arial Unicode
+    /// MS", Word's PDF draws the numbers in ArialMT on the text's baseline).
+    pub marker_font_hansi: Option<String>,
     pub marker_font_east_asia: Option<String>,
     /// S1037: level rPr w:b / w:i (CT_OnOff, `val="0"` honoured).
     pub marker_bold: Option<bool>,
     pub marker_italic: Option<bool>,
+}
+
+impl NumberingLevel {
+    /// The Latin face Word draws `marker` in: w:ascii for an all-ASCII marker,
+    /// otherwise w:hAnsi (falling back to w:ascii).
+    fn marker_font_for(&self, marker: &str) -> Option<String> {
+        if marker.is_ascii() {
+            self.marker_font.clone()
+        } else {
+            self.marker_font_hansi.clone().or_else(|| self.marker_font.clone())
+        }
+    }
 }
 
 /// An abstract numbering definition containing levels
@@ -212,7 +229,7 @@ impl NumberingDefinitions {
                 // Map Symbol font private use area characters to standard Unicode
                 map_symbol_bullets(&level.lvl_text)
             };
-            return ResolvedMarker { text: marker, marker_size: level.marker_size, marker_font: level.marker_font.clone(), marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left };
+            return ResolvedMarker { marker_font: level.marker_font_for(&marker), text: marker, marker_size: level.marker_size, marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left };
         }
 
         // Numbered list: increment counter
@@ -342,7 +359,7 @@ impl NumberingDefinitions {
             text
         };
 
-        ResolvedMarker { text: marker, marker_size: level.marker_size, marker_font: level.marker_font.clone(), marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left }
+        ResolvedMarker { marker_font: level.marker_font_for(&marker), text: marker, marker_size: level.marker_size, marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left }
     }
 
     /// S988B: the EFFECTIVE level for (numId, ilvl) — the `<w:lvlOverride>`'s
@@ -671,6 +688,7 @@ fn parse_numbering_level(
     let mut tab_stop = None;
     let mut marker_size: Option<f32> = None;
     let mut marker_font: Option<String> = None;
+    let mut marker_font_hansi: Option<String> = None;
     let mut marker_font_east_asia: Option<String> = None;
     let mut marker_bold: Option<bool> = None;
     let mut marker_italic: Option<bool> = None;
@@ -738,9 +756,8 @@ fn parse_numbering_level(
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             if val.is_empty() { continue; }
                             match key.as_str() {
-                                "ascii" | "hAnsi" => {
-                                    if marker_font.is_none() { marker_font = Some(val); }
-                                }
+                                "ascii" => marker_font = Some(val),
+                                "hAnsi" => marker_font_hansi = Some(val),
                                 "eastAsia" => marker_font_east_asia = Some(val),
                                 _ => {}
                             }
@@ -826,6 +843,7 @@ fn parse_numbering_level(
         tab_stop,
         marker_size,
         marker_font,
+        marker_font_hansi,
         marker_font_east_asia,
         marker_bold,
         marker_italic,
