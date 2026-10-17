@@ -92,6 +92,13 @@ def dump(exe, path):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def truth_mtime(t):
+    try:
+        return round(os.path.getmtime(t), 3)
+    except OSError:
+        return None
+
+
 def main():
     expr = sys.argv[1]
     a = sys.argv[2:]
@@ -107,14 +114,20 @@ def main():
     work = [w for w in work if w[2] is not None]
     print(f"predicate: {expr}\nmatched {len(hits)} docs, {len(work)} with truth, jobs={jobs}", flush=True)
 
+    truth_of = {w[0]: w[2] for w in work}
+
     def cached(binary, env):
         d = CACHE / sha12(binary)
         d.mkdir(parents=True, exist_ok=True)
         got, todo = {}, []
         for w in work:
             f = d / (w[0].replace("/", "__") + ".json")
-            if not env and f.exists():
-                got[w[0]] = json.loads(f.read_text(encoding="utf-8"))
+            # the key is the binary only, so a cached result is reused only while the
+            # truth file it was scored against is unchanged (2026-10-17: the truth was
+            # re-measured on the new PC and every cached result went stale)
+            hit = json.loads(f.read_text(encoding="utf-8")) if (not env and f.exists()) else None
+            if hit is not None and hit.get("truth_mtime") == truth_mtime(w[2]):
+                got[w[0]] = hit
             else:
                 todo.append(w)
         return d, got, todo
@@ -127,6 +140,7 @@ def main():
     for (side, key), r in run_many(tasks, jobs).items():
         (base_res if side == "b" else new_res)[key] = r
         if r.get("pass") is not None and (side == "b" or not new_env):
+            r = dict(r, truth_mtime=truth_mtime(truth_of[key]))
             ((bdir if side == "b" else ndir) / (key.replace("/", "__") + ".json")).write_text(json.dumps(r), encoding="utf-8")
     base_res = [base_res[w[0]] for w in work]
     new_res = [new_res[w[0]] for w in work]
