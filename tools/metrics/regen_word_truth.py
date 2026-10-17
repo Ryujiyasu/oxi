@@ -19,6 +19,7 @@ file already stamped newpc is skipped.
     python tools/metrics/regen_word_truth.py            # all gate documents
     python tools/metrics/regen_word_truth.py --limit=5  # first five (smoke test)
     python tools/metrics/regen_word_truth.py --shard=0/3 --no-preopen   # one of three parallel workers
+    python tools/metrics/regen_word_truth.py --only=pipeline_data/missing_face_docs.json --fresh --force --no-preopen
 """
 import datetime, json, os, shutil, sys, time
 from pathlib import Path
@@ -78,6 +79,9 @@ def main():
     limit = None
     shard = (0, 1)
     reverse = False
+    only = None
+    fresh = False
+    force = False
     preopen = True
     for a in sys.argv[1:]:
         if a.startswith("--limit="):
@@ -87,6 +91,15 @@ def main():
             shard = (int(k), int(n))
         elif a == "--no-preopen":
             preopen = False
+        elif a.startswith("--only="):
+            # a JSON file whose keys are the document ids to (re)measure
+            only = set(json.loads(Path(a.split("=", 1)[1]).read_text(encoding="utf-8")))
+        elif a == "--fresh":
+            # every document in its OWN Word process: Word caches a missing face's
+            # substitute per process (memory: word_missing_face_substitute_process_state)
+            fresh = True
+        elif a == "--force":
+            force = True
         elif a == "--reverse":
             # an extra worker walking the queue from the far end; finished files
             # are skipped right before each measurement, so the two meet cleanly
@@ -94,7 +107,7 @@ def main():
     items = work_list()
     print("gate documents with truth:", len(items), flush=True)
     backup(sorted({t.parent for _, _, t in items}))
-    todo = [it for it in items if not is_new(it[2])]
+    todo = [it for it in items if (force or not is_new(it[2])) and (only is None or it[0] in only)]
     todo = [it for i, it in enumerate(todo) if i % shard[1] == shard[0]]
     if reverse:
         todo = todo[::-1]
@@ -121,9 +134,15 @@ def main():
         (REPO / "pipeline_data" / f"truth_env_{datetime.datetime.now():%Y%m%d_%H%M}.json").write_text(json.dumps(env, ensure_ascii=False, indent=1), encoding="utf-8")
         print("cloud fonts added by pre-open:", sorted(set(env["cloud_after_preopen"]) - set(env["cloud_before"])), flush=True)
         for i, (did, p, t) in enumerate(todo):
-            if is_new(t):
+            if is_new(t) and not force:
                 continue
             t0 = time.time()
+            if fresh:
+                try:
+                    word.Quit()
+                except Exception:
+                    pass
+                word = win32com.client.DispatchEx("Word.Application"); word.Visible = False; word.DisplayAlerts = 0
             try:
                 res = MW.measure_doc(word, p)
             except Exception as e:
@@ -135,6 +154,8 @@ def main():
                 word = win32com.client.DispatchEx("Word.Application"); word.Visible = False; word.DisplayAlerts = 0
                 continue
             res["machine"] = TAG; res["word_build"] = env["word_build"]
+            if fresh:
+                res["fresh_process"] = True
             t.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"  [{i + 1}/{len(todo)}] {did} {res['n_pages']}p {time.time() - t0:.1f}s", flush=True)
     finally:
