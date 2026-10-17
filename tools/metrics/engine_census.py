@@ -24,7 +24,7 @@ import line_census as L  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "pipeline_data" / "engine_census"
-IBIS = os.environ.get("IBIS_EXE", r"C:\Users\ryuji\tools\ibisoffice-0.8.1\ibisOffice\ibisOffice.exe")
+IBIS = os.environ.get("IBIS_EXE", r"C:\Users\ryuji\tools\ibisoffice-0.8.1\ibisOffice\ibisOffice\ibisOffice.exe")
 SOFFICE = os.environ.get("SOFFICE_EXE", r"C:\Program Files\LibreOffice\program\soffice.exe")
 
 
@@ -32,15 +32,15 @@ def convert_one(engine, docx, pdf, timeout=300):
     t = tempfile.mkdtemp()
     src = os.path.join(t, Path(docx).name); shutil.copy(docx, src)
     if engine == "ibis":
-        # syntax checked against the binary's --help before the first run (see the archive note)
-        cmd = [IBIS, "--export", "pdf", src, "--output", pdf]
+        # crates/ibis-office-app/src/export.rs: --export pdf [--out-dir <dir>] <file> -> <dir>/<name>.pdf
+        cmd = [IBIS, "--export", "pdf", "--out-dir", t, src]
     elif engine == "soffice":
         cmd = [SOFFICE, "--headless", "--convert-to", "pdf", "--outdir", t, src]
     else:
         raise SystemExit(f"unknown engine {engine}")
     t0 = time.time()
     r = subprocess.run(cmd, capture_output=True, timeout=timeout)
-    if engine == "soffice":
+    if engine in ("soffice", "ibis"):
         out = os.path.join(t, Path(docx).stem + ".pdf")
         if os.path.exists(out):
             shutil.move(out, pdf)
