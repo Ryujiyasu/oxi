@@ -78,6 +78,11 @@ pub struct AbstractNum {
     #[allow(dead_code)]
     pub abstract_num_id: String,
     pub levels: HashMap<u8, NumberingLevel>,
+    /// `<w:styleLink>`: this definition IS the numbering style of that name.
+    pub style_link: Option<String>,
+    /// `<w:numStyleLink>`: this definition only points at a numbering style;
+    /// its levels are the ones of the definition whose styleLink names it.
+    pub num_style_link: Option<String>,
 }
 
 /// S988B: a `<w:lvlOverride>` for one (numId, ilvl). A lvlOverride can carry a
@@ -623,6 +628,27 @@ pub fn parse_numbering(xml: &str) -> Result<NumberingDefinitions, ParseError> {
         }
     }
 
+    // A list whose abstractNum carries only <w:numStyleLink w:val="X"/> takes its
+    // levels from the abstractNum declaring <w:styleLink w:val="X"/> (Word lays
+    // policies__008885e3's bullets out with that definition's left 720 / hanging
+    // 360; without it the paragraph had no level indent and line 1 lost 36pt).
+    let linked: Vec<(String, String)> = defs
+        .abstract_nums
+        .iter()
+        .filter(|(_, a)| a.levels.is_empty())
+        .filter_map(|(id, a)| a.num_style_link.clone().map(|s| (id.clone(), s)))
+        .collect();
+    for (id, style) in linked {
+        let levels = defs
+            .abstract_nums
+            .values()
+            .find(|a| a.style_link.as_deref() == Some(style.as_str()) && !a.levels.is_empty())
+            .map(|a| a.levels.clone());
+        if let (Some(levels), Some(a)) = (levels, defs.abstract_nums.get_mut(&id)) {
+            a.levels = levels;
+        }
+    }
+
     Ok(defs)
 }
 
@@ -632,10 +658,27 @@ fn parse_abstract_num(
     abstract_num_id: &str,
 ) -> Result<AbstractNum, ParseError> {
     let mut levels = HashMap::new();
+    let mut style_link = None;
+    let mut num_style_link = None;
     let mut depth = 0;
 
     loop {
         match reader.read_event()? {
+            Event::Empty(e) if depth == 0 => {
+                let local = local_name(e.name().as_ref());
+                if local == "styleLink" || local == "numStyleLink" {
+                    let val = e
+                        .attributes()
+                        .flatten()
+                        .find(|a| local_name(a.key.as_ref()) == "val")
+                        .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                    if local == "styleLink" {
+                        style_link = val;
+                    } else {
+                        num_style_link = val;
+                    }
+                }
+            }
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "lvl" && depth == 0 {
@@ -670,6 +713,8 @@ fn parse_abstract_num(
     Ok(AbstractNum {
         abstract_num_id: abstract_num_id.to_string(),
         levels,
+        style_link,
+        num_style_link,
     })
 }
 
@@ -1157,5 +1202,29 @@ mod tests {
         let (marker, indent) = defs.resolve_marker("999", 0, &mut counters);
         assert_eq!(marker, "\u{2022}");
         assert_eq!(indent, Some(18.0));
+    }
+
+    #[test]
+    fn num_style_link_takes_the_style_link_levels() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="1">
+    <w:styleLink w:val="ImportedStyle1"/>
+    <w:lvl w:ilvl="0">
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val="&#x2022;"/>
+      <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="17">
+    <w:numStyleLink w:val="ImportedStyle1"/>
+  </w:abstractNum>
+  <w:num w:numId="2"><w:abstractNumId w:val="17"/></w:num>
+</w:numbering>"#;
+        let defs = parse_numbering(xml).unwrap();
+        let mut counters = HashMap::new();
+        let (marker, hanging) = defs.resolve_marker("2", 0, &mut counters);
+        assert_eq!(marker, "\u{2022}");
+        assert_eq!(hanging, Some(18.0));
     }
 }
