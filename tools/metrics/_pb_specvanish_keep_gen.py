@@ -19,7 +19,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", "_pb_specvanish_keep")
 W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
-NS = list(range(44, 55))
+NS = list(range(44, 58))
 
 
 def doc(n, keep, via_style=False, cont_lines=1):
@@ -30,9 +30,13 @@ def doc(n, keep, via_style=False, cont_lines=1):
     ps = '<w:pStyle w:val="H3"/>' if via_style else ""
     body.append('<w:p><w:pPr>%s%s<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/><w:rPr><w:vanish/><w:specVanish/></w:rPr></w:pPr>'
                 '<w:r><w:rPr><w:b/></w:rPr><w:t>HEADWORD.</w:t></w:r></w:p>' % (ps, kn))
-    body.append('<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t xml:space="preserve"> – MERGED continuation text.</w:t></w:r></w:p>')
+    body.append('<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t xml:space="preserve"> – MERGED continuation text.%s</w:t></w:r></w:p>' % (" more words" * (14 * (cont_lines - 1))))
     big = " ".join(["block"] * 90)
-    body.append('<w:p><w:pPr><w:keepLines/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t>BLOCKSTART %s</w:t></w:r></w:p>' % big)
+    if os.environ.get("PB_FOLLOW") == "line":   # a plain one-line follower (0056b52f's «(Added 1993)»)
+        body.append('<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t>BLOCKSTART one line</w:t></w:r></w:p>')
+        body.append('<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t>%s</w:t></w:r></w:p>' % big)
+    else:
+        body.append('<w:p><w:pPr><w:keepLines/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t>BLOCKSTART %s</w:t></w:r></w:p>' % big)
     xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document %s><w:body>%s'
            '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:bottom="1440" w:left="1440" w:right="1440"/></w:sectPr>'
            '</w:body></w:document>' % (W, "".join(body)))
