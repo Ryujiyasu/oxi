@@ -621,15 +621,35 @@ impl<'a> LineBreaker<'a> {
                     let tail: Vec<String> = current_line.fragments.iter().rev().take(3).map(|f| f.text.clone()).collect();
                     eprintln!("[WRAP-SEED] tail={:?} nfrag={} cw_tw={} lines={}", tail, current_line.fragments.len(), current_width_tw, lines.len());
                 }
-                let n_trail = if s1027_on && c14_active && c14_space_tw > 0 {
-                    current_line
-                        .fragments
-                        .iter()
-                        .rev()
-                        .take_while(|f| f.text == SPACE_STRING)
-                        .count()
+                // OXI_WRAP_TRAIL_SPACES (2026-10-18, default ON, opt-out _DISABLE): with
+                // <w:wrapTrailSpaces/> the first space of the run stays at the line end and
+                // each further one stays only while it fits the column; the rest lead the
+                // next line (`_pb_wraptrail_gen.py`; legal__0011dcc «…PARTNERSHIP.  (a)»
+                // whose second space starts line 2 and wraps «the»). Without the flag no
+                // space leads. The old-Word S1027 rule (every space but one leads) stays
+                // behind OXI_C14JUST.
+                let n_trail_run = current_line
+                    .fragments
+                    .iter()
+                    .rev()
+                    .take_while(|f| f.text == SPACE_STRING)
+                    .count();
+                let (n_trail, lead_sp_w) = if n_trail_run >= 2
+                    && self.wrap_trail_spaces
+                    && std::env::var_os("OXI_WRAP_TRAIL_SPACES_DISABLE").is_none()
+                {
+                    let sp_w = current_line.fragments.last().map_or(0.0, |f| f.width);
+                    let sp_tw = pt_to_tw(sp_w);
+                    let base_tw = current_width_tw - sp_tw * n_trail_run as i32;
+                    let mut kept = 1usize;
+                    while kept < n_trail_run && base_tw + sp_tw * (kept as i32 + 1) <= available_tw {
+                        kept += 1;
+                    }
+                    (n_trail_run - kept + 1, sp_w)
+                } else if s1027_on && c14_active && c14_space_tw > 0 {
+                    (n_trail_run, (c14_space_tw as f32) / 20.0)
                 } else {
-                    0
+                    (0, 0.0)
                 };
                 if n_trail >= 2 {
                     let keep = current_line.fragments.len() - (n_trail - 1);
@@ -673,8 +693,8 @@ impl<'a> LineBreaker<'a> {
                     current_line.fragments.push(f);
                 }
                 if n_trail >= 2 {
-                    let sp_w = (c14_space_tw as f32) / 20.0;
-                    let seed_tw = c14_space_tw * (n_trail as i32 - 1);
+                    let sp_w = lead_sp_w;
+                    let seed_tw = pt_to_tw(sp_w) * (n_trail as i32 - 1);
                     for _ in 0..(n_trail - 1) {
                         current_line.fragments.push(LineFragment {
                             auto_space_shrink: 0.0,

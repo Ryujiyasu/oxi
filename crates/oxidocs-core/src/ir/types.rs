@@ -86,6 +86,10 @@ pub struct Document {
     /// 0 JP → byte-identical elsewhere by construction.
     #[serde(default)]
     pub wp_justification: bool,
+    /// `<w:wrapTrailSpaces/>` (compat): spaces past the column at a line break
+    /// lead the next line instead of hanging (all but the first of the run).
+    #[serde(default)]
+    pub wrap_trail_spaces: bool,
     /// `<w:autoHyphenation/>` (CT_OnOff, settings.xml): Word breaks words at
     /// legal hyphenation points to fill lines. 6/619 corpus docs set it; the
     /// rule Word applies is derived in `layout::hyphen`.

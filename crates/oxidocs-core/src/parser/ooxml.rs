@@ -583,6 +583,7 @@ impl OoxmlParser {
         let endnote_sep_line = self.parse_endnote_sep_line();
         let compress_punctuation = self.parse_compress_punctuation();
         let wp_justification = self.parse_compat_bool_flag("wpJustification");
+        let wrap_trail_spaces = self.parse_compat_bool_flag("wrapTrailSpaces");
         // `<w:autoHyphenation/>` and `<w:hyphenationZone>` live directly under
         // w:settings (not inside w:compat), but parse_compat_bool_flag scans the
         // whole part for the element name, so it reads them correctly.
@@ -1301,6 +1302,7 @@ impl OoxmlParser {
             endnote_sep_line,
             compress_punctuation,
             wp_justification,
+            wrap_trail_spaces,
             auto_hyphenation,
             hyphenation_zone,
             do_not_expand_shift_return,

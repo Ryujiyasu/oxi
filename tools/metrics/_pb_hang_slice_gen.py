@@ -47,7 +47,7 @@ def build(did, needle, rights, out):
         if k:
             q = q.replace("<w:pPr>", "<w:pPr><w:pageBreakBefore/>", 1)
         paras.append(q)
-    b0 = d.find("<w:body>") + len("<w:body>")
+    b0 = re.search(r"<w:body[^>]*>", d).end()   # some packages write <w:body ...> with attributes
     parts["word/document.xml"] = (d[:b0] + "".join(paras) + sect + "</w:body></w:document>").encode("utf-8")
     if os.environ.get("SLICE_SETTINGS") == "bare":
         parts["word/settings.xml"] = (
