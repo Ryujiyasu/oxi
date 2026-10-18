@@ -15,7 +15,7 @@ glyph starting inside the right indent and ending past it.
     python tools/metrics/_pb_hangmark_prop_gen.py word
     python tools/metrics/_pb_hangmark_prop_gen.py compare <renderer.exe>   # per-line glyph counts vs Word
 """
-import json, os, shutil, subprocess, sys, tempfile, zipfile
+import json, os, re, shutil, subprocess, sys, tempfile, zipfile
 sys.stdout.reconfigure(encoding="utf-8")
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", os.environ.get("PB_OUT", "_pb_hangmark_prop"))
@@ -34,6 +34,11 @@ RIGHTS = list(range(2050, 2301, 5))   # «twenty<mark>» reaches the edge near 2
 if os.environ.get("PB_RIGHTS"):   # "start,stop,step" in twips (narrower faces need a wider sweep)
     RIGHTS = list(range(*map(int, os.environ["PB_RIGHTS"].split(","))))
 TEXT = "The regional team reviewed the latest results for participants aged fifteen to twenty"
+TEXT = os.environ.get("PB_TEXT", TEXT)   # e.g. a filler ending in a hyphenated token «… 15-17»
+# PB_EA: the run's w:eastAsia face (e.g. "ＭＳ 明朝" or "Times New Roman"); empty = not set
+EA = ' w:eastAsia="%s"' % os.environ["PB_EA"] if os.environ.get("PB_EA") else ""
+# PB_LANG_EA: the run's <w:lang w:eastAsia=...> (e.g. ja-JP / en-US); empty = not set
+LANG = '<w:lang w:eastAsia="%s"/>' % os.environ["PB_LANG_EA"] if os.environ.get("PB_LANG_EA") else ""
 
 CT = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>"""
@@ -65,9 +70,10 @@ def build(font, cm, jc, mark):
         esc = lambda x: x.replace("&", "&amp;").replace('"', "&quot;")
         # PB_LEAD ends with a hard line break, so the filler + mark is the paragraph's LINE 2
         t = (esc(LEAD) + '</w:t><w:br/><w:t xml:space="preserve">' if LEAD else "") + esc(TEXT + ch + TAIL)
+        rfonts = '<w:rFonts w:ascii="%s" w:hAnsi="%s"%s/>' % (font, font, EA)
         paras.append('<w:p><w:pPr>%s%s<w:ind w:right="%d"/><w:spacing w:before="0" w:after="0"/></w:pPr>'
-                     '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/><w:sz w:val="22"/></w:rPr>'
-                     '<w:t xml:space="preserve">%s</w:t></w:r></w:p>' % (pb, jcx, r, font, font, t))
+                     '<w:r><w:rPr>%s<w:sz w:val="22"/>%s</w:rPr>'
+                     '<w:t xml:space="preserve">%s</w:t></w:r></w:p>' % (pb, jcx, r, rfonts, LANG, t))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document %s><w:body>%s'
            '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="720" w:bottom="720" w:left="1080" w:right="800"/>'
            '</w:sectPr></w:body></w:document>' % (W, "".join(paras)))
@@ -76,8 +82,27 @@ def build(font, cm, jc, mark):
     settings = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings %s>%s</w:settings>' % (W, compat)
     p = os.path.join(OUT, arm(font, cm, jc, mark) + ".docx")
     with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", CT); z.writestr("_rels/.rels", RELS)
-        z.writestr("word/_rels/document.xml.rels", DRELS)
+        ct, drels = CT, DRELS
+        # PB_PARTS_FROM=<docx> PB_PARTS=fontTable,theme,styles: copy those parts of a real
+        # document into the arm (additive bisection of a document-level switch)
+        src = os.environ.get("PB_PARTS_FROM")
+        for k, part in enumerate(filter(None, os.environ.get("PB_PARTS", "").split(","))):
+            name = {"theme": "word/theme/theme1.xml"}.get(part, "word/%s.xml" % part)
+            rtype = {"fontTable": "fontTable", "theme": "theme", "styles": "styles"}[part]
+            ctype = {"fontTable": "wordprocessingml.fontTable+xml", "theme": "theme+xml",
+                     "styles": "wordprocessingml.styles+xml"}[part]
+            data = zipfile.ZipFile(src).read(name).decode("utf-8")
+            # PB_STYLES_SUB="regex=>repl;;...": edit the copied styles.xml
+            if part == "styles":
+                for rule in filter(None, os.environ.get("PB_STYLES_SUB", "").split(";;")):
+                    pat, rep = rule.split("=>")
+                    data = re.sub(pat, rep, data, flags=re.S)
+            z.writestr(name, data.encode("utf-8"))
+            drels = drels.replace("</Relationships>", '<Relationship Id="rIdP%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/%s" Target="%s"/></Relationships>' % (k, rtype, name[5:]))
+            prefix = "application/vnd.openxmlformats-officedocument." if part != "theme" else "application/vnd.openxmlformats-officedocument."
+            ct = ct.replace("</Types>", '<Override PartName="/%s" ContentType="%s%s"/></Types>' % (name, prefix, ctype))
+        z.writestr("[Content_Types].xml", ct); z.writestr("_rels/.rels", RELS)
+        z.writestr("word/_rels/document.xml.rels", drels)
         z.writestr("word/document.xml", doc); z.writestr("word/settings.xml", settings)
 
 

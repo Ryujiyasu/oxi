@@ -35,6 +35,8 @@ def build(did, needle, rights, out):
         pat, rep = rule.split("=>")
         p = re.sub(pat, rep, p)
     sect = re.findall(r"<w:sectPr[ >].*?</w:sectPr>", d, re.S)[-1]
+    if os.environ.get("SLICE_SECT") == "bare":   # page size + margins only
+        sect = "<w:sectPr>%s%s</w:sectPr>" % (re.search(r"<w:pgSz [^>]*/>", sect).group(0), re.search(r"<w:pgMar [^>]*/>", sect).group(0))
     paras = []
     for k, r in enumerate(rights):
         q = re.sub(r"<w:ind ([^>]*?)w:right=\"-?\d+\"", r"<w:ind \1", p)
@@ -51,6 +53,12 @@ def build(did, needle, rights, out):
         parts["word/settings.xml"] = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
             '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="14"/></w:compat></w:settings>').encode()
+    # SLICE_STYLES_SUB="regex=>replacement;;...": edit styles.xml (e.g. drop the docDefaults lang)
+    st = parts["word/styles.xml"].decode("utf-8")
+    for rule in filter(None, os.environ.get("SLICE_STYLES_SUB", "").split(";;")):
+        pat, rep = rule.split("=>")
+        st = re.sub(pat, rep, st, flags=re.S)
+    parts["word/styles.xml"] = st.encode("utf-8")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as w:
         for n, b in parts.items():

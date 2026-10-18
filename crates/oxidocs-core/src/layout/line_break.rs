@@ -186,7 +186,7 @@ impl<'a> LineBreaker<'a> {
             .and_then(|b| b.right.as_ref())
             .map_or(false, |d| d.style != "none")
             && std::env::var("OXI_S929_DISABLE").is_err();
-        // S1262 (2026-08-30, opt-in OXI_S1262=1 since 2026-10-18): the hang
+        // S1262 (2026-08-30, default ON, opt-out OXI_S1262_DISABLE): the hang
         // also applies at compatibilityMode 15 when the paragraph is JUSTIFIED,
         // and the mark set includes the closing quotes.
         // WORD TRUTH (`tools/metrics/_pb_hangpunct_{gen,read}.py`, 156 arms =
@@ -212,15 +212,18 @@ impl<'a> LineBreaker<'a> {
         // `... Bankers Ghana.` by hanging the period at 523.38..526.17 past the
         // 523.32 column edge; Oxi counted it, broke a word early, spent an extra
         // line and pushed 4 paragraphs onto the next page.
-        // 2026-10-18, the 2026-10 Word: a legacy document (compat <= 14 or no
-        // compatibilityMode) hangs a line-end '.', ',', U+201D, U+2019 in a
-        // PROPORTIONAL face only, left or justified alike; a fixed-pitch face
-        // (Courier New, Consolas, Lucida Console) hangs nothing, and compat 15
-        // hangs nothing in any face or alignment (`_pb_hangmark_prop_gen.py`,
-        // `_pb_hangpunct` re-run). The old Word also hung Courier and the
-        // compat-15 justified line: S1262's justified arm and S953 are opt-ins
-        // for that truth.
-        let s1262 = std::env::var("OXI_S1262").is_ok();
+        // 2026-10-18, the 2026-10 Word: the hang below belongs to the run's
+        // EAST-ASIAN LANGUAGE. With <w:lang w:eastAsia="ja-JP"> a proportional
+        // face hangs '.' ',' at compat 14 (left and justified) and at compat 15
+        // when justified -- the S809 / S1262 table; with eastAsia="en-US" nothing
+        // hangs anywhere (`_pb_hangmark_prop_gen.py` PB_LANG_EA, Times New Roman
+        // and Courier New x cm14/15 x left/both). A fixed-pitch face never hangs.
+        // A document without docDefaults takes the language from Normal.dotm
+        // (ja-JP on the truth machine), so style-less probes hang; the real
+        // witnesses split on it: administrative__003f0741 hangs «January 15-17,»
+        // (Normal eastAsia ja-JP) and not «…vehicle refueling.» (run en-US);
+        // reference__00acfeb3 (docDefaults eastAsia en-US) hangs nothing.
+        let s1262 = std::env::var("OXI_S1262_DISABLE").is_err();
         let s809_legacy = self.compat_mode < 15 || !self.compat_mode_explicit;
         let s809_hang = !self.doc_body_has_real_cjk
             && (s809_legacy || (s1262 && is_justified))
@@ -337,7 +340,7 @@ impl<'a> LineBreaker<'a> {
         let s799_space_shrink = std::env::var("OXI_S799_DISABLE").is_err()
             && is_justified
             && !self.doc_body_has_real_cjk;
-        // S953 (2026-07-20, opt-in OXI_S953=1 since 2026-10-18): a COMPAT-15 JUSTIFIED
+        // S953 (2026-07-20, default ON, opt-out OXI_S953_DISABLE): a COMPAT-15 JUSTIFIED
         // line hangs its trailing '.'/',' past the right edge — the S809 rule's
         // modern-justified arm. DERIVED (hang_probe, Arial-12, 12-space line,
         // 2tw margin sweeps against the RENDER-measured natural 444.14):
@@ -377,7 +380,7 @@ impl<'a> LineBreaker<'a> {
                 && s799_space_shrink
                 && !s929_right_fence
                 && !s1018_decimal_paren_list
-                && std::env::var("OXI_S953").is_ok());
+                && std::env::var("OXI_S953_DISABLE").is_err());
         let s809_hang = s953_hang;
         // S1630 (2026-10-01, OPT-IN OXI_S1630=1 -- held, see the end): in the
         // compat-15 justified arm only the '.' hangs; S953 measured a period
@@ -4617,7 +4620,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // the separately measured mixed-text policy admits period.
                         let fixed_pitch = s809_hang
                             && (char_metrics.char_width_em('i') - char_metrics.char_width_em('M')).abs() < 0.001;
-                        word_trail_hang_w = if fixed_pitch {
+                        let east_asian_lang = style
+                            .east_asia_lang
+                            .as_deref()
+                            .or(self.default_east_asia_lang.as_deref())
+                            .is_some_and(|lang| {
+                            let l = lang.to_ascii_lowercase();
+                            ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
+                        });
+                        let lang_hang = !s809_hang
+                            || east_asian_lang
+                            || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
+                        word_trail_hang_w = if fixed_pitch || !lang_hang {
                             0.0
                         } else if ch == '.'
                             || (s809_hang && ch == ',' && !s1630_no_comma)
@@ -6654,7 +6668,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // the separately measured mixed-text policy admits period.
                         let fixed_pitch = s809_hang
                             && (char_metrics.char_width_em('i') - char_metrics.char_width_em('M')).abs() < 0.001;
-                        word_trail_hang_w = if fixed_pitch {
+                        let east_asian_lang = style
+                            .east_asia_lang
+                            .as_deref()
+                            .or(self.default_east_asia_lang.as_deref())
+                            .is_some_and(|lang| {
+                            let l = lang.to_ascii_lowercase();
+                            ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
+                        });
+                        let lang_hang = !s809_hang
+                            || east_asian_lang
+                            || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
+                        word_trail_hang_w = if fixed_pitch || !lang_hang {
                             0.0
                         } else if ch == '.'
                             || (s809_hang && ch == ',' && !s1630_no_comma)
