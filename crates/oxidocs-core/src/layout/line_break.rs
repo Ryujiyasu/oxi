@@ -696,6 +696,32 @@ impl<'a> LineBreaker<'a> {
             }};
         }
         // Helper: flush the accumulated word into current_line, breaking if needed.
+        // OXI_EA_LANG_NOKINSOKU (2026-10-18, default ON, opt-out _DISABLE): a paragraph mixing CJK with Latin
+        // (an ASCII letter or space) whose CJK runs carry a non-east-Asian eastAsia
+        // language gets no kinsoku and no burasage -- Word starts the next line with an
+        // overflowing 。 / 、 (`_pb_ea_breakrules_gen.py` PB_TEXT with «LCD» / spaces:
+        // en-US 行頭 21, ja-JP ぶら下げ 21; pure CJK text keeps the push in both).
+        // ja/technical__c6d7cdb1's «…ディスプレイに が表示されます» + «。».
+        let ea_nokinsoku = std::env::var_os("OXI_EA_LANG_NOKINSOKU_DISABLE").is_none() && {
+            let is_ea_lang = |st: &RunStyle| {
+                st.east_asia_lang
+                    .as_deref()
+                    .or(self.default_east_asia_lang.as_deref())
+                    .is_some_and(|lang| {
+                        let l = lang.to_ascii_lowercase();
+                        ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
+                    })
+            };
+            let cjk_runs: Vec<_> = fragments
+                .iter()
+                .filter(|&&(t, _, _, _, _)| t.chars().any(kinsoku::is_cjk_ideograph_or_kana))
+                .collect();
+            !cjk_runs.is_empty()
+                && cjk_runs.iter().all(|&&(_, st, _, _, _)| !is_ea_lang(st))
+                && fragments
+                    .iter()
+                    .any(|&(t, _, _, _, _)| t.chars().any(|c| c.is_ascii_alphabetic() || c == ' '))
+        };
         let dbg_flush: bool = std::env::var("OXI_DBGFLUSH").ok().map_or(false, |needle| {
             !needle.is_empty() && fragments.iter().any(|&(t, _, _, _, _)| t.contains(&needle))
         });
@@ -6431,6 +6457,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let s1429_cell_oidashi = IN_TABLE_LAYOUT.with(|c| c.get()) > 0
                             && std::env::var_os("OXI_S1429_DISABLE").is_none();
                         let can_hang = kinsoku::is_hangable_punct(ch)
+                            && !ea_nokinsoku
                             && !s1429_cell_oidashi
                             && (!vertical_natural_boundary || vertical_grid_hang)
                             && !modern_cjk_line_end
@@ -6486,8 +6513,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             } else {
                                 ch
                             };
-                            let bad = kinsoku::is_line_start_prohibited(next_first)
-                                || last_of_curr.map_or(false, kinsoku::is_line_end_prohibited);
+                            let bad = !ea_nokinsoku
+                                && (kinsoku::is_line_start_prohibited(next_first)
+                                    || last_of_curr.map_or(false, kinsoku::is_line_end_prohibited));
                             if !bad {
                                 break;
                             }

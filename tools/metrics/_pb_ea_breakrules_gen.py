@@ -19,7 +19,8 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", "_pb_ea_breakrules")
 W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 TEXT = "スリープタイマーが設定されると、ディスプレイに表示されます。次の行の文章です"
-TEXT = os.environ.get("PB_TEXT", TEXT)   # e.g. the real line with spaces and Latin «LCD»
+TEXT = os.environ.get("PB_TEXT", TEXT)
+MARK = os.environ.get("PB_MARK", "。")   # the punctuation under test   # e.g. the real line with spaces and Latin «LCD»
 RIGHTS = list(range(0, 2400, 10))
 CT = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
@@ -72,11 +73,12 @@ def word_classes(docx):
                 if ch:
                     lines.append(ch)
         for k, ch in enumerate(lines):
-            if ch[0]["c"] == "。":
+            # only the mark after «表示されます»: the previous line ends with す
+            if ch[0]["c"] == MARK and k > 0 and lines[k - 1][-1]["c"] == "す":
                 seen["starts_line"] += 1
-            if ch[-1]["c"] == "。" and ch[-1]["bbox"][2] > lim + 0.5:
+            if ch[-1]["c"] == MARK and len(ch) > 1 and ch[-2]["c"] == "す" and ch[-1]["bbox"][2] > lim + 0.5:
                 seen["hangs"] += 1
-            if k + 1 < len(lines) and lines[k + 1][0]["c"] != "。" and "".join(c["c"] for c in lines[k + 1]).startswith("す。"):
+            if k + 1 < len(lines) and lines[k + 1][0]["c"] != MARK and "".join(c["c"] for c in lines[k + 1]).startswith("す" + MARK):
                 seen["pushed"] += 1
     return seen
 
@@ -84,8 +86,8 @@ def word_classes(docx):
 if __name__ == "__main__":
     # PB_EAFONTS: the run's w:eastAsia faces to try (a Latin face here = the CJK text falls back)
     for ea in os.environ.get("PB_EAFONTS", "ＭＳ 明朝").split(","):
-        for rule_off in (False, True):
-            for lang in ("ja-JP", "en-US"):
+        for rule_off in ((False, True) if not os.environ.get("PB_RULE_ON_ONLY") else (False,)):
+            for lang in os.environ.get("PB_LANGS", "ja-JP,en-US").split(","):
                 cm = 14
                 name = "rule%s_%s_cm%d_%s" % ("OFF" if rule_off else "on", lang, cm, ea.replace(" ", ""))
                 print("%-34s %s" % (name, word_classes(build(name, rule_off, lang, cm, ea))), flush=True)
