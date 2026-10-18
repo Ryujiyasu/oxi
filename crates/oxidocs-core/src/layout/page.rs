@@ -9024,6 +9024,136 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         img_adv
                     };
+                    // OXI_IMG_KEEPNEXT (2026-10-18, default ON, opt-out _DISABLE): an
+                    // inline image whose host paragraph is keepNext shares its page with
+                    // the next paragraph's first line. When the image fits but that line
+                    // does not, the image moves -- with the keepNext chain above it (S802B's
+                    // back-pull, here reaching through image hosts as S959 does).
+                    // policies__00148f8d p65: «(6)» and «(7)» (keepNext) -> Graphics figure
+                    // (keepNext) -> «Location of brake lights on a vehicle»: Word starts p66
+                    // with all four; Oxi kept the text and figure on p65 and moved only the
+                    // heading. Latin scope (the JP corpus keeps its calibrated keepNext).
+                    if std::env::var_os("OXI_IMG_KEEPNEXT_DISABLE").is_none()
+                        && !self.doc_body_has_real_cjk
+                        && img.position.is_none()
+                        && !(num_columns > 1 && current_column + 1 < num_columns)
+                    {
+                        let img_overflows = cursor.cursor_y + img_before + img_fit > start_y + content_height;
+                        let host_keep = img.host_paragraph.as_ref().map_or(false, |h| h.style.keep_next);
+                        let next_need = if img_overflows || !host_keep { 0.0 } else { match page.blocks.get(block_idx + 1) {
+                            Some(Block::Paragraph(next)) if !next.style.page_break_before => {
+                                let mut one = next.clone();
+                                one.runs.truncate(1);
+                                if let Some(r) = one.runs.first_mut() {
+                                    r.text = "x".to_string();
+                                }
+                                one.shapes.clear();
+                                let h = self.estimate_para_height(&one, content_width, grid_pitch, None, false, None, None);
+                                h + img.paragraph_space_after.max(next.style.space_before.unwrap_or(0.0))
+                            }
+                            _ => 0.0,
+                        } };
+                        if img_overflows
+                            || (next_need > 0.0
+                                && cursor.cursor_y + img_before + img_fit + next_need > start_y + content_height)
+                        {
+                            let mut pull_from = block_idx;
+                            while pull_from > 0 {
+                                let prev = pull_from - 1;
+                                if block_page_indices.get(prev) != Some(&current_page_idx) {
+                                    break;
+                                }
+                                let keep = match page.blocks.get(prev) {
+                                    Some(Block::Paragraph(pp)) => pp.style.keep_next,
+                                    Some(Block::Image(pi)) if pi.position.is_none() => pi
+                                        .host_paragraph
+                                        .as_ref()
+                                        .map_or(false, |h| h.style.keep_next),
+                                    _ => false,
+                                };
+                                if !keep {
+                                    break;
+                                }
+                                pull_from = prev;
+                            }
+                            let chain_top = block_y_positions.get(pull_from).copied().unwrap_or(cursor.cursor_y);
+                            let fresh_height = s755_geom.as_ref().map_or(content_height, |g| g.ch(pages.len() + 2));
+                            let chain_h = cursor.cursor_y - chain_top + img_before + img_fit + next_need;
+                            // An overflowing image with no keepNext chain above it keeps
+                            // the existing single-image move below.
+                            if chain_top > start_y + 0.1 && chain_h <= fresh_height
+                                && (!img_overflows || pull_from < block_idx)
+                            {
+                                let pulled: Vec<LayoutElement> = if pull_from < block_idx {
+                                    let y0 = block_y_positions[pull_from] - 0.1;
+                                    let (keep, moved): (Vec<LayoutElement>, Vec<LayoutElement>) =
+                                        elements.drain(..).partition(|e| {
+                                            if let Some(index) = e.paragraph_index {
+                                                return index < pull_from || index >= block_idx;
+                                            }
+                                            e.y < y0
+                                        });
+                                    elements = keep;
+                                    moved
+                                } else {
+                                    Vec::new()
+                                };
+                                let chain_end_old = cursor.cursor_y;
+                                dbg_page_push(pages.len(), 0);
+                                pages.push(LayoutPage {
+                                    width: page.size.width,
+                                    height: page.size.height,
+                                    elements: std::mem::take(&mut elements),
+                                });
+                                if let Some(g) = s755_geom.as_ref() {
+                                    start_y = g.top(pages.len() + 1);
+                                    content_height = g.ch(pages.len() + 1);
+                                }
+                                cursor.set(start_y);
+                                current_column = 0;
+                                start_x = col_x_positions[0];
+                                content_width = col_widths[0];
+                                lm2_cells = 0;
+                                current_page_idx += 1;
+                                footnote_reserve_current = 0.0;
+                                footnote_ids_current_page.clear();
+                                s900_fold(
+                                    &mut footnote_reserve_current,
+                                    &mut footnote_ids_current_page,
+                                    &mut s900_pending_deferred,
+                                    current_page_idx,
+                                );
+                                if !pulled.is_empty() {
+                                    let min_y = pulled.iter().map(|e| e.y).fold(f32::MAX, f32::min);
+                                    let dy = cursor.cursor_y - min_y;
+                                    for mut e in pulled {
+                                        e.y += dy;
+                                        if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = e.content {
+                                            *y1 += dy;
+                                            *y2 += dy;
+                                        }
+                                        elements.push(e);
+                                    }
+                                    cursor.set(chain_end_old + dy);
+                                    for bi in pull_from..block_idx {
+                                        if let Some(p) = block_page_indices.get_mut(bi) {
+                                            *p = current_page_idx;
+                                        }
+                                        if let Some(y) = block_y_positions.get_mut(bi) {
+                                            *y += dy;
+                                        }
+                                    }
+                                } else {
+                                    img_before = image_section_top_spacing;
+                                }
+                                *block_page_indices.last_mut().unwrap() = current_page_idx;
+                                *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                                if std::env::var("OXI_S1293_DISABLE").is_err() {
+                                    *block_start_page_indices.last_mut().unwrap() = current_page_idx;
+                                }
+                            }
+                        }
+                    }
                     // An oversized inline image must occupy a fresh region.
                     // Moving it from an empty page to an identical empty page
                     // cannot improve the fit and inserts an artificial blank.
