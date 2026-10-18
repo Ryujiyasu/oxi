@@ -22,13 +22,14 @@ W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 NS = list(range(44, 55))
 
 
-def doc(n, keep):
+def doc(n, keep, via_style=False, cont_lines=1):
     body = []
     for i in range(n):
         body.append('<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t>filler line %d</w:t></w:r></w:p>' % i)
-    kn = "<w:keepNext/>" if keep else ""
-    body.append('<w:p><w:pPr>%s<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/><w:rPr><w:vanish/><w:specVanish/></w:rPr></w:pPr>'
-                '<w:r><w:rPr><w:b/></w:rPr><w:t>HEADWORD.</w:t></w:r></w:p>' % kn)
+    kn = "" if via_style else ("<w:keepNext/>" if keep else "")
+    ps = '<w:pStyle w:val="H3"/>' if via_style else ""
+    body.append('<w:p><w:pPr>%s%s<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/><w:rPr><w:vanish/><w:specVanish/></w:rPr></w:pPr>'
+                '<w:r><w:rPr><w:b/></w:rPr><w:t>HEADWORD.</w:t></w:r></w:p>' % (ps, kn))
     body.append('<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t xml:space="preserve"> – MERGED continuation text.</w:t></w:r></w:p>')
     big = " ".join(["block"] * 90)
     body.append('<w:p><w:pPr><w:keepLines/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:t>BLOCKSTART %s</w:t></w:r></w:p>' % big)
@@ -45,15 +46,31 @@ RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships x
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
 
 
+# PB_ARM: "direct1" (default), "style1", "direct4", "style4" -- keepNext source x continuation lines
+ARM = os.environ.get("PB_ARM", "direct1")
+VIA_STYLE = ARM.startswith("style")
+CONT_LINES = int(ARM[-1])
+STYLES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles %s><w:style w:type="paragraph" w:styleId="H3">'
+          '<w:name w:val="heading 3"/><w:pPr>%%s</w:pPr></w:style></w:styles>' % W)
+DRELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
+
+
 def main():
     import fitz, win32com.client
     os.makedirs(OUT, exist_ok=True)
     for keep in (True, False):
         row = []
         for n in NS:
-            p = os.path.join(OUT, "kn%d_n%d.docx" % (keep, n))
+            p = os.path.join(OUT, "kn%d_n%d_%s.docx" % (keep, n, ARM))
             with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
-                z.writestr("[Content_Types].xml", CT); z.writestr("_rels/.rels", RELS); z.writestr("word/document.xml", doc(n, keep))
+                ct = CT
+                if VIA_STYLE:
+                    ct = CT.replace("</Types>", '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>')
+                    z.writestr("word/styles.xml", STYLES % ("<w:keepNext/>" if keep else ""))
+                    z.writestr("word/_rels/document.xml.rels", DRELS)
+                z.writestr("[Content_Types].xml", ct); z.writestr("_rels/.rels", RELS)
+                z.writestr("word/document.xml", doc(n, keep, VIA_STYLE, CONT_LINES))
             pdf = p[:-5] + ".pdf"
             w = win32com.client.DispatchEx("Word.Application"); w.Visible = False; w.DisplayAlerts = 0
             try:
@@ -68,7 +85,7 @@ def main():
                 if "BLOCKSTART" in t and pg_block is None:
                     pg_block = i + 1
             row.append("n%d:%s/%s" % (n, pg_merged, pg_block))
-        print("heading keepNext=%s  (merged page / block page): %s" % (keep, " ".join(row)), flush=True)
+        print("%s heading keepNext=%s  (merged page / block page): %s" % (ARM, keep, " ".join(row)), flush=True)
 
 
 if __name__ == "__main__":
