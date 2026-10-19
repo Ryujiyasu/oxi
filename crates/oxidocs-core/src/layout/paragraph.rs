@@ -816,6 +816,35 @@ impl<'a> ParagraphLayouter<'a> {
                     s893_stop_extra = (stop - indent_left).max(0.0);
                 }
             }
+            // OXI_NUM_PLAIN_STOP (2026-10-19, default ON, opt-out _DISABLE): under
+            // <w:doNotUseIndentAsNumberingTabStop/> at compat <= 14 the hanging
+            // indent is an ORDINARY stop among the default stops -- the suffix tab
+            // goes to the nearest of them strictly past the marker end, so a marker
+            // that ends exactly on the indent moves on to the next default stop, and
+            // a default stop before the indent wins over it
+            // (`_pb_tab_exact_stop_gen.py` PB_FLAG=1, defaultTabStop 420, marker 18pt:
+            // hanging 360 -> 21, 400 -> 20, 900 -> 21, 840 -> 21; without the flag or
+            // at compat 15: 18 / 20 / 45 / 42). ja/educational__08709ff2: «⑤検索…»
+            // text at margin + 21, not + 18.
+            if std::env::var_os("OXI_NUM_PLAIN_STOP_DISABLE").is_none()
+                && self.no_indent_num_tab_stop
+                && self.compat_mode <= 14
+                && para.style.list_suff.as_deref().unwrap_or("tab") == "tab"
+                && list_consumes_hanging
+                && s778_stop_extra <= 0.0
+                && para.style.list_indent.is_some()
+                && self.default_tab_stop > 0.0
+            {
+                let marker_end_rel = (indent_left - list_indent) + marker_width;
+                let dts = self.default_tab_stop;
+                let default_stop = ((marker_end_rel + 0.01) / dts).floor() * dts + dts;
+                let stop = if indent_left > marker_end_rel + 0.01 {
+                    default_stop.min(indent_left)
+                } else {
+                    default_stop
+                };
+                s893_stop_extra = stop - indent_left;
+            }
             let line_height = self.line_height(
                 marker_font_size,
                 para.style.line_spacing,

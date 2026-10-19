@@ -3372,6 +3372,8 @@ pub struct LayoutEngine {
     wp_justification: bool,
     /// `<w:wrapTrailSpaces/>`: see ir::Document.
     wrap_trail_spaces: bool,
+    /// `<w:doNotUseIndentAsNumberingTabStop/>`: see paragraph.rs OXI_NUM_PLAIN_STOP.
+    no_indent_num_tab_stop: bool,
     /// CELLPAIR scope (2026-07-02): the document has a linesAndChars docGrid with
     /// NEGATIVE charSpace (the 文字詰め form family: 191cb/b35123/atimesresume/
     /// parttime). Within this scope the derived Word cell model applies: subtract
@@ -4038,6 +4040,7 @@ impl LayoutEngine {
             compress_punctuation: false,
             wp_justification: false,
             wrap_trail_spaces: false,
+            no_indent_num_tab_stop: false,
             cellpair_neg_charspace: false,
             do_not_expand_shift_return: false,
             balance_single_byte_double_byte_width: false,
@@ -4276,6 +4279,7 @@ impl LayoutEngine {
             compress_punctuation: doc.compress_punctuation,
             wp_justification: doc.wp_justification,
             wrap_trail_spaces: doc.wrap_trail_spaces,
+            no_indent_num_tab_stop: doc.no_indent_num_tab_stop,
             cellpair_neg_charspace: doc.pages.iter().any(|pg| {
                 pg.doc_grid_lines_and_chars && pg.grid_char_space_raw.map_or(false, |cs| cs < 0)
             }),

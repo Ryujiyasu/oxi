@@ -90,6 +90,10 @@ pub struct Document {
     /// lead the next line instead of hanging (all but the first of the run).
     #[serde(default)]
     pub wrap_trail_spaces: bool,
+    /// `<w:doNotUseIndentAsNumberingTabStop/>` (compat): the hanging indent is
+    /// not the numbering suffix tab's own stop; see LayoutEngine.
+    #[serde(default)]
+    pub no_indent_num_tab_stop: bool,
     /// `<w:autoHyphenation/>` (CT_OnOff, settings.xml): Word breaks words at
     /// legal hyphenation points to fill lines. 6/619 corpus docs set it; the
     /// rule Word applies is derived in `layout::hyphen`.
