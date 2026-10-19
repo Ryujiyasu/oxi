@@ -12613,6 +12613,18 @@ fn parse_table_row(
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
+                        // OXI_TRHEIGHT_AUTO (2026-10-19, default ON, opt-out _DISABLE):
+                        // hRule="auto" is ECMA's "determine the height from the content"
+                        // -- the val is ignored. `_pb_trheight_auto_gen.py`: a one-line
+                        // Arial 11 row with val 866 is 13.20 under auto, 43.80 under
+                        // atLeast (and with no rule), 43.32 exact. en/reports__001f1397
+                        // row 22 (866 auto) split across pages: its page-2 remainder is
+                        // one line in Word; Oxi gave it 43pt and slid page 2 down 28pt.
+                        if height_rule.as_deref() == Some("auto")
+                            && std::env::var_os("OXI_TRHEIGHT_AUTO_DISABLE").is_none()
+                        {
+                            height = None;
+                        }
                     }
                     "tblHeader" => {
                         // S1384 (2026-09-13): `<w:tblHeader w:val="0"/>` is NOT a
