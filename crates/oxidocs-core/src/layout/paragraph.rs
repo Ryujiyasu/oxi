@@ -7532,6 +7532,35 @@ impl<'a> ParagraphLayouter<'a> {
                         && std::env::var_os("OXI_ATLEAST_UNION_CELL_DISABLE").is_none()))
                 });
 
+            // OXI_GRID_MIXED_FACE_BASELINE (2026-10-20, default ON, opt-out _DISABLE):
+            // on a typed-grid AUTO line that carries a CJK 83/64 face, the Latin
+            // fragments sit on the CJK baseline (S1354 centres the CJK box; the
+            // renderer would otherwise hang each face from its own ascent).
+            // ja/policies__07543a6b (linesAndChars, Century + ＭＳ 明朝 at one size):
+            // Word's PDF has both faces at 220.70 / 405.29 / 565.87 (p1) and 125.06 (p2);
+            // Oxi drew Century 3.0 / 2.3 / 2.3 / 2.3pt lower -- 72 such lines.
+            let grid_mixed_cjk_ref: Option<f32> = if std::env::var_os("OXI_GRID_MIXED_FACE_BASELINE_DISABLE").is_none()
+                && !line_has_mixed_sizes
+                && !page.doc_grid_no_type
+                && para.style.snap_to_grid
+                && grid_pitch.is_some_and(|p| p > 0.0)
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+            {
+                let mut cjk_ref: f32 = 0.0;
+                let mut has_latin = false;
+                for f in line.fragments.iter().filter(|f| !f.text.trim().is_empty()) {
+                    let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                    if m.is_cjk_83_64_font() {
+                        cjk_ref = cjk_ref.max(m.baseline_ascent() * f.style.font_size.unwrap_or(para_font_size));
+                    } else {
+                        has_latin = true;
+                    }
+                }
+                (cjk_ref > 0.0 && has_latin).then_some(cjk_ref)
+            } else {
+                None
+            };
+
             // R-10: track whether any fragment on this line came from a
             // revision-bearing source run; if so we emit one change-bar at
             // the line's left margin after the fragment loop finishes.
@@ -7818,6 +7847,12 @@ impl<'a> ParagraphLayouter<'a> {
                 // probes actually measured is a LATIN line carrying two
                 // different font SIZES, so that is all this claims: a
                 // same-size line is left exactly where it was.
+                let baseline_adjust = baseline_adjust
+                    + match grid_mixed_cjk_ref {
+                        Some(r) if !frag_metrics.is_cjk_83_64_font() && !frag.text.trim().is_empty() =>
+                            r - frag_metrics.baseline_ascent() * resolved_font_size,
+                        _ => 0.0,
+                    };
                 let baseline_adjust = baseline_adjust + line_ascent_growth
                     + if std::env::var("OXI_S1358_DISABLE").is_err()
                         && line_max_render_ascent > 0.0
