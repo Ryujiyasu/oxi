@@ -6487,14 +6487,52 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             let chain_len = block_idx - pull_from;
                             let s1176_single =
                                 chain_len == 1 && std::env::var("OXI_S1176_DISABLE").is_err();
-                            let pulled_here: Vec<usize> = (pull_from..block_idx).collect();
+                            // OXI_KEEPNEXT_TAIL_SPLIT (2026-10-19, default ON, opt-out _DISABLE):
+                            // a keepNext predecessor with >= 4 lines on the old page (not
+                            // keepLines) is SPLIT, not dragged: only its last two lines join the
+                            // follower, and the chain above it stays (keepNext only asks for the
+                            // LAST line beside the follower -- the S916/S978 rule, here on the
+                            // follower-moved path). technical__0056b52f p20: Word keeps «event
+                            // counter» on p20 and starts p21 with its tail and «(Added 1993)»;
+                            // Oxi dragged three run-in glossary entries across
+                            // (`_pb_keepnext_slice_gen.py`; `_pb_specvanish_keep_gen.py`
+                            // PB_ARM=direct4: a 4-line keepNext paragraph at the page end splits).
+                            let tail_split_y: Option<f32> = if std::env::var_os("OXI_KEEPNEXT_TAIL_SPLIT_DISABLE").is_none()
+                                && chain_len >= 1
+                            {
+                                match page.blocks.get(block_idx - 1) {
+                                    Some(Block::Paragraph(p)) if !p.style.keep_lines => {
+                                        let mut ys: Vec<f32> = pages[old_idx]
+                                            .elements
+                                            .iter()
+                                            .filter(|e| {
+                                                e.paragraph_index == Some(block_idx - 1)
+                                                    && matches!(e.content, LayoutContent::Text { .. })
+                                            })
+                                            .map(|e| e.y)
+                                            .collect();
+                                        ys.sort_by(f32::total_cmp);
+                                        ys.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+                                        if ys.len() >= 4 { Some(ys[ys.len() - 2]) } else { None }
+                                    }
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+                            let pulled_here: Vec<usize> = if tail_split_y.is_some() {
+                                vec![block_idx - 1]
+                            } else {
+                                (pull_from..block_idx).collect()
+                            };
+                            let is_mine = |e: &LayoutElement| {
+                                e.paragraph_index.is_some_and(|pi| pulled_here.contains(&pi))
+                                    && tail_split_y.map_or(true, |ty| e.y >= ty - 0.1)
+                            };
                             let chain_min_y = pages[old_idx]
                                 .elements
                                 .iter()
-                                .filter(|e| {
-                                    e.paragraph_index
-                                        .is_some_and(|pi| pulled_here.contains(&pi))
-                                })
+                                .filter(|e| is_mine(e))
                                 .map(|e| e.y)
                                 .fold(f32::INFINITY, f32::min);
                             // Anything unowned sitting in the vacated band (a
@@ -6505,12 +6543,10 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             // that keys off the block's page (float bands,
                             // anchors), which a bare element move would desync.
                             let source_column_x = col_x_positions[s1324_col_before];
-                            let region_clean = (chain_len >= 2 || s1176_single)
+                            let region_clean = (chain_len >= 2 || s1176_single || tail_split_y.is_some())
                                 && chain_min_y.is_finite()
                                 && !pages[old_idx].elements.iter().any(|e| {
-                                    let mine = e
-                                        .paragraph_index
-                                        .is_some_and(|pi| pulled_here.contains(&pi));
+                                    let mine = is_mine(e);
                                     (e.y >= chain_min_y - 0.1
                                         && (num_columns == 1 || e.x >= source_column_x - 0.5)
                                         && !mine)
@@ -6521,8 +6557,7 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             // Never blank the page the chain came from (Word's
                             // own cutoff: the N=60 probe splits rather than push).
                             let old_keeps_body = pages[old_idx].elements.iter().any(|e| {
-                                e.paragraph_index
-                                    .is_some_and(|pi| !pulled_here.contains(&pi))
+                                e.paragraph_index.is_some() && !is_mine(e)
                             });
                             // S1249 (default ON, opt-out OXI_S1249_DISABLE): `dbg_para_start_y` is the
                             // cursor at this paragraph's START, i.e. the chain's last
@@ -6550,9 +6585,7 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             if region_clean && old_keeps_body && fits_fresh {
                                 let mut pulled: Vec<LayoutElement> = Vec::new();
                                 pages[old_idx].elements.retain(|e| {
-                                    if e.paragraph_index
-                                        .is_some_and(|pi| pulled_here.contains(&pi))
-                                    {
+                                    if is_mine(e) {
                                         pulled.push(e.clone());
                                         false
                                     } else {
@@ -6572,7 +6605,8 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                                 pulled.extend(std::mem::take(&mut para_elements));
                                 para_elements = pulled;
                                 cursor.advance(chain_advance);
-                                for pi in pulled_here.iter() {
+                                // a split predecessor still STARTS on the old page
+                                for pi in pulled_here.iter().filter(|_| tail_split_y.is_none()) {
                                     if let Some(p) = block_page_indices.get_mut(*pi) {
                                         *p = current_page_idx + 1;
                                     }
