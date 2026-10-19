@@ -2296,6 +2296,22 @@ impl FontMetricsRegistry {
         // Century, MS Mincho, MS Gothic at multiple sizes. 100% 10tw match.
         if metrics.char_widths.contains_key(&c) {
             let advance_em = metrics.char_width_em(c);
+            // OXI_PROP_CJK_EXACT on this path too (it lived only in char_width_pt,
+            // so the body line break -- which comes here with its gdi map -- kept
+            // rounding): ja/educational__08709ff2 «…調べる方» (BIZ UDPGothic 18pt)
+            // sums to 424.996 at hmtx on a 425.2 line and Word keeps 方; the
+            // 10tw-rounded kana pushed it down. Word's PDF steps by hmtx (た 17.640,
+            // し 15.293 -- `_pb_advance_round_gen.py`).
+            if std::env::var_os("OXI_PROP_CJK_EXACT_DISABLE").is_none()
+                && std::env::var_os("OXI_PROP_CJK_EXACT_GDI_DISABLE").is_none()
+                && matches!(c, '\u{3041}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}'
+                    | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}')
+                && metrics.units_per_em != 256
+                && metrics.is_cjk_83_64_font()
+                && metrics.has_proportional_kana()
+            {
+                return advance_em * font_size;
+            }
             let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
             if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
                 eprintln!("[CW] {} family={:?} upm={} has_cw={} fs={} -> {:.4}",
