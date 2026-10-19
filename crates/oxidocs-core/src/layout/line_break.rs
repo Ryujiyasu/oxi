@@ -2135,11 +2135,26 @@ impl<'a> LineBreaker<'a> {
             // nothing; without spaces the line fills to the margin (37).
             // blind-G ja/reports__59eadfc4 (compat 12, docDefaults eastAsia
             // Calibri): the title's five lines sat 17.55pt off.
-            let cjk_latin_wrap = std::env::var_os("OXI_CJK_LEGACY_WORDWRAP_DISABLE").is_none()
+            // OXI_TNR_EA_WORDWRAP (2026-10-19, default ON, opt-out _DISABLE): an eastAsia
+            // face of «Times New Roman» -- and only that face -- wraps the CJK text like
+            // Latin at EVERY compatibility mode (`_pb_ea_tnr_wordbreak_gen.py`: compat
+            // 12/14/15 x TNR / Calibri / Cambria / Arial / Century / Courier New, run
+            // level; only TNR keeps «卿が永眠…» off line 1; the eastAsia language changes
+            // nothing). ja/correspondence__0d550693: docDefaults eastAsia TNR, Word moves
+            // the whole «卿が永眠いたしました。…» run to line 2 after «David McMurtry».
+            let declared_ea_face = style
+                .font_family_east_asia
+                .as_deref()
+                .or(para_style.default_run_style.as_ref().and_then(|d| d.font_family_east_asia.as_deref()))
+                .or(self.default_font_family_east_asia.as_deref());
+            let tnr_ea_wrap = std::env::var_os("OXI_TNR_EA_WORDWRAP_DISABLE").is_none()
+                && declared_ea_face == Some("Times New Roman");
+            let cjk_latin_wrap = tnr_ea_wrap
+                || (std::env::var_os("OXI_CJK_LEGACY_WORDWRAP_DISABLE").is_none()
                 && (self.compat_mode <= 12 || !self.compat_mode_explicit)
                 && style.fallback_declared_latin
                     .filter(|_| std::env::var_os("OXI_LEGACY_WRAP_FALLBACK_DISABLE").is_none())
-                    .unwrap_or_else(|| cjk_metrics.is_some_and(|m| !m.is_cjk_83_64_font()));
+                    .unwrap_or_else(|| cjk_metrics.is_some_and(|m| !m.is_cjk_83_64_font())));
             let substitute_gdi_map = substitute_metrics
                 .and_then(|m| self.registry.get_gdi_char_widths(&m.family, font_size));
             let latin_gdi_map = self
