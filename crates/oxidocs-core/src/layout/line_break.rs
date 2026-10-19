@@ -5087,6 +5087,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // fits at natural width. Compression credit must not also
                         // pull the preceding text beyond the line boundary.
                         && (!is_justified || current_width_tw > available_tw);
+                    // OXI_PROP_FINAL_NOHANG (2026-10-19, default ON, opt-out _DISABLE): at
+                    // compat <= 14 the PARAGRAPH-FINAL 。/、 of a proportional face (its mark
+                    // narrower than an em) does not hang -- Word pushes it out with the
+                    // character before it. `_pb_hang_gap_gen.py` (right indent swept 0.4pt
+                    // at a time): BIZ UDPGothic / MS PGothic / ＭＳ Ｐ明朝 c11 jc=left and
+                    // jc=both push «ね。¶» as soon as 。 overflows, the same text with
+                    // more after the mark hangs it (drawn from the edge); MS Gothic hangs
+                    // the final 。 too; c15 jc=both hangs. ja/educational__08709ff2 «⑤…
+                    // ダブルタップします。» wraps «す。».
+                    let prop_final_nohang = std::env::var_os("OXI_PROP_FINAL_NOHANG_DISABLE").is_none()
+                        && (self.compat_mode <= 14 || !self.compat_mode_explicit)
+                        && matches!(ch, '。' | '、' | '，' | '．')
+                        && s725_chars_after == 0
+                        && char_index + 1 == chars_vec.len()
+                        && cjk_metrics.is_some_and(|m| {
+                            let width = m.char_width_em(ch);
+                            width > 0.0 && width < 0.99
+                        });
                     let s725_final_char = std::env::var("OXI_S725_DISABLE").is_err()
                         && !vertical
                         && self.compat_mode >= 15
@@ -5561,6 +5579,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 || !self.compat_mode_explicit
                                 || is_justified
                                 || std::env::var("OXI_S1334_DISABLE").is_ok())
+                            && !prop_final_nohang
                             // S1346: under the regime a refused ・ is 追い出し, not hung
                             && !(s1318_regime && ch == '・' && s1318_refuse_here)
                             // S1346: under the regime a closing bracket hangs like 、
@@ -6507,6 +6526,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             && std::env::var_os("OXI_S1429_DISABLE").is_none();
                         let can_hang = kinsoku::is_hangable_punct(ch)
                             && !ea_nokinsoku
+                            && !prop_final_nohang
                             && !s1429_cell_oidashi
                             && (!vertical_natural_boundary || vertical_grid_hang)
                             && !modern_cjk_line_end
