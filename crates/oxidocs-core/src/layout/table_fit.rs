@@ -7110,7 +7110,22 @@ impl<'a> TableFitLayouter<'a> {
                                                                     current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch),
                                                                     carry.iter().map(|c| c.ch).chain(std::iter::once(ch)),
                                                                 );
-                                                            if !tail.map_or(false, |c| pred(c)) && !joined_space {
+                                                            // OXI_CELL_LEADPUNCT (2026-10-19, default ON, opt-out
+                                                            // _DISABLE): the body's leadpunct carry in the cell
+                                                            // wrapper -- a space whose next character is a closing
+                                                            // mark (. , : ; ? ! % ) ] } ’ ” °) is no break, so the
+                                                            // word before it moves with the mark
+                                                            // (`_pb_lead_punct_gen.py` PB_CELL=1: Word never starts a
+                                                            // cell line with «%» after «rate␠» at the end of the
+                                                            // paragraph; Oxi did). en/reports__001f1397 «Actual
+                                                            // recorded annual inflation rate %» -> «inflation» /
+                                                            // «rate %».
+                                                            let lead_joined = s818_cell
+                                                                && std::env::var_os("OXI_CELL_LEADPUNCT_DISABLE").is_none()
+                                                                && tail == Some(' ')
+                                                                && carry.iter().find(|c| c.ch != ' ').is_some_and(|c| matches!(c.ch,
+                                                                    '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201D}' | '\u{B0}'));
+                                                            if !tail.map_or(false, |c| pred(c)) && !joined_space && !lead_joined {
                                                                 hit_boundary =
                                                                     remaining_on_line >= 1;
                                                                 break;

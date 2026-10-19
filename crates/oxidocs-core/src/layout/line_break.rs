@@ -569,7 +569,10 @@ impl<'a> LineBreaker<'a> {
             ($word:expr, $wfw:expr, $avail:expr) => {{
                 let mut lp_carry: Vec<LineFragment> = Vec::new();
                 if leadpunct_on {
-                    let proh = |c: char| matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201D}');
+                    // ° (2026-10-19): `_pb_lead_punct_gen.py` -- Word never starts a line
+                    // with «␠°» either; $ ( - – — / do start one.
+                    let proh = |c: char| matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201D}')
+                        || (c == '\u{B0}' && std::env::var_os("OXI_CELL_LEADPUNCT_DISABLE").is_none());
                     let is_sp = |f: &LineFragment| !f.text.is_empty() && f.text.chars().all(|c| c == ' ');
                     let is_wd = |f: &LineFragment| f.tab_position.is_none() && f.field_type.is_none()
                         && !f.text.is_empty() && !f.text.chars().any(|c| c == ' ' || c == '\t');
