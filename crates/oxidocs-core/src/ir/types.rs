@@ -94,6 +94,9 @@ pub struct Document {
     /// not the numbering suffix tab's own stop; see LayoutEngine.
     #[serde(default)]
     pub no_indent_num_tab_stop: bool,
+    /// `<w:useAltKinsokuLineBreakRules/>` (compat): see LayoutEngine.
+    #[serde(default)]
+    pub alt_kinsoku: bool,
     /// `<w:autoHyphenation/>` (CT_OnOff, settings.xml): Word breaks words at
     /// legal hyphenation points to fill lines. 6/619 corpus docs set it; the
     /// rule Word applies is derived in `layout::hyphen`.

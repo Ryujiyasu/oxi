@@ -5105,6 +5105,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let width = m.char_width_em(ch);
                             width > 0.0 && width < 0.99
                         });
+                    // OXI_ALT_KINSOKU_NOHANG (2026-10-19, default ON, opt-out _DISABLE):
+                    // under <w:useAltKinsokuLineBreakRules/> at compat <= 14 a closing
+                    // bracket does not hang -- it is pushed out with the character before
+                    // it; 、 and 。 still hang. `_pb_hang_gap_gen.py` PB_COMPAT: BIZ
+                    // UDPGothic c11 」/） pushed as soon as they overflow (without the flag
+                    // they hang from the edge), 。/、 hang; MS Gothic 」 pushed once its
+                    // blank half is spent; c15 jc=both hangs 」 with the flag. The
+                    // faithful slice of ja/educational__08709ff2 «…押し「バツ印」を…»
+                    // never hangs its 」; without the document's settings it does.
+                    let alt_closing_nohang = std::env::var_os("OXI_ALT_KINSOKU_NOHANG_DISABLE").is_none()
+                        && self.alt_kinsoku
+                        && (self.compat_mode <= 14 || !self.compat_mode_explicit)
+                        && kinsoku::is_yakumono_closing(ch)
+                        && !matches!(ch, '、' | '。' | '，' | '．');
                     let s725_final_char = std::env::var("OXI_S725_DISABLE").is_err()
                         && !vertical
                         && self.compat_mode >= 15
@@ -5580,6 +5594,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 || is_justified
                                 || std::env::var("OXI_S1334_DISABLE").is_ok())
                             && !prop_final_nohang
+                            && !alt_closing_nohang
                             // S1346: under the regime a refused ・ is 追い出し, not hung
                             && !(s1318_regime && ch == '・' && s1318_refuse_here)
                             // S1346: under the regime a closing bracket hangs like 、
@@ -6527,6 +6542,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let can_hang = kinsoku::is_hangable_punct(ch)
                             && !ea_nokinsoku
                             && !prop_final_nohang
+                            && !alt_closing_nohang
                             && !s1429_cell_oidashi
                             && (!vertical_natural_boundary || vertical_grid_hang)
                             && !modern_cjk_line_end
