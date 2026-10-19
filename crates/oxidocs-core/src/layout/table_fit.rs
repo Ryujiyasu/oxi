@@ -7013,6 +7013,86 @@ impl<'a> TableFitLayouter<'a> {
                                                     is_first_line = false;
                                                     continue;
                                                 }
+                                                // OXI_CELL_ENDKINSOKU (2026-10-20, default ON, opt-out _DISABLE):
+                                                // a line-end-prohibited CJK mark (opening brackets) never ends a cell
+                                                // line -- it moves down with the overflowing character. The S421
+                                                // oikomi above only fires when the OVERFLOWING character is
+                                                // line-start-prohibited. ja/policies__07543a6b p12 synonym table: Word
+                                                // ends a line with «LLT» and starts the next with the bracket (5 lines);
+                                                // Oxi kept the bracket at the line end, packed the cell into 4 lines and
+                                                // pulled the page up one line.
+                                                let cell_tail_opener = |c: char| kinsoku::is_line_end_prohibited(c) && !c.is_ascii();
+                                                if std::env::var_os("OXI_CELL_ENDKINSOKU_DISABLE").is_none()
+                                                    && buf.chars().last()
+                                                        .or_else(|| current_line.last().and_then(|f| f.0.chars().last()))
+                                                        .is_some_and(cell_tail_opener)
+                                                {
+                                                    let mut carry: Vec<crate::layout::jc_both_compress::CharContext> =
+                                                        vec![crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size }];
+                                                    loop {
+                                                        let tail = buf.chars().last()
+                                                            .or_else(|| current_line.last().and_then(|f| f.0.chars().last()));
+                                                        let remaining = buf.chars().count()
+                                                            + current_line.iter().map(|f| f.0.chars().count()).sum::<usize>();
+                                                        if !tail.is_some_and(cell_tail_opener) || remaining <= 1 {
+                                                            break;
+                                                        }
+                                                        if buf.pop().is_some() {
+                                                            if let Some(pc) = buf_chars.pop() {
+                                                                buf_w -= pc.natural_advance;
+                                                                carry.insert(0, pc);
+                                                            }
+                                                        } else if let Some(pc) = current_line_chars.pop() {
+                                                            if let Some(frag) = current_line.last_mut() {
+                                                                if frag.0.pop().is_some() {
+                                                                    frag.2 -= pc.natural_advance;
+                                                                    if frag.0.is_empty() {
+                                                                        current_line.pop();
+                                                                    }
+                                                                }
+                                                            }
+                                                            carry.insert(0, pc);
+                                                        } else {
+                                                            break;
+                                                        }
+                                                    }
+                                                    if carry.len() >= 2 {
+                                                        if !buf.is_empty() {
+                                                            current_line.push((
+                                                                buf.clone(),
+                                                                font_size,
+                                                                buf_w,
+                                                                bold,
+                                                                run.style.italic,
+                                                                run.style.underline,
+                                                                run.style.underline_style.clone(),
+                                                                run.style.strikethrough,
+                                                                font_family.clone(),
+                                                                run.style.color.clone(),
+                                                                run.style.highlight.clone().or_else(|| run.style.shading.clone()),
+                                                                cs,
+                                                                run.style.text_scale.unwrap_or(100.0),
+                                                                std::mem::take(&mut s993_lrpb_pending),
+                                                                run.style.font_family_east_asia.clone(),
+                                                                run.ruby.is_some(),
+                                                                run.style.clone(),
+                                                            ));
+                                                            buf.clear();
+                                                            buf_w = 0.0;
+                                                            current_line_chars.extend(buf_chars.drain(..));
+                                                        }
+                                                        lines.push(std::mem::take(&mut current_line));
+                                                        line_x = 0.0;
+                                                        current_line_chars.clear();
+                                                        is_first_line = false;
+                                                        for c in &carry {
+                                                            buf.push(c.ch);
+                                                            buf_w += c.natural_advance;
+                                                        }
+                                                        buf_chars.extend(carry);
+                                                        continue;
+                                                    }
+                                                }
                                                 // CELLWORD (2026-07-08, default ON, opt-out
                                                 // OXI_CELLWORD_DISABLE): Latin WORD wrap in the cell
                                                 // wrapper. The greedy per-char fill breaks English
