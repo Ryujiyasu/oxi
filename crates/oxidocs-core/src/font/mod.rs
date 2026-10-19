@@ -2306,9 +2306,17 @@ impl FontMetricsRegistry {
                 && std::env::var_os("OXI_PROP_CJK_EXACT_GDI_DISABLE").is_none()
                 && matches!(c, '\u{3041}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}'
                     | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}')
-                && metrics.units_per_em != 256
-                && metrics.is_cjk_83_64_font()
-                && metrics.has_proportional_kana()
+                && ((metrics.units_per_em != 256
+                    && metrics.is_cjk_83_64_font()
+                    && metrics.has_proportional_kana())
+                    // OXI_PMINCHO_EXACT (2026-10-20, default ON, opt-out _DISABLE): ＭＳ Ｐ明朝
+                    // (upm 256, no COM table) too -- S1202's finding (Word's PDF steps by
+                    // the design advance, て 9.483 vs 9.475) on the path the body line
+                    // break takes. ja/policies__07543a6b p2 «…文書中にICHが»: the 10tw
+                    // rounding put Oxi 0.86pt right of Word by «に» and pushed «が» down.
+                    || (metrics.units_per_em == 256
+                        && metrics.family == "MS PMincho"
+                        && std::env::var_os("OXI_PMINCHO_EXACT_DISABLE").is_none()))
             {
                 return advance_em * font_size;
             }
