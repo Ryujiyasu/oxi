@@ -2948,7 +2948,21 @@ impl<'a> LineBreaker<'a> {
             // Rule 1 (close+open ×0.5) is gated by yakumono_pair_enabled
             // (compress_punctuation OR hwid font); Rules 2-4 below use
             // yakumono_enabled (compress_punctuation only).
-            let yakumono_compressed: Vec<bool> = if yakumono_pair_enabled {
+            // OXI_PROP_PAIR (2026-10-19, default ON, opt-out _DISABLE): a proportional
+            // face -- its 、 and 。 already narrower than an em -- takes no pair
+            // compression at all; both marks keep their hmtx advance.
+            // `_pb_prop_pair_gen.py` (compat 11/15 x compressPunctuation /
+            // doNotCompress): BIZ UDPGothic 、「 = 10.80 / 9.00, MS PGothic 11.95 /
+            // 9.00, while BIZ UDGothic / MS Gothic / Meiryo / Yu Gothic halve the first
+            // mark to 9.00 of 18. ja/educational__08709ff2 (BIZ UDPGothic «、「重ねる»).
+            let prop_pair_off = std::env::var_os("OXI_PROP_PAIR_DISABLE").is_none()
+                && cjk_metrics.is_some_and(|m| {
+                    ['\u{3001}', '\u{3002}'].iter().all(|&mark| {
+                        let width = m.char_width_em(mark);
+                        width > 0.0 && width < 0.99
+                    })
+                });
+            let yakumono_compressed: Vec<bool> = if yakumono_pair_enabled && !prop_pair_off {
                 let n = chars_vec.len();
                 let mut v = vec![false; n];
                 // S1494 (2026-09-20, default ON, opt-out OXI_S1494_DISABLE): a pair
