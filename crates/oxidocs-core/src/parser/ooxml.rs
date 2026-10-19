@@ -539,10 +539,17 @@ impl OoxmlParser {
         // An unstyled, unthemed package inherits the reference application's
         // Japanese defaults, as sectionless page setup does. Hosts may override
         // the family and size without changing document-declared properties.
+        // OXI_BARE_NORMAL_DOTM (2026-10-19, default ON, opt-out _DISABLE): when the
+        // endpoint's Normal.dotm was read (app_default_run_style), it IS the
+        // application default -- the old machine's 游明朝 10.5pt below would shadow
+        // it. COM on en/legal__0032068833 (empty styles part, no theme): its Normal
+        // is Aptos with Font.Kerning 1.0 = this Normal.dotm's docDefaults.
         if std::env::var("OXI_APPLICATION_FONT_DEFAULTS_DISABLE").is_err()
             && styles.styles.is_empty()
             && self.read_part("word/theme/theme1.xml").is_err()
             && styles.doc_default_run_style.is_none()
+            && (styles.app_default_run_style.is_none()
+                || std::env::var_os("OXI_BARE_NORMAL_DOTM_DISABLE").is_some())
         {
             if let (Ok(family), Ok(size)) = (
                 std::env::var("OXI_APPLICATION_FONT_FAMILY")
@@ -2964,7 +2971,15 @@ fn parse_body(
     // the product's reference environment, and the scope is docs with NO
     // sectPr at all: 1 of 727 corpus docs (golden 369 / ja 100 / real_en 8
     // all carry sectPr → byte-identical by construction).
+    // OXI_SECTIONLESS_NEWPC (2026-10-19, default ON, opt-out _DISABLE = the S1177 old-PC
+    // values): the truth machine changed (2026-10-16) and its Normal.dotm is NOT the old
+    // one. COM on a fresh `Documents.Add()`: PageWidth 612 x 792 (Letter), margins
+    // 99.25 / 85.05 / 85.05 / 85.05 (unchanged), LayoutMode 0 = no document grid.
+    // en/legal__0032068833 (no sectPr, no settings, empty styles): Word's PDF page is
+    // 612 x 792 and its Calibri 11 single lines step 13.4pt, where the 18pt grid put
+    // them 18pt apart and the A4 width wrapped «in» one word early.
     let s1177 = std::env::var("OXI_S1177_DISABLE").is_err() || std::env::var("OXI_S1002").is_ok();
+    let newpc = std::env::var_os("OXI_SECTIONLESS_NEWPC_DISABLE").is_none();
     let (sectionless_margin, sectionless_grid) = if s1177 {
         (
             Margin {
@@ -2973,13 +2988,18 @@ fn parse_body(
                 left: 85.05,
                 right: 85.05,
             },
-            Some(18.0),
+            if newpc { None } else { Some(18.0) },
         )
     } else {
         (Margin::default(), None)
     };
+    let sectionless_page = if s1177 && newpc {
+        PageSize { width: 612.0, height: 792.0 }
+    } else {
+        PageSize::default()
+    };
     let last_sp = final_sect_pr.unwrap_or(SectionProperties {
-        page_size: PageSize::default(),
+        page_size: sectionless_page,
         margin: sectionless_margin,
         margin_top_negative: false,
         grid_line_pitch: sectionless_grid,

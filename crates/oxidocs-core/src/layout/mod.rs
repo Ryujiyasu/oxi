@@ -3294,6 +3294,9 @@ pub struct LayoutEngine {
     /// The document's default east-Asian language (docDefaults, else the endpoint's
     /// Normal.dotm) for a run the parser left without one.
     default_east_asia_lang: Option<String>,
+    /// The document's default kern threshold (docDefaults, else the endpoint's
+    /// Normal.dotm): see line_break.rs OXI_DEFAULT_KERN.
+    default_kern: Option<f32>,
     default_font_size: f32,
     cell_end_style_id: Option<String>,
     cell_default_style_id: Option<String>,
@@ -4027,6 +4030,7 @@ impl LayoutEngine {
             deva_font_families: std::collections::HashSet::new(),
             aum_charset_80: false,
             default_east_asia_lang: None,
+            default_kern: None,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
@@ -4247,6 +4251,7 @@ impl LayoutEngine {
                 .styles
                 .effective_doc_default_run_style()
                 .and_then(|s| s.east_asia_lang.clone()),
+            default_kern: doc.styles.effective_doc_default_run_style().and_then(|s| s.kern),
             aum_charset_80: doc.styles.font_table.get("Arial Unicode MS")
                 .and_then(|f| f.charset.as_deref())
                 .map_or(false, |c| c.eq_ignore_ascii_case("80")),

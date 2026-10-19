@@ -3231,10 +3231,19 @@ impl<'a> LineBreaker<'a> {
                 // quotes). Scope: kern-active runs only — no-kern docs
                 // (gen/gen2/test authored without w:kern) keep the
                 // S672-validated com_tw break.
+                // OXI_DEFAULT_KERN (2026-10-19, default ON, opt-out _DISABLE): a run
+                // whose own and paragraph styles leave kern unset takes the document
+                // default -- the package's rPrDefault, else the endpoint's Normal.dotm
+                // (this machine's: <w:kern w:val="2"/>). en/legal__0032068833 has an
+                // empty styles part; COM reads Font.Kerning 1.0 on its paragraphs and
+                // Word's PDF kerns «LV» -0.83 / «BY» -0.28 on the 11pt Calibri Bold
+                // caps line, which then holds «COUNCIL:» (design widths 442.97 on a
+                // 441.90 line, kerned 440.3).
                 let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
                     && style
                         .kern
                         .or_else(|| para_style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                        .or(if std::env::var_os("OXI_DEFAULT_KERN_DISABLE").is_none() { self.default_kern } else { None })
                         .map_or(false, |k| k > 0.0 && font_size >= k);
                 if std::env::var("OXI_DBG_KERN").is_ok() && char_index == 0 {
                     eprintln!("[DBG_KERN] fs={} ch={:?} style.kern={:?} drs.kern={:?} active={} widths_has={} fam={}",
