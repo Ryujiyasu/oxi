@@ -9728,7 +9728,12 @@ fn parse_vml_pict(
                             }
                         }
                     }
-                    "wrap" => {
+                    // OXI_VML_WRAP_CHILD (2026-10-20, default ON, opt-out _DISABLE): w10:wrap
+                    // is honoured only as a child of the VML shape. golden probextxbx writes
+                    // it as a sibling of <v:rect> under <w:pict>; Word ignores it there (the
+                    // body runs full width under the right-aligned box) where Oxi wrapped
+                    // the text and lost three lines a page.
+                    "wrap" if std::env::var_os("OXI_VML_WRAP_CHILD_DISABLE").is_some() || depth >= 2 => {
                         shape_wrap = e.attributes().flatten()
                             .find(|a| local_name(a.key.as_ref()) == "type")
                             .and_then(|a| match a.value.as_ref() {
@@ -9925,7 +9930,12 @@ fn parse_vml_pict(
                             }
                         }
                     }
-                    "wrap" => {
+                    // OXI_VML_WRAP_CHILD (2026-10-20, default ON, opt-out _DISABLE): w10:wrap
+                    // is honoured only as a child of the VML shape. golden probextxbx writes
+                    // it as a sibling of <v:rect> under <w:pict>; Word ignores it there (the
+                    // body runs full width under the right-aligned box) where Oxi wrapped
+                    // the text and lost three lines a page.
+                    "wrap" if std::env::var_os("OXI_VML_WRAP_CHILD_DISABLE").is_some() || depth >= 1 => {
                         shape_wrap = e.attributes().flatten()
                             .find(|a| local_name(a.key.as_ref()) == "type")
                             .and_then(|a| match a.value.as_ref() {
