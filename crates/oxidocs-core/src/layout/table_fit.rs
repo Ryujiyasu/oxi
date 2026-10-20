@@ -11976,6 +11976,41 @@ impl<'a> TableFitLayouter<'a> {
                             e.y -= cell_adjust;
                         }
                     }
+                    // OXI_CONT_BORDER_FOLLOW (2026-10-21, default ON, opt-out _DISABLE): the
+                    // continuation is the row from the first moved line's TOP to the row
+                    // bottom, so when that line started above the page bottom (adjust < 0)
+                    // the row's closing edges move down with the re-anchored text. Oxi
+                    // shifted them by split_y alone and closed the fragment short. golden
+                    // probethdr row 7 (4 lines, 2 move; tblHeader replayed): Word's
+                    // fragment closes 13.2 under its last baseline exactly like a whole
+                    // row, Oxi 10.1 -- 2.57 = split_y 771.0 - the moved line's top -- and
+                    // every later row on the page sat 2.6pt high until one line too many
+                    // fitted before the next split.
+                    if adjust < 0.0 && !s1093_ok
+                        && std::env::var_os("OXI_CONT_BORDER_FOLLOW_DISABLE").is_none()
+                    {
+                        // only the edges at the fragment's bottom (a replayed header's
+                        // own rules stay where they are)
+                        let bottom = next_page_elems.iter().filter_map(|e| match &e.content {
+                            LayoutContent::TableBorder { y1, y2, .. } => Some(y1.max(*y2)),
+                            _ => None,
+                        }).fold(f32::NEG_INFINITY, f32::max);
+                        for e in next_page_elems.iter_mut() {
+                            if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
+                                if (*y2 - bottom).abs() > 0.1 && (*y1 - bottom).abs() > 0.1 {
+                                    continue;
+                                }
+                                if (*y1 - *y2).abs() < 0.1 {
+                                    *y1 -= adjust;
+                                    *y2 -= adjust;
+                                    e.y -= adjust;
+                                } else {
+                                    *y2 -= adjust;
+                                    e.height = *y2 - *y1;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 let terminal_spacing = |e: &LayoutElement| -> f32 {
