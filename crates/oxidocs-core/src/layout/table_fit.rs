@@ -10892,7 +10892,23 @@ impl<'a> TableFitLayouter<'a> {
                                 .map(|e| e.y + e.height).fold(f32::NEG_INFINITY, f32::max);
                             (t, b)
                         };
-                        cands.push((top, bot, nh, id));
+                        // OXI_S1527_AFTER (2026-10-21, default ON, opt-out _DISABLE): a
+                        // reference on its paragraph's LAST line keeps that paragraph's
+                        // after with it, as the line fit itself does (S1092). golden
+                        // probeqfncell row 第7項: the line ending at 554.88 + after 8
+                        // misses the 555.43 left above note 7, so the line moves; Oxi
+                        // kept the note on page 1 while the line went to page 2.
+                        let last_bot = para_els.iter().map(|e| e.y + e.height).fold(f32::NEG_INFINITY, f32::max);
+                        let after = if std::env::var_os("OXI_S1527_AFTER_DISABLE").is_none()
+                            && (bot - last_bot).abs() < 0.5
+                        {
+                            row.cells.get(ci).and_then(|c| c.blocks.iter().filter_map(|b| match b {
+                                Block::Paragraph(p) => Some(p),
+                                _ => None,
+                            }).nth(pi)).map_or(0.0, |p| self.cell_para_spacing(
+                                p, table.style.para_style.as_ref(), table_grid_pitch).1)
+                        } else { 0.0 };
+                        cands.push((top, bot + after, nh, id));
                     }
                     cands.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
                     let mut bottom = bottom;
@@ -10914,7 +10930,16 @@ impl<'a> TableFitLayouter<'a> {
                             // does everything below it. The cut sits just under
                             // the line's top so the line ABOVE (whose bottom
                             // coincides with this top within rounding) stays.
-                            bottom = bottom.min(top + 0.4);
+                            // OXI_S1527_AFTER: the line above is tested with the cell
+                            // frame (pad_b + rule) reserved, so the cut leaves that
+                            // room too; at +0.4 alone it fails and S1607 moves the
+                            // whole row (probeqfncell 第7項, Word keeps its first line).
+                            let frame = if std::env::var_os("OXI_S1527_AFTER_DISABLE").is_none() {
+                                row_default_pad_b + if table.style.border {
+                                    table.style.border_width.unwrap_or(0.4).max(0.0)
+                                } else { 0.0 }
+                            } else { 0.0 };
+                            bottom = bottom.min(top + 0.4 + frame);
                             break;
                         }
                     }
