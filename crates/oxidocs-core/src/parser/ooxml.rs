@@ -11705,6 +11705,21 @@ fn parse_table(
             styles.default_table_style_id.clone()
         }
     });
+    // OXI_NO_TABLENORMAL_ZERO_PAD (2026-10-20, default ON, opt-out _DISABLE): a styles
+    // part that defines NO default table style leaves an unstyled table with zero
+    // cell margins -- the 108tw left/right live in TableNormal, and without it Word
+    // has nothing to inherit. golden probezgridspan (styles.xml = docDefaults + Normal
+    // only): Word's cell text sits at 71.66 on a 70.94 margin; with a TableNormal
+    // (tblCellMar 108) added it moves to 76.58. Oxi used its 99tw fallback (76.0) and
+    // wrapped every cell narrower. A package with no styles part takes Normal.dotm's
+    // TableNormal and is left alone (its sheet is empty).
+    if eff_tbl_style_id.is_none()
+        && style.default_cell_margins.is_none()
+        && !styles.styles.is_empty()
+        && std::env::var_os("OXI_NO_TABLENORMAL_ZERO_PAD_DISABLE").is_none()
+    {
+        style.default_cell_margins = Some(CellMargins { top: Some(0.0), bottom: Some(0.0), left: Some(0.0), right: Some(0.0) });
+    }
     if let Some(ref style_id) = eff_tbl_style_id {
         if let Some(tbl_style) = styles.table_styles.get(style_id) {
             // The built-in Normal Table supplies application defaults when
