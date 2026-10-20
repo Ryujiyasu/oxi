@@ -7142,7 +7142,14 @@ impl<'a> TableFitLayouter<'a> {
                                                     })
                                                     && (para.runs.iter().all(|r| {
                                                         !r.text.chars().any(kinsoku::is_cjk)
-                                                    }) || (!self.doc_body_has_real_cjk
+                                                    }) || (std::env::var_os("OXI_CELLWORD_MIXED_DISABLE").is_none()
+                                                        // OXI_CELLWORD_MIXED (2026-10-20, default ON, opt-out _DISABLE): an
+                                                        // ENGLISH word (ASCII letters) in a CJK cell paragraph wraps whole.
+                                                        // ja/policies__07543a6b p9: Word «(mental | illness)», «(mesenteric |
+                                                        // ischaemia)»; Oxi split «ill|ness», «ischaem|ia». Digits stay
+                                                        // char-breakable: golden 29dc6e89 «…法律第7|7号）» is broken inside
+                                                        // the number by Word (an alphanumeric gate lost 3 of its lines).
+                                                        && ch.is_ascii_alphabetic()) || (!self.doc_body_has_real_cjk
                                                         && para.runs.iter().all(|r| {
                                                             !r.text.chars().any(
                                                                 kinsoku::is_cjk_ideograph_or_kana,
