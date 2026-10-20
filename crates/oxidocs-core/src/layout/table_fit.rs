@@ -11145,7 +11145,14 @@ impl<'a> TableFitLayouter<'a> {
                 // reserves tcMar_b + bw (the cell frame); this is the content
                 // term that sits above it. Latin-scoped + natural split only,
                 // mirroring S819.
-                let s1092 = !self.doc_body_has_real_cjk
+                // OXI_S1092_CJK (2026-10-21, default ON, opt-out _DISABLE): CJK bodies
+                // too, as S1606 did for S819's frame. golden probevmerge (MS Mincho,
+                // Normal.dotm after 8, a 4-line row 0.14pt too tall for page 3): Word
+                // keeps three lines and carries the fourth with its after; Oxi kept
+                // all four (762.8 <= 771.0 without the after) and closed an empty
+                // continuation on page 4.
+                let s1092 = (!self.doc_body_has_real_cjk
+                    || std::env::var_os("OXI_S1092_CJK_DISABLE").is_none())
                     && s819_natural_split
                     && std::env::var("OXI_S1092_DISABLE").is_err();
                 let mut s1092_after: std::collections::HashMap<(usize, usize), f32> =
