@@ -6115,6 +6115,30 @@ impl<'a> PageLayouter<'a> {
                     // trailing space is not part of the chain's own extent.
                     let s1249_prev_sa = prev_space_after;
                     let dbg_para_start_pages = pages.len();
+                    // OXI_UNEQUAL_COL_PREADVANCE (2026-10-20, default ON, opt-out _DISABLE):
+                    // with columns of unequal width, a paragraph whose first line cannot
+                    // fit in the current column enters the next column BEFORE it is broken,
+                    // so it wraps at that column's width. golden probecolsuneq (two columns
+                    // 160 / 272pt): Word sets 第5条 in the wide column at 25 characters a
+                    // line; Oxi broke it at the narrow column's 14 and carried those lines
+                    // over, one line short per page.
+                    if std::env::var_os("OXI_UNEQUAL_COL_PREADVANCE_DISABLE").is_none()
+                        && num_columns > 1
+                        && current_column + 1 < num_columns
+                        && col_widths.iter().any(|w| (*w - content_width).abs() > 0.1)
+                        && cursor.cursor_y > col_band_top + 0.01
+                        && !para.runs.is_empty()
+                    {
+                        let one_line = self.estimate_para_height(
+                            para, 1.0e6, grid_pitch, None, false, None, None,
+                        );
+                        if cursor.cursor_y + one_line > start_y + effective_content_h + 0.01 {
+                            current_column += 1;
+                            start_x = col_x_positions[current_column];
+                            content_width = col_widths[current_column];
+                            cursor.set(col_band_top);
+                        }
+                    }
                     if std::env::var("OXI_DBG_COL").is_ok() && num_columns > 1 {
                         eprintln!("[COL] enter block_idx={} col={} cursor_y={:.1} band_top={:.1} pages={}",
                             block_idx, current_column, cursor.cursor_y, col_band_top, pages.len());
