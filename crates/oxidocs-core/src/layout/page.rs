@@ -7806,8 +7806,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // note area starts right below the last body row with no
                     // slot-sized gap. Reserve the separator only for no-grid /
                     // no-type pages (where it occupies a footnote line, S596b).
+                    // OXI_S740_SEP_GRID (2026-10-21, default ON, opt-out _DISABLE): the
+                    // new-PC truth of the same probe overturns that reading -- Word's
+                    // page-2 note separator sits one separator line (21.0) under the
+                    // table (455.71 -> 476.71), and the page-1 row 第7項 splits because
+                    // its note plus that line no longer fit.
                     let s740_sep = if s740_any
-                        && !(page.grid_line_pitch.is_some() && !page.doc_grid_no_type)
+                        && (!(page.grid_line_pitch.is_some() && !page.doc_grid_no_type)
+                            || std::env::var_os("OXI_S740_SEP_GRID_DISABLE").is_none())
                     {
                         let first = s740_row_fn
                             .iter()
