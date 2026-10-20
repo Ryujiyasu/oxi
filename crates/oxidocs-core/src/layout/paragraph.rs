@@ -2417,6 +2417,29 @@ impl<'a> ParagraphLayouter<'a> {
                             };
                             grid_pitch.filter(|p| *p > 0.1)
                                 .map_or(target, |pitch| ((occ / pitch).ceil().max(1.0) * pitch).max(text_floor))
+                        } else if std::env::var_os("OXI_GRID_OBJ_NOLEAD_DISABLE").is_none()
+                            && !s1596_math
+                            && line.fragments.iter().all(|f| f.style.inline_object_image.is_some() || f.text.is_empty())
+                            && grid_pitch.map_or(false, |p| p > 0.1)
+                        {
+                            // OXI_GRID_OBJ_NOLEAD (2026-10-20, default ON, opt-out _DISABLE): a
+                            // line holding only an inline object takes n = ceil(h / pitch) whole
+                            // cells of the object box ALONE -- the auto line-spacing multiple's
+                            // extra leading does not count. `_pb_grid_object_line_gen.py` (pitch
+                            // 18, VML w:object and DrawingML alike, h 6..110): the line is n x 18
+                            // under spacing 1.0 / 1.158 / 1.5 and MS Mincho 8..20pt, the object
+                            // centred in it (image top (n x 18 - h) / 2 below the line top; the
+                            // following text paragraph's Info(6) reads its grid pad lower, which
+                            // is why the raw Info(6) step looks like n x 18 / 2 + h / 2 + pad).
+                            // golden probeqobject (72pt OLE objects, Normal.dotm 1.158): Oxi
+                            // counted 72 + 2.85 leading and spent 5 cells per object.
+                            let pitch = grid_pitch.unwrap_or(18.0);
+                            let h = (occupied - extra).max(0.0);
+                            if std::env::var_os("OXI_DBG_GRIDOBJ").is_some() {
+                                eprintln!("[GRIDOBJ] h={:.2} extra={:.2} old={:.2}", h, extra,
+                                    ((occupied / pitch).ceil() * pitch).max(target));
+                            }
+                            ((h / pitch - 1e-3).ceil().max(1.0) * pitch).max(target - extra)
                         } else {
                         grid_pitch.filter(|p| *p > 0.1)
                             .map_or(target, |pitch| ((occupied / pitch).ceil() * pitch).max(target))
@@ -8122,6 +8145,19 @@ impl<'a> ParagraphLayouter<'a> {
                             let fs = tf.style.font_size.unwrap_or(para_font_size);
                             let m = &*self.metrics_for_text(&tf.text, &tf.style, &para.style);
                             emit_y + text_y_off - 1.0 + m.win_ascent * fs
+                        } else if !is_header_footer && !page.doc_grid_no_type && para.style.snap_to_grid
+                            && grid_pitch.map_or(false, |p| p > 0.1)
+                            && std::env::var_os("OXI_GRID_OBJ_CENTER_DISABLE").is_none()
+                        {
+                            // OXI_GRID_OBJ_CENTER (2026-10-20): an object alone on a
+                            // typed-grid line is centred in its whole cells
+                            // (`_pb_grid_object_line_gen.py`, VML w:object and
+                            // DrawingML alike), not stood on the line bottom.
+                            let (et, eb) = if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                                (img.effect_extent_t.max(0.0), img.effect_extent_b.max(0.0))
+                            } else { (0.0, 0.0) };
+                            emit_y + (line_height + oh + et + eb) * 0.5 - eb
                         } else if is_header_footer {
                             // Additional auto leading belongs below an image-only
                             // story line, while its natural baseline stays unchanged.

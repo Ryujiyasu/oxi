@@ -8950,6 +8950,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // probe, not a blanket scope change.
                     let img_line =
                         self.s971_image_line_h(img, content_width, page.grid_line_pitch, true);
+                    // OXI_GRID_OBJ_NOLEAD (2026-10-20, default ON, opt-out _DISABLE): on a
+                    // TYPED grid the picture line is n = ceil(h / pitch) whole cells of the
+                    // picture alone; S1179's auto-multiple leading (derived without a grid)
+                    // does not ride on top. `_pb_grid_object_line_gen.py` (pitch 18, h
+                    // 6..110, DrawingML and VML w:object alike): n x 18 under spacing 1.0 /
+                    // 1.158 / 1.5, the picture centred in it. golden probeqobject's 72pt
+                    // objects under Normal.dotm's 1.158 took 72 + 2.85 -> 5 cells in Oxi.
+                    let img_line = if !page.doc_grid_no_type
+                        && page.grid_line_pitch.map_or(false, |p| p > 0.1)
+                        && img.host_exact_line.is_none()
+                        && img.host_paragraph.as_deref().map_or(false, |h|
+                            matches!(h.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                            && h.style.line_spacing.map_or(false, |f| f > 1.001))
+                        && std::env::var_os("OXI_GRID_OBJ_NOLEAD_DISABLE").is_none()
+                    {
+                        let ext = img.height + if !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                            img.effect_extent_b.max(0.0) + img.effect_extent_t.max(0.0)
+                        } else { 0.0 };
+                        img_line.min(ext)
+                    } else { img_line };
                     // S1101 (2026-08-08, default ON, opt-out OXI_S1101_DISABLE):
                     // a NO-TYPE docGrid does NOT round the image-only paragraph
                     // to whole cells — the extent is used EXACTLY, which is what
@@ -9322,7 +9343,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                         _ => None,
                     };
-                    let img_y = s1321_top.unwrap_or(cursor.visual_y + if !self.doc_body_has_real_cjk { img.effect_extent_t.max(0.0) } else { 0.0 });
+                    // OXI_GRID_OBJ_CENTER (2026-10-20, default ON, opt-out _DISABLE): on a
+                    // typed grid the picture is centred in its whole cells, (n x pitch - h)
+                    // / 2 below the line top. `_pb_grid_object_line_gen.py` (pitch 18):
+                    // h 6/10/14/16/20/30/40/60/72/80 draw 6/4/2/1/8/3/7/6/0/5 below the
+                    // top; S1418b's policies__1db396de figure (7.44 in 234) agrees.
+                    let grid_center = if s1321_top.is_none() && !page.doc_grid_no_type
+                        && page.grid_line_pitch.map_or(false, |p| p > 0.1)
+                        && std::env::var_os("OXI_GRID_OBJ_CENTER_DISABLE").is_none()
+                    {
+                        let ext = img.height + if !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                            img.effect_extent_b.max(0.0) + img.effect_extent_t.max(0.0)
+                        } else { 0.0 };
+                        ((img_adv - ext) * 0.5).max(0.0)
+                    } else { 0.0 };
+                    let img_y = s1321_top.unwrap_or(cursor.visual_y + grid_center + if !self.doc_body_has_real_cjk { img.effect_extent_t.max(0.0) } else { 0.0 });
                     if s1321_top.is_some() {
                         if let Some(v) = block_y_positions.last_mut() {
                             *v = img_y;
