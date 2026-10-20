@@ -4903,9 +4903,21 @@ impl<'a> PageLayouter<'a> {
                                 let ha_e = para.style.space_after.unwrap_or(0.0);
                                 let nsb_e = next_para.style.space_before.unwrap_or(0.0);
                                 let na_e = next_para.style.space_after.unwrap_or(0.0);
-                                let ha_i = if head_inc { ha_e } else { 0.0 };
-                                let nsb_i = if next_inc { nsb_e } else { 0.0 };
-                                let na_i = if next_inc { na_e } else { 0.0 };
+                                // OXI_S948_DIRECT (2026-10-20, default ON, opt-out _DISABLE): the
+                                // estimate carries a paragraph's space_before / space_after only
+                                // when THAT side is direct (or the rule is exact / atLeast), so
+                                // the correction may only take back what was put in. ja/policies__
+                                // 07543a6b «3.1.4 潜在的な投薬過誤» (keepNext, direct before 6, after 8
+                                // from the linkStyles Normal) + a 2-line widow-controlled question:
+                                // S948 subtracted 14 for spacing the estimate never held, read the
+                                // pair as 49.6 in a 50.3 gap, and stranded the heading; Word moves
+                                // it (p21: heading baseline 83, question 109 = 18 + max(8, 6)).
+                                let s948_direct = std::env::var_os("OXI_S948_DIRECT_DISABLE").is_none();
+                                let explicit = |st: &ParagraphStyle| matches!(
+                                    st.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"));
+                                let ha_i = if if s948_direct { para.style.has_direct_after || explicit(&para.style) } else { head_inc } { ha_e } else { 0.0 };
+                                let nsb_i = if if s948_direct { next_para.style.has_direct_before || explicit(&next_para.style) } else { next_inc } { nsb_e } else { 0.0 };
+                                let na_i = if if s948_direct { next_para.style.has_direct_after || explicit(&next_para.style) } else { next_inc } { na_e } else { 0.0 };
                                 (ha_i + nsb_i - ha_e.max(nsb_e)).max(0.0) + na_i
                             } else {
                                 0.0
