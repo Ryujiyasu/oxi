@@ -11884,7 +11884,14 @@ impl<'a> TableFitLayouter<'a> {
                 let s817_tail =
                     if std::env::var_os("OXI_CELL_EMPTY_LINES").is_some() {
                         0.0
-                    } else if !self.doc_body_has_real_cjk && std::env::var("OXI_S817_DISABLE").is_err() {
+                    } else if (!self.doc_body_has_real_cjk
+                        // OXI_S817_CJK (2026-10-21, default ON, opt-out _DISABLE): CJK
+                        // bodies close a continuation with the ending paragraph's after
+                        // too. golden probeqfncell (MS Mincho, Normal.dotm after 8): the
+                        // page-2 fragment of 第7項 is line + 8 + rule (70.92 -> 95.18);
+                        // Oxi closed it at the bare line and every later row sat 5.5 high.
+                        || std::env::var_os("OXI_S817_CJK_DISABLE").is_none())
+                        && std::env::var("OXI_S817_DISABLE").is_err() {
                         let pad_b = row
                             .cells
                             .first()
@@ -13148,8 +13155,21 @@ impl<'a> TableFitLayouter<'a> {
                     let trailing_empty_count = if std::env::var_os("OXI_CELL_EMPTY_LINES").is_some() {
                         0
                     } else { trailing_empty_count };
+                    // OXI_S817_CJK: a cell line that does not take the grid pitch
+                    // (probeqfncell's 15.77 lines on an 18pt grid) closes on its own height.
+                    let own_line_h: f32 = elements
+                        .iter()
+                        .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
+                        .filter(|e| (e.y - last_cont_top).abs() < 0.5)
+                        .map(|e| e.height)
+                        .fold(0.0_f32, f32::max);
+                    let table_grid_pitch_a = match table_grid_pitch {
+                        Some(lh) if std::env::var_os("OXI_S817_CJK_DISABLE").is_none()
+                            && own_line_h > 0.5 && own_line_h < lh - 0.5 => Some(own_line_h),
+                        other => other,
+                    };
                     if last_cont_top.is_finite() {
-                        if let Some(lh) = table_grid_pitch {
+                        if let Some(lh) = table_grid_pitch_a {
                             cursor.set(
                                 last_cont_top
                                     + lh * (1.0 + trailing_empty_count as f32)
