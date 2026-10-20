@@ -2138,6 +2138,29 @@ impl<'a> TableFitLayouter<'a> {
                 }).filter(|h| *h > 0.5);
                 match one_line { Some(h) => s754_min_fit.min(h), None => s754_min_fit }
             } else { s754_min_fit };
+            // OXI_ROWSPLIT_VPAD (2026-10-20, default ON, opt-out _DISABLE): the room a
+            // multi-cell row needs to START at the page bottom (and split) is its first
+            // line PLUS the cell's top AND bottom margins. `_pb_rowsplit_margin_gen.py`
+            // (cell margins 0 / 60 / 120 tw, room swept 0.4pt at a time): Word's
+            // threshold is 15.7 / 21.7 / 27.7 -- +6 / +12, both margins. golden
+            // probeqtblstyle (style margins 60tw, 18pt lines): 22.9 of room, Oxi split
+            // the row (line + top = 21), Word moved it whole (24 needed).
+            let s754_min_fit = if std::env::var_os("OXI_ROWSPLIT_VPAD_DISABLE").is_none()
+                && row.cells.len() > 1
+            {
+                let vpad = row.cells.iter().map(|c| {
+                    let t = c.margins.as_ref().and_then(|m| m.top)
+                        .or_else(|| row.cell_margins_override.as_ref().and_then(|m| m.top))
+                        .unwrap_or(default_pad_t);
+                    let b = c.margins.as_ref().and_then(|m| m.bottom)
+                        .or_else(|| row.cell_margins_override.as_ref().and_then(|m| m.bottom))
+                        .unwrap_or(default_pad_b);
+                    t + b
+                }).fold(0.0_f32, f32::max);
+                s754_min_fit + vpad
+            } else {
+                s754_min_fit
+            };
             // A floating table starts its own layout area. If no first cell
             // line fits at its text anchor, Word keeps the first row in that
             // area. Use the measured line and top inset, not a fixed font-size
