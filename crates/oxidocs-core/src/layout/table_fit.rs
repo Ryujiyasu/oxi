@@ -12901,10 +12901,26 @@ impl<'a> TableFitLayouter<'a> {
                         if cell.v_merge.is_some() { continue; }
                         let bottom = cell.margins.as_ref().and_then(|m| m.bottom)
                             .unwrap_or(row_default_pad_b) + self.rowbox2_trh_bw(table, row);
+                        // OXI_VMCONT_TAIL_AFTER (2026-10-21, default ON, opt-out _DISABLE):
+                        // the fragment ends with the cell's LAST paragraph, and its after
+                        // closes the band like a whole row's. `terminal_spacing` carries it
+                        // only under the OXI_CELL_EMPTY_LINES opt-in. golden probevmerge
+                        // (a vMerge column beside 4-line cells, Normal.dotm after 8): Word's
+                        // one-line continuation closes 13.3 under its baseline as every row
+                        // does, Oxi 5.3, and page 2 ran 7.5pt high into one extra line.
+                        let tail_after = if std::env::var_os("OXI_VMCONT_TAIL_AFTER_DISABLE").is_none()
+                            && std::env::var_os("OXI_CELL_EMPTY_LINES").is_none()
+                        {
+                            cell.blocks.iter().rev().find_map(|b| match b {
+                                Block::Paragraph(p) => Some(self.cell_para_spacing(
+                                    p, table.style.para_style.as_ref(), table_grid_pitch).1),
+                                _ => None,
+                            }).unwrap_or(0.0)
+                        } else { 0.0 };
                         match &e.content {
                             LayoutContent::Text { text, .. } => {
                                 independent_continuation_end = independent_continuation_end
-                                    .max(e.y + e.height + terminal_spacing(e) + bottom);
+                                    .max(e.y + e.height + terminal_spacing(e) + tail_after + bottom);
                                 independent_continuation_ink |= !text.trim().is_empty();
                             }
                             LayoutContent::Image { .. } => {
