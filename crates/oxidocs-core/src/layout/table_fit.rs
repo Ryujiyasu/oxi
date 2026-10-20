@@ -1678,7 +1678,22 @@ impl<'a> TableFitLayouter<'a> {
                     } else { height }
                 })
             } else { row_fit_height };
-            let mut row_overflows = cursor.cursor_y + row_fit_height > page_bottom;
+            // OXI_ROW_OWN_NOTES (2026-10-21, default ON, opt-out _DISABLE): the row's
+            // own footnotes (and the separator, when they are the page's first) must
+            // fit under it for the row to stay whole; S740 only commits a row's notes
+            // when the NEXT row starts. golden probeqfncell (a note per 2-line row,
+            // Normal.dotm after 8): Word splits 第7項 after its first line and carries
+            // the line holding reference 7 -- with note 7 -- to page 2; Oxi kept the
+            // row whole and ran its bottom (562.9) under the separator (555.4).
+            let row_own_notes = match row_footnotes {
+                Some(rf) if std::env::var_os("OXI_ROW_OWN_NOTES_DISABLE").is_none()
+                    && !rf[row_idx].0.is_empty() =>
+                {
+                    rf[row_idx].1 + if s740_page_has_notes { 0.0 } else { fn_sep }
+                }
+                _ => 0.0,
+            };
+            let mut row_overflows = cursor.cursor_y + row_fit_height + row_own_notes > page_bottom;
             // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
             // ANY cell's FIRST paragraph carries `<w:lastRenderedPageBreak/>`
             // on its run[0], Word's saved render broke before this row.
@@ -10768,7 +10783,9 @@ impl<'a> TableFitLayouter<'a> {
             } else { 0.0 };
             let fragment_content_bottom = page_bottom - fragment_bottom_width;
             let row_bottom = cursor.cursor_y + row_height;
-            if !keep_float_whole && row_bottom > fragment_content_bottom + row_fit_epsilon && !row.cant_split && !first_row_forced {
+            // OXI_ROW_OWN_NOTES: the split path decides which of the row's notes stay
+            // (S1527); it must be entered when the row only fits without them.
+            if !keep_float_whole && row_bottom + row_own_notes > fragment_content_bottom + row_fit_epsilon && !row.cant_split && !first_row_forced {
                 // R7.56 (Day 34 part 25, 2026-05-13): respect mid-cell LRPB markers.
                 // If any element in this row carries `is_paragraph_start_with_lrpb`,
                 // force the split before the FIRST such element above page_bottom
