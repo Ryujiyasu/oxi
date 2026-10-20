@@ -23055,10 +23055,20 @@ cells={} pitch={:.2} text={:?}",
     ) -> f32 {
         let language = style.east_asia_lang.as_deref().or_else(||
             para.style.default_run_style.as_ref().and_then(|r| r.east_asia_lang.as_deref()));
+        // OXI_CELL_LANG_UNSET_JA (2026-10-21, default ON, opt-out _DISABLE): a run whose
+        // east-Asian language is set nowhere (run, paragraph default, docDefaults) takes
+        // the application's editing language, ja-JP on the truth machine, and gets the
+        // modern table. `_pb_cell_comma_pool_gen.py` (no w:lang anywhere, compat 15,
+        // jc=both, a cell and the body alike): 20-character lines hold 0.50/0.76/0.83/
+        // 0.86/0.88/0.90 em of overflow with 1..6 marks, mark kind and position
+        // irrelevant, the S1490 table within 0.02 em; golden probethdr's 34-character
+        // cell line pulls its last ideograph in over four 、.
+        let unset_ja = std::env::var_os("OXI_CELL_LANG_UNSET_JA_DISABLE").is_none();
+        let language = language.or(self.default_east_asia_lang.as_deref());
         if self.compat_mode < 15 || !self.compat_mode_explicit || !self.compress_punctuation
             || !matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
             || (para.style.snap_to_grid && grid_char_pitch.is_some())
-            || !language.is_some_and(|lang| lang.eq_ignore_ascii_case("ja") || lang.to_ascii_lowercase().starts_with("ja-"))
+            || !language.map_or(unset_ja, |lang| lang.eq_ignore_ascii_case("ja") || lang.to_ascii_lowercase().starts_with("ja-"))
             || (!kinsoku::is_cjk(next) && next != '\u{2610}')
             || kinsoku::cell_yaku_type_a(next) || kinsoku::cell_yaku_type_b(next)
         { return 0.0; }
