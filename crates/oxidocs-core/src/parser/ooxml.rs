@@ -14954,15 +14954,36 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     // golden 183/187, ja 178 -> 179, en 291/298 with no PASS->FAIL.
     if std::env::var_os("OXI_DECLARED_JAPANESE_FALLBACK_DISABLE").is_none() {
         for (name, info) in &document.styles.font_table {
-            let japanese = info.charset.as_deref()
-                .and_then(|value| u8::from_str_radix(value, 16).ok()) == Some(0x80)
+            let charset = info.charset.as_deref()
+                .and_then(|value| u8::from_str_radix(value, 16).ok());
+            // OXI_CHARSET_SUBSTITUTE (2026-10-20, default ON, opt-out _DISABLE): the
+            // declared CJK charset decides the substitute before the code-page bits.
+            // `_pb_charset_substitute_gen.py` (a missing face, one Word process per
+            // arm): 80 -> Yu Gothic, 86 -> Microsoft YaHei, 88 -> Microsoft JhengHei,
+            // 81 -> Malgun Gothic, with or without the Japanese code-page bit; 00 / no
+            // charset -> Yu Gothic only with the Japanese bit. ja/reference__2296511c
+            // declares «Noto Sans Japanese Bold» charset 86 + the Japanese bit: Word
+            // draws Microsoft YaHei (18pt lines), Oxi drew Yu Gothic (17.5).
+            let by_charset = if std::env::var_os("OXI_CHARSET_SUBSTITUTE_DISABLE").is_none() {
+                match charset {
+                    Some(0x86) => Some("Microsoft YaHei"),
+                    Some(0x88) => Some("Microsoft JhengHei"),
+                    Some(0x81) => Some("Malgun Gothic"),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let japanese = charset == Some(0x80)
                 || info.code_page_range.is_some_and(|bits| bits & (1 << 17) != 0);
-            if japanese
-                && !registry.supports_family(name)
-                && crate::font::runtime::resolve(name, false, false).is_none()
-                && !alias.contains_key(name)
-            {
-                alias.insert(name.clone(), "Yu Gothic".to_string());
+            let target = by_charset.or(if japanese { Some("Yu Gothic") } else { None });
+            if let Some(target) = target {
+                if !registry.supports_family(name)
+                    && crate::font::runtime::resolve(name, false, false).is_none()
+                    && !alias.contains_key(name)
+                {
+                    alias.insert(name.clone(), target.to_string());
+                }
             }
         }
     }
