@@ -5799,7 +5799,20 @@ impl LayoutEngine {
                 })
                 .or(self.default_font_family_east_asia.as_deref());
             if let Some(ff) = ea {
-                return self.registry.get(self.cjk_ea_family(ff, true, false));
+                let linked = self.cjk_ea_family(ff, true, false);
+                // OXI_S956_LATIN_EA_ASCII (2026-10-21, default ON, opt-out _DISABLE):
+                // a Latin-only eastAsia does NOT font-link to the theme / OS Japanese
+                // face; the mark takes the ASCII font. `_pb_markfont_gen.py` re-run
+                // with ONE FRESH Word process per document (the original run reused
+                // a live Word whose cached substitutes leaked between cases): lang
+                // ja + Arial everywhere -> Arial 1.1499 with or without a theme,
+                // theme Jpan ＭＳ 明朝 / ゴシック / Meiryo alike; only a CJK eastAsia
+                // (ＭＳ 明朝, c4/c5/c9) gives its own 1.297. mysignaiguide's empty
+                // Arial-17 paragraphs: Word 22.5 (Arial x 1.15), Oxi 25.35.
+                if linked != ff && std::env::var_os("OXI_S956_LATIN_EA_ASCII_DISABLE").is_none() {
+                    return self.metrics_for(run_style, para_style);
+                }
+                return self.registry.get(linked);
             }
         }
         if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
