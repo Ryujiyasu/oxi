@@ -380,7 +380,10 @@ def main() -> int:
         print(f"no docx matched (prefix={prefix}, dir={DOCS_DIR})", file=sys.stderr)
         return 2
 
-    word = win32com.client.Dispatch("Word.Application")
+    # DispatchEx: a NEW Word process. Dispatch attaches to any Word already running
+    # (another session's), whose cached missing-face substitutes leak into the truth
+    # (2026-10-21: en/technical__00642ce0 measured one paragraph a page late).
+    word = win32com.client.DispatchEx("Word.Application")
     word.Visible = False
     word.DisplayAlerts = False
 
