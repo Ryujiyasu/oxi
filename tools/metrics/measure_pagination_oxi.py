@@ -321,7 +321,7 @@ def measure_doc(docx_path: str) -> dict:
     }
 
 
-def measure_docs_batch(docx_paths, exe=None, env=None, stall_timeout=300):
+def measure_docs_batch(docx_paths, exe=None, env=None, stall_timeout=1200):
     """Measure many documents with ONE renderer process (`--batch=LIST`).
 
     A renderer cold start costs ~1.25s of a ~1.6s median document, so this is
@@ -329,6 +329,8 @@ def measure_docs_batch(docx_paths, exe=None, env=None, stall_timeout=300):
     `docx_paths`: the measure_doc() dict, or an Exception. A document that makes
     no progress for `stall_timeout` seconds is killed and recorded as an error;
     the batch resumes with the next one.
+    The limit is 1200s: legal__0010437a (625 pages) lays out in ~600s and
+    technical__002c1ffa (368) in 600-900s, so at 300s they were scored None.
     """
     import threading, queue
     exe = exe or RENDERER
