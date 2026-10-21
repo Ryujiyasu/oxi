@@ -5409,6 +5409,12 @@ impl<'a> TableFitLayouter<'a> {
                                             // set ships together (forms 1.000 + policies 1.000).
                                             // Same rule, same scope as break_into_lines' LATINEM.
                                             if std::env::var("OXI_S869_DISABLE").is_err() {
+                                                // OXI_CELL_DEFAULT_KERN (2026-10-21, default ON, opt-out
+                                                // _DISABLE): a cell run without w:kern takes the document
+                                                // default's (a styles part without rPrDefault inherits this
+                                                // machine's Normal.dotm, kern 1pt), as the body does. en/
+                                                // reports__001f1397: Tahoma 12 «non-consolidated for» --
+                                                // Word kerns «fo» -0.117 and fits 108.44 in 108.60.
                                                 let kern_active =
                                                     std::env::var("OXI_KERNBREAK_DISABLE").is_err()
                                                         && run
@@ -5420,6 +5426,7 @@ impl<'a> TableFitLayouter<'a> {
                                                                     .as_ref()
                                                                     .and_then(|rs| rs.kern)
                                                             })
+                                                            .or(if std::env::var_os("OXI_CELL_DEFAULT_KERN_DISABLE").is_none() { self.default_kern } else { None })
                                                             .map_or(false, |k| {
                                                                 k > 0.0 && font_size >= k
                                                             });
