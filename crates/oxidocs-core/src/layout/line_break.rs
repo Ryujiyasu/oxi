@@ -4715,8 +4715,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let l = lang.to_ascii_lowercase();
                             ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
                         });
+                        // OXI_HANG_DD_EA (2026-10-21, default ON, opt-out _DISABLE): the
+                        // language alone does not hang the mark -- docDefaults' eastAsia
+                        // FACE must be a CJK face too. `_pb_hangmark_prop_gen.py` arms with
+                        // a real styles part (Arial, comma, left, no compat): dd eastAsia
+                        // ＭＳ 明朝 / SimSun + lang ja or zh hang 2.96; dd eastAsia Arial or
+                        // none never; SimSun + zh-CN set on the RUN or in Normal never; dd
+                        // SimSun + run lang zh hangs. The style-less probes behind the
+                        // language law inherited Normal.dotm's CJK face. en/educational
+                        // __004cf6e9 (dd eastAsia Calibri, style eastAsia SimSun + zh-CN):
+                        // Word wraps «program,», Oxi hung the comma.
+                        let dd_ea_cjk = std::env::var_os("OXI_HANG_DD_EA_DISABLE").is_some()
+                            || self.default_font_family_east_asia.as_deref().is_some_and(|f|
+                                crate::font::shape::family_covers(f, '本')
+                                    || self.registry.get(f).is_cjk_83_64_font());
                         let lang_hang = !s809_hang
-                            || east_asian_lang
+                            || (east_asian_lang && dd_ea_cjk)
                             || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
                         word_trail_hang_w = if fixed_pitch || !lang_hang {
                             0.0
@@ -6801,8 +6815,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let l = lang.to_ascii_lowercase();
                             ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
                         });
+                        // OXI_HANG_DD_EA (2026-10-21, default ON, opt-out _DISABLE): the
+                        // language alone does not hang the mark -- docDefaults' eastAsia
+                        // FACE must be a CJK face too. `_pb_hangmark_prop_gen.py` arms with
+                        // a real styles part (Arial, comma, left, no compat): dd eastAsia
+                        // ＭＳ 明朝 / SimSun + lang ja or zh hang 2.96; dd eastAsia Arial or
+                        // none never; SimSun + zh-CN set on the RUN or in Normal never; dd
+                        // SimSun + run lang zh hangs. The style-less probes behind the
+                        // language law inherited Normal.dotm's CJK face. en/educational
+                        // __004cf6e9 (dd eastAsia Calibri, style eastAsia SimSun + zh-CN):
+                        // Word wraps «program,», Oxi hung the comma.
+                        let dd_ea_cjk = std::env::var_os("OXI_HANG_DD_EA_DISABLE").is_some()
+                            || self.default_font_family_east_asia.as_deref().is_some_and(|f|
+                                crate::font::shape::family_covers(f, '本')
+                                    || self.registry.get(f).is_cjk_83_64_font());
                         let lang_hang = !s809_hang
-                            || east_asian_lang
+                            || (east_asian_lang && dd_ea_cjk)
                             || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
                         word_trail_hang_w = if fixed_pitch || !lang_hang {
                             0.0
