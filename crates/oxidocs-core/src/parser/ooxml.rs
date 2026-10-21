@@ -11718,7 +11718,13 @@ fn parse_table(
         && !styles.styles.is_empty()
         && std::env::var_os("OXI_NO_TABLENORMAL_ZERO_PAD_DISABLE").is_none()
     {
-        style.default_cell_margins = Some(CellMargins { top: Some(0.0), bottom: Some(0.0), left: Some(0.0), right: Some(0.0) });
+        // OXI_IMPLICIT_CELLMAR_10TW (2026-10-22, default ON, opt-out _DISABLE): not zero
+        // left/right -- 10tw. `_pb_zero_cellmar_inset_gen.py` (no border, MS Mincho):
+        // the implicit margin's text starts at +0.524 and ends at -0.35, the same as an
+        // explicit 9..11tw tblCellMar on both sides (0tw: +0.044 / +0.25 over); top and
+        // bottom stay 0 (the implicit and the explicit-0 rows measure alike).
+        let lr = if std::env::var_os("OXI_IMPLICIT_CELLMAR_10TW_DISABLE").is_none() { 0.5 } else { 0.0 };
+        style.default_cell_margins = Some(CellMargins { top: Some(0.0), bottom: Some(0.0), left: Some(lr), right: Some(lr) });
     }
     if let Some(ref style_id) = eff_tbl_style_id {
         if let Some(tbl_style) = styles.table_styles.get(style_id) {
