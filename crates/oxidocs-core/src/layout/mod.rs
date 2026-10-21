@@ -2182,6 +2182,10 @@ struct VertColumn {
     /// the image's height of room (2970ce67 p2: the 145.7pt canvas does not
     /// fit band 3's remaining 145.5pt and opens band 4).
     image: bool,
+    /// OXI_VERT_PARA_SPACING: the space between two paragraphs (the previous
+    /// paragraph's after + this one's before), as a column that draws nothing
+    /// and is dropped at a page edge instead of carried over.
+    spacer: bool,
 }
 
 // Natural text coordinates are retained until the table's row boundaries
@@ -6876,6 +6880,10 @@ impl LayoutEngine {
                     let _ = avail;
                     while k < chunk_end {
                         let pitch = cols[k].pitch;
+                        if cols[k].spacer && (x - pitch < left - 0.01 || x >= avail_right - 0.01) {
+                            k += 1;
+                            continue;
+                        }
                         if x - pitch < left - 0.01 {
                             break;
                         }
@@ -7904,8 +7912,40 @@ impl LayoutEngine {
         let mut recipes: Vec<VertParaRecipe> = Vec::new();
         let mut cols: Vec<VertColumn> = Vec::new();
         let s1165_on = std::env::var("OXI_S1165_DISABLE").is_err();
+        // OXI_VERT_PARA_SPACING (2026-10-21, default ON, opt-out _DISABLE): a vertical
+        // section spaces its paragraphs like a horizontal one -- the previous after
+        // plus this before, as a blank column between them. golden probevert (tbRl,
+        // lines grid 18, Normal.dotm 1.158 / after 8): Word's column steps are
+        // 20.8 inside a paragraph and 28.9 between paragraphs, 9 articles a page;
+        // Oxi stepped 20.85 everywhere and packed 11.
+        let vert_spacing = std::env::var_os("OXI_VERT_PARA_SPACING_DISABLE").is_none();
+        let mut prev_after: Option<f32> = None;
 
         for block_idx in run_start..run_end {
+            if vert_spacing {
+                if let Block::Paragraph(next) = &page.blocks[block_idx] {
+                    if let Some(after) = prev_after.take() {
+                        let gap = after + next.style.space_before.unwrap_or(0.0).max(0.0);
+                        if gap > 0.01 && !cols.is_empty() {
+                            let recipe = cols.last().map(|c| c.recipe).unwrap_or(0);
+                            cols.push(VertColumn {
+                                recipe,
+                                text: String::new(),
+                                segs: Vec::new(),
+                                top: 0.0,
+                                pitch: gap,
+                                blank: true,
+                                hard_break: false,
+                                image: false,
+                                spacer: true,
+                            });
+                        }
+                    }
+                    prev_after = Some(next.style.space_after.unwrap_or(0.0).max(0.0));
+                } else {
+                    prev_after = None;
+                }
+            }
             let para = match &page.blocks[block_idx] {
                 Block::Paragraph(p) => p,
                 Block::Image(img) if img.position.is_none()
@@ -7927,7 +7967,7 @@ impl LayoutEngine {
                         pitch: img.width.max(0.0),
                         blank: false,
                         hard_break: false,
-                        image: true,
+                        image: true, spacer: false,
                     });
                     continue;
                 }
@@ -8134,7 +8174,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch,
                     blank: true,
                     hard_break,
-                    image: false,
+                    image: false, spacer: false,
                 });
                 continue;
             }
@@ -8218,7 +8258,7 @@ cells={} pitch={:.2} text={:?}",
                             top: (s1331_left + if li == 0 { s1331_first } else { 0.0 }).max(0.0),
                             blank: false,
                             hard_break: hard_break && li == 0,
-                            image: false,
+                            image: false, spacer: false,
                         });
                     }
                 }
@@ -8240,7 +8280,7 @@ cells={} pitch={:.2} text={:?}",
                         pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                         blank: false,
                         hard_break: hard_break && first,
-                        image: false,
+                        image: false, spacer: false,
                     });
                     first = false;
                     cur_y = s1331_left;
@@ -8266,7 +8306,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                     blank: false,
                     hard_break: hard_break && first,
-                    image: false,
+                    image: false, spacer: false,
                 });
             }
         }
