@@ -7254,6 +7254,14 @@ impl<'a> TableFitLayouter<'a> {
                                                             // «rate %».
                                                             let lead_joined = s818_cell
                                                                 && std::env::var_os("OXI_CELL_LEADPUNCT_DISABLE").is_none()
+                                                                // OXI_LEADPUNCT_EA_LANG: only under ja/zh/ko (see line_break.rs)
+                                                                && (std::env::var_os("OXI_LEADPUNCT_EA_LANG_DISABLE").is_some()
+                                                                    || run.style.east_asia_lang.as_deref()
+                                                                        .or(self.default_east_asia_lang.as_deref())
+                                                                        .map_or(true, |lang| {
+                                                                            let l = lang.to_ascii_lowercase();
+                                                                            ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
+                                                                        }))
                                                                 && tail == Some(' ')
                                                                 && carry.iter().find(|c| c.ch != ' ').is_some_and(|c| matches!(c.ch,
                                                                     '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201D}' | '\u{B0}'));

@@ -565,10 +565,24 @@ impl<'a> LineBreaker<'a> {
         // punctuation (. , : ; ? ! % ) ] } ’ ”): the word before the space goes
         // to the next line with it (default ON, opt-out OXI_LATIN_LEADPUNCT_CARRY_DISABLE).
         let leadpunct_on = std::env::var_os("OXI_LATIN_LEADPUNCT_CARRY_DISABLE").is_none();
+        // OXI_LEADPUNCT_EA_LANG (2026-10-21, default ON, opt-out _DISABLE): the carry is
+        // Japanese line breaking -- Word applies it only when the run's east-Asian
+        // language is ja/zh/ko. `_pb_lead_punct_gen.py` with a real styles part: docDefaults
+        // eastAsia en-US -> «␠.» «␠,» «␠.......» all start lines (Calibri or ＭＳ 明朝 alike);
+        // ja-JP -> never. The style-less arms inherited Normal.dotm's ja-JP. en/legal
+        // __0010437a (en-US): «affidavit of / .......» -- Oxi carried «of» down, the
+        // paragraph took 3 lines and the next rule moved a page.
+        let leadpunct_lang = |ea_lang: Option<&str>| -> bool {
+            std::env::var_os("OXI_LEADPUNCT_EA_LANG_DISABLE").is_some()
+                || ea_lang.or(self.default_east_asia_lang.as_deref()).map_or(true, |lang| {
+                    let l = lang.to_ascii_lowercase();
+                    ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
+                })
+        };
         macro_rules! leadpunct_take {
-            ($word:expr, $wfw:expr, $avail:expr) => {{
+            ($word:expr, $wfw:expr, $avail:expr, $ea:expr) => {{
                 let mut lp_carry: Vec<LineFragment> = Vec::new();
-                if leadpunct_on {
+                if leadpunct_on && $ea {
                     // ° (2026-10-19): `_pb_lead_punct_gen.py` -- Word never starts a line
                     // with «␠°» either; $ ( - – — / do start one.
                     let proh = |c: char| matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201D}')
@@ -1350,7 +1364,7 @@ impl<'a> LineBreaker<'a> {
                         if !preceded_by_open && !s745_char_wrap
                             && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG").is_ok() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
-                            let lp_carry = leadpunct_take!(word, word_fit_width_tw, available_tw);
+                            let lp_carry = leadpunct_take!(word, word_fit_width_tw, available_tw, leadpunct_lang(ws.east_asia_lang.as_deref()));
                             wrap_and_seed!(ws);
                             leadpunct_put!(lp_carry);
                         }
@@ -1611,7 +1625,7 @@ impl<'a> LineBreaker<'a> {
                                 }
                             }
                         }
-                        let lp_carry = if hyphenated { Vec::new() } else { leadpunct_take!(word, word_fit_width_tw, available_tw) };
+                        let lp_carry = if hyphenated { Vec::new() } else { leadpunct_take!(word, word_fit_width_tw, available_tw, leadpunct_lang(ws.east_asia_lang.as_deref())) };
                         wrap_and_seed!(ws);
                         leadpunct_put!(lp_carry);
                     }
