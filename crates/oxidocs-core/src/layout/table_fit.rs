@@ -13429,7 +13429,15 @@ impl<'a> TableFitLayouter<'a> {
                 // fit, and it landed alone on a page of its own -- an empty p6
                 // and +1 for the rest of the document. A row that moved whole
                 // advances exactly like one laid out at the top of a fresh page.
-                if s1168 && split_y <= row_top + 0.1 {
+                // OXI_WHOLEPUSH_TALL (2026-10-21, default ON, opt-out _DISABLE): a row
+                // taller than a page that moved to a fresh page still SPLITS there, so
+                // it is a continuation, not a whole-row push. golden probenest (one
+                // outer cell: a 20-row nested table + 「（続き）」, 1165pt): Word goes on
+                // under 「（続き）」 at 558 on page 3; Oxi set the cursor to page top +
+                // 1165 and threw 第1条 onto page 4.
+                let s1168_tall = std::env::var_os("OXI_WHOLEPUSH_TALL_DISABLE").is_none()
+                    && row_height > content_height + 0.5;
+                if s1168 && split_y <= row_top + 0.1 && !s1168_tall {
                     // A replayed header already shifted the pushed row's content.
                     // Advance past the same header when positioning its successor.
                     let header_height = if s754_hdr_replay
