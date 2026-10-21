@@ -115,11 +115,30 @@ fn face_matches(font: &skrifa::FontRef, family: &str, bold: bool, italic: bool) 
     if !fam_ok {
         return false;
     }
-    if let Some(rec) = font
+    // OXI_FACE_ALL_SUBFAMILY (2026-10-21, default ON, opt-out _DISABLE): the FIRST
+    // subfamily record may be a localized one -- tahomabd.ttf lists Catalan
+    // «Negreta» before the English «Bold» -- so a bold file read as Regular and
+    // never resolved; Tahoma Bold's £ fell to the 0.5em default (4.00 vs 5.09 at
+    // 8pt, en/reports__001f1397's «award (£)» cell kept on one line). Read the
+    // English (0x409) record when there is one, else any record naming the style.
+    let all_records = std::env::var_os("OXI_FACE_ALL_SUBFAMILY_DISABLE").is_none();
+    let recs: Vec<String> = font
         .localized_strings(skrifa::string::StringId::SUBFAMILY_NAME)
-        .next()
-    {
-        style = rec.to_string().to_ascii_lowercase();
+        .map(|r| r.to_string().to_ascii_lowercase())
+        .collect();
+    if let Some(first) = recs.first() {
+        style = first.clone();
+    }
+    let english = font
+        .localized_strings(skrifa::string::StringId::SUBFAMILY_NAME)
+        .find(|r| r.language().map_or(false, |l| l.eq_ignore_ascii_case("en-US")))
+        .map(|r| r.to_string().to_ascii_lowercase());
+    if all_records {
+        if let Some(en) = english {
+            style = en;
+        } else if let Some(r) = recs.iter().find(|r| r.contains("bold") || r.contains("italic") || r.contains("regular")) {
+            style = r.clone();
+        }
     }
     let has_bold = style.contains("bold");
     let has_italic = style.contains("italic") || style.contains("oblique");
