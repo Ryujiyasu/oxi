@@ -2810,10 +2810,29 @@ impl<'a> ParagraphLayouter<'a> {
                         // and 12.75 with the level font set to Arial; a 12pt marker
                         // 19.5. The PDF draws the digit in Calibri-Bold, but the line
                         // grows by AUM's ascent overflow (10pt +3.8, 12pt +6.46).
+                        // OXI_MARKER_CJK_ASC (2026-10-22, default ON, opt-out _DISABLE): the fresh-
+                        // process truth retires S1614's 1.332em box. `_pb_marker_face_line_gen.py`
+                        // (Calibri 10/11, single and 1.15): a marker in ＭＳ 明朝 -- or in Arial
+                        // Unicode MS declared charset 80, which Word draws in MS-Mincho -- pushes
+                        // its line down by 0.54 (10pt single), 0.60 (11pt / 1.15), 0.66 (11pt
+                        // 1.15); undeclared AUM and Arial push nothing (S1614's box is gone with
+                        // the face absent). 0.54 = (0.859 + (83/64-1)/2)
+                        // x 10 - Calibri's 9.52: the CJK face's ascent is its winAscent plus half
+                        // the 83/64 leading. en/policies__0097fbf2 (charset 80): S1614 put every
+                        // numbered heading 4pt low (blind-G line census).
+                        let marker_cjk_asc = std::env::var_os("OXI_MARKER_CJK_ASC_DISABLE").is_none();
+                        let aum_absent = crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none();
+                        let aum_family = self.resolve_font_family(ms, &para.style) == Some("Arial Unicode MS");
+                        let aum_as_mincho = marker_cjk_asc && aum_family && aum_absent && self.aum_charset_80;
                         let aum_marker = std::env::var_os("OXI_S1614_DISABLE").is_none()
                             && !self.doc_body_has_real_cjk
-                            && self.resolve_font_family(ms, &para.style) == Some("Arial Unicode MS");
-                        let m = if aum_marker {
+                            && aum_family
+                            && !aum_as_mincho
+                            // undeclared AUM, absent: Word sizes the marker as Arial (aum0 arms)
+                            && !(marker_cjk_asc && aum_absent);
+                        let m = if aum_as_mincho {
+                            self.registry.get("MS Mincho")
+                        } else if aum_marker {
                             self.registry.get_with_style(
                                 "Arial Unicode MS Latin",
                                 self.resolve_bold(ms, &para.style),
@@ -2827,6 +2846,7 @@ impl<'a> ParagraphLayouter<'a> {
                         // 11 marker over Calibri-Bold 10.5: Word +0.30/line; repro
                         // Arial 11/13, TNR 11 = model +-0.04). Opt-out OXI_MARKER_BOX_TOP_DISABLE.
                         if !aum_marker && !matches!(m.family.as_str(), "Symbol" | "Wingdings" | "Wingdings 2" | "Wingdings 3")
+                            && !(marker_cjk_asc && m.is_cjk_83_64_font())
                             && std::env::var_os("OXI_MARKER_BOX_TOP_DISABLE").is_none()
                             // Measured for SINGLE auto spacing only; under a line multiple
                             // (administrative__0046f255, line 259) Word does not raise it.
@@ -2842,6 +2862,8 @@ impl<'a> ParagraphLayouter<'a> {
                             (m.win_ascent + raise) * mfs
                         } else if aum_marker {
                             LayoutEngine::aum_marker_ascent_em(m.win_ascent) * mfs
+                        } else if marker_cjk_asc && m.is_cjk_83_64_font() {
+                            (m.win_ascent + (83.0 / 64.0 - 1.0) * (m.win_ascent + m.win_descent) * 0.5) * mfs
                         } else {
                             m.win_ascent * mfs
                         }
