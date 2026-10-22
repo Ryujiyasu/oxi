@@ -4588,6 +4588,54 @@ impl LayoutEngine {
                     resolve_cells(&mut tb.blocks, false);
                 }
             }
+            // OXI_CELL_CAPS (2026-10-22, default ON, opt-out _DISABLE): `w:caps` in a
+            // table cell. The body sets such a run in capitals (S677, paragraph.rs);
+            // the cell wrapper and its row-height estimate read the run text as
+            // written, so a footer table printed «love T.C.» where Word prints
+            // «LOVE T.C.» (ja/administrative__0ed7739e; 4 gate documents carry caps
+            // runs in cells). Upper-cased here on the private layout copy, so every
+            // cell path -- estimate and placement -- sees the same text. A character
+            // whose capital is longer (ß) keeps its spelling, so source offsets hold.
+            if std::env::var_os("OXI_CELL_CAPS_DISABLE").is_none() {
+                fn caps_cells(blocks: &mut [Block], in_cell: bool) {
+                    for block in blocks {
+                        match block {
+                            Block::Paragraph(p) if in_cell => {
+                                let para_caps = p.style.default_run_style.as_ref().is_some_and(|d| d.all_caps);
+                                for run in &mut p.runs {
+                                    if (run.style.all_caps || (para_caps && !run.style.has_explicit_all_caps))
+                                        && run.field_type.is_none()
+                                        && run.text.chars().any(|c| c.is_lowercase())
+                                    {
+                                        run.text = run.text.chars().map(|c| {
+                                            let mut u = c.to_uppercase();
+                                            match (u.next(), u.next()) {
+                                                (Some(x), None) => x,
+                                                _ => c,
+                                            }
+                                        }).collect();
+                                    }
+                                }
+                            }
+                            Block::Table(t) => {
+                                for row in &mut t.rows {
+                                    for cell in &mut row.cells {
+                                        caps_cells(&mut cell.blocks, true);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                caps_cells(&mut page.blocks, false);
+                caps_cells(&mut page.header, false);
+                caps_cells(&mut page.footer, false);
+                caps_cells(&mut page.header_first, false);
+                caps_cells(&mut page.footer_first, false);
+                caps_cells(&mut page.header_even, false);
+                caps_cells(&mut page.footer_even, false);
+            }
             self.resolve_fit_text_page(page);
         }
 
