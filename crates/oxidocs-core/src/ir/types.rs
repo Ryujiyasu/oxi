@@ -513,6 +513,11 @@ pub enum FieldType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunStyle {
+    /// Layout-only (never serialized): the field a run's text stands for (PAGE /
+    /// NUMPAGES), copied from `Run::field_type` by the table-cell wrapper, whose
+    /// fragments carry a run's style but not the run (OXI_CELL_FIELD).
+    #[serde(skip)]
+    pub cell_field_type: Option<FieldType>,
     pub font_family: Option<String>,
     /// East Asian font family (w:rFonts eastAsia) for CJK characters
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -766,6 +771,7 @@ pub struct RunStyle {
 impl Default for RunStyle {
     fn default() -> Self {
         Self {
+            cell_field_type: None,
             font_family: None,
             font_family_east_asia: None,
             font_family_cs: None,

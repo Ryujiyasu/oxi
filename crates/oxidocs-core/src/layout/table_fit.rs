@@ -4902,6 +4902,20 @@ impl<'a> TableFitLayouter<'a> {
                                     // the next visible run's first fragment.
                                     let mut s993_lrpb_pending = false;
                                     for (run_idx, run) in para.runs.iter().enumerate() {
+                                        // OXI_CELL_FIELD (2026-10-22, default ON, opt-out _DISABLE): the
+                                        // fragment's source style also carries the run's field type, so a
+                                        // PAGE / NUMPAGES result in a cell is substituted like one in the
+                                        // body. Every cell fragment was emitted with no field type: a header
+                                        // or footer table printed «#» where Word prints the number
+                                        // (en/technical__00454dc8 «102800 - 1», en/legal__0016ee20,
+                                        // en/legal__001e6d77 «Page 1 of 2» -- 22 documents of the gate).
+                                        let cell_run_style = {
+                                            let mut s = run.style.clone();
+                                            if std::env::var_os("OXI_CELL_FIELD_DISABLE").is_none() {
+                                                s.cell_field_type = run.field_type;
+                                            }
+                                            s
+                                        };
                                         if run.has_last_rendered_page_break
                                             && !(cell_para_counter == 0 && run_idx == 0)
                                         {
@@ -4980,7 +4994,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     std::mem::take(&mut s993_lrpb_pending),
                                                     run.style.font_family_east_asia.clone(),
                                                     run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                    run.style.clone(),
+                                                    cell_run_style.clone(),
                                                 ));
                                                 line_x += ow;
                                                 continue;
@@ -5025,7 +5039,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     std::mem::take(&mut s993_lrpb_pending),
                                                     run.style.font_family_east_asia.clone(),
                                                     run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                    run.style.clone(),
+                                                    cell_run_style.clone(),
                                                 ));
                                                 line_x += ow;
                                             }
@@ -5084,7 +5098,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 std::mem::take(&mut s993_lrpb_pending),
                                                 run.style.font_family_east_asia.clone(),
                                                 run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                run.style.clone(),
+                                                cell_run_style.clone(),
                                             ));
                                             line_x += cw;
                                             continue;
@@ -5193,7 +5207,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         std::mem::take(&mut s993_lrpb_pending),
                                                         run.style.font_family_east_asia.clone(),
                                                         run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                        run.style.clone(),
+                                                        cell_run_style.clone(),
                                                     ));
                                                     buf.clear();
                                                     buf_w = 0.0;
@@ -5209,7 +5223,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         font_family.clone(), run.style.color.clone(),
                                                         run.style.highlight.clone().or_else(|| run.style.shading.clone()),
                                                         cs, run.style.text_scale.unwrap_or(100.0), false,
-                                                        run.style.font_family_east_asia.clone(), false, run.style.clone()));
+                                                        run.style.font_family_east_asia.clone(), false, cell_run_style.clone()));
                                                 }
                                                 if !tab_break { explicit_break_lines.insert(lines.len()); }
                                                 lines.push(std::mem::take(&mut current_line));
@@ -5279,7 +5293,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         cs, run.style.text_scale.unwrap_or(100.0),
                                                         std::mem::take(&mut s993_lrpb_pending),
                                                         run.style.font_family_east_asia.clone(), run.ruby.is_some(),
-                                                        run.style.clone()));
+                                                        cell_run_style.clone()));
                                                     line_x += buf_w;
                                                     buf.clear();
                                                     buf_w = 0.0;
@@ -5293,7 +5307,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     cs, run.style.text_scale.unwrap_or(100.0),
                                                     std::mem::take(&mut s993_lrpb_pending),
                                                     run.style.font_family_east_asia.clone(), run.ruby.is_some(),
-                                                    run.style.clone()));
+                                                    cell_run_style.clone()));
                                                 line_x += tab_w;
                                                 current_line_chars.push(
                                                     crate::layout::jc_both_compress::CharContext {
@@ -6996,7 +7010,7 @@ impl<'a> TableFitLayouter<'a> {
                                                                     ),
                                                                     run.style.font_family_east_asia.clone(),
                                                                     run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                                    run.style.clone(),
+                                                                    cell_run_style.clone(),
                                                                 ));
                                                                 buf.clear();
                                                                 buf_w = 0.0;
@@ -7045,7 +7059,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             std::mem::take(&mut s993_lrpb_pending),
                                                             run.style.font_family_east_asia.clone(),
                                                             run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                            run.style.clone(),
+                                                            cell_run_style.clone(),
                                                         ));
                                                         buf.clear();
                                                         buf_w = 0.0;
@@ -7120,7 +7134,7 @@ impl<'a> TableFitLayouter<'a> {
                                                                 std::mem::take(&mut s993_lrpb_pending),
                                                                 run.style.font_family_east_asia.clone(),
                                                                 run.ruby.is_some(),
-                                                                run.style.clone(),
+                                                                cell_run_style.clone(),
                                                             ));
                                                             buf.clear();
                                                             buf_w = 0.0;
@@ -7333,7 +7347,7 @@ impl<'a> TableFitLayouter<'a> {
                                                                     ),
                                                                     run.style.font_family_east_asia.clone(),
                                                                     run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                                    run.style.clone(),
+                                                                    cell_run_style.clone(),
                                                                 ));
                                                                 buf.clear();
                                                                 buf_w = 0.0;
@@ -7398,7 +7412,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         std::mem::take(&mut s993_lrpb_pending),
                                                         run.style.font_family_east_asia.clone(),
                                                         run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                        run.style.clone(),
+                                                        cell_run_style.clone(),
                                                     ));
                                                     buf.clear();
                                                     buf_w = 0.0;
@@ -7453,7 +7467,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         false,
                                                         run.style.font_family_east_asia.clone(),
                                                         run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                        run.style.clone(),
+                                                        cell_run_style.clone(),
                                                     ));
                                                     prev_char_emitted = Some(ch);
                 prev_char_gap = Some(self.natural_autospace_after(ch, &run.style, &para.style, font_size, cs));
@@ -7495,7 +7509,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 std::mem::take(&mut s993_lrpb_pending),
                                                 run.style.font_family_east_asia.clone(),
                                                 run.ruby.is_some(),  // S1312: this fragment's run carries ruby
-                                                run.style.clone(),
+                                                cell_run_style.clone(),
                                             ));
                                             line_x += buf_w;
                                             current_line_chars.extend(buf_chars.drain(..));
@@ -9445,7 +9459,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     character_spacing: *cs
                                                         + justify_char_spacing
                                                         + grid_cs_adj,
-                                                    field_type: None,
+                                                    field_type: _source_style.cell_field_type,
                                                     text_scale: *ts,
                                                     is_vertical: false,
                                                     effects: TextEffects::default(),
@@ -9629,7 +9643,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             character_spacing: *cs
                                                                 + justify_char_spacing
                                                                 + if single_byte_grid.is_some() { 0.0 } else { grid_cs_adj },
-                                                            field_type: None,
+                                                            field_type: _source_style.cell_field_type,
                                                             text_scale: *ts,
                                                             is_vertical: false,
                                                             effects: TextEffects::default(),
