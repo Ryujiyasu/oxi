@@ -584,6 +584,34 @@ impl OoxmlParser {
                 legacy_tblstyle_normal_sz(&mut s.blocks, &styles);
             }
         }
+        // OXI_LEGACY_SECT_BR (2026-10-22, default ON, opt-out _DISABLE): under
+        // compatibility mode 14 or older a page break in the RUNS of the paragraph
+        // that carries a section's sectPr breaks nothing, whatever the next
+        // section's type. `_pb_sect_tail_br_gen.py` re-run with compat 14: br in the
+        // sectPr paragraph -> continuous 1 page (compat 15: 2), nextPage / oddPage
+        // 2 = the section break alone; with text before the br 1; a br in its OWN
+        // paragraph after still breaks (2). Compat 12 the same. The real document
+        // is reference__0ea3ec86 (compat 14): Word sets the cover and the next
+        // continuous section's heading on page 1; S1454's break sent it to page 3.
+        if std::env::var_os("OXI_LEGACY_SECT_BR_DISABLE").is_none()
+            && (compat_mode <= 14 || !compat_mode_explicit)
+        {
+            for s in sections.iter_mut() {
+                for block in s.blocks.iter_mut() {
+                    if let Block::Paragraph(p) = block {
+                        if !p.style.page_section_break {
+                            continue;
+                        }
+                        if p.style.page_break_after && p.runs.iter().all(|r| r.text.trim().is_empty()) {
+                            p.style.page_break_after = false;
+                        }
+                        for run in p.runs.iter_mut() {
+                            run.text.retain(|ch| ch != '\x0C');
+                        }
+                    }
+                }
+            }
+        }
         let settings_part_exists = self.read_part("word/settings.xml").is_ok();
         let fn_special_declared = self.parse_fn_special_declared();
         let fn_pos_beneath = self.parse_fn_pos_beneath();
