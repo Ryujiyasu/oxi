@@ -5719,8 +5719,8 @@ impl<'a> TableFitLayouter<'a> {
                                                 let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
                                                     && (prev_char_ruby || run.style.ruby_field);
                                                 if !s1316_adj
-                                                    && ((de_boundary && para.style.auto_space_de)
-                                                        || (dn_boundary && para.style.auto_space_dn))
+                                                    && ((de_boundary && (para.style.auto_space_de && self.doc_autospace()))
+                                                        || (dn_boundary && (para.style.auto_space_dn && self.doc_autospace())))
                                                 {
                                                     if let Some(gap) = prev_char_gap { gap } else if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
                                                     {
@@ -6079,7 +6079,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         .chain(std::iter::once(ch))
                                                     {
                                                         if let Some(p) = prev {
-                                                            if if std::env::var_os("OXI_CELL_AKI").is_some() { cell_aki_joint(p, c, para.style.auto_space_de, para.style.auto_space_dn) } else { is_cjk_latin_joint(p, c) } {
+                                                            if if std::env::var_os("OXI_CELL_AKI").is_some() { cell_aki_joint(p, c, (para.style.auto_space_de && self.doc_autospace()), (para.style.auto_space_dn && self.doc_autospace())) } else { self.doc_autospace() && is_cjk_latin_joint(p, c) } {
                                                                 n += 1.0;
                                                             }
                                                         }
@@ -8318,7 +8318,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     self.balance_single_byte_double_byte_width && !f.15),
                                             )).collect();
                                             plan_cell_aki(&fragments, line_total_w - effective_wrap,
-                                                |a, b| cell_aki_joint(a, b, para.style.auto_space_de, para.style.auto_space_dn))
+                                                |a, b| cell_aki_joint(a, b, (para.style.auto_space_de && self.doc_autospace()), (para.style.auto_space_dn && self.doc_autospace())))
                                         } else { Vec::new() };
                                         let mut frag_width_adj: Vec<f32> = (0..line.len())
                                             .map(|i| -aki_plan.get(i).map_or(0.0, |p| p.width_reduction)).collect();
@@ -9173,7 +9173,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     !ruby_adjacent && previous.0.chars().last()
                                                         .zip(text.chars().next())
                                                         .is_some_and(|(a,b)| cell_aki_joint(a,b,
-                                                            para.style.auto_space_de,para.style.auto_space_dn))
+                                                            (para.style.auto_space_de && self.doc_autospace()),(para.style.auto_space_dn && self.doc_autospace())))
                                                 })
                                                 .map_or(0.0, |previous| {
                                                     self.natural_autospace_after(previous.0.chars().last().unwrap_or(' '),
@@ -9579,8 +9579,8 @@ impl<'a> TableFitLayouter<'a> {
                                                         &self.registry,
                                                         &fm,
                                                         *cs + justify_char_spacing + if single_byte_grid.is_some() { 0.0 } else { grid_cs_adj },
-                                                        para.style.auto_space_de,
-                                                        para.style.auto_space_dn,
+                                                        (para.style.auto_space_de && self.doc_autospace()),
+                                                        (para.style.auto_space_dn && self.doc_autospace()),
                                                         None,
                                                         std::env::var_os("OXI_CELL_BALANCED_SPACE").is_some()
                                                             && self.balance_single_byte_double_byte_width,

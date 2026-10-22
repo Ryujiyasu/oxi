@@ -3455,6 +3455,9 @@ pub struct LayoutEngine {
     /// AND is conservative: one typed-grid page anywhere leaves the flag false
     /// and the whole document keeps its calibrated behaviour.
     doc_grid_all_no_type: bool,
+    /// OXI_AUTOSPACE_DD_EA: whether docDefaults' eastAsia face is a CJK face
+    /// (computed on first use; see `doc_autospace`).
+    doc_autospace_cache: std::cell::OnceCell<bool>,
 }
 
 /// S463: recursive CJK scan over a block (paragraph runs + nested table cells).
@@ -4068,6 +4071,7 @@ impl LayoutEngine {
             doc_lrpb_distrust: false,
             lrpb_count_distrust: std::cell::Cell::new(false),
             doc_grid_all_no_type: false,
+            doc_autospace_cache: std::cell::OnceCell::new(),
         }
     }
 
@@ -4325,6 +4329,7 @@ impl LayoutEngine {
             // S1062: true only when EVERY page that declares a grid pitch is a
             // no-type docGrid (see the field doc comment for why this is
             // document-level rather than threaded).
+            doc_autospace_cache: std::cell::OnceCell::new(),
             doc_grid_all_no_type: doc
                 .pages
                 .iter()
@@ -5476,6 +5481,24 @@ impl LayoutEngine {
     /// ArialMT. Pure-CJK text keeps the body-CJK gate: digitalcontract (en-US,
     /// CJK body) sizes its AUM 委託契約書 heading by the Japanese face's box
     /// (Word 20.25pt row). Opt-out OXI_AUMJA_DISABLE restores the body-CJK gate.
+    /// OXI_AUTOSPACE_DD_EA (2026-10-22, default ON, opt-out _DISABLE): Word puts
+    /// the auto space at a CJK / Latin-letter or CJK / digit joint (autoSpaceDE /
+    /// autoSpaceDN) only when docDefaults' eastAsia FACE is a CJK face -- the same
+    /// discriminator as OXI_HANG_DD_EA. `_pb_autospace_face_gen.py` (compat 15,
+    /// 10pt, «、mysign公式…生成AIを利用SEO効果»): dd eastAsia ＭＳ 明朝 / 游ゴシック
+    /// -> «成A» 12.49-12.62 (10 + the 1/4em gap); dd eastAsia Arial / Century / none
+    /// -> 9.97-10.09, no gap, whatever the run face (Arial, Century, ＭＳ 明朝, AUM)
+    /// or language. golden mysignaiguide (Google Docs export, dd eastAsia Arial):
+    /// Word sets «mysign公式» with no gap, Oxi's +2.5 at each joint wrapped «て».
+    fn doc_autospace(&self) -> bool {
+        *self.doc_autospace_cache.get_or_init(|| {
+            std::env::var_os("OXI_AUTOSPACE_DD_EA_DISABLE").is_some()
+                || self.default_font_family_east_asia.as_deref().is_some_and(|f|
+                    crate::font::shape::family_covers(f, '\u{672C}')
+                        || self.registry.get(f).is_cjk_83_64_font())
+        })
+    }
+
     fn aum_japanese_substitute(&self, text: Option<&str>) -> bool {
         if std::env::var_os("OXI_AUMJA_DISABLE").is_some() {
             return self.doc_body_has_real_cjk;
@@ -8569,8 +8592,8 @@ cells={} pitch={:.2} text={:?}",
                     // (autoSpaceDN) boundary: 1/8 em per boundary -- the probe's
                     // «Ｑ0柴田高校» (two boundaries) measures 138 in Word = 132 + 2 × 3
                     let cjk = crate::font::is_fullwidth(c);
-                    let latin = (c.is_ascii_alphabetic() && p.style.auto_space_de)
-                        || (c.is_ascii_digit() && p.style.auto_space_dn);
+                    let latin = (c.is_ascii_alphabetic() && (p.style.auto_space_de && self.doc_autospace()))
+                        || (c.is_ascii_digit() && (p.style.auto_space_dn && self.doc_autospace()));
                     if let Some(pc) = prev_cjk {
                         if (pc && latin) || (!pc && cjk && prev_cjk == Some(false)) {
                             w += 0.125 * fs;
@@ -19862,8 +19885,8 @@ cells={} pitch={:.2} text={:?}",
                     let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
                         && (prev_char_ruby || run.style.ruby_field);
                     if !s1316_adj
-                        && ((de_boundary && para.style.auto_space_de)
-                            || (dn_boundary && para.style.auto_space_dn))
+                        && ((de_boundary && (para.style.auto_space_de && self.doc_autospace()))
+                            || (dn_boundary && (para.style.auto_space_dn && self.doc_autospace())))
                     {
                         if let Some(gap) = prev_char_gap { gap } else if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
                             s1175_autospace(
@@ -19939,7 +19962,7 @@ cells={} pitch={:.2} text={:?}",
                             .chain(std::iter::once(ch))
                         {
                             if let Some(p) = prev {
-                                if if std::env::var_os("OXI_CELL_AKI").is_some() { cell_aki_joint(p, c, para.style.auto_space_de, para.style.auto_space_dn) } else { is_cjk_latin_joint(p, c) } {
+                                if if std::env::var_os("OXI_CELL_AKI").is_some() { cell_aki_joint(p, c, (para.style.auto_space_de && self.doc_autospace()), (para.style.auto_space_dn && self.doc_autospace())) } else { self.doc_autospace() && is_cjk_latin_joint(p, c) } {
                                     n += 1.0;
                                 }
                             }

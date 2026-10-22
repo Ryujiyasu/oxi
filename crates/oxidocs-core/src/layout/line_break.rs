@@ -837,8 +837,8 @@ impl<'a> LineBreaker<'a> {
             && grid_char_pitch.is_none();
         let legacy_gap_floor = |chars: &[char], fs: f32| -> f32 {
             let is_lat = |c: char| {
-                (c.is_ascii_alphabetic() && para_style.auto_space_de)
-                    || (c.is_ascii_digit() && para_style.auto_space_dn)
+                (c.is_ascii_alphabetic() && (para_style.auto_space_de && self.doc_autospace()))
+                    || (c.is_ascii_digit() && (para_style.auto_space_dn && self.doc_autospace()))
             };
             let mut gaps = 0usize;
             let mut island_from_start = chars.first().map_or(false, |&c| is_lat(c));
@@ -4874,8 +4874,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             || current_line.fragments.last().map_or(false, |f| f.style.ruby_field));
                     if cur_is_cjk
                         && !s1316_ruby_adjacent
-                        && ((prev_is_alpha && para_style.auto_space_de)
-                            || (prev_is_digit && para_style.auto_space_dn))
+                        && ((prev_is_alpha && (para_style.auto_space_de && self.doc_autospace()))
+                            || (prev_is_digit && (para_style.auto_space_dn && self.doc_autospace())))
                     {
                         // S546: gap = fs/4 true-space (old per-fontSize table = paint artifact).
                         let extra = current_line.fragments.last()
@@ -5821,8 +5821,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .chain(std::iter::once(ch))
                             .collect();
                         let is_lat = |c: char| {
-                            (c.is_ascii_alphabetic() && para_style.auto_space_de)
-                                || (c.is_ascii_digit() && para_style.auto_space_dn)
+                            (c.is_ascii_alphabetic() && (para_style.auto_space_de && self.doc_autospace()))
+                                || (c.is_ascii_digit() && (para_style.auto_space_dn && self.doc_autospace()))
                         };
                         let mut gaps = 0usize;
                         let mut island_from_start = line_chars.first().map_or(false, |&c| is_lat(c));
@@ -6740,8 +6740,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // Session 95 (2026-05-18) split DE (alpha) vs DN (digit).
                     let ch_is_alpha = ch.is_ascii_alphabetic();
                     let ch_is_digit = ch.is_ascii_digit();
-                    let s95_de_fires = ch_is_alpha && para_style.auto_space_de;
-                    let s95_dn_fires = ch_is_digit && para_style.auto_space_dn;
+                    let s95_de_fires = ch_is_alpha && (para_style.auto_space_de && self.doc_autospace());
+                    let s95_dn_fires = ch_is_digit && (para_style.auto_space_dn && self.doc_autospace());
                     if word_style.is_none() && (s95_de_fires || s95_dn_fires) {
                         // S1316: a ruby field on either side suppresses the auto-space.
                         let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
@@ -7083,8 +7083,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // so mixed run sizes do not turn into one paragraph-wide estimate.
         if legacy_gap_on && IN_TABLE_LAYOUT.with(|c| c.get()) == 0 {
             let is_lat = |c: char| {
-                (c.is_ascii_alphabetic() && para_style.auto_space_de)
-                    || (c.is_ascii_digit() && para_style.auto_space_dn)
+                (c.is_ascii_alphabetic() && (para_style.auto_space_de && self.doc_autospace()))
+                    || (c.is_ascii_digit() && (para_style.auto_space_dn && self.doc_autospace()))
             };
             for (line_index, line) in lines.iter_mut().enumerate() {
                 let target = available_width
