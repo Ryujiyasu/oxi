@@ -6925,7 +6925,17 @@ impl<'a> TableFitLayouter<'a> {
                                                                 // inside a bracket group -- Word moves the whole
                                                                 // 「（　　　）」 (0adfa250 p2 「自宅・その他」 /
                                                                 // 「（　　　）」).
-                                                                ) || (s1583_left && head == '\u{3000}');
+                                                                ) || (s1583_left && head == '\u{3000}')
+                                                                // OXI_CELL_LATIN_CARRY (2026-10-23, default ON, opt-out
+                                                                // _DISABLE): once the carry has reached into a Latin word
+                                                                // it takes the word whole -- Word never breaks a word to
+                                                                // keep a closing mark off the line start. ja/reference
+                                                                // __3187a5b4's 2122tw cell «(physical condition)»: only
+                                                                // «)» overflows; Word sets «(physical» / «condition)», the
+                                                                // one-character carry gave «(physical conditio» / «n)».
+                                                                || (head.is_ascii_alphanumeric()
+                                                                    && tail.is_some_and(|t| t.is_ascii_graphic())
+                                                                    && std::env::var_os("OXI_CELL_LATIN_CARRY_DISABLE").is_none());
                                                             let remaining_on_line = buf
                                                                 .chars()
                                                                 .count()
