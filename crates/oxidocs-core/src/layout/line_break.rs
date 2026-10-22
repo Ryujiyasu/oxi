@@ -3071,6 +3071,21 @@ impl<'a> LineBreaker<'a> {
                     continue;
                 }
 
+                // OXI_FIELD_WORD_SPLIT (2026-10-22, default ON, opt-out _DISABLE): a
+                // field result glued to the text before or after it (no space) must
+                // stay its own fragment. The word accumulator takes its field type
+                // from the word's FIRST character, so «PG=» + PAGE became one plain
+                // word «PG=#» and the page number was never substituted -- the
+                // footer printed «PG=#» where Word prints «PG=89»
+                // (`_pb_filler_pgnum_gen.py`, every arm).
+                if char_index == 0
+                    && !word.is_empty()
+                    && frag_field_type != word_field_type
+                    && (frag_field_type.is_some() || word_field_type.is_some())
+                    && std::env::var_os("OXI_FIELD_WORD_SPLIT_DISABLE").is_none()
+                {
+                    flush_word!(style);
+                }
                 if s1488_after_hang && std::env::var_os("OXI_S1488_DISABLE").is_none() {
                     if ch == ' ' && current_line.fragments.is_empty() {
                         if let Some(prev) = lines.last_mut() {
