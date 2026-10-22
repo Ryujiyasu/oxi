@@ -3375,6 +3375,7 @@ impl<'a> LineBreaker<'a> {
                 // case (~0.66pt/space granted) whose enabling condition the synthetic
                 // lacks — the underived S799-shrink model (dedicated session; vary
                 // para line count / following content / numPr / cs magnitude).
+                let width_before_tracking = char_width;
                 char_width += if deva_cont { 0.0 } else { cs };
                 // §17.15.1.7 balanceSingleByteDoubleByteWidth (Session 56 Finding 3,
                 // COM-confirmed via V19/V25/V26/V27 minimal repros 2026-05-06):
@@ -3394,6 +3395,21 @@ impl<'a> LineBreaker<'a> {
                 {
                     char_width += cs;
                 }
+                // OXI_GRID_BARE_WIDTH (2026-10-22, default ON, opt-out _DISABLE): the
+                // run's w:spacing (and its balanceSingleByteDoubleByteWidth double) in
+                // this advance. The character-grid rules below must judge and extend the
+                // GLYPH's advance, because S1340 adds the tracking on top of the cell
+                // once. `_pb_grid_runspacing_gen.py` (0ea3ec86 slice, linesAndChars cell
+                // 11.5, ＭＳ 明朝 11pt, spacing -40..+40tw): Word's per-character room is
+                // cell + 2s for every sign. With the tracking left in, a full-width glyph
+                // under s <= -0.12pt read as narrower than 0.98em, took S1510's
+                // «own advance + half the charSpace» and then S1340's 2s again: s = -0.2
+                // stepped 10.46 (Word 11.52) and held 22 characters where Word holds 20.
+                let grid_tracking = if std::env::var_os("OXI_GRID_BARE_WIDTH_DISABLE").is_none() {
+                    char_width - width_before_tracking
+                } else {
+                    0.0
+                };
                 // 2-pass wrap: remember pre-yakumono width to compute yakumono savings.
                 let mut pre_yakumono_width = char_width;
                 // Physical yakumono compression (COM-confirmed b837 2026-04-16):
@@ -3807,7 +3823,7 @@ impl<'a> LineBreaker<'a> {
                                 // (see grid_half_increment_class): half for kana / U+30FC /
                                 // U+3001-3002, the whole charSpace for everything else, each
                                 // on top of the glyph's own advance.
-                                char_width + if grid_half_increment_class(ch) {
+                                char_width - grid_tracking + if grid_half_increment_class(ch) {
                                     0.5 * char_space_pt
                                 } else {
                                     char_space_pt
@@ -3822,7 +3838,7 @@ impl<'a> LineBreaker<'a> {
                                 // Word PDF glyph origins on a linePitch 411 / charSpace
                                 // 3042 grid). Unscaled, the glyph is full-width, the
                                 // expected width is the pitch and S1347 gives 7.87.
-                                && char_width / s1347_scale < 0.98 * font_size
+                                && (char_width - grid_tracking) / s1347_scale < 0.98 * font_size
                             {
                                 // S1510 (2026-09-20, default ON, opt-out OXI_S1510_DISABLE):
                                 // the additive pitch is per GLYPH -- a proportional
@@ -3840,7 +3856,7 @@ impl<'a> LineBreaker<'a> {
                                 // -0.27 -- exactly HALF. A proportional glyph takes
                                 // half the charSpace, the way a single-byte glyph
                                 // takes half the cell increment under balance.
-                                char_width + 0.5 * char_space_pt
+                                char_width - grid_tracking + 0.5 * char_space_pt
                             } else {
                                 // S1210: additive for BOTH signs (see above).
                                 font_size + char_space_pt
