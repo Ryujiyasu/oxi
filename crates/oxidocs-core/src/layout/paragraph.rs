@@ -8006,7 +8006,20 @@ impl<'a> ParagraphLayouter<'a> {
                 let leader_grid: Option<(f32, usize, f32)> = if std::env::var_os("OXI_LEADER_GRID_DISABLE").is_none() {
                     tab_leader_text.as_ref().and_then(|t| t.chars().next()).and_then(|ch| {
                         let adv = frag_metrics.char_width_em(ch) * resolved_font_size;
-                        let step = (adv * 600.0 / 72.0).round() * 72.0 / 600.0;
+                        // OXI_LEADER_GRID_BOLD (2026-10-23, default ON, opt-out _DISABLE): a
+                        // synthetic bold (ＭＳ faces have no bold) steps exactly one 1/600in
+                        // wider -- `_pb_leader_grid_gen.py` PB_BOLD=1: 4.68 / 5.40 / 5.64 / 6.12
+                        // at 9 / 10.5 / 11 / 12pt = the regular step + 0.12 in every arm; a face
+                        // with a real bold (Calibri) takes its bold advance. ja/policies__1a7a3fec's
+                        // TOC (toc 2 = ＭＳ ゴシック 11pt bold) steps 5.64.
+                        let synthetic = if frag_metrics.synthetic_bold_advance > 0.0
+                            && std::env::var_os("OXI_LEADER_GRID_BOLD_DISABLE").is_none() { 72.0 / 600.0 } else { 0.0 };
+                        // char_width_em already carries Oxi's synthetic-bold widening;
+                        // the grid takes the regular advance plus Word's one device unit.
+                        let regular = if synthetic > 0.0 {
+                            (frag_metrics.char_width_em(ch) - frag_metrics.synthetic_bold_advance) * resolved_font_size
+                        } else { adv };
+                        let step = (regular * 600.0 / 72.0).round() * 72.0 / 600.0 + synthetic;
                         if step <= 0.1 {
                             return None;
                         }

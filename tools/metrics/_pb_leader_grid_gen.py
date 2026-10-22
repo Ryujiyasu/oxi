@@ -31,6 +31,7 @@ SETTINGS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings 
 FACES = {"gothic": "ＭＳ ゴシック", "mincho": "ＭＳ 明朝", "calibri": "Calibri", "tnr": "Times New Roman"}
 SIZES = [18, 21, 22, 24]
 INDENTS = [0, 100, 250]
+BOLD = os.environ.get("PB_BOLD") == "1"  # bold runs (ＭＳ faces have no bold: synthetic)
 
 
 def build():
@@ -41,14 +42,14 @@ def build():
     for face, f in FACES.items():
         for sz in SIZES:
             for ind in INDENTS:
-                rpr = '<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/><w:sz w:val="%d"/></w:rPr>' % (f, f, f, sz)
+                rpr = '<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/><w:sz w:val="%d"/>%s</w:rPr>' % (f, f, f, sz, "<w:b/>" if BOLD else "")
                 body += ('<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="8000"/></w:tabs><w:ind w:left="%d"/></w:pPr>'
                          '<w:r>%s<w:t>Item%s%d%d</w:t></w:r><w:r>%s<w:tab/></w:r><w:r>%s<w:t>12</w:t></w:r></w:p>'
                          % (ind, rpr, face[0].upper(), sz, ind, rpr, rpr))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document %s><w:body>%s'
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440"/></w:sectPr></w:body></w:document>' % (W, body))
     os.makedirs(OUT, exist_ok=True)
-    path = os.path.join(OUT, "leader.docx")
+    path = os.path.join(OUT, "leader%s.docx" % ("_b" if BOLD else ""))
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", CT); z.writestr("_rels/.rels", RELS)
         z.writestr("word/_rels/document.xml.rels", DRELS); z.writestr("word/styles.xml", styles)
