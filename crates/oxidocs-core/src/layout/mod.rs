@@ -4695,6 +4695,8 @@ impl LayoutEngine {
         // pushed rather than recomputed afterwards (S912's `page_numbers` is a
         // post-pass and does not exist yet here).
         let mut logical_prev: u32 = 0;
+        // OXI_FILLER_PGNUM: the parity filler pages pushed below (see S912).
+        let mut parity_fillers: Vec<usize> = Vec::new();
         for (ir_idx, page) in doc_resolved.pages.iter().enumerate() {
             // S816: sections after the first count as "page 2+" for the
             // page-top space-before suppression.
@@ -4798,6 +4800,7 @@ impl LayoutEngine {
                         break;
                     }
                     dbg_page_push(pages.len(), 0);
+                    parity_fillers.push(pages.len());
                     pages.push(LayoutPage {
                         width: page.size.width,
                         height: page.size.height,
@@ -4918,7 +4921,22 @@ impl LayoutEngine {
             let mut nums = Vec::with_capacity(pages.len());
             let mut num: u32 = 0;
             let mut prev_ir: Option<usize> = None;
+            // OXI_FILLER_PGNUM (2026-10-22, default ON, opt-out _DISABLE): a parity
+            // filler page is numbered in the sequence it closes -- the restart of
+            // the section it precedes fires on that section's first CONTENT page.
+            // The filler maps to the incoming IR page (it carries its geometry), so
+            // the restart used to land on the blank and the content page read one
+            // more: reference__0ea3ec86 (oddPage section, pgNumType start 91 after
+            // a page numbered 89): Word blank (90) then 91, Oxi blank 91 then 92 on
+            // every following page. The filler rules above already count it this
+            // way (`logical_prev += 1` before the section's start is applied).
+            let filler_pgnum = std::env::var_os("OXI_FILLER_PGNUM_DISABLE").is_none();
             for page_idx in 0..pages.len() {
+                if filler_pgnum && parity_fillers.contains(&page_idx) {
+                    num += 1;
+                    nums.push(num);
+                    continue;
+                }
                 let ir = layout_to_ir_page.get(page_idx).copied();
                 // The first LayoutPage mapping to a given IR page is that
                 // section's first page — the only place a restart can fire.
