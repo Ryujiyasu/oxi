@@ -7992,6 +7992,31 @@ impl<'a> ParagraphLayouter<'a> {
                 // S672: emit at the TRUE cumulative x (render_x) for pure-Latin
                 // left-aligned lines; else the com_tw cumulative (x).
                 let el_x = if s672_latinx { render_x } else { x };
+                // OXI_LEADER_GRID (2026-10-23, default ON, opt-out _DISABLE): Word puts
+                // the leader's characters on a PAGE-ABSOLUTE grid of the leader glyph's
+                // advance rounded to 1/600in, from the first grid point at or after the
+                // tab's start to the last whose glyph ends before the stop's text.
+                // `_pb_leader_grid_gen.py` (dot leader, right stop 8000tw; ＭＳ ゴシック /
+                // ＭＳ 明朝 / Calibri / Times New Roman x 9 / 10.5 / 11 / 12pt x left indent
+                // 0 / 100 / 250tw): first dot x / step is an integer in all 48 arms; step
+                // 4.56 / 5.28 / 5.52 / 6.00 (0.5em in 600dpi units), Calibri 2.28 / 2.64 /
+                // 2.76 / 3.00. Oxi drew floor(gap / advance) dots from the tab start with the
+                // line's justification spacing: ja/policies__1a7a3fec's TOC got one dot more
+                // than Word and the last sat on the page number.
+                let leader_grid: Option<(f32, usize, f32)> = if std::env::var_os("OXI_LEADER_GRID_DISABLE").is_none() {
+                    tab_leader_text.as_ref().and_then(|t| t.chars().next()).and_then(|ch| {
+                        let adv = frag_metrics.char_width_em(ch) * resolved_font_size;
+                        let step = (adv * 600.0 / 72.0).round() * 72.0 / 600.0;
+                        if step <= 0.1 {
+                            return None;
+                        }
+                        let k0 = (el_x / step - 1e-3).ceil();
+                        let k1 = ((el_x + adjusted_width) / step + 1e-3).floor();
+                        Some((k0 * step, (k1 - k0).max(0.0) as usize, step - adv))
+                    })
+                } else {
+                    None
+                };
                 // S703 (2026-06-30): render a `combine` run (割注 / two-lines-in-one)
                 // as warichu — optional brackets + the n chars split into 2 small
                 // (~half-size) rows stacked within one line height. Emits 2-4 plain
@@ -8370,9 +8395,9 @@ impl<'a> ParagraphLayouter<'a> {
                 // its field start (the advance is unchanged; see ruby_lead).
                 let s1650_lead = if frag.style.ruby_spread { frag.style.ruby_lead } else { 0.0 };
                 let mut el = LayoutElement::new(
-                    el_x + s1650_lead,
+                    leader_grid.map_or(el_x + s1650_lead, |g| g.0),
                     emit_y,
-                    adjusted_width,
+                    leader_grid.map_or(adjusted_width, |g| (el_x + adjusted_width - g.0).max(0.0)),
                     line_height,
                     LayoutContent::Text {
                         // S700: Word renders eastAsianLayout w:vert by ROTATING the run
@@ -8385,7 +8410,11 @@ impl<'a> ParagraphLayouter<'a> {
                         text: if is_vert_frag {
                             frag.text.chars().rev().collect::<String>()
                         } else {
-                            tab_leader_text.clone().unwrap_or_else(|| frag.text.clone())
+                            match (&tab_leader_text, leader_grid) {
+                                (Some(t), Some((_, n, _))) => t.chars().next().map_or(String::new(),
+                                    |c| std::iter::repeat(c).take(n).collect()),
+                                _ => tab_leader_text.clone().unwrap_or_else(|| frag.text.clone()),
+                            }
                         },
                         font_size: resolved_font_size,
                         font_family: self
@@ -8414,6 +8443,8 @@ impl<'a> ParagraphLayouter<'a> {
                             // The column's per-char DOWN advance is exactly fs (the
                             // renderer adds character_spacing to it) → keep it 0.
                             0.0
+                        } else if let Some((_, _, cs)) = leader_grid {
+                            cs
                         } else if frag.style.fit_text.is_some() || frag.style.ruby_spread {
                             frag.style.character_spacing.unwrap_or(0.0) + justify_char_spacing
                         } else {
