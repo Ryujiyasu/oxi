@@ -23139,6 +23139,42 @@ cells={} pitch={:.2} text={:?}",
     /// Modern paragraph and cell wrapping share the same punctuation budget.
     fn modern_punctuation_capacity_tw(n: usize, k: usize, cell_tw: i32, unit: bool, floor: Option<i32>) -> i32 {
         if k == 0 { return 0; }
+        // OXI_COMPCAP_LONG (2026-10-23, default ON, opt-out _DISABLE): the table measured on
+        // this machine's Word over n = 14..64 characters and k = 1..8 marks, with the unit
+        // X + mark as its own rows. `_pb_compcap_unit_gen.py` (ＭＳ 明朝 7 / 8 / 10.5 / 12pt,
+        // jc both, docGrid lines, compat 15, balance; 2tw right-indent sweeps; capacity =
+        // first refused overflow - 0.01 cell): n=40 k<=4 reproduces the old rows; the
+        // capacity keeps shrinking past n=40 (the old table clamped there) and keeps growing
+        // past k=4 (it clamped there too); the unit's deficit grows with n (n=26: -0.03..-0.06,
+        // n=64: -0.11..-0.17). Sizes and the paragraph's line index do not matter.
+        // ja/administrative__0ba21b0c (65-character lines, 4 marks): Word wraps «が、» at
+        // 0.54 cell, the clamped table packed it to 0.69; ja/forms__009bbe8a / ja/policies
+        // __11e25470 (5-8 marks on ~56-character lines) keep their X.
+        if std::env::var_os("OXI_COMPCAP_LONG_DISABLE").is_none() {
+            const NS: [f32; 5] = [14.0, 26.0, 40.0, 50.0, 64.0];
+            const X: [[f32; 8]; 5] = [
+                [0.495, 0.838, 0.886, 0.910, 0.915, 0.925, 0.930, 0.935],
+                [0.502, 0.728, 0.802, 0.840, 0.865, 0.890, 0.902, 0.915],
+                [0.452, 0.624, 0.714, 0.762, 0.802, 0.828, 0.853, 0.865],
+                [0.402, 0.565, 0.665, 0.728, 0.765, 0.802, 0.815, 0.840],
+                [0.333, 0.504, 0.604, 0.676, 0.719, 0.747, 0.776, 0.804],
+            ];
+            const U: [[f32; 8]; 5] = [
+                [0.475, 0.748, 0.786, 0.810, 0.802, 0.828, 0.840, 0.853],
+                [0.502, 0.678, 0.740, 0.777, 0.802, 0.828, 0.840, 0.853],
+                [0.428, 0.540, 0.615, 0.665, 0.703, 0.740, 0.765, 0.790],
+                [0.328, 0.453, 0.540, 0.603, 0.640, 0.678, 0.715, 0.740],
+                [0.219, 0.347, 0.433, 0.504, 0.561, 0.604, 0.647, 0.676],
+            ];
+            let t = if unit { &U } else { &X };
+            let ki = k.min(8) - 1;
+            let nf = (n as f32).clamp(14.0, 64.0);
+            let i = (0..4).find(|&i| nf <= NS[i + 1]).unwrap_or(3);
+            let f = (nf - NS[i]) / (NS[i + 1] - NS[i]);
+            let cells = t[i][ki] + (t[i + 1][ki] - t[i][ki]) * f;
+            let capacity = (cells * cell_tw as f32) as i32;
+            return floor.map_or(capacity, |floor| capacity.max(floor));
+        }
         const T14: [f32; 4] = [0.495, 0.838, 0.886, 0.910];
         const T26: [f32; 4] = [0.495, 0.724, 0.800, 0.838];
         const T40: [f32; 4] = [0.452, 0.624, 0.714, 0.762];
