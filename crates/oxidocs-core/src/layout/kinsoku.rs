@@ -33,14 +33,42 @@ const LINE_END_PROHIBITED: &[char] = &[
     '(', '[', '{',
 ];
 
+// OXI_KINSOKU_STANDARD (2026-10-23, default ON, opt-out _DISABLE): the rest of Word's
+// default ("standard") kinsoku sets -- the tables above held only the full-width
+// brackets and marks. `_pb_halfwidth_kinsoku_gen.py` (ＭＳ 明朝 10pt, 40-cell lines,
+// the mark at the line end / the next line's start): Word moves the preceding «あ»
+// with every one of ｣ ､ ｡ ･ ﾞ ﾟ 々 ％ ℃ ’ ” ! ? % , . and keeps ｢ ＄ ￥ ‘ “ off the line
+// end -- the full lists Word's kinsoku dialog shows for 標準:
+//   start  !%),.:;?]}¢°’”‰′″℃、。々〉》」』】〕゛゜ゝゞ・ヽヾ！％），．：；？］｝｡｣､･ﾞﾟ￠
+//   end    $([\{£¥‘“〈《「『【〔＄（［｛｢￡￥
+// ja/technical__898a80c8: Word wraps before «｢», Oxi left it at the line end.
+// Only the East Asian members: the ASCII and Latin-1 / General Punctuation ones
+// (! % , . ? ¢ ° ’ ” ‰ ′ ″ $ \ £ ¥ ‘ “) also sit inside English words, and adding them
+// moved eight English documents' lines away from Word (the word path keeps them).
+const LINE_START_PROHIBITED_STANDARD: &[char] = &[
+    '\u{2103}', '\u{3005}', '\u{309B}', '\u{309C}', '\u{FF05}',
+    '\u{FF61}', '\u{FF63}', '\u{FF64}', '\u{FF65}', '\u{FF9E}', '\u{FF9F}', '\u{FFE0}',
+];
+const LINE_END_PROHIBITED_STANDARD: &[char] = &[
+    '\u{FF04}', '\u{FF62}', '\u{FFE1}', '\u{FFE5}',
+];
+
+fn kinsoku_standard_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("OXI_KINSOKU_STANDARD_DISABLE").is_none())
+}
+
 /// Check if a character is prohibited at the start of a line
 pub fn is_line_start_prohibited(ch: char) -> bool {
     LINE_START_PROHIBITED.contains(&ch)
+        || (kinsoku_standard_on() && LINE_START_PROHIBITED_STANDARD.contains(&ch))
 }
 
 /// Check if a character is prohibited at the end of a line
 pub fn is_line_end_prohibited(ch: char) -> bool {
     LINE_END_PROHIBITED.contains(&ch)
+        || (kinsoku_standard_on() && LINE_END_PROHIBITED_STANDARD.contains(&ch))
 }
 
 /// Characters that Word allows to "hang" past the right margin (burasagari).
