@@ -935,6 +935,7 @@ impl<'a> TableFitLayouter<'a> {
                             let hidden_final_mark = !vert_writing_active
                                 && LayoutEngine::hidden_cell_final_line(cell, block_pos, para);
                                                         let para = if hidden_final_mark { hidden_tail_para.as_ref().unwrap() } else { para };
+                            let _kinsoku = kinsoku::KinsokuOffScope::new(para.style.kinsoku, self.compat_mode >= 15 && self.compat_mode_explicit);
                             let (mut para_h, mut para_h_visual, mut para_h_center) = if vert_writing_active {
                                 let h = if s753_vert {
                                     if s753_first_done {
@@ -3389,6 +3390,7 @@ impl<'a> TableFitLayouter<'a> {
                                 let hidden_final_mark = !self.is_vert_writing_active(cell)
                                     && LayoutEngine::hidden_cell_final_line(cell, block_pos, para);
                                                                 let para = if hidden_final_mark { hidden_tail_para.as_ref().unwrap() } else { para };
+                                let _kinsoku = kinsoku::KinsokuOffScope::new(para.style.kinsoku, self.compat_mode >= 15 && self.compat_mode_explicit);
                                 // Session 131 (2026-05-20): vertical writing early-exit.
                                 // For tbRlV cells, emit one Text element per paragraph at
                                 // relative_y=0 (Word's COM Information(6) on a vert-cell

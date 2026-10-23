@@ -13407,6 +13407,7 @@ cells={} pitch={:.2} text={:?}",
         quantized_char_grid: bool,
     ) -> Vec<Line> {
         // body in layout/line_break.rs (its own codegen unit, see split_layout_mod2.py)
+        let _kinsoku = kinsoku::KinsokuOffScope::new(para_style.kinsoku, self.compat_mode >= 15 && self.compat_mode_explicit);
         line_break::LineBreaker(self).break_into_lines_with_grid(fragments, available_width, first_line_indent, para_style, grid_char_pitch, grid_char_cw_ratio, lines_and_chars, s476_body, is_justified, doc_grid_no_type, para_has_lrpb, caps_size_split, vertical, quantized_char_grid)
     }
 
@@ -19535,6 +19536,7 @@ cells={} pitch={:.2} text={:?}",
         grid_char_cw_ratio: Option<f32>,
         float_wrap: Option<&cell_float::ParagraphWrap>,
     ) -> (usize, usize, Vec<CellLineSample>, Vec<bool>) {
+        let _kinsoku = kinsoku::KinsokuOffScope::new(para.style.kinsoku, self.compat_mode >= 15 && self.compat_mode_explicit);
         if para.runs.is_empty() {
             return (1, 0, Vec::new(), Vec::new());
         }

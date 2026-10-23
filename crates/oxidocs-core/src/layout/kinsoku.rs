@@ -53,6 +53,57 @@ const LINE_END_PROHIBITED_STANDARD: &[char] = &[
     '\u{FF04}', '\u{FF62}', '\u{FFE1}', '\u{FFE5}',
 ];
 
+// OXI_KINSOKU_OFF (2026-10-24, default ON, opt-out _DISABLE): a paragraph with
+// <w:kinsoku w:val="0"/> breaks with no prohibition and no hanging at all.
+// `_pb_halfwidth_kinsoku_gen.py` with PB_KINSOKU_OFF=1 (every paragraph kinsoku=0):
+// Word leaves «「 ｢ （ ＄» at the line end and starts the next line with every one of
+// «、 。 ） 」 ・ 々 ％ ｣ ､ ｡», none hanging past the margin -- at compat 15. At
+// compat 14 (PB_COMPAT=14) the prohibition is gone just the same («・ 々 ％ ｣» start
+// lines) but the marks that hang with kinsoku on still hang («、 。 ） 」 ､ ｡ ’ ” , .»).
+// `_pb_kinsoku_off_squeeze_gen.py` (compressPunctuation, jc=both): compat 15 kinsoku=0
+// wraps «」 ）» that kinsoku on hangs; compat 14 hangs them either way.
+// ja/creative__285f61cb (compat 14, 171 paragraphs kinsoku=0): Word sets «々» at line
+// starts, and wraps «「» rather than squeezing it in as a line-final character
+// (the faithful slice keeps «い» off that line too).
+// The layout entry points that know the paragraph style hold a KinsokuOffScope
+// while they break that paragraph's lines.
+thread_local! {
+    // 0 = kinsoku on, 1 = off (legacy compat: hanging stays), 2 = off, no hanging
+    static KINSOKU_OFF: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// While alive, the kinsoku predicates answer as the given paragraph's w:kinsoku says.
+pub struct KinsokuOffScope(u8);
+
+impl KinsokuOffScope {
+    pub fn new(kinsoku: bool, modern_compat: bool) -> Self {
+        let off = if kinsoku || std::env::var_os("OXI_KINSOKU_OFF_DISABLE").is_some() {
+            0
+        } else if modern_compat {
+            2
+        } else {
+            1
+        };
+        KinsokuOffScope(KINSOKU_OFF.with(|k| k.replace(off)))
+    }
+}
+
+impl Drop for KinsokuOffScope {
+    fn drop(&mut self) {
+        KINSOKU_OFF.with(|k| k.set(self.0));
+    }
+}
+
+/// The paragraph being broken has w:kinsoku val=0.
+pub fn kinsoku_off() -> bool {
+    KINSOKU_OFF.with(|k| k.get()) > 0
+}
+
+/// The paragraph being broken has w:kinsoku val=0 at compat 15: nothing hangs.
+pub fn kinsoku_off_no_hang() -> bool {
+    KINSOKU_OFF.with(|k| k.get()) == 2
+}
+
 fn kinsoku_standard_on() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
@@ -61,14 +112,14 @@ fn kinsoku_standard_on() -> bool {
 
 /// Check if a character is prohibited at the start of a line
 pub fn is_line_start_prohibited(ch: char) -> bool {
-    LINE_START_PROHIBITED.contains(&ch)
-        || (kinsoku_standard_on() && LINE_START_PROHIBITED_STANDARD.contains(&ch))
+    !kinsoku_off() && LINE_START_PROHIBITED.contains(&ch)
+        || (!kinsoku_off() && kinsoku_standard_on() && LINE_START_PROHIBITED_STANDARD.contains(&ch))
 }
 
 /// Check if a character is prohibited at the end of a line
 pub fn is_line_end_prohibited(ch: char) -> bool {
-    LINE_END_PROHIBITED.contains(&ch)
-        || (kinsoku_standard_on() && LINE_END_PROHIBITED_STANDARD.contains(&ch))
+    !kinsoku_off() && LINE_END_PROHIBITED.contains(&ch)
+        || (!kinsoku_off() && kinsoku_standard_on() && LINE_END_PROHIBITED_STANDARD.contains(&ch))
 }
 
 /// Characters that Word allows to "hang" past the right margin (burasagari).
@@ -85,7 +136,7 @@ const HANGABLE_PUNCT: &[char] = &[
 /// Check if a character is allowed to hang past the right margin
 /// (burasagari / hanging punctuation).
 pub fn is_hangable_punct(ch: char) -> bool {
-    HANGABLE_PUNCT.contains(&ch)
+    !kinsoku_off_no_hang() && HANGABLE_PUNCT.contains(&ch)
 }
 
 /// CJK punctuation that can be compressed from full-width to half-width (50% compression).

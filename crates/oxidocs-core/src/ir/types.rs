@@ -1940,6 +1940,10 @@ pub struct ParagraphStyle {
     /// Automatically adjust right indent for CJK grid (w:adjustRightInd, default true)
     #[serde(default = "default_true")]
     pub adjust_right_ind: bool,
+    /// w:kinsoku (default true): false turns off the paragraph's line-start /
+    /// line-end prohibition and punctuation hanging (OXI_KINSOKU_OFF).
+    #[serde(default = "default_true")]
+    pub kinsoku: bool,
     /// Auto space between East Asian and Western text (w:autoSpaceDE, default true)
     #[serde(default = "default_true")]
     pub auto_space_de: bool,
@@ -2082,6 +2086,7 @@ impl Default for ParagraphStyle {
             has_explicit_contextual_spacing: false,
             word_wrap: true,
             adjust_right_ind: true,
+            kinsoku: true,
             text_alignment: None,
             text_alignment_from_pprdefault: false,
             auto_space_de: true,

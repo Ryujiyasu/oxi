@@ -5123,6 +5123,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         } else {
                             s1167_cap
                         };
+                        // OXI_KINSOKU_OFF: an opening bracket only meets the margin when
+                        // kinsoku is off, and Word sets it there uncompressed (285f61cb);
+                        // at compat 15 a closing bracket is not squeezed in either
+                        // (`_pb_kinsoku_off_squeeze_gen.py`: 20 «あ、» + «」» keeps the «」»
+                        // with kinsoku on, wraps it with kinsoku=0).
+                        let s1167_cap = if kinsoku::kinsoku_off() && (kinsoku::is_yakumono_opening(ch)
+                            || (kinsoku::kinsoku_off_no_hang() && kinsoku::is_yakumono_closing(ch))) {
+                            0.0
+                        } else {
+                            s1167_cap
+                        };
                         let capacity = pt_to_tw(pre_yakumono_width - s1167_cap);
                         if vertical && std::env::var("OXI_VERTICAL_PAIR_DISABLE").is_err() {
                             capacity.min(pt_to_tw(char_width))
@@ -5432,6 +5443,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let mut s1490_unit_refused = false;
                     let (mut s1318_force_fit, mut s1318_refuse_here) = if !s1318_regime {
                         (false, false)
+                    } else if kinsoku::kinsoku_off() && (kinsoku::is_yakumono_opening(ch)
+                        || (s1318_ch_mark && (kinsoku::kinsoku_off_no_hang() || !kinsoku::is_hangable_punct(ch))))
+                    {
+                        // OXI_KINSOKU_OFF: the line-final squeeze exists to keep a prohibited
+                        // mark off the next line's start, so a kinsoku=0 paragraph pulls no
+                        // mark in -- only the compat-14 hang is left (`_pb_kinsoku_off_squeeze
+                        // _gen.py`: 20 «あ、» + «」 / 。 / ・» keeps the mark with kinsoku on and
+                        // wraps it with kinsoku=0 at compat 15; compat 14 wraps «・» and hangs
+                        // «。 」»). A line-final opening bracket (kinsoku=0 only) is a plain
+                        // character at its whole cell -- no pair collapse with the mark before
+                        // it. 285f61cb «…もっとも、» + «「»: Word wraps the «「» exactly as it
+                        // wraps a kana there, and the «、» that the pair had halved keeps its
+                        // whole cell.
+                        let prev_halved = char_index > 0 && yakumono_compressed[char_index - 1];
+                        let over = current_width_tw + 2 * s1318_half_cell_tw - s1318_avail_tw
+                            + if prev_halved { s1318_half_cell_tw } else { 0 };
+                        let fit = over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW);
+                        (fit, !fit)
                     } else if s1318_prev_open {
                         // S1346 (N_/Q_ arms): after an OPENING BRACKET the overflowing
                         // element may spend EVERY blank on the line, the bracket's own
@@ -5672,6 +5701,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 || std::env::var("OXI_S1334_DISABLE").is_ok())
                             && !prop_final_nohang
                             && !alt_closing_nohang
+                            // OXI_KINSOKU_OFF: a compat-15 kinsoku=0 paragraph hangs nothing
+                            && !kinsoku::kinsoku_off_no_hang()
                             // S1346: under the regime a refused ・ is 追い出し, not hung
                             && !(s1318_regime && ch == '・' && s1318_refuse_here)
                             // S1346: under the regime a closing bracket hangs like 、

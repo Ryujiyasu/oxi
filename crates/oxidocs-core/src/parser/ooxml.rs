@@ -4547,6 +4547,9 @@ fn parse_paragraph_with_inline_images_impl(
             if !ds.adjust_right_ind {
                 style.adjust_right_ind = false;
             }
+            if !ds.kinsoku {
+                style.kinsoku = false;
+            }
             // Session 85 fix: inherit auto_space_de from style (false overrides
             // default true). Mirrors snap_to_grid pattern. Confirmed via CR9
             // minimal repro: when paragraph has BOTH direct pPr autoSpaceDE=0
@@ -6240,6 +6243,16 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.bidi = enabled;
+                    }
+                    "kinsoku" => {
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        style.kinsoku = enabled;
                     }
                     "adjustRightInd" => {
                         let mut enabled = true;

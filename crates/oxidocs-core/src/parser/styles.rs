@@ -347,6 +347,9 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if !parent.adjust_right_ind {
         child.adjust_right_ind = false;
     }
+    if !parent.kinsoku {
+        child.kinsoku = false;
+    }
     if child.outline_level.is_none() {
         child.outline_level = parent.outline_level;
     }
@@ -1231,6 +1234,16 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
             }
             style.snap_to_grid = enabled;
         }
+        "kinsoku" => {
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                }
+            }
+            style.kinsoku = enabled;
+        }
         "adjustRightInd" => {
             // S1211D: the character-grid line floor's own switch — harassmanual
             // carries <w:adjustRightInd w:val="0"/> on Normal.
@@ -1933,6 +1946,16 @@ fn parse_style_definition(
                                 }
                             }
                             style.snap_to_grid = enabled;
+                        }
+                        "kinsoku" => {
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                            }
+                            style.kinsoku = enabled;
                         }
                         "adjustRightInd" => {
                             // S1211D: the char-grid line floor switch (harassmanual
