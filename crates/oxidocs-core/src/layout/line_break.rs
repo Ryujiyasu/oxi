@@ -5353,7 +5353,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         LayoutEngine::modern_punctuation_capacity_tw(
                             current_line.fragments.iter().map(|f| f.text.chars().count()).sum(),
                             k.saturating_sub(s1490_colons), s1318_one_cell_tw, unit,
-                            ((japanese_language_oikomi && !unit) || (unit
+                            // OXI_COMPCAP_NOFLOOR (2026-10-23, default ON, opt-out _DISABLE):
+                            // a normal character takes the table, not a half-cell floor --
+                            // `_pb_compcap_unit_gen.py` (ja-JP, 、 or 。, k=1): Word wraps at
+                            // 0.463 / 0.412 / 0.343 cell for n = 40 / 50 / 64; at n <= 26 the
+                            // table already gives 0.50, so the floor only over-packed long lines.
+                            ((japanese_language_oikomi && !unit
+                                && std::env::var_os("OXI_COMPCAP_NOFLOOR_DISABLE").is_some()) || (unit
                                 && following_punctuation.iter().take_while(|&&nc|
                                     matches!(nc as u32, 0x3001 | 0x3002 | 0xFF0C | 0xFF0E | 0xFF1A | 0xFF1B | 0x30FB)
                                         || kinsoku::is_yakumono_closing(nc)).count() >= 2
