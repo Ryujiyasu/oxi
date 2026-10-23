@@ -1181,17 +1181,22 @@ impl<'a> ParagraphLayouter<'a> {
             .default_run_style
             .as_ref()
             .map_or(false, |d| d.all_caps);
+        // OXI_CAPS_EXPLICIT_OFF (2026-10-23, default ON, opt-out _DISABLE): a run that
+        // says caps / smallCaps itself (on or off) is not overridden by the paragraph
+        // style's. en/policies__007ccedd's TOC1 style carries <w:caps/> and every run
+        // of its entries says <w:caps w:val="0"/>; Word sets «1 Introduction», Oxi set
+        // «1 INTRODUCTION».
+        let caps_explicit_off = std::env::var_os("OXI_CAPS_EXPLICIT_OFF_DISABLE").is_none();
+        let run_ac = |r: &crate::ir::Run| if caps_explicit_off && r.style.has_explicit_all_caps {
+            r.style.all_caps } else { r.style.all_caps || para_ac };
+        let run_sc = |r: &crate::ir::Run| if caps_explicit_off && r.style.has_explicit_small_caps {
+            r.style.small_caps } else { r.style.small_caps || para_sc };
         let caps_active = std::env::var("OXI_S677_DISABLE").is_err()
-            && (para_sc
-                || para_ac
-                || para
-                    .runs
-                    .iter()
-                    .any(|r| r.style.all_caps || r.style.small_caps));
+            && para.runs.iter().any(|r| run_ac(r) || run_sc(r));
         let preserve_case_source = caps_active && std::env::var("OXI_SOURCE_TEXT_IDENTITY").is_ok();
         let case_sources: Vec<Option<CaseSourceMap>> = if preserve_case_source {
             para.runs.iter().map(|r| {
-                (r.style.small_caps || r.style.all_caps || para_sc || para_ac)
+                (run_sc(r) || run_ac(r))
                     .then(|| CaseSourceMap::uppercase(&r.text))
             }).collect()
         } else { Vec::new() };
@@ -1202,7 +1207,7 @@ impl<'a> ParagraphLayouter<'a> {
                 if s673vi && r.style.vanish {
                     continue;
                 }
-                if r.style.small_caps || para_sc {
+                if run_sc(r) {
                     let small = self.resolve_font_size(&r.style, &para.style) * 0.8;
                     let mut cur = String::new();
                     let mut rendered_start = 0usize;
@@ -1231,7 +1236,7 @@ impl<'a> ParagraphLayouter<'a> {
                         }
                         segs.push((cur, st, r.field_type, i, rendered_start));
                     }
-                } else if r.style.all_caps || para_ac {
+                } else if run_ac(r) {
                     segs.push((r.text.to_uppercase(), r.style.clone(), r.field_type, i, 0));
                 } else {
                     segs.push((r.text.clone(), r.style.clone(), r.field_type, i, 0));
