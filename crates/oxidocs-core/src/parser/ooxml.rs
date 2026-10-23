@@ -209,6 +209,22 @@ fn resolve_character_style(style: &mut RunStyle, styles: &StyleSheet, toc_result
         let direct_bold = style.has_explicit_bold;
         let direct_italic = style.has_explicit_italic;
         super::styles::merge_run_style(style, base);
+        // OXI_RSTYLE_CAPS (2026-10-23, default ON, opt-out _DISABLE): a character
+        // style's caps / smallCaps reach the runs that name it. merge_run_style keeps
+        // caps out of the STYLE CHAIN on purpose (S988A), so the character style's
+        // caps were dropped altogether: en/policies__008f68d9's heading runs name
+        // rStyle «Emphasis» (<w:caps/>) and Word sets «QUALIFY AS HOMELESS», Oxi
+        // «QUALIFY AS homeless». A run's own caps / smallCaps still win.
+        if std::env::var_os("OXI_RSTYLE_CAPS_DISABLE").is_none() {
+            if !style.has_explicit_all_caps && (base.all_caps || base.has_explicit_all_caps) {
+                style.all_caps = base.all_caps;
+                style.has_explicit_all_caps = true;
+            }
+            if !style.has_explicit_small_caps && (base.small_caps || base.has_explicit_small_caps) {
+                style.small_caps = base.small_caps;
+                style.has_explicit_small_caps = true;
+            }
+        }
         if !direct_bold && (base.bold || base.has_explicit_bold) {
             style.bold = paragraph_base.bold ^ base.bold;
             style.has_explicit_bold = true;
