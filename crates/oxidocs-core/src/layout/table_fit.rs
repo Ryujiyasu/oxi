@@ -8952,6 +8952,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // centre 22.20 / bottom 31.44 = 9.25 and 18.5 lower). Oxi's grid
                                         // cells sat a uniform 1.0pt higher (blind-G forms__020115bc and
                                         // administrative__19bb32f7, 65 lines at -1.2).
+                                        let mut cjk_dominant_baseline: Option<f32> = None;
                                         let cell_text_y_off = if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
                                             && matches!(effective_line_rule, None | Some("auto"))
                                             && effective_line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
@@ -8977,6 +8978,9 @@ impl<'a> TableFitLayouter<'a> {
                                             let mut c_max = 0.0f32;
                                             let mut d_max = 0.0f32;
                                             let (mut f8_small, mut f8_large) = (f32::INFINITY, 0.0f32);
+                                            // OXI_CELL_CJK_DOMINANT: the CJK faces' own box and baseline
+                                            let (mut cjk_asc, mut cjk_desc, mut cjk_c, mut cjk_base) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                                            let mut lat_c = 0.0f32;
                                             for (text, fs, _, bold, italic, _, _, _, font_family, _, _, _, _, _, ea, _, _) in line.iter() {
                                                 if text.trim().is_empty() {
                                                     continue;
@@ -9010,6 +9014,14 @@ impl<'a> TableFitLayouter<'a> {
                                                 let f8 = &*self.registry.get_with_style(
                                                     font_family.as_deref().unwrap_or("Calibri"), *bold, *italic);
                                                 let a8 = f8.baseline_ascent() * fs;
+                                                if cjk {
+                                                    cjk_asc = cjk_asc.max(m.win_ascent * fs);
+                                                    cjk_desc = cjk_desc.max(m.win_descent * fs);
+                                                    cjk_c = cjk_c.max(c);
+                                                    cjk_base = cjk_base.max(a8);
+                                                } else {
+                                                    lat_c = lat_c.max(c);
+                                                }
                                                 f8_small = f8_small.min(a8);
                                                 f8_large = f8_large.max(a8);
                                             }
@@ -9031,6 +9043,23 @@ impl<'a> TableFitLayouter<'a> {
                                                     })
                                                     .fold(0.0_f32, f32::max);
                                                 1.0 + ((lh - (asc + desc + chain)) / 2.0).max(0.0) + chain
+                                            } else if any_cjk && cjk_asc > 0.0
+                                                && lat_c <= cjk_c + 0.01
+                                                && std::env::var_os("OXI_CELL_CJK_DOMINANT_DISABLE").is_none()
+                                            {
+                                                // OXI_CELL_CJK_DOMINANT (2026-10-23, default ON, opt-out _DISABLE):
+                                                // a line mixing a CJK face with Latin runs no taller than the CJK
+                                                // box sits exactly where a pure-CJK line sits, every glyph on the
+                                                // CJK baseline. `_pb_grid_cell_mixed_baseline_gen.py` (ＭＳ 明朝 +
+                                                // Century / Arial / Times New Roman, 10 / 10.5 / 12pt, docGrid lines
+                                                // and none, one run per character class, vAlign center): Word's
+                                                // «9月21日（土）» baseline equals the pure-CJK cell's in all 18 arms;
+                                                // Oxi set the Latin runs at their own ascent on a grid (+0.2..+0.8,
+                                                // the CJK -0.5..-1.3) and the whole line at the Latin ascent off it.
+                                                // ja/administrative__13c71e15: Word 472.03, Oxi 472.88 / 471.62.
+                                                let y = 1.0 + ((lh - (cjk_asc + cjk_desc)) / 2.0).max(0.0);
+                                                cjk_dominant_baseline = Some(y - 1.0 + cjk_base);
+                                                y
                                             } else if any_cjk && asc > 0.0
                                                 // opt-in (2026-10-14): on 02157cbe's «(フリガナ)» (Century 8pt
                                                 // parens + ＭＳ 明朝) it moved the line 0.7 the wrong way and the
@@ -9077,6 +9106,12 @@ impl<'a> TableFitLayouter<'a> {
                                                 Some(cell_text_y_off - 1.0 + largest)
                                             } else { None }
                                         } else { None };
+                                        let shared_cell_baseline = if cjk_dominant_baseline.is_some()
+                                            && line.iter().all(|f| !f.15 && !f.16.combine
+                                                && f.16.vertical_align.is_none()
+                                                && f.16.position.map_or(true, |p| p.abs() < 0.001)
+                                                && f.16.inline_object_extent.is_none())
+                                        { cjk_dominant_baseline } else { shared_cell_baseline };
                                         // S592: line-1 body starts AFTER the inline marker (no overlap).
                                         // S718: line-1 body pulled left to the defaultTabStop position.
                                         let mut rx = if s592_cell_space && line_idx == 0 {
