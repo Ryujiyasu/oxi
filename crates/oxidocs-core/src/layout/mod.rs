@@ -13358,6 +13358,40 @@ cells={} pitch={:.2} text={:?}",
         }
     }
 
+    /// OXI_EA_LANG_KINSOKU_OFF (2026-10-24, default ON, opt-out _DISABLE): a paragraph
+    /// whose CJK runs all carry a non-east-Asian eastAsia language (run, else the
+    /// document default) breaks as a kinsoku=0 paragraph does at compat 15 -- no
+    /// prohibition, no hanging, no squeeze. `_pb_halfwidth_kinsoku_gen.py` PB_RUN_LANG
+    /// (pure kana + mark, compat 14 and 15, jc left and both, docDefaults lang / face
+    /// present or absent, with and without styles.xml): run eastAsia en-US starts lines
+    /// with «、 。 」 ％ 々» and ends them with «「 （», nothing hanging; run ja-JP over
+    /// docDefaults en-US keeps kinsoku. OXI_EA_LANG_NOKINSOKU required a Latin letter or
+    /// space in the paragraph because `_pb_ea_breakrules_gen.py` counted every line
+    /// starting «す。» as a push; its own PDFs start a line with «、» at indent 1850.
+    /// No language anywhere = Normal.dotm's ja-JP: kinsoku stays on.
+    pub(super) fn ea_lang_kinsoku_off<'a>(&self, runs: impl Iterator<Item = (&'a str, Option<&'a str>)>) -> bool {
+        if std::env::var_os("OXI_EA_LANG_KINSOKU_OFF_DISABLE").is_some() {
+            return false;
+        }
+        let mut any = false;
+        for (text, lang) in runs {
+            if !text.chars().any(kinsoku::is_cjk_ideograph_or_kana) {
+                continue;
+            }
+            match lang.or(self.default_east_asia_lang.as_deref()) {
+                Some(l) => {
+                    let l = l.to_ascii_lowercase();
+                    if ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-"))) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+            any = true;
+        }
+        any
+    }
+
     fn break_into_lines(
         &self,
         fragments: &[(&str, &RunStyle, Option<FieldType>, usize, usize)],
@@ -13407,7 +13441,8 @@ cells={} pitch={:.2} text={:?}",
         quantized_char_grid: bool,
     ) -> Vec<Line> {
         // body in layout/line_break.rs (its own codegen unit, see split_layout_mod2.py)
-        let _kinsoku = kinsoku::KinsokuOffScope::new(para_style.kinsoku, self.compat_mode >= 15 && self.compat_mode_explicit);
+        let ea_off = self.ea_lang_kinsoku_off(fragments.iter().map(|f| (f.0, f.1.east_asia_lang.as_deref())));
+        let _kinsoku = kinsoku::KinsokuOffScope::new(para_style.kinsoku && !ea_off, ea_off || self.compat_mode >= 15 && self.compat_mode_explicit);
         line_break::LineBreaker(self).break_into_lines_with_grid(fragments, available_width, first_line_indent, para_style, grid_char_pitch, grid_char_cw_ratio, lines_and_chars, s476_body, is_justified, doc_grid_no_type, para_has_lrpb, caps_size_split, vertical, quantized_char_grid)
     }
 
@@ -19536,7 +19571,8 @@ cells={} pitch={:.2} text={:?}",
         grid_char_cw_ratio: Option<f32>,
         float_wrap: Option<&cell_float::ParagraphWrap>,
     ) -> (usize, usize, Vec<CellLineSample>, Vec<bool>) {
-        let _kinsoku = kinsoku::KinsokuOffScope::new(para.style.kinsoku, self.compat_mode >= 15 && self.compat_mode_explicit);
+        let ea_off = self.ea_lang_kinsoku_off(para.runs.iter().map(|r| (r.text.as_str(), r.style.east_asia_lang.as_deref())));
+        let _kinsoku = kinsoku::KinsokuOffScope::new(para.style.kinsoku && !ea_off, ea_off || self.compat_mode >= 15 && self.compat_mode_explicit);
         if para.runs.is_empty() {
             return (1, 0, Vec::new(), Vec::new());
         }
