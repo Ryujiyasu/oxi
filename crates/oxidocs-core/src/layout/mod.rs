@@ -3217,6 +3217,24 @@ impl LayoutEngine {
         if std::env::var_os("OXI_TEXT_SHADOW_LINE_DISABLE").is_some() {
             return (0.0, 0.0);
         }
+        // OXI_SHADOW_SMALL_RUN (2026-10-25, default ON, opt-out _DISABLE): a shadow on a
+        // run SMALLER than the line's largest run grows the line only by what each extent
+        // exceeds that run's own room inside the line box: below the baseline
+        // (winDescent + half the 83/64 leading) x (largest size - its size), above it
+        // (winAscent + half the leading) x the same. `_pb_shadow_small_run_gen.py`
+        // (ＭＳ ゴシック, 40pt run + shadowed small run in the document's text box, the
+        // P1->P2 pitch = the bottom side): blur 4 / dist 3 down grows 0 at 10..24pt,
+        // +0.84 at 30, +3.12 at 36, +4.68 at 40; at 30pt blur 8 / dist 6 +4.68, blur 0 /
+        // dist 6 +0.36, blur 8 / dist 0 +1.44, blur 2 / dist 1.5 0 -- every arm equals
+        // (blur + dist) x 0.05 x size^0.7 minus 0.289em x (40 - size), within 0.06. Oxi
+        // added the small run's extents whole. ja/reference__5593c6a7's title box (40pt
+        // run + 20pt shadowed run): Word's second line sat 2.1pt above Oxi's.
+        let small_run_slack = std::env::var_os("OXI_SHADOW_SMALL_RUN_DISABLE").is_none();
+        let runs: Vec<(&RunStyle, &str)> = runs.collect();
+        let fs_big = runs.iter()
+            .filter(|(_, text)| !text.trim().is_empty())
+            .map(|(st, _)| self.resolve_font_size(st, para_style))
+            .fold(0.0f32, f32::max);
         let (mut top, mut bottom) = (0.0f32, 0.0f32);
         for (st, text) in runs {
             let Some((blur, dist, dir)) = st.text_shadow else { continue };
@@ -3226,8 +3244,17 @@ impl LayoutEngine {
             let fs = self.resolve_font_size(st, para_style);
             let scale = 0.05 * fs.powf(0.70);
             let dy = dist * dir.to_radians().sin();
-            top = top.max((blur - dy).max(0.0) * scale);
-            bottom = bottom.max((blur + dy).max(0.0) * scale);
+            let (t, b) = ((blur - dy).max(0.0) * scale, (blur + dy).max(0.0) * scale);
+            if small_run_slack && fs < fs_big - 0.01 {
+                let m = &*self.metrics_for(st, para_style);
+                let half_lead = (m.win_ascent + m.win_descent) * (83.0 / 64.0 - 1.0) * 0.5;
+                let d = fs_big - fs;
+                top = top.max((t - (m.win_ascent + half_lead) * d).max(0.0));
+                bottom = bottom.max((b - (m.win_descent + half_lead) * d).max(0.0));
+            } else {
+                top = top.max(t);
+                bottom = bottom.max(b);
+            }
         }
         (top, bottom)
     }
