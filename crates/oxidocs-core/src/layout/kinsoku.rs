@@ -133,10 +133,24 @@ const HANGABLE_PUNCT: &[char] = &[
     '）', '〕', '］', '｝', '〉', '》', '」', '』', '】', '〙', '〗',
 ];
 
+// OXI_HALFWIDTH_HANG (2026-10-24, default ON, opt-out _DISABLE): the half-width
+// ideographic comma and full stop hang exactly where 、 and 。 do. `_pb_halfwidth
+// _kinsoku_gen.py` (ＭＳ 明朝 10pt, 40 cells, «あ»×40 + mark): Word hangs «､» and «｡»
+// at compat 14 (jc=left and jc=both) and at compat 15 jc=both -- the S1334 cases
+// in which it hangs «、 。» -- where Oxi carried the «あ» before them down.
+const HANGABLE_HALFWIDTH: &[char] = &['\u{FF61}', '\u{FF64}'];
+
+pub(crate) fn halfwidth_hang_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("OXI_HALFWIDTH_HANG_DISABLE").is_none())
+}
+
 /// Check if a character is allowed to hang past the right margin
 /// (burasagari / hanging punctuation).
 pub fn is_hangable_punct(ch: char) -> bool {
-    !kinsoku_off_no_hang() && HANGABLE_PUNCT.contains(&ch)
+    !kinsoku_off_no_hang()
+        && (HANGABLE_PUNCT.contains(&ch) || (halfwidth_hang_on() && HANGABLE_HALFWIDTH.contains(&ch)))
 }
 
 /// CJK punctuation that can be compressed from full-width to half-width (50% compression).

@@ -15,6 +15,10 @@ sys.stdout.reconfigure(encoding="utf-8")
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", "_pb_halfwidth_kinsoku")
 COMPAT = int(os.environ.get("PB_COMPAT", "15"))
+JC = os.environ.get("PB_JC", "left")
+EA_LANG = os.environ.get("PB_EA_LANG", "ja-JP")
+ASCII_FONT = os.environ.get("PB_ASCII_FONT", "ＭＳ 明朝")
+RUN_LANG = os.environ.get("PB_RUN_LANG")  # eastAsia lang on the run itself
 W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 CT = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
@@ -29,9 +33,9 @@ DRELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships 
 SETTINGS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings %s><w:characterSpacingControl w:val="doNotCompress"/>'
             '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="%d"/></w:compat></w:settings>') % (W, COMPAT)
 STYLES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles %s><w:docDefaults><w:rPrDefault><w:rPr>'
-          '<w:rFonts w:ascii="ＭＳ 明朝" w:hAnsi="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝"/><w:sz w:val="20"/><w:lang w:val="en-US" w:eastAsia="ja-JP"/>'
-          '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/><w:jc w:val="left"/></w:pPr></w:pPrDefault></w:docDefaults>'
-          '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>') % W
+          '<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="ＭＳ 明朝"/><w:sz w:val="20"/><w:lang w:val="en-US" w:eastAsia="%s"/>'
+          '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/><w:jc w:val="%s"/></w:pPr></w:pPrDefault></w:docDefaults>'
+          '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>') % (W, ASCII_FONT, ASCII_FONT, EA_LANG, JC)
 OPENING = ["｢", "「", "（", "(", "＄", "￥", "‘", "“"]
 CLOSING = ["｣", "､", "｡", "･", "ﾞ", "ﾟ", "」", "、", "。", "）", "・", "ー", "っ", "々", "％", "℃", "’", "”", "!", "?", "%", ",", "."]
 CELLS = 40  # 10pt cells in 400pt
@@ -39,7 +43,7 @@ KOFF = os.environ.get("PB_KINSOKU_OFF") == "1"  # <w:kinsoku w:val="0"/> on ever
 
 
 def para(text):
-    return '<w:p><w:pPr>%s<w:ind w:right="%d"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p><w:p/>' % ('<w:kinsoku w:val="0"/>' if KOFF else '', 9026 - CELLS * 200, text)
+    return '<w:p><w:pPr>%s<w:ind w:right="%d"/></w:pPr><w:r>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p><w:p/>' % ('<w:kinsoku w:val="0"/>' if KOFF else '', 9026 - CELLS * 200, '<w:rPr><w:lang w:eastAsia="%s"/></w:rPr>' % RUN_LANG if RUN_LANG else '', text)
 
 
 def build():
@@ -53,7 +57,7 @@ def build():
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440"/></w:sectPr></w:body></w:document>'
            % (W, body))
     os.makedirs(OUT, exist_ok=True)
-    path = os.path.join(OUT, "hk%s_c%d.docx" % ("_off" if KOFF else "", COMPAT))
+    path = os.path.join(OUT, "hk%s_c%d_%s_%s_%s.docx" % ("_off" if KOFF else "", COMPAT, JC, EA_LANG, ASCII_FONT.replace(" ", "")) if not RUN_LANG else "hk_c%d_%s_dd%s_run%s.docx" % (COMPAT, JC, EA_LANG, RUN_LANG))
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", CT); z.writestr("_rels/.rels", RELS)
         z.writestr("word/_rels/document.xml.rels", DRELS); z.writestr("word/styles.xml", STYLES)

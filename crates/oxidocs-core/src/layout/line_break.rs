@@ -5708,6 +5708,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // S1346: under the regime a closing bracket hangs like 、
                             // (19 kana + 「字」」 keeps 字 with the 」 past the floor)
                             && (matches!(ch, '。' | '、' | '，' | '．' | '・')
+                                // OXI_HALFWIDTH_HANG: ｡ and ､ hang as 。 and 、 do
+                                || (kinsoku::halfwidth_hang_on() && matches!(ch, '\u{FF61}' | '\u{FF64}'))
                                 || (s1318_regime && kinsoku::is_yakumono_closing(ch))
                                 // S1220 (2026-08-25, opt-out `OXI_S1220_DISABLE`): the unified
                                 // break-billing law from the regime probes
