@@ -4777,7 +4777,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let lang_hang = !s809_hang
                             || (east_asian_lang && dd_ea_cjk)
                             || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
-                        word_trail_hang_w = if fixed_pitch || !lang_hang {
+                        // OXI_KINSOKU_OFF: a kinsoku=0 / non-east-Asian-language paragraph at
+                        // compat 15 hangs no Latin mark either (`_pb_halfwidth_kinsoku_gen.py`
+                        // c15 jc=both run en-US: Word starts the line with «.», Oxi hung it).
+                        word_trail_hang_w = if fixed_pitch || !lang_hang || kinsoku::kinsoku_off_no_hang() {
                             0.0
                         } else if ch == '.'
                             || (s809_hang && ch == ',' && !s1630_no_comma)
@@ -6916,7 +6919,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let lang_hang = !s809_hang
                             || (east_asian_lang && dd_ea_cjk)
                             || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
-                        word_trail_hang_w = if fixed_pitch || !lang_hang {
+                        // OXI_KINSOKU_OFF: a kinsoku=0 / non-east-Asian-language paragraph at
+                        // compat 15 hangs no Latin mark either (`_pb_halfwidth_kinsoku_gen.py`
+                        // c15 jc=both run en-US: Word starts the line with «.», Oxi hung it).
+                        word_trail_hang_w = if fixed_pitch || !lang_hang || kinsoku::kinsoku_off_no_hang() {
                             0.0
                         } else if ch == '.'
                             || (s809_hang && ch == ',' && !s1630_no_comma)
