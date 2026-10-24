@@ -2135,7 +2135,30 @@ fn parse_style_definition(
 /// Matches Word output: Table Grid (a7) basedOn Normal Table (a1)
 /// → inherits borders AND cell margins from parent.
 fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
-    let ids: Vec<String> = styles.table_styles.keys().cloned().collect();
+    let mut ids: Vec<String> = styles.table_styles.keys().cloned().collect();
+    // OXI_TBLSTYLE_CHAIN_ORDER (2026-10-24, default ON, opt-out _DISABLE): merge a
+    // parent before its children, so a two-step chain carries the grandparent's
+    // values down. The single pass in HashMap order left it to the per-process hash
+    // seed: ja/reference__3de85ac1's DOETable12 -> ListTable4-Accent6 -> TableNormal
+    // took TableNormal's 108tw left/right cell margin on about half the runs (cell
+    // text at 76.30, Word 76.82) and none on the rest (75.85), re-wrapping 9 lines.
+    if std::env::var_os("OXI_TBLSTYLE_CHAIN_ORDER_DISABLE").is_none() {
+        let depth = |id: &String| -> usize {
+            let mut d = 0;
+            let mut cur = styles.table_styles.get(id).and_then(|s| s.style_id.clone());
+            while let Some(parent) = cur {
+                d += 1;
+                if d > 16 {
+                    break;
+                }
+                cur = styles.table_styles.get(&parent).and_then(|s| s.style_id.clone());
+            }
+            d
+        };
+        let mut keyed: Vec<(usize, String)> = ids.into_iter().map(|id| (depth(&id), id)).collect();
+        keyed.sort();
+        ids = keyed.into_iter().map(|(_, id)| id).collect();
+    }
     for id in ids {
         // style_id field stores basedOn reference (set by parse_table_style_definition)
         let based_on = styles.table_styles.get(&id)
