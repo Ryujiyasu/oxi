@@ -5643,6 +5643,23 @@ fn parse_paragraph_properties(
                                             .find(|a| local_name(a.key.as_ref()) == "val")
                                             .map(|a| String::from_utf8_lossy(&a.value).into_owned());
                                     }
+                                    // OXI_MARK_SHADOW_EMPTY: the mark's <w14:shadow> (an empty
+                                    // paragraph's line grows by it, see text_shadow_ext)
+                                    if rd == 0 && local_name(e2.name().as_ref()) == "shadow"
+                                        && e2.name().as_ref().starts_with(b"w14:")
+                                    {
+                                        let (mut blur, mut dist, mut dir) = (0.0f32, 0.0f32, 0.0f32);
+                                        for a in e2.attributes().flatten() {
+                                            let v = String::from_utf8_lossy(&a.value).parse::<f32>().unwrap_or(0.0);
+                                            match local_name(a.key.as_ref()).as_str() {
+                                                "blurRad" => blur = v / 12700.0,
+                                                "dist" => dist = v / 12700.0,
+                                                "dir" => dir = v / 60000.0,
+                                                _ => {}
+                                            }
+                                        }
+                                        ppr_rpr.text_shadow = Some((blur, dist, dir));
+                                    }
                                     rd += 1;
                                 }
                                 Event::End(_) => {

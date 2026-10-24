@@ -3236,6 +3236,24 @@ impl LayoutEngine {
             .map(|(st, _)| self.resolve_font_size(st, para_style))
             .fold(0.0f32, f32::max);
         let (mut top, mut bottom) = (0.0f32, 0.0f32);
+        // OXI_MARK_SHADOW_EMPTY (2026-10-25, default ON, opt-out _DISABLE): a paragraph
+        // with no text takes its paragraph MARK's shadow, at the mark's size, as the run
+        // that sets the line. Slice of ja/reference__5593c6a7's second box (22pt line,
+        // empty paragraph, 22pt line): Word's pitch grows +1.56 / +2.64 / +3.02 for a
+        // mark of 10.5 / 22 / 26pt with blur 3 / dist 1.8 = (blur + dist + blur - dist)
+        // x 0.05 x size^0.70 (1.56 / 2.61 / 2.93); the 22pt mark without the shadow
+        // leaves the pitch where Oxi has it. The document's two empty paragraphs put its
+        // «他にも有名で誇れることが！» 4.2pt above Word's (blind-G line census).
+        let mark_runs: Vec<(&RunStyle, &str)>;
+        let runs = if fs_big <= 0.0
+            && std::env::var_os("OXI_MARK_SHADOW_EMPTY_DISABLE").is_none()
+            && para_style.ppr_rpr.as_ref().is_some_and(|m| m.text_shadow.is_some())
+        {
+            mark_runs = vec![(para_style.ppr_rpr.as_ref().unwrap(), "\u{B6}")];
+            mark_runs
+        } else {
+            runs
+        };
         for (st, text) in runs {
             let Some((blur, dist, dir)) = st.text_shadow else { continue };
             if text.trim().is_empty() {
