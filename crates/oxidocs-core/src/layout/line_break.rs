@@ -4858,6 +4858,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         .or_else(|| fragments[frag_outer_idx + 1..].iter().find_map(|f| f.0.chars().next()))
                         .is_some_and(|next| next.is_ascii_digit())))
                     || (use_east_asia && matches!(ch, '\u{0370}'..='\u{04FF}'))
+                    // OXI_HINT_MIDDOT_CJK_BREAK (2026-10-24, default ON, opt-out _DISABLE): a
+                    // middle dot U+00B7 in a run hinted eastAsia is a CJK character for the
+                    // break -- a line may end after it and the Latin letters that follow start
+                    // the next line, exactly where U+30FB breaks. `_pb_middot_latin_break_gen.py`
+                    // PB_HINT=1 (あ×35..39 + «「·MONO」», c14/c15 x en-US/ja-JP): hinted «「·|MONO»
+                    // in every arm that puts «「・|MONO» for the katakana dot; unhinted «·MONO»
+                    // stays one word («「|·MON»). ja/technical__c6d7cdb1 p18 «…または「·» / «MONO」».
+                    || (ch == '\u{00B7}'
+                        && (style.east_asia_hint || style.font_hint_east_asia == Some(true))
+                        && std::env::var_os("OXI_HINT_MIDDOT_CJK_BREAK_DISABLE").is_none())
                 {
                     // CJK characters always break at char boundaries (subject to kinsoku).
                     // ECMA-376 §17.3.1.40: wordWrap controls LATIN word-break only.
