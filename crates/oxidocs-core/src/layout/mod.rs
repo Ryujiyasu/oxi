@@ -5588,6 +5588,22 @@ impl LayoutEngine {
             return None;
         }
         let fs = self.resolve_font_size(ms, &para.style);
+        // OXI_MARKER_CJK_ASC (2026-10-24, cell path; the body site in paragraph.rs
+        // shipped 2026-10-22): with the face absent, a marker in Arial Unicode MS
+        // declared charset 80 is drawn by Word in MS-Mincho and takes that face's
+        // 83/64 ascent (winAscent + half the 83/64 leading); undeclared, it is sized
+        // as the generic marker. en/policies__0097fbf2 (checklist rows in a table,
+        // blind-G line census): the S1614 box kept every numbered row 4.0pt low
+        // after the body fix -- Word 239.70, Oxi 243.7, the cell site unchanged.
+        if std::env::var_os("OXI_MARKER_CJK_ASC_DISABLE").is_none()
+            && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
+        {
+            if !self.aum_charset_80 {
+                return None;
+            }
+            let m = &*self.registry.get("MS Mincho");
+            return Some((m.win_ascent + (83.0 / 64.0 - 1.0) * (m.win_ascent + m.win_descent) * 0.5) * fs);
+        }
         let m = &*self.registry.get_with_style(
             "Arial Unicode MS Latin",
             self.resolve_bold(ms, &para.style),
