@@ -546,8 +546,8 @@ fn plan_cell_aki(
 }
 
 fn cell_aki_joint(a: char, b: char, de: bool, dn: bool) -> bool {
-    let ai = kinsoku::is_cjk_ideograph_or_kana(a);
-    let bi = kinsoku::is_cjk_ideograph_or_kana(b);
+    let ai = kinsoku::is_autospace_east_asian(a);
+    let bi = kinsoku::is_autospace_east_asian(b);
     (de && ((ai && b.is_ascii_alphabetic()) || (a.is_ascii_alphabetic() && bi)))
         || (dn && ((ai && b.is_ascii_digit()) || (a.is_ascii_digit() && bi)))
 }
@@ -3627,8 +3627,8 @@ fn heading_default_font_size(level: u8) -> f32 {
 /// autoSpaceDN.
 fn is_cjk_latin_joint(a: char, b: char) -> bool {
     let lat = |c: char| c.is_ascii_alphabetic() || c.is_ascii_digit();
-    (kinsoku::is_cjk_ideograph_or_kana(a) && lat(b))
-        || (lat(a) && kinsoku::is_cjk_ideograph_or_kana(b))
+    (kinsoku::is_autospace_east_asian(a) && lat(b))
+        || (lat(a) && kinsoku::is_autospace_east_asian(b))
 }
 
 fn s1175_autospace(font_size: f32, cs: f32, balance: bool) -> f32 {

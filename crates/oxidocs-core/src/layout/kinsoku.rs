@@ -504,6 +504,22 @@ pub fn is_cjk_ideograph_or_kana(ch: char) -> bool {
     )
 }
 
+// OXI_HWKANA_AUTOSPACE (2026-10-25, default ON, opt-out _DISABLE): half-width katakana
+// (U+FF66-FF9F) is the East Asian side of an autoSpaceDE / autoSpaceDN gap, exactly like
+// a full-width kana. `_pb_hwkana_autospace_gen.py` (ＭＳ 明朝 10pt, «あ×10 + ｱ/カ/x + abc»,
+// gap read from the PDF glyph origins): ｱ→a 0.260em, カ→a 0.255em, x→a 0.006em with the
+// default autoSpaceDE, all under 0.01em with autoSpaceDE=0, compat 14 and 15 alike; Oxi
+// put 0 after ｱ (is_cjk_ideograph_or_kana stops at the Katakana block). The confound
+// behind the withdrawn compat-14 Latin half-cell adjacency reading («、ｱ+abc» wrapped
+// because of this gap, not because the 、 was two characters back).
+pub fn is_autospace_east_asian(ch: char) -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    is_cjk_ideograph_or_kana(ch)
+        || (*ON.get_or_init(|| std::env::var_os("OXI_HWKANA_AUTOSPACE_DISABLE").is_none())
+            && matches!(ch as u32, 0xFF66..=0xFF9F))
+}
+
 pub fn is_cjk(ch: char) -> bool {
     matches!(ch as u32,
         // CJK Unified Ideographs

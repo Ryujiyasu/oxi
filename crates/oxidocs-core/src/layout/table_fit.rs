@@ -5719,14 +5719,14 @@ impl<'a> TableFitLayouter<'a> {
                                             let auto_space_extra = {
                                                 let prev_cjk_ideo = prev_char_emitted.map_or(
                                                     false,
-                                                    kinsoku::is_cjk_ideograph_or_kana,
+                                                    kinsoku::is_autospace_east_asian,
                                                 );
                                                 let prev_alpha = prev_char_emitted
                                                     .map_or(false, |c| c.is_ascii_alphabetic());
                                                 let prev_digit = prev_char_emitted
                                                     .map_or(false, |c| c.is_ascii_digit());
                                                 let cur_cjk_ideo =
-                                                    kinsoku::is_cjk_ideograph_or_kana(ch);
+                                                    kinsoku::is_autospace_east_asian(ch);
                                                 let cur_alpha = ch.is_ascii_alphabetic();
                                                 let cur_digit = ch.is_ascii_digit();
                                                 let de_boundary = (prev_cjk_ideo && cur_alpha)

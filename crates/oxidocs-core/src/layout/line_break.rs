@@ -844,8 +844,8 @@ impl<'a> LineBreaker<'a> {
             let mut island_from_start = chars.first().map_or(false, |&c| is_lat(c));
             for w in chars.windows(2) {
                 let (a, b) = (w[0], w[1]);
-                let a_cjk = kinsoku::is_cjk_ideograph_or_kana(a);
-                let b_cjk = kinsoku::is_cjk_ideograph_or_kana(b);
+                let a_cjk = kinsoku::is_autospace_east_asian(a);
+                let b_cjk = kinsoku::is_autospace_east_asian(b);
                 if a_cjk && is_lat(b) {
                     gaps += 1;
                     island_from_start = false;
@@ -4905,7 +4905,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let prev_is_alpha = prev_alpha_local || prev_frag_alpha;
                     let prev_is_digit = prev_digit_local || prev_frag_digit;
                     flush_word!(style);
-                    let cur_is_cjk = kinsoku::is_cjk_ideograph_or_kana(ch);
+                    let cur_is_cjk = kinsoku::is_autospace_east_asian(ch);
                     // S1316 (2026-09-05, default ON, opt-out OXI_S1316_DISABLE): Word puts
                     // no auto-space on the side of a digit/Latin run that touches a
                     // RUBY field. DERIVED (`_pb_autospace_gen.py`, (資料代)50(円) with
@@ -5911,8 +5911,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let mut island_from_start = line_chars.first().map_or(false, |&c| is_lat(c));
                         for w in line_chars.windows(2) {
                             let (a, b) = (w[0], w[1]);
-                            let a_cjk = kinsoku::is_cjk_ideograph_or_kana(a);
-                            let b_cjk = kinsoku::is_cjk_ideograph_or_kana(b);
+                            let a_cjk = kinsoku::is_autospace_east_asian(a);
+                            let b_cjk = kinsoku::is_autospace_east_asian(b);
                             if a_cjk && is_lat(b) {
                                 gaps += 1;
                                 island_from_start = false;
@@ -6834,7 +6834,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             f.text
                                 .chars()
                                 .last()
-                                .map_or(false, |c| kinsoku::is_cjk_ideograph_or_kana(c))
+                                .map_or(false, |c| kinsoku::is_autospace_east_asian(c))
                         });
                         if prev_is_cjk_ideo {
                             // S546: gap = fs/4 true-space (old per-fontSize table = paint artifact).
