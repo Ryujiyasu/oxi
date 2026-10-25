@@ -16,6 +16,63 @@ under 0.80). The change is recorded here so the two numbers are not read as one 
 
 ---
 
+## 0.8.9 — 2026-10-26
+
+Twenty-three days and 219 commits after 0.8.2, 145 of them layout fixes each derived from a
+Word measurement (a probe document varying one property at a time, read back from Word's own
+PDF). Engine `77605bde`.
+
+### Rendering fidelity — blind-I, frozen 2026-10-25 before measurement
+
+Fifty English and fifty Japanese documents that nothing had touched, drawn by the declared
+SHA-order rule (`pipeline_data/FROZEN_BLIND_I.md`), scored against Microsoft Word's own
+150 DPI render (Microsoft 365 16.0.20430.20182, one fresh Word process per document). Every
+engine was updated to its latest public release on the measurement day, and two engines that
+appeared since 0.8.2 were added: WordCraft and ibisOffice. Mean SSIM on common pages /
+penalized (missing pages score 0) / page counts equal to Word's.
+
+| Engine | English (50) | Japanese (50) |
+|---|---|---|
+| ONLYOFFICE 10.0.0 | **0.909 / 0.888** / 42 (49 scored) | 0.790 / 0.734 / 38 |
+| **Oxi 0.8.9** | 0.903 / 0.883 / **47** | **0.905 / 0.899 / 47** |
+| WordCraft 0.10.0 | 0.885 / 0.857 / 41 | 0.827 / 0.749 / 37 |
+| LibreOffice 26.8.1.1 | 0.864 / 0.828 / 39 | 0.831 / 0.789 / 41 |
+| SILURUS @silurus/ooxml 0.89.4 | 0.842 / 0.806 / 41 | 0.821 / 0.719 / 31 (48 scored) |
+| GenOffice 28cee5ca | 0.815 / 0.747 / 35 (49 scored) | 0.825 / 0.737 / 34 |
+| ibisOffice 0.8.4 | 0.783 / 0.706 / 33 | 0.819 / 0.776 / 41 |
+| OfficeCLI 1.0.158 (`--render html`) | 0.770 / 0.443 / 14 | 0.810 / 0.629 / 32 |
+| BetterOffice @betteroffice/docx 0.4.3 | 0.767 / 0.636 / 26 | 0.785 / 0.675 / 34 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.756 / 0.704 / 33 | 0.768 / 0.694 / 36 |
+
+Penalized two-language mean 0.8907 → **0.8.9**. Document by document, Oxi is closer to Word
+than LibreOffice on 30 of 50 English and 43 of 50 Japanese documents; in English, ONLYOFFICE
+(37 of 50) and WordCraft (34 of 50) win more documents than Oxi does, so Oxi's English mean
+rests on having fewer bad documents rather than on winning the typical one. Polaris Office
+11.115 was installed but its window-driven export timed out on every document, so it is
+reported as not measured. GenOffice's first run opened every file as a blank page (its newest
+build takes the file as a one-shot URL, the harness passed bytes); that run was discarded
+before scoring and redone.
+
+### What changed since 0.8.2
+
+- **Line census to zero**: on the hundred blind-G documents, no first-page line is more than
+  2pt from Word's (246 such lines when the census started on 2026-10-02)
+- **Line breaking**: Word's full standard kinsoku set; kinsoku off for `w:kinsoku=0` and for
+  East Asian text in a non-Japanese/Chinese/Korean language; half-width ､｡ hang; the
+  autoSpaceDE gap beside half-width katakana; justified-line squeeze of a Latin word's own gap
+- **Tables**: exact-height rows keep their height for vertical alignment and when they close a
+  vertical merge; a floating table's bottom border takes room below it; tblpYSpec placement;
+  ＭＳ-face cell lines estimated at the exact line they render with; table-style basedOn chains
+- **Text boxes and shapes**: text inset by half the outline width, grouped boxes included;
+  text-shadow line growth for small runs and empty paragraphs
+- **Paragraphs**: snapToGrid=0 empty paragraphs on a typed grid; numbering markers in a
+  declared-charset Arial Unicode MS; middle dot breaking under an East Asian hint
+- **Measurement**: the Word truth for every gate and blind set is now taken on the new
+  measurement PC with one Word process per document (Word caches missing-face substitutes
+  per process, which had leaked between documents)
+
+---
+
 ## 0.8.2 — 2026-10-02
 
 Forty days and 1,360 commits after 0.8.0, almost all of them layout: the Word engine now

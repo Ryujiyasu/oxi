@@ -78,6 +78,11 @@ def collect() -> dict:
     else:
         found["genoffice"] = None
 
+    # The command-line engines added for blind-I: the version is the release folder name.
+    tools = Path(r"C:\Users\ryuji\tools")
+    for name, prefix in (("ibisoffice", "ibisoffice-"), ("wordcraft", "wordcraft-")):
+        got = sorted(p.name[len(prefix):] for p in tools.glob(prefix + "*") if p.is_dir()) if tools.is_dir() else []
+        found[name] = got[-1] if got else None
     run = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                          cwd=REPO, capture_output=True, text=True)
     found["oxi"] = (run.stdout or "").strip() or None

@@ -38,6 +38,8 @@ SHAPES = {
     "betteroffice": ("betteroffice_png", "png"),
     "genoffice": ("genoffice_png", "png"),
     "officecli": ("officecli_png", "png"),
+    "ibis": ("ibis_pdf", "pdf"),
+    "wordcraft": ("wordcraft_pdf", "pdf"),
 }
 
 

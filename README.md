@@ -7,7 +7,7 @@ Word (.docx) layout is scored against Microsoft Word page by page, PowerPoint (.
 
 [Live Demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Layout Accuracy](#layout-accuracy-vs-microsoft-word) · [Contributing](#contributing)
 
-![release v0.8.2](https://img.shields.io/badge/release-v0.8.2-8a2be2) ![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
+![release v0.8.9](https://img.shields.io/badge/release-v0.8.9-8a2be2) ![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
 
 > **Canonical repository:** [GitHub — Ryujiyasu/oxi](https://github.com/Ryujiyasu/oxi) (issues, pull requests, CI, releases).
 > The [GitLab repository](https://gitlab.com/Ryujiyasu/oxi) receives `main` from GitHub and exists to run the Pages job that serves the live demo.
@@ -60,49 +60,57 @@ An accuracy number is only as honest as the corpus it comes from. Oxi's document
 
 The blind sets are drawn from the public [superdoc-dev/docx-corpus](https://docxcorp.us/) (ODC-BY, 736K real .docx from Common Crawl) by a deterministic rule declared *before* fetching: 10 document types × the next 5 documents in SHA-256-ascending manifest order, with a purely mechanical quarantine (valid zip, has `word/document.xml`, no macros, ≤ 4 MB). No quality-based selection, no post-hoc swaps. When a newer blind set is frozen, the old one is demoted to validation and only then becomes fixable.
 
-Everything below is measured against **Microsoft Word's own render** of the same file (Microsoft 365 16.0.20326.20132, 150 DPI, resize-to-match, structural similarity). Nobody grades their own homework.
+Everything below is measured against **Microsoft Word's own render** of the same file (Microsoft 365 16.0.20430.20182, 150 DPI, resize-to-match, structural similarity; one fresh Word process per document). Nobody grades their own homework.
 
 One measurement note, because it would otherwise flatter a competitor: **OfficeCLI is measured with `--render html`, its own layout engine.** Its default `--render auto` is documented as "native on Windows w/ Word", and on a host with Word installed that path hands the rendering to Word itself — 0.996 SSIM against Word, because it *is* Word. Its own engine scores 0.972 on that same page. Only the second is a comparison.
 
-### English blind set — blind-H50, 50 never-seen documents
+### English blind set — blind-I50, 50 never-seen documents
 
-Frozen 2026-10-02 (`pipeline_data/FROZEN_BLIND_H.md`) as the next unclaimed SHA-256 ranks per type, **before** any measurement. Every engine renders the same 50 documents; where one produced nothing for a document, its row says how many it managed. One drawn document Word itself refused to open was replaced by the next entry of its type under the pre-declared quarantine rule, before any score was read.
+Frozen 2026-10-25 (`pipeline_data/FROZEN_BLIND_I.md`) as the next unclaimed SHA-256 ranks per type, **before** any measurement. Every engine renders the same 50 documents; where one produced nothing for a document, its row says how many it managed. Word opened and exported all 100 documents of the two sets, so no quarantine replacement was needed this time.
 
-**Why a new set.** Blind-G (2026-09-29) was spent the day its numbers were written down and has since been a fix target, and blind-D50's numbers are two engine generations old. The sets are different documents and are not comparable: Oxi scored 0.837 on D50 and 0.874 here.
+**Why a new set.** Blind-H (2026-10-02) was spent the day its numbers were written down and has since been a fix target, so it can no longer say how the engine generalizes. The sets are different documents and are not comparable: Oxi scored 0.874 on H50 and 0.903 here.
 
-| Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
-|--------|--------------------------|-----------|-------------------------|------------------|
-| ONLYOFFICE 9.3.1.8 | **0.918** | **0.912** | **48 / 50** | 50 |
-| **Oxi 0.8.2** | 0.874 | 0.845 | 43 / 50 | 50 |
-| LibreOffice 26.8.0.3 | 0.858 | 0.838 | 42 / 50 | 50 |
-| Polaris Office 11.115 | 0.827 | 0.792 | 41 / 50 | 49 |
-| GenOffice 6a241c4 | 0.772 | 0.737 | 39 / 50 | 50 |
-| SILURUS @silurus/ooxml 0.86.1 | 0.762 | 0.726 | 35 / 50 | 48 |
-| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.739 | 0.672 | 30 / 50 | 50 |
-| BetterOffice, OfficeCLI | *not measured in this rotation* (see note) | | | |
-
-**Oxi is second in English, behind ONLYOFFICE and ahead of LibreOffice.** ONLYOFFICE leads by 0.044; Oxi wins 32 of 50 head-to-head against LibreOffice and loses 18. Page counts match on 43 of 50. The worst Oxi document is at 0.579 — a defect, since the other engines score it 0.62 and up.
-
-### Japanese blind set — jaBlindH50, 50 never-seen documents
-
-Frozen 2026-10-02 by the same rule, **before** any measurement. The Japanese `technical` type is exhausted in the public manifest, so its five slots were filled by the pre-declared top-up rule (the next unclaimed entries across the other types in SHA order — all five came from `forms`).
+**Every engine is at its latest public release on the measurement day** (2026-10-25): LibreOffice and ONLYOFFICE installed fresh, the npm-distributed engines at `@latest`, GenOffice pulled to its newest commit, and two engines that appeared since the last rotation added — [WordCraft](https://github.com/storytold/wordcraft) and [ibisOffice](https://github.com/ibisjp/ibis-office), both exporting a PDF from their own command line.
 
 | Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
 |--------|--------------------------|-----------|-------------------------|------------------|
-| **Oxi 0.8.2** | **0.857** | **0.809** | **41 / 50** | 50 |
-| Polaris Office 11.115 | 0.828 | 0.768 | 37 / 50 | 48 |
-| SILURUS @silurus/ooxml 0.86.1 | 0.819 | 0.741 | 34 / 50 | 47 |
-| LibreOffice 26.8.0.3 | 0.807 | 0.714 | 32 / 50 | 50 |
-| GenOffice 6a241c4 | 0.800 | 0.696 | 29 / 50 | 48 |
-| ONLYOFFICE 9.3.1.8 | 0.787 | 0.746 | 39 / 50 | 50 |
-| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.761 | 0.654 | 29 / 50 | 49 |
-| BetterOffice, OfficeCLI | *not measured in this rotation* (see note) | | | |
+| ONLYOFFICE 10.0.0 | **0.909** | **0.888** | 42 / 50 | 49 |
+| **Oxi 0.8.9** | 0.903 | 0.883 | **47 / 50** | 50 |
+| WordCraft 0.10.0 | 0.885 | 0.857 | 41 / 50 | 50 |
+| LibreOffice 26.8.1.1 | 0.864 | 0.828 | 39 / 50 | 50 |
+| SILURUS @silurus/ooxml 0.89.4 | 0.842 | 0.806 | 41 / 50 | 50 |
+| GenOffice 28cee5ca | 0.815 | 0.747 | 35 / 50 | 49 |
+| ibisOffice 0.8.4 | 0.783 | 0.706 | 33 / 50 | 50 |
+| OfficeCLI 1.0.158 (`--render html`) | 0.770 | 0.443 | 14 / 50 | 50 |
+| BetterOffice @betteroffice/docx 0.4.3 | 0.767 | 0.636 | 26 / 50 | 50 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.756 | 0.704 | 33 / 50 | 50 |
+| Polaris Office 11.115 | *not measured* (see note) | | | |
 
-**Oxi is first in Japanese by 0.029 over Polaris Office and 0.050 over LibreOffice**, and wins 41 of 50 head-to-head against LibreOffice. It also places Japanese page breaks best this time (41 / 50). The worst document (0.551) is hard for every engine — all five score it between 0.50 and 0.63.
+**Oxi is second in English, 0.006 behind ONLYOFFICE — inside the ±0.02 one sample carries — and places page breaks best (47 / 50).** The mean hides a split worth stating: document by document, ONLYOFFICE is closer to Word on 37 of 50 and WordCraft on 34 of 50, while Oxi beats LibreOffice on 30 of 50. Oxi's mean holds up because its bad documents are less bad, not because it wins the typical one. The worst Oxi document is at 0.542 — a defect, since ONLYOFFICE scores it 0.924.
 
-**Rankings do not transfer between languages.** ONLYOFFICE is first in English and fifth in Japanese; Oxi is second in English and first in Japanese. That is the whole reason for keeping a blind set per language, and for keeping both numbers on this page rather than the flattering one.
+### Japanese blind set — jaBlindI50, 50 never-seen documents
 
-Every engine was measured on the same day against the same Word ground truth (Microsoft 365 16.0.20430.20092, 150 DPI). Versions are recorded in `_engine_versions_blindH50.json` beside each result. ONLYOFFICE 9.4.0 had shipped and the installed 9.3.1.8 was measured instead — the engine that beats Oxi in English, so the gap is if anything understated. BetterOffice (@betteroffice/docx 0.1.0) and OfficeCLI (1.0.148) were not completed on this rotation: the measurement host ran out of memory twice during their browser renders on the day the set was frozen, and a blind set is reported once, so their columns are left empty rather than measured later against a spent set. On blind-D50 both placed in the bottom tier (0.764 / 0.767 English).
+Frozen 2026-10-25 by the same rule, **before** any measurement. The Japanese `technical` type is exhausted in the public manifest, so its five slots were filled by the pre-declared top-up rule (the next unclaimed entries across the other types in SHA order — all five came from `forms`).
+
+| Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
+|--------|--------------------------|-----------|-------------------------|------------------|
+| **Oxi 0.8.9** | **0.905** | **0.899** | **47 / 50** | 50 |
+| LibreOffice 26.8.1.1 | 0.831 | 0.789 | 41 / 50 | 50 |
+| WordCraft 0.10.0 | 0.827 | 0.749 | 37 / 50 | 50 |
+| GenOffice 28cee5ca | 0.825 | 0.737 | 34 / 50 | 50 |
+| SILURUS @silurus/ooxml 0.89.4 | 0.821 | 0.719 | 31 / 50 | 48 |
+| ibisOffice 0.8.4 | 0.819 | 0.776 | 41 / 50 | 50 |
+| OfficeCLI 1.0.158 (`--render html`) | 0.810 | 0.629 | 32 / 50 | 50 |
+| ONLYOFFICE 10.0.0 | 0.790 | 0.734 | 38 / 50 | 50 |
+| BetterOffice @betteroffice/docx 0.4.3 | 0.785 | 0.675 | 34 / 50 | 50 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.768 | 0.694 | 36 / 50 | 50 |
+| Polaris Office 11.115 | *not measured* (see note) | | | |
+
+**Oxi is first in Japanese by 0.074 over LibreOffice**, closer to Word than LibreOffice on 43 of 50 documents, than WordCraft on 43 and than ONLYOFFICE on 48. The worst document (0.670) is hard for every engine — the others score it 0.63-0.65.
+
+**Rankings do not transfer between languages.** ONLYOFFICE is first in English and eighth in Japanese; Oxi is second in English and first in Japanese. That is the whole reason for keeping a blind set per language, and for keeping both numbers on this page rather than the flattering one.
+
+Every engine was measured against the same Word ground truth (Microsoft 365 16.0.20430.20182, 150 DPI). Versions are recorded in `_engine_versions_blindI50.json` beside each result. Three measurement notes, each written down before any number was compared: (1) GenOffice's newest build hands its renderer the file as a one-shot URL instead of bytes; the harness first fed it bytes, every document opened as a blank page, and that run was discarded and redone — the numbers above are the redone run. (2) OfficeCLI's low page-count match is its own pagination: the harness takes the page count from OfficeCLI's own view and captures every page it reports. (3) Polaris Office was installed but its export is driven through its window, and on this run every document timed out in that window, so it is reported as not measured rather than measured later against a spent set.
 
 ### How much does one blind set decide?
 
@@ -114,6 +122,7 @@ Three independently frozen Japanese blind sets, each measured once against the b
 | blind-C50 (ranks 16-20, 2026-08-31) | 0.802 | 35 / 50 |
 | blind-D50 (ranks 21-25, 2026-09-11) | 0.802 | 40 / 50 |
 | blind-H50 (next unclaimed ranks, 2026-10-02) | 0.857 | 41 / 50 |
+| blind-I50 (next unclaimed ranks, 2026-10-25) | 0.905 | 47 / 50 |
 
 B50 and C50 were measured the same day on the same binary, so the 0.040 between them is set difficulty and nothing else. Roughly a quarter of that is a known defect — 19 of the 50 blind-C documents contain an anchored floating text box whose text Oxi drops, and those documents average 0.06-0.10 lower than the rest — and the remainder is simply that one sample of fifty wild documents is harder than another. **A single blind number carries about ±0.02, and a page-count rate can move 90% → 70% between samples.**
 
@@ -121,9 +130,11 @@ D50, cut eleven days and one engine revision later, landed on 0.802 again. Two i
 
 H50, three weeks and one engine generation later, is the first Japanese set to leave 0.80: 0.857. Two rotations (E, F, G) of pagination-only blind measurement were tuned against in between, so that step is engine, not sampling — but it is one sample, and the ±0.02 above still applies to it.
 
-The English pair moved further — 0.903 on C50, 0.837 on D50, 0.874 on H50 — but C50 had been rotated into the development corpus by then, so set difficulty and tuning cannot be separated there and the C50 English number is retired rather than quoted.
+I50, three weeks and 219 commits later (145 of them layout fixes derived from Word measurements), is the first to pass 0.90: 0.905, with page breaks matching Word on 47 of 50. Again one sample, and the ±0.02 above applies.
 
-Two honest caveats about the two engine tables together: (1) the English and Japanese sets are different documents, so the numbers are not comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes fifth in Japanese), which is exactly why blind sets per language exist.
+The English sets moved too — 0.903 on C50, 0.837 on D50, 0.874 on H50, 0.903 on I50 — but C50 had been rotated into the development corpus by then, so set difficulty and tuning cannot be separated there and the C50 English number is retired rather than quoted.
+
+Two honest caveats about the two engine tables together: (1) the English and Japanese sets are different documents, so the numbers are not comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes eighth in Japanese), which is exactly why blind sets per language exist.
 
 ![Word vs Oxi vs LibreOffice vs @silurus/ooxml — same page, same ground truth](docs/img/vert-3way.png)
 
@@ -387,16 +398,16 @@ Oxi treats every document as untrusted input. A hostile file can render wrong �
 ## Roadmap
 
 The version number is the **mean pixel similarity to Word on the current frozen blind
-sets, with every page Oxi gets wrong counted against it**: `0.8.2` means that on the
+sets, with every page Oxi gets wrong counted against it**: `0.8.9` means that on the
 never-seen English and Japanese benchmarks above, Oxi's documents average penalized SSIM
-0.82 against Word's own render of the same files (0.845 and 0.809; a page Oxi adds or
+0.89 against Word's own render of the same files (0.883 and 0.899; a page Oxi adds or
 drops scores zero; two-decimal truncation of the two-language mean). The number is
 measured, not tuned — a blind set is spent once its number is written down and a new one
 is frozen before the next release — and `1.0` is the project's stop condition rather than
 its finish line. Per-release detail: [CHANGELOG.md](CHANGELOG.md).
 
 - **0.8 — current:** Word-compatible .docx rendering; the measurement loop (dev gates + rotating blind benchmarks); .pptx and .xlsx rendering, formula engine and browser VBA host; PDF; round-trip editing; WASM + Canvas editor, CLI, desktop app, Python bindings
-- **0.9 — the blind sets average 0.9 penalized:** close the English pixel gap to ONLYOFFICE (0.918 vs 0.874), lift the Japanese worst documents (five below 0.70 on blind-H), the page-1 line census to zero, IME (Japanese/CJK input) and editor polish
+- **0.9 — the blind sets average 0.9 penalized:** win the typical English document, not just the mean (ONLYOFFICE is closer to Word on 37 of 50 blind-I documents, WordCraft on 34), lift the worst documents (nine English and six Japanese below 0.80 on blind-I), IME (Japanese/CJK input) and editor polish. The page-1 line census reached zero on 2026-10-25: across the hundred blind-G documents, no first-page line is more than 2pt from Word's
 - **1.0 — indistinguishable from Word:** no document in the corpus below 1.0. This is the falsifiable claim the whole loop exists to serve; counterexamples are the contribution most wanted
 - **Beyond 1.0 — format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level
 
