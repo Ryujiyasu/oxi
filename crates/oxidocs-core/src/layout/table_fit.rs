@@ -10219,6 +10219,18 @@ impl<'a> TableFitLayouter<'a> {
                 // max_actual_cell_h in case visual_row_h underestimated for
                 // unusual cells (defensive).
                 let mut effective_row_h = row_height.max(visual_row_h).max(max_actual_cell_h);
+                // OXI_EXACT_ROW_VALIGN_BOX (2026-10-25, default ON, opt-out _DISABLE): an EXACT
+                // row's cells centre (and bottom-align) in the exact height -- content that
+                // overflows it is clipped, it does not enlarge the box. `_pb_exact_row_valign
+                // _gen.py` (exact 323tw row: a two-paragraph cell (32pt) beside a one-line
+                // vAlign=center cell and a merged vAlign=center cell): Word keeps the centred
+                // one-liner on the top line (101.4, where a one-paragraph neighbour puts it
+                // too) and the merged cell at 110.8; Oxi set them 7.9 / 8.2 lower, centring
+                // in the 32pt content. With atLeast both agree (109.3 / 119.1). ja/forms__
+                // 02157d72 p1 row 2 (那覇市 / 生年月日 / 平熱 / 現住所): 18 census lines +8.07.
+                if is_exact_row && std::env::var_os("OXI_EXACT_ROW_VALIGN_BOX_DISABLE").is_none() {
+                    effective_row_h = row_height;
+                }
                 // S503 (2026-06-08): include the render-line-height centering floor so a
                 // vAlign=center cell that is laid out BEFORE a taller cell (col0 before
                 // col1) centers within the FULL actual row content height, not the
