@@ -7447,7 +7447,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // vertAnchor="margin"; "text" gives 232.7, "page"
                             // 137.18. Oxi took the absent case as "text" and the
                             // margin case from the pushed body top (232.65).
-                            Some("text") => cursor.cursor_y + pos.y, // offset from anchor para bottom
+                            // OXI_YSPEC_TEXT_SHIFT (2026-10-25, default ON, opt-out _DISABLE): with a
+                            // tblpYSpec instead of a tblpY the table's top sits ABOVE the tblpY=0
+                            // position by the binary-format sentinel of that alignment taken as
+                            // twips: top -4, center -8, bottom -12, inside -16, outside -20 =
+                            // 0.2 / 0.4 / 0.6 / 0.8 / 1.0pt. `_pb_float_chain_gen.py` bonly_* arms
+                            // (Word PDF top rule, 600dpi-rounded, against tblpY=0 at 55.56): top
+                            // 55.44, center 55.20, bottom 54.96, inside 54.84, outside 54.60; the
+                            // bottom 0.60 holds at 14pt runs, five rows, no docGrid, with a
+                            // preceding float of rule 0.5 / 1.5 and own rules of 1.5. S1615's COM
+                            // reading was 107.25 vs 108 (0.75-quantised). ja/forms__02157d72 p1:
+                            // the 緊急連絡先 table (yspec bottom) at 316.37 against the 316.91 chain.
+                            Some("text") => {
+                                let sentinel = match pos.y_spec.as_deref() {
+                                    Some("top") => 0.2,
+                                    Some("center") => 0.4,
+                                    Some("bottom") => 0.6,
+                                    Some("inside") => 0.8,
+                                    Some("outside") => 1.0,
+                                    _ => 0.0,
+                                };
+                                cursor.cursor_y + pos.y
+                                    - if std::env::var_os("OXI_YSPEC_TEXT_SHIFT_DISABLE").is_none()
+                                    { sentinel } else { 0.0 }
+                            } // offset from anchor para bottom
                             Some("margin") if std::env::var_os("OXI_S1651_DISABLE").is_some() => start_y + pos.y,
                             None if std::env::var_os("OXI_S1651_DISABLE").is_some() => cursor.cursor_y + pos.y,
                             _ => page.margin.top + pos.y,
