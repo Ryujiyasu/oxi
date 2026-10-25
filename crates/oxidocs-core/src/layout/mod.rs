@@ -16565,7 +16565,22 @@ cells={} pitch={:.2} text={:?}",
                             std::env::var("OXI_S1305_DISABLE").is_err()
                                 && std::env::var("OXI_S1306_DISABLE").is_err(),
                         );
-                        raw_max = metrics.word_line_height_no_grid(font_size);
+                        // OXI_SG0_BLANK_HHEA (2026-10-25, default ON, opt-out _DISABLE): a
+                        // Latin mark face prices the blank at its hhea natural, as every
+                        // other no-grid Latin line does (S671 body, S1574 cell);
+                        // `word_line_height_no_grid` floors the win sum to 0.5pt
+                        // (Century 9pt 10.50 for 10.84). `_pb_empty_snap0_gen.py`
+                        // (per-empty height over 8 blanks, Word PDF, one process per
+                        // document): see the archive 2026-10-25 for the table.
+                        // ja/forms__02157d72 p1: three such blanks between the floating
+                        // tables, -0.34 each on the blind-G line census.
+                        raw_max = if !metrics.is_cjk_83_64_font()
+                            && std::env::var_os("OXI_SG0_BLANK_HHEA_DISABLE").is_none()
+                        {
+                            metrics.natural_line_height_hhea(font_size)
+                        } else {
+                            metrics.word_line_height_no_grid(font_size)
+                        };
                     } else {
                         // S1298 FOURTH site. A snapToGrid=0 line in a typed grid
                         // returns from HERE, before the folds above are consulted,
