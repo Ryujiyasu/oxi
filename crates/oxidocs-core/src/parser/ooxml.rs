@@ -9161,7 +9161,17 @@ fn parse_drawing(
                                 let (cx, cy, cw, ch) = member_rect(w.off, w.ext);
                                 s839_text_children.push(TextBox {
                                     wrap_polygon: Vec::new(),
-                                    text_outline_inset: 0.0,
+                                    // OXI_WPG_CHILD_OUTLINE_INSET (2026-10-25, default ON, opt-out
+                                    // _DISABLE): the member's own `a:ln w`, halved, as for a stand-
+                                    // alone box (`_pb_txbx_cjk_base_gen.py`: +w/2 with noFill too).
+                                    // blind-G ja/policies__20069856: the two 52pt title members carry
+                                    // `<a:ln w="38100"><a:noFill/></a:ln>` -> +1.5; Oxi set them
+                                    // 1.53 high (and the 0.5pt members ~0.3 high).
+                                    text_outline_inset: if std::env::var_os("OXI_WPG_CHILD_OUTLINE_INSET_DISABLE").is_none() {
+                                        w.ln_w.unwrap_or(0.0).max(0.0) * 0.5
+                                    } else {
+                                        0.0
+                                    },
                                     vertical_text: text_vertical,
                                     blocks: std::mem::take(&mut w.blocks),
                                     inline: false,
