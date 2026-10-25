@@ -75,6 +75,10 @@ export function build_docx_with_template(content, template) {
     return v2;
 }
 
+export function clear_font_programs() {
+    wasm.clear_font_programs();
+}
+
 /**
  * Which cells one sheet's conditional rules catch, and the look each puts on.
  *
@@ -318,6 +322,16 @@ export function edit_xlsx_from_workbook(data, workbook) {
 }
 
 /**
+ * A successful registration changes both layout and painting together.
+ * Callers use this revision to relayout after asynchronous font loading.
+ * @returns {bigint}
+ */
+export function font_program_revision() {
+    const ret = wasm.font_program_revision();
+    return BigInt.asUintN(64, ret);
+}
+
+/**
  * Renders a number the way a sheet shows it under `format`.
  *
  * The browser used to carry its own reading of number formats; this is the
@@ -367,6 +381,61 @@ export function generate_hanko_svg(config) {
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
+}
+
+/**
+ * Painting commands are returned to the renderer in memory, independently
+ * from layout/source dumps. They are never stored as font data tables.
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @param {number} index
+ * @param {Float32Array} expected_bounds_em
+ * @returns {any}
+ */
+export function get_font_glyph_outline(family, bold, italic, index, expected_bounds_em) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(expected_bounds_em, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.get_font_glyph_outline(ptr0, len0, bold, italic, index, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Complete SFNT bytes for the CSS face; unlike PDF embedding, preserve the
+ * OTF wrapper around CFF tables. Returned bytes stay in the client memory.
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @returns {Uint8Array}
+ */
+export function get_registered_font_sfnt(family, bold, italic) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.get_registered_font_sfnt(ptr0, len0, bold, italic);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @returns {boolean}
+ */
+export function has_font_program(family, bold, italic) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.has_font_program(ptr0, len0, bold, italic);
+    return ret !== 0;
 }
 
 export function init() {
@@ -593,6 +662,43 @@ export function recalculate_spreadsheet(workbook, now) {
 }
 
 /**
+ * Register caller-supplied font bytes in memory. The face's own name table
+ * and style metadata must agree; no OS paths or family exception lists.
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @param {Uint8Array} bytes
+ * @param {number} face_index
+ */
+export function register_font_program(family, bold, italic, bytes, face_index) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.register_font_program(ptr0, len0, bold, italic, ptr1, len1, face_index);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @param {Uint8Array} bytes
+ */
+export function register_font_program_family(family, bold, italic, bytes) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.register_font_program_family(ptr0, len0, bold, italic, ptr1, len1);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
  * Rename a sheet across the whole workbook, so the live view stays right.
  *
  * The sheet's own name changes, and every formula that named it is rewritten
@@ -796,6 +902,24 @@ export function translate_formula(formula, rows, columns) {
     } finally {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
+}
+
+/**
+ * Resolve the requested name/style from the actual program's name tables,
+ * including every collection member. No filename or family exception map.
+ * @param {string} family
+ * @param {boolean} bold
+ * @param {boolean} italic
+ * @param {Uint8Array} bytes
+ * @returns {boolean}
+ */
+export function try_register_font_program_family(family, bold, italic, bytes) {
+    const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.try_register_font_program_family(ptr0, len0, bold, italic, ptr1, len1);
+    return ret !== 0;
 }
 
 /**
@@ -1206,6 +1330,14 @@ function getDataViewMemory0() {
     return cachedDataViewMemory0;
 }
 
+let cachedFloat32ArrayMemory0 = null;
+function getFloat32ArrayMemory0() {
+    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
+        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
+    }
+    return cachedFloat32ArrayMemory0;
+}
+
 function getStringFromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return decodeText(ptr, len);
@@ -1235,6 +1367,13 @@ function isLikeNone(x) {
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArrayF32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getFloat32ArrayMemory0().set(arg, ptr / 4);
     WASM_VECTOR_LEN = arg.length;
     return ptr;
 }
@@ -1316,6 +1455,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedDataViewMemory0 = null;
+    cachedFloat32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

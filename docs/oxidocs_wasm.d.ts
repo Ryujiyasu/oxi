@@ -34,6 +34,8 @@ export function build_docx(content: any): Uint8Array;
  */
 export function build_docx_with_template(content: any, template: Uint8Array): Uint8Array;
 
+export function clear_font_programs(): void;
+
 /**
  * Which cells one sheet's conditional rules catch, and the look each puts on.
  *
@@ -143,6 +145,12 @@ export function edit_xlsx(data: Uint8Array, edits: any): Uint8Array;
 export function edit_xlsx_from_workbook(data: Uint8Array, workbook: any): Uint8Array;
 
 /**
+ * A successful registration changes both layout and painting together.
+ * Callers use this revision to relayout after asynchronous font loading.
+ */
+export function font_program_revision(): bigint;
+
+/**
  * Renders a number the way a sheet shows it under `format`.
  *
  * The browser used to carry its own reading of number formats; this is the
@@ -158,6 +166,20 @@ export function format_cell_number(value: number, format: string): string;
  *   { name: "山田", style: "Round"|"Square"|"Oval", size: 100, date?: "2026.03.13" }
  */
 export function generate_hanko_svg(config: any): string;
+
+/**
+ * Painting commands are returned to the renderer in memory, independently
+ * from layout/source dumps. They are never stored as font data tables.
+ */
+export function get_font_glyph_outline(family: string, bold: boolean, italic: boolean, index: number, expected_bounds_em: Float32Array): any;
+
+/**
+ * Complete SFNT bytes for the CSS face; unlike PDF embedding, preserve the
+ * OTF wrapper around CFF tables. Returned bytes stay in the client memory.
+ */
+export function get_registered_font_sfnt(family: string, bold: boolean, italic: boolean): Uint8Array;
+
+export function has_font_program(family: string, bold: boolean, italic: boolean): boolean;
 
 export function init(): void;
 
@@ -233,6 +255,14 @@ export function read_macro_safety(_package: Uint8Array): any;
  * Cross-sheet references resolve, because the whole workbook goes across.
  */
 export function recalculate_spreadsheet(workbook: any, now?: number | null): any;
+
+/**
+ * Register caller-supplied font bytes in memory. The face's own name table
+ * and style metadata must agree; no OS paths or family exception lists.
+ */
+export function register_font_program(family: string, bold: boolean, italic: boolean, bytes: Uint8Array, face_index: number): void;
+
+export function register_font_program_family(family: string, bold: boolean, italic: boolean, bytes: Uint8Array): void;
 
 /**
  * Rename a sheet across the whole workbook, so the live view stays right.
@@ -324,6 +354,12 @@ export function slide_glyph_offsets(line: any, advances: any): any;
 export function translate_formula(formula: string, rows: number, columns: number): string;
 
 /**
+ * Resolve the requested name/style from the actual program's name tables,
+ * including every collection member. No filename or family exception map.
+ */
+export function try_register_font_program_family(family: string, bold: boolean, italic: boolean, bytes: Uint8Array): boolean;
+
+/**
  * Apply a batch of comment operations to a .docx:
  * { add: [ { author, initials?, date?, text, paragraph_index, char_start,
  *            char_end, resolved?, parent_index?, parent_para_id? } ],
@@ -339,12 +375,10 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly list_spreadsheet_vba_procedures: (a: number, b: number) => [number, number, number];
-    readonly run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
-    readonly read_macro_safety: (a: number, b: number) => [number, number, number];
     readonly break_slide_paragraph: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: any) => [number, number, number];
     readonly build_docx: (a: any) => [number, number, number, number];
     readonly build_docx_with_template: (a: any, b: number, c: number) => [number, number, number, number];
+    readonly clear_font_programs: () => void;
     readonly conditional_formats: (a: any, b: number) => [number, number, number];
     readonly create_blank_docx: () => [number, number];
     readonly create_pdf: (a: number, b: number, c: number, d: number) => [number, number];
@@ -358,8 +392,12 @@ export interface InitOutput {
     readonly edit_xlsx_from_workbook: (a: number, b: number, c: any) => [number, number, number, number];
     readonly format_cell_number: (a: number, b: number, c: number) => [number, number];
     readonly generate_hanko_svg: (a: any) => [number, number, number, number];
+    readonly get_font_glyph_outline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+    readonly get_registered_font_sfnt: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly has_font_program: (a: number, b: number, c: number, d: number) => number;
     readonly layout_document: (a: number, b: number) => [number, number, number];
     readonly layout_slide_shape: (a: any, b: any, c: any, d: any, e: number, f: number, g: any) => [number, number, number];
+    readonly list_spreadsheet_vba_procedures: (a: number, b: number) => [number, number, number];
     readonly parse_document: (a: number, b: number) => [number, number, number];
     readonly parse_pdf: (a: number, b: number) => [number, number, number];
     readonly parse_presentation: (a: number, b: number) => [number, number, number];
@@ -367,16 +405,22 @@ export interface InitOutput {
     readonly pdf_extract_text: (a: number, b: number) => [number, number, number, number];
     readonly pdf_verify_signatures: (a: number, b: number) => [number, number, number];
     readonly preview_hanko: (a: number, b: number) => [number, number];
+    readonly read_macro_safety: (a: number, b: number) => [number, number, number];
     readonly recalculate_spreadsheet: (a: any, b: number, c: number) => [number, number, number];
+    readonly register_font_program: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly register_font_program_family: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly rename_sheet: (a: any, b: number, c: number, d: number) => [number, number, number];
     readonly row_height_px: (a: number, b: number, c: number) => number;
+    readonly run_spreadsheet_vba: (a: any, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number];
     readonly set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
     readonly shift_band: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly slide_face_advance: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly slide_family_measurable: (a: number, b: number) => number;
     readonly slide_glyph_offsets: (a: any, b: any) => [number, number, number];
     readonly translate_formula: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly try_register_font_program_family: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly update_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
+    readonly font_program_revision: () => bigint;
     readonly init: () => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
