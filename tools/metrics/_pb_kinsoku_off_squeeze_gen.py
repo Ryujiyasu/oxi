@@ -33,6 +33,13 @@ STYLES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles %s><
           '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/><w:jc w:val="left"/></w:pPr></w:pPrDefault></w:docDefaults>'
           '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>') % W
 CELLS = 40
+RUN_LANG = os.environ.get("PB_RUN_LANG")
+JC = os.environ.get("PB_JC", "both")
+CSC = os.environ.get("PB_CSC", "compressPunctuation")
+GRID = os.environ.get("PB_GRID")
+IND_EXTRA = int(os.environ.get("PB_IND_EXTRA", "0"))
+BALANCE = os.environ.get("PB_BALANCE") == "1"
+LATIN_FONT = os.environ.get("PB_LATIN_FONT", "ＭＳ 明朝")  # ascii / hAnsi face  # <w:balanceSingleByteDoubleByteWidth/> (the S1585 probe had it)  # twips added to the right indent (sub-cell sweeps)  # docGrid type (lines / linesAndChars) with linePitch 360  # eastAsia lang on every run (en-US = no kinsoku at all)
 TEXTS = [
     "あ、" * 20 + "いうえお",
     "あ" * 38 + "、、" + "いうえお",
@@ -50,23 +57,78 @@ TEXTS = [
     (20, "あ" * 16 + "。あ、、" + "「うえお"),
     (20, "あ" * 16 + "。あ、、" + "いうえお"),
 ]
+if os.environ.get("PB_HALF") == "1":
+    # a half-width «a» needs half a cell: do the marks' blanks lend it?
+    TEXTS = [
+        "あ、" * 20 + "aうえお",             # twenty 、 on the line
+        "あ" * 39 + "、" + "aうえお",         # one 、
+        "あ" * 37 + "「あ」" + "aうえお",     # one pair of brackets
+        "あ" * 38 + "「あ" + "aうえお",       # one opening bracket
+        "あ" * 40 + "aうえお",               # no mark at all
+    ]
+if os.environ.get("PB_HALF") == "2":
+    # script and line length: half-width katakana vs Latin, 14-cell vs 40-cell lines
+    TEXTS = [
+        (40, "あ、" * 20 + "ｱうえお"),
+        (40, "あ" * 39 + "、" + "ｱうえお"),
+        (14, "あ" * 13 + "、" + "aうえお"),
+        (14, "あ" * 13 + "、" + "ｱうえお"),
+        (14, "あ" * 12 + "「あ」" + "aうえお"),
+        (40, "あ" * 38 + "、" + "abうえお"),
+        (40, "あ、" * 20 + "abうえお"),
+    ]
+if os.environ.get("PB_HALF") == "3":
+    # a Latin unit after kana carries an autospace gap (0.25em): is the gap, not the mark, the credit?
+    TEXTS = [
+        (40, "あ" * 39 + "abうえお"),            # gap + 1.0  (over 0.25)
+        (40, "あ" * 39 + "10うえお"),            # digits, same geometry
+        (40, "あ" * 38 + "、" + "abうえお"),     # no gap after 、, fits exactly (control)
+        (40, "あ" * 38 + "、い" + "abうえお"),   # gap + 、 (over 1.25)
+        (40, "あ" * 39 + "abcうえお"),           # gap + 1.5 (over 0.75)
+        (40, "あ" * 38 + "、" + "abcうえお"),    # 、 only (over 0.5)
+        (40, "あ" * 38 + "い" + "aうえお"),      # gap + 0.5 (over -0.25: fits) control
+        (40, "あ" * 39 + "aうえお"),             # gap + 0.5 (over 0.25... 39+0.25+0.5 = 39.75 fits) control
+    ]
+if os.environ.get("PB_HALF") == "6":
+    TEXTS = [(40, "あ" * 39 + "abうえお")]   # need 0.25 cell + PB_IND_EXTRA/200 cells, one gap
+if os.environ.get("PB_HALF") == "5":
+    # how much of the autospace gaps does a justified compat-15 line squeeze to keep its last word?
+    TEXTS = [
+        (40, "あ" * 39 + "abうえお"),              # need 0.25 cell, 1 gap, mid line
+        (40, "あ" * 39 + "ab"),                    # same, paragraph end (last line)
+        (40, "あ" * 38 + "aあbcうえお"),           # need 0.25, 3 gaps
+        (40, "あ" * 38 + "aあbcdうえお"),          # need 0.75, 3 gaps
+        (40, "あ" * 37 + "aあbあcdうえお"),        # need 0.75 + ... : 37+0.5+1+0.5+1+1 = 41 (+5 gaps 1.25) wraps anyway? -> need 2.25
+        (40, "あ" * 38 + "ab" + "あ" + "cうえお"),  # need 0.5 + 3 gaps 0.75: 38+1+1+0.5 = 40.5 -> over 1.25 with 3 gaps
+    ]
+if os.environ.get("PB_HALF") == "4":
+    # need vs the slack a wrap would leave: half-width ｱ before the word moves the wrap point
+    TEXTS = [
+        (40, "あ" * 38 + "、ｱ" + "abうえお"),    # need 0.5, wrap leaves 0.5 (tie)
+        (40, "あ" * 38 + "、ｱ" + "abcうえお"),   # need 1.0, wrap leaves 0.5
+        (40, "あ" * 37 + "、ｱ" + "abcうえお"),   # need 0.5, wrap leaves 1.0
+        (40, "あ" * 37 + "、ｱ" + "abcdうえお"),  # need 1.0, wrap leaves 1.0
+        (40, "あ" * 38 + "ｱ" + "abcうえお"),     # fits exactly (control)
+        (40, "あ" * 38 + "、" + "a bcうえお"),    # 'a' fits, 'bc' needs 1.0 after a space
+    ]
 
 
 def build(compat, koff):
-    settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings %s><w:characterSpacingControl w:val="compressPunctuation"/>'
-                '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="%d"/></w:compat></w:settings>') % (W, compat)
+    settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings %s><w:characterSpacingControl w:val="%s"/>%s'
+                '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="%d"/></w:compat></w:settings>') % (W, CSC, '<w:balanceSingleByteDoubleByteWidth/>' if BALANCE else '', compat)
     styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles %s><w:docDefaults><w:rPrDefault><w:rPr>'
-              '<w:rFonts w:ascii="ＭＳ 明朝" w:hAnsi="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝"/><w:sz w:val="20"/><w:lang w:val="en-US" w:eastAsia="ja-JP"/>'
-              '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/><w:jc w:val="both"/></w:pPr></w:pPrDefault></w:docDefaults>'
-              '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>') % W
-    body = "".join('<w:p><w:pPr>%s<w:ind w:right="%d"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p><w:p/>'
-                   % ('<w:kinsoku w:val="0"/>' if koff else '', 9026 - (t[0] if isinstance(t, tuple) else CELLS) * 200,
+              '<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="ＭＳ 明朝"/><w:sz w:val="20"/><w:lang w:val="en-US" w:eastAsia="ja-JP"/>'
+              '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/><w:jc w:val="%s"/></w:pPr></w:pPrDefault></w:docDefaults>'
+              '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>') % (W, LATIN_FONT, LATIN_FONT, JC)
+    body = "".join('<w:p><w:pPr>%s<w:ind w:right="%d"/></w:pPr><w:r>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p><w:p/>'
+                   % ('<w:kinsoku w:val="0"/>' if koff else '', 9026 - (t[0] if isinstance(t, tuple) else CELLS) * 200 + IND_EXTRA,
+                      '<w:rPr><w:lang w:eastAsia="%s"/></w:rPr>' % RUN_LANG if RUN_LANG else '',
                       t[1] if isinstance(t, tuple) else t) for t in TEXTS)
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document %s><w:body>%s'
-           '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440"/></w:sectPr></w:body></w:document>'
-           % (W, body))
+           '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440"/>%s</w:sectPr></w:body></w:document>'
+           % (W, body, '<w:docGrid w:type="%s" w:linePitch="360"/>' % GRID if GRID else ''))
     os.makedirs(OUT, exist_ok=True)
-    path = os.path.join(OUT, "ks_c%d_%s.docx" % (compat, "off" if koff else "on"))
+    path = os.path.join(OUT, "ks_c%d_%s%s%s.docx" % (compat, "off" if koff else "on", "_" + RUN_LANG if RUN_LANG else "", "_half" + os.environ.get("PB_HALF", "") + ("_x%d" % IND_EXTRA if IND_EXTRA else "") + ("_bal" if BALANCE else "") + ("_" + LATIN_FONT.replace(" ", "") if LATIN_FONT != "ＭＳ 明朝" else "") if os.environ.get("PB_HALF") else "") if JC == "both" and CSC == "compressPunctuation" and not GRID else "ks_c%d_%s_%s_%s_%s%s.docx" % (compat, "off" if koff else "on", RUN_LANG or "ja", JC, CSC, "_grid" + GRID if GRID else ""))
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", CT); z.writestr("_rels/.rels", RELS)
         z.writestr("word/_rels/document.xml.rels", DRELS); z.writestr("word/styles.xml", styles)

@@ -767,6 +767,9 @@ impl<'a> LineBreaker<'a> {
         // read inside flush_word).
         let s1346_regime_credit: std::cell::Cell<i32> = std::cell::Cell::new(0);
         let word_full_punctuation_credit = std::cell::Cell::new(false);
+        // OXI_JSHRINK_MID_OWN_GAP: true only for the flush after the last fragment, i.e. when
+        // the word ends the paragraph and its line is the (left-set) last line.
+        let final_flush = std::cell::Cell::new(false);
         // S1585 (2026-09-27, default ON, opt-out OXI_S1585_DISABLE): a JUSTIFIED
         // CJK line squeezes its autoSpace gaps (and mid-line ideographic spaces)
         // to keep its last unit. `_pb_cjk_jshrink_gen.py` (MS Mincho 10.5 +
@@ -944,7 +947,25 @@ impl<'a> LineBreaker<'a> {
                         let (g0, mid_sp) = s1585_counts(&line_chars);
                         let gap_before = line_chars.last().map_or(false, |&c| kinsoku::is_cjk(c) && c != '\u{3000}');
                         let g = g0 + gap_before as usize;
-                        let gap_part = s1585_gap_part(g, fs);
+                        // OXI_JSHRINK_MID_OWN_GAP (2026-10-25, default ON, opt-out _DISABLE): the
+                        // S1585 sweeps were one-line paragraphs, so every justified line they
+                        // measured was the paragraph's LAST line. `_pb_jshrink_mid_gen.py`
+                        // (10.5pt, compat 15, 1-twip sweeps, a CJK tail making the measured line
+                        // a mid line, one Word process per document): a Latin word with its own
+                        // leading gap is kept by HALF the gap on the last line (1.30, Century
+                        // and ＭＳ 明朝 alike -- S1585's G=1 value) and by the WHOLE gap on a
+                        // mid line (2.50 / 2.65); the CJK-unit series (one island 1.95-2.00,
+                        // two islands 2.60) and the no-gap control (0) are the same on both.
+                        // With an island earlier on the line as well (three gaps) the last line
+                        // gives 3.40 / 3.85 and the mid line 4.15 / 5.05: the word's OWN gap
+                        // (half on the last line, whole on a mid line) on top of the CJK-unit
+                        // series taken over the OTHER gaps -- G=1 last stays S1585's 1.31.
+                        let gap_part = if std::env::var_os("OXI_JSHRINK_MID_OWN_GAP_DISABLE").is_none() {
+                            s1585_gap_part(g0, fs)
+                                + if gap_before { if final_flush.get() { fs / 8.0 } else { fs / 4.0 } } else { 0.0 }
+                        } else {
+                            s1585_gap_part(g, fs)
+                        };
                         let sp_cap = 0.25 * mid_sp as f32 * fs + gap_part;
                         let last = 0.31 * (word_width + if gap_before { fs / 4.0 } else { 0.0 });
                         pt_to_tw(sp_cap.min(gap_part.max(last)))
@@ -6971,6 +6992,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // path inside the macro is the same break/push logic as the original inline flush.
         if !word.is_empty() {
             let fallback_style = fragments.last().map(|f| f.1.clone()).unwrap_or_default();
+            final_flush.set(true);
             flush_word!(fallback_style);
         }
 
