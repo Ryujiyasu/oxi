@@ -10791,7 +10791,17 @@ impl<'a> TableFitLayouter<'a> {
                         eprintln!("[S1192] FOLD row={} key={} rem={:.2} here={} next={}",
                             row_idx, ci, remaining, here_cont, next_cont);
                     }
-                    if here_cont && !next_cont {
+                    // OXI_EXACT_ROW_NO_VMERGE_GROW (2026-10-25, default ON, opt-out _DISABLE):
+                    // an EXACT row closing a vertical merge keeps its exact height -- the
+                    // merged cell's leftover content is clipped, as in a plain exact cell.
+                    // ja/forms__02157d72 p1 (緊急連絡先 table, Word PDF borders 338.2 /
+                    // 350.8 / 373.4 / 447.1): the exact 454tw «氏名» row closing the two-row
+                    // «続柄» merge (two 游明朝 paragraphs, 38.9 > 35.05) is 22.6 in Word;
+                    // Oxi stretched it to 27.15 and set the 16 lines below 4.5 low (blind-G
+                    // line census). `_pb_exact_row_valign_gen.py` exact_vmerge_over arm.
+                    if here_cont && !next_cont
+                        && !(is_exact_row && std::env::var_os("OXI_EXACT_ROW_NO_VMERGE_GROW_DISABLE").is_none())
+                    {
                         let remaining = vmerge_absolute_ends.get(ci).map(|end| {
                             end - (pages.len() as f32 * vmerge_coordinate_stride + cursor.visual_y)
                         }).unwrap_or(*remaining);
