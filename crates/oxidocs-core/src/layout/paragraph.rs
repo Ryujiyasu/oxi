@@ -7532,12 +7532,39 @@ impl<'a> ParagraphLayouter<'a> {
                         _ => base,
                     }
                 };
+                // OXI_SCRIPT_NOT_MIXED (2026-10-25, default ON, opt-out _DISABLE): a
+                // super/subscript drawn SMALLER than the line's other runs sits inside
+                // their box and does not change the line's baseline, so it does not make
+                // the line "mixed". `_pb_sup_line_gen.py` (ＭＳ 明朝 9 / 10.5 / 14pt x no
+                // grid / lines 360 x snapToGrid 1 / 0): a superscript «1» in ＭＳ 明朝 or
+                // Century, with or without a normal-size Century space, leaves Word's
+                // first baseline exactly where the plain line has it; Oxi dropped the
+                // superscript + Century-space arm 1.17-1.65 (the shared baseline took the
+                // space's Latin ascent), every other arm already matched. blind-G
+                // ja/educational__20aa108d: the footnote «¹ 本稿における…» +1.19.
+                // Scope: lines that do not snap to a grid. On a grid-snapped line the
+                // mixed-size stack also places the script (removing it from the test
+                // there moved ＭＳ superscripts 2.1-3.4 off); that line keeps its
+                // shared baseline -- an open item (supcs on lines 360: +1.1-1.7).
+                let script_not_mixed = std::env::var_os("OXI_SCRIPT_NOT_MIXED_DISABLE").is_none()
+                    && (grid_pitch.is_none() || !para.style.snap_to_grid);
+                let is_script = |f: &LineFragment| matches!(
+                    f.style.vertical_align,
+                    Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)
+                );
+                let plain_max = line.fragments.iter()
+                    .filter(|f| !f.text.is_empty() && !is_script(f))
+                    .map(|f| set_size(f))
+                    .fold(0.0_f32, f32::max);
                 let mut seen: Option<f32> = None;
                 line.fragments.iter().any(|f| {
                     if f.text.is_empty() {
                         return false;
                     }
                     let fs = set_size(f);
+                    if script_not_mixed && is_script(f) && plain_max > 0.0 && fs <= plain_max + 0.01 {
+                        return false;
+                    }
                     match seen {
                         None => {
                             seen = Some(fs);
@@ -7902,6 +7929,33 @@ impl<'a> ParagraphLayouter<'a> {
                         Some(r) if !frag_metrics.is_cjk_83_64_font() && !frag.text.trim().is_empty() =>
                             r - frag_metrics.baseline_ascent() * resolved_font_size,
                         _ => 0.0,
+                    };
+                // OXI_SCRIPT_NOT_MIXED (2): the script glyph itself keeps the drop the
+                // shared-baseline path gave it (plain runs' max ascent - its own set
+                // ascent), so the superscript sits where it did and only the plain runs
+                // move. Without this its baseline rose by that difference (ＭＳ 9pt: 2.58).
+                // Not on a grid-snapped line: the grid stack places the script on its own
+                // (snapped arms kept the 3.0 rise without this; adding it sank them 1.2-3.8).
+                let baseline_adjust = baseline_adjust
+                    + if std::env::var_os("OXI_SCRIPT_NOT_MIXED_DISABLE").is_none()
+                        && !line_has_mixed_sizes
+                        && (grid_pitch.is_none() || !para.style.snap_to_grid)
+                        && matches!(frag.style.vertical_align,
+                            Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript))
+                    {
+                        let plain_max = line.fragments.iter()
+                            .filter(|f| !f.text.is_empty() && !matches!(f.style.vertical_align,
+                                Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)))
+                            .map(|f| self.metrics_for_text(&f.text, &f.style, &para.style).baseline_ascent()
+                                * f.style.font_size.unwrap_or(para_font_size))
+                            .fold(0.0_f32, f32::max);
+                        if plain_max > 0.0 {
+                            (plain_max - frag_metrics.baseline_ascent() * resolved_font_size).max(0.0)
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
                     };
                 let baseline_adjust = baseline_adjust + line_ascent_growth
                     + if std::env::var("OXI_S1358_DISABLE").is_err()
