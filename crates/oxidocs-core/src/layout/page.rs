@@ -8042,7 +8042,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let s1580_foot_done = std::env::var_os("OXI_S1580_DISABLE").is_none()
                         && self.s1191_on()
                         && self.s1191_table_needs_foot(table);
-                    if !is_floating
+                    // OXI_FLOAT_BOTTOM_RULE (2026-10-25, default ON, opt-out _DISABLE): a
+                    // FLOATING table's bottom rule takes the same room. `_pb_floattbl_bottom
+                    // _gen.py` (text-anchored full-width float, two exact rows, Word PDF):
+                    // the pushed-below anchor paragraph starts at the last rule + 0.48 /
+                    // 1.56 / 3.00 for sz 4 / 12 / 24 against the borderless arm, the inline
+                    // twins 0.48 / 1.56 / 3.00, on linesAndChars / lines / no grid alike and
+                    // with the edges as tblBorders or as tcBorders on every cell. Oxi floats
+                    // sat at the rule itself wherever this block would have advanced an
+                    // inline table (tblBorders on linesAndChars; tcBorders on every grid);
+                    // where it would not (tblBorders on lines / no grid) the Bug A start
+                    // shift already stands in for floats too (91.05 vs 91.10). So the one
+                    // gate that differed was `!is_floating`. ja/forms__02157d72 p1: three
+                    // tcBorders floats, -0.5 below each.
+                    if (!is_floating || std::env::var_os("OXI_FLOAT_BOTTOM_RULE_DISABLE").is_none())
                         && !s1580_foot_done
                         && std::env::var_os("OXI_S1452_DISABLE").is_none()
                         && !matches!(page.blocks.get(block_idx + 1), Some(Block::Table(_)))
