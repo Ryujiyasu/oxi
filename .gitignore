@@ -100,3 +100,9 @@ editors/vscode/*.vsix
 
 # wrangler keeps its local state beside the Worker it deploys.
 services/feedback/.wrangler/
+
+# The site engine is built by the GitLab Pages job (.gitlab-ci.yml), not committed.
+docs/oxidocs_wasm.js
+docs/oxidocs_wasm_bg.wasm
+docs/oxidocs_wasm.d.ts
+docs/oxidocs_wasm_bg.wasm.d.ts

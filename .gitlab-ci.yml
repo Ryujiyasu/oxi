@@ -19,15 +19,37 @@
 stages:
   - deploy
 
-# The site is a copy of `docs/` and needs no toolchain to assemble, so it does
-# not pull the Rust image the build jobs used to want.
+# The site is `docs/` plus the WebAssembly engine, built here from the same
+# commit. The engine used to be committed into `docs/` by hand, which put a
+# 50-80 MB binary into the repository history on every site update and let the
+# demo drift from the source it claims to run. Building it here keeps the
+# history free of it and makes the demo exactly the commit it was deployed from.
+#
+# The full suite is built (`--features suite`): the Word, Excel and PowerPoint
+# demo pages all load this one module. If the build fails the job fails and
+# Pages keeps serving the previous deploy, so a broken toolchain cannot take the
+# site down.
 pages:
   stage: deploy
-  image: alpine:3
+  image: rust:latest
   needs: []
+  variables:
+    WASM_PACK_VERSION: "v0.15.0"
+    CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  cache:
+    key: wasm-pages
+    paths:
+      - .cargo/registry
+      - target
   script:
+    - rustup target add wasm32-unknown-unknown
+    - curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin --strip-components=1 "wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack"
+    - wasm-pack --version
+    - (cd crates/oxidocs-wasm && wasm-pack build --target web --release -- --features suite)
     - mkdir -p public
     - cp -r docs/* public/
+    - cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm crates/oxidocs-wasm/pkg/oxidocs_wasm.d.ts crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm.d.ts public/
+    - ls -la public/oxidocs_wasm_bg.wasm
   artifacts:
     paths:
       - public
