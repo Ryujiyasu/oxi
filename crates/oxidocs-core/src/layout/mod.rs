@@ -22533,6 +22533,22 @@ cells={} pitch={:.2} text={:?}",
                             );
                         }
                         metrics.natural_line_height_hhea(font_size)
+                    } else if in_cell
+                        && metrics.is_cjk_83_64_font()
+                        && self.rowbox2_raw()
+                        && std::env::var_os("OXI_MS_CELL_EXACT_EST_DISABLE").is_none()
+                    {
+                        // OXI_MS_CELL_EXACT_EST (2026-10-25, default ON, opt-out _DISABLE): the
+                        // row is max(estimate, emitted line) and the emitted 83/64 cell line is
+                        // the exact win box (ROWBOX2 raw), so S499's pixel tombstone only ever
+                        // mattered where it EXCEEDS that line -- 11pt (15px -> 14.50 vs 14.27)
+                        // and 12.5pt (16.50 vs 16.21). `_pb_cell_nogrid_lh_gen.py` (compat 15,
+                        // ＭＳ ゴシック / 明朝 x 9 / 10.5 / 11 / 12 / 12.5pt x lang ja / en x no grid /
+                        // lines 360, 8 single-line rows): Word's row pitch is 83/64 x fs + 0.48
+                        // at every size (11pt 14.775); Oxi matched all but 11pt (15.000).
+                        // blind-G ja/legal__0e9cf147: four 11pt rows, the notes below +1.1-1.2.
+                        metrics.word_line_height_no_grid(font_size)
+                            + self.symbol_chain_extra(&run.text, metrics, font_size)
                     } else {
                         metrics.word_line_height_table_cell(font_size)
                             + self.symbol_chain_extra(&run.text, metrics, font_size)
