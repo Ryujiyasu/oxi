@@ -3694,8 +3694,18 @@ impl<'a> LineBreaker<'a> {
                 // fit_text SCALE mode (natural > target, text_scale<100) keeps charGrid
                 // padding — otherwise scaled CJK chars in table cells become narrower
                 // than the grid pitch, shifting downstream content (3a4f regression).
+                // OXI_FIT_EXPAND_LAST (default ON, opt-out _DISABLE): the group's
+                // LAST character -- split off with cs 0 so no tracking trails it --
+                // belongs to the expand group too (expand = no text_scale), and
+                // takes no grid padding either. blind-I ja/correspondence__17884aa3:
+                // «校長　　寺﨑　晶子» / «６年担任» fitText 2540 (127pt) in a 127.3pt
+                // first line on a linesAndChars grid -- the padded last glyph (+2.2)
+                // pushed the group to 129.2 and wrapped «子» / «任» (Word: one line,
+                // last glyph at 548.1, end 559.1), two lines per page.
                 let fit_text_expand = style.fit_text.is_some()
-                    && style.character_spacing.map_or(false, |cs| cs > 0.01);
+                    && (style.character_spacing.map_or(false, |cs| cs > 0.01)
+                        || (style.text_scale.is_none()
+                            && std::env::var_os("OXI_FIT_EXPAND_LAST_DISABLE").is_none()));
                 // S1347: the run's w:w scale factor for the grid cell (see below).
                 let s1347_scale = if std::env::var("OXI_S1347_DISABLE").is_err()
                     && style.fit_text.is_none()
