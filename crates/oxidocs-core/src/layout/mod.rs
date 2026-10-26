@@ -19123,6 +19123,46 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
+            // OXI_FIXED_PCT_GRID (default ON, opt-out _DISABLE): a FIXED-layout table
+            // whose tblW is a percentage is that share of the text width, its grid
+            // columns scaled in proportion. `_pb_tbl_pct_grid_gen.py` (blind-I
+            // en/reference__00f0e7f3, tabloid calendar, grid 300 / 300 / 4400 tw =
+            // 250pt): Word draws 100% at 72..1152.9 with the rules at 136.7 / 201.6
+            // (64.8 each) and 50% at 72..612.4 (32.4 each), compat 12 and 15 alike;
+            // tblW in dxa keeps the 250pt grid. Oxi kept the grid at 100% too, so
+            // the day-name column was one glyph wide and one page ran to three.
+            // (An autofit pct table also takes the share, but sizes its columns
+            // from their content -- not this rule.)
+            if std::env::var_os("OXI_FIXED_PCT_GRID_DISABLE").is_none()
+                && table.style.layout.as_deref() == Some("fixed")
+                && table.style.width_type.as_deref() == Some("pct")
+                && table.style.position.is_none()
+                // Measured on body tables only.
+                && !is_nested
+            {
+                // The base is the text width, plus the table's own left and right cell
+                // margins before compat 15 (where the table stands out by them):
+                // compat 14 00156ad9 / 005a4bdb (text + 10.8) x 86.3% / 92.1% = their
+                // 400.7 / 401.8pt grids, which Word keeps; compat 12 00f0e7f3, no table
+                // style, 0.5pt margins: (1080 + 1.0) x 100% = Word's 1080.9, and the
+                // same file at compat 15 1080.0; compat 15 00870bdf: 468 x 98.26% =
+                // 459.9 (Word 459.5, its grid 459.35).
+                let margins = table.style.default_cell_margins.as_ref();
+                let lr = if self.table_modern_compat() {
+                    0.0
+                } else {
+                    margins.and_then(|m| m.left).unwrap_or(5.4) + margins.and_then(|m| m.right).unwrap_or(5.4)
+                };
+                let share = table.style.width.unwrap_or(0.0);
+                let sum: f32 = grid_cols.iter().sum();
+                let target = (content_width + lr) * share / 100.0;
+                if share > 0.0 && sum > 0.0 && target > 0.0 && (target - sum).abs() > 0.5 {
+                    let k = target / sum;
+                    for w in &mut grid_cols {
+                        *w *= k;
+                    }
+                }
+            }
             let table_grid_columns = &grid_cols;
             let total: f32 = table_grid_columns.iter().sum();
             let indent = table.style.indent.unwrap_or(0.0);
