@@ -513,3 +513,11 @@ pub(crate) fn registered_rule_thickness(family: &str, bold: bool, italic: bool) 
     let thickness = face.underline_metrics()?.thickness;
     (thickness > 0).then(|| f32::from(thickness)/f32::from(face.units_per_em()))
 }
+
+pub(crate) fn registered_strikeout(family: &str, bold: bool, italic: bool) -> Option<(f32, f32)> {
+    let font = memory_font(family, bold, italic)?;
+    let face = rustybuzz::ttf_parser::Face::parse(&font.bytes, font.face_index).ok()?;
+    let metrics = face.strikeout_metrics()?;
+    let upm = f32::from(face.units_per_em());
+    (metrics.thickness > 0).then(|| (f32::from(metrics.position) / upm, f32::from(metrics.thickness) / upm))
+}

@@ -11392,11 +11392,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         } else {
                             144.0_f32.min(hdr_width)
                         };
+                        // OXI_FN_RULE_STRIKE (default ON, opt-out _DISABLE): the rule is
+                        // the strikeout stroke of the separator paragraph's own line,
+                        // which ends where the first note begins. `_pb_fn_rule_gen.py`
+                        // (20aa108d slices, 18 arms): Word's rule top = that line's
+                        // baseline - OS/2 yStrikeoutPosition x size, its thickness
+                        // yStrikeoutSize x size, within 0.15pt for Century / Arial /
+                        // Times 20 / Calibri / ＭＳ 明朝 / 游明朝 / メイリオ at 8-20pt,
+                        // exact / atLeast / double lines, after 12 (rises 12) and
+                        // before 12 (no change); grid or no grid. Oxi drew a 1pt bar at
+                        // the top of the reservation (20aa108d: 642.16 vs Word 649.80).
+                        let (rule_y, rule_h) = match self.footnote_separator_rule(page) {
+                            Some((offset, thickness)) =>
+                                (area_top + separator_h + separator_pad + offset, thickness),
+                            None => (area_top, 1.0),
+                        };
                         lp.elements.push(LayoutElement::new(
                             hdr_x,
-                            area_top,
+                            rule_y,
                             sep_w,
-                            1.0,
+                            rule_h,
                             LayoutContent::BoxRect {
                                 fill: Some("#000000".to_string()),
                                 stroke_color: None,
@@ -11493,5 +11508,75 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         }
 
         pages
+    }
+
+    /// The footnote rule as the strikeout stroke of the separator paragraph's
+    /// line (OXI_FN_RULE_STRIKE): (rule top relative to the first note's top,
+    /// thickness). The line is laid out as an ordinary footnote paragraph with
+    /// one glyph in the separator run's style, so its box and baseline follow
+    /// the same font and spacing rules as text; it ends where the first note
+    /// begins. None (the legacy bar) for a custom separator with text or more
+    /// than one paragraph, or a face without strikeout metrics.
+    fn footnote_separator_rule(&self, page: &Page) -> Option<(f32, f32)> {
+        if std::env::var_os("OXI_FN_RULE_STRIKE_DISABLE").is_some() {
+            return None;
+        }
+        let note = page.footnotes.iter().find(|n| n.number == u32::MAX)?;
+        let [Block::Paragraph(separator)] = note.blocks.as_slice() else { return None };
+        if !separator.runs.iter().all(|r| r.text.trim().is_empty()) {
+            return None;
+        }
+        let mut line = separator.clone();
+        line.runs.first_mut()?.text = "x".to_string();
+        let lay_out = |line: &Paragraph| self.footnote_layout_plan(
+            &Footnote { automatic_numbering: false, number: u32::MAX, blocks: vec![Block::Paragraph(line.clone())] },
+            0, page, None);
+        // The separator's line is the run's ASCII face alone: `_pb_fn_rule_gen.py`
+        // eagothic (eastAsia ＭＳ ゴシック) draws where asis does, and asis in a
+        // Japanese document sits on Century's own descent, not on the ＭＳ 明朝
+        // box a Latin letter's line takes there. So lay it out once to learn the
+        // face, then again with that face in every slot.
+        let (elements, _) = lay_out(&line);
+        let face = elements.iter().find_map(|e| match &e.content {
+            LayoutContent::Text { font_family: Some(family), .. } => Some(family.clone()),
+            _ => None,
+        })?;
+        for run in &mut line.runs {
+            run.style.font_family = Some(face.clone());
+            run.style.font_family_east_asia = Some(face.clone());
+        }
+        if let Some(mark) = line.style.ppr_rpr.as_mut() {
+            mark.font_family = Some(face.clone());
+            mark.font_family_east_asia = Some(face.clone());
+        }
+        let (elements, height) = lay_out(&line);
+        let line_rule = line.style.line_spacing_rule.as_deref();
+        let line_factor = line.style.line_spacing.unwrap_or(1.0);
+        let (baseline, size, family, bold, italic) = elements.iter().find_map(|e| match &e.content {
+            LayoutContent::Text { font_size, font_family, bold, italic, .. } if *font_size > 0.0 => {
+                let family = font_family.as_deref().unwrap_or("Calibri");
+                let metrics = self.registry.get(family);
+                // A Latin face on an auto line takes the Latin law (S1047: line
+                // top + baseline ascent) in a Japanese document too -- asis's
+                // Century line sits on Century's own descent in Word -- while
+                // the body's Latin law is scoped to Latin documents.
+                let latin_auto = !metrics.is_cjk_83_64_font()
+                    && matches!(line_rule, None | Some("auto"))
+                    && line_factor >= 0.999;
+                let baseline = match e.baseline_offset {
+                    Some(b) => e.y + b,
+                    None if latin_auto => e.y + metrics.baseline_ascent() * font_size,
+                    None => e.y + e.text_y_off - 1.0 + metrics.baseline_ascent() * font_size,
+                };
+                Some((baseline, *font_size, family.to_string(), *bold, *italic))
+            }
+            _ => None,
+        })?;
+        let strikeout = crate::font::catalog_glyph_strikeout(&family, bold, italic);
+        if std::env::var_os("OXI_FN_PROBE").is_some() {
+            eprintln!("[FN_RULE] face={family} size={size} baseline={baseline:.3} height={height:.3} strikeout={strikeout:?} elems={:?}", elements.iter().map(|e| (e.y, e.height, e.text_y_off, e.baseline_offset)).collect::<Vec<_>>());
+        }
+        let (position, thickness) = strikeout?;
+        Some((baseline - position * size - height, thickness * size))
     }
 }

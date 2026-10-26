@@ -495,6 +495,11 @@ pub(crate) fn glyph_face_metrics(family:&str,bold:bool,italic:bool)->Option<supe
 struct RuleFaceMetrics {
     units_per_em: u16,
     underline_thickness: i16,
+    #[serde(default)]
+    strikeout_thickness: Option<i16>,
+    /// OS/2 yStrikeoutPosition: the top of the strikeout stroke above the baseline.
+    #[serde(default)]
+    strikeout_position: Option<i16>,
 }
 
 #[derive(Deserialize)]
@@ -509,6 +514,25 @@ pub(crate) fn glyph_rule_thickness(family: &str, bold: bool, italic: bool) -> Op
     if super::runtime::resolve_registered(family, bold, italic).is_some() {
         return super::runtime::registered_rule_thickness(family, bold, italic);
     }
+    let raw = rule_face_metrics(family, bold, italic)?;
+    if raw.units_per_em == 0 || raw.underline_thickness <= 0 { return None; }
+    Some(f32::from(raw.underline_thickness) / f32::from(raw.units_per_em))
+}
+
+/// OS/2 strikeout stroke of the same selected face, em-normalized:
+/// (top of the stroke above the baseline, thickness). Absent when unmeasured.
+pub(crate) fn glyph_strikeout(family: &str, bold: bool, italic: bool) -> Option<(f32, f32)> {
+    if super::runtime::resolve_registered(family, bold, italic).is_some() {
+        return super::runtime::registered_strikeout(family, bold, italic);
+    }
+    let raw = rule_face_metrics(family, bold, italic)?;
+    let (position, thickness) = (raw.strikeout_position?, raw.strikeout_thickness?);
+    if raw.units_per_em == 0 || thickness <= 0 { return None; }
+    let upm = f32::from(raw.units_per_em);
+    Some((f32::from(position) / upm, f32::from(thickness) / upm))
+}
+
+fn rule_face_metrics(family: &str, bold: bool, italic: bool) -> Option<&'static RuleFaceMetrics> {
     static RULES: OnceLock<RuleMetricIndex> = OnceLock::new();
     let rules = RULES.get_or_init(|| {
         let index: RuleMetricIndex = serde_json::from_str(include_str!("data/font_rule_metrics.json"))
@@ -520,7 +544,5 @@ pub(crate) fn glyph_rule_thickness(family: &str, bold: bool, italic: bool) -> Op
     let name = family.trim().to_lowercase();
     let i = catalog.select(&name, bold, italic)
         .or_else(|| catalog.select(&name, false, false))?;
-    let raw = rules.faces.get(&catalog.faces[i].key)?;
-    if raw.units_per_em == 0 || raw.underline_thickness <= 0 { return None; }
-    Some(f32::from(raw.underline_thickness) / f32::from(raw.units_per_em))
+    rules.faces.get(&catalog.faces[i].key)
 }
