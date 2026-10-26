@@ -7608,6 +7608,36 @@ impl<'a> ParagraphLayouter<'a> {
                     mixed && (!cjk || (matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"))
                         && std::env::var_os("OXI_ATLEAST_UNION_CELL_DISABLE").is_none()))
                 });
+            // OXI_GRID_SCRIPT_NOT_MIXED (default ON, opt-out _DISABLE): on a
+            // grid-snapped auto line whose runs share one size apart from its
+            // super/subscripts, the plain runs stay where the plain line has them
+            // (the shared-baseline drop is for the script alone).
+            // `_pb_sup_line_gen.py` lines 360, snapToGrid 1, ＭＳ 明朝 9 / 10.5 / 14:
+            // a Century superscript «1» plus a normal-size Century space or «A»
+            // (supcs / supcA) leaves Word's body baseline on the plain line's
+            // (84.26 / 84.86 / 95.06); Oxi took the shared baseline from the
+            // Century run's ascent and dropped the body 1.11 / 1.24 / 1.74. The
+            // script's own position is not changed here.
+            let is_script_fragment = |f: &LineFragment| matches!(
+                f.style.vertical_align,
+                Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)
+            );
+            let grid_script_only_mix = std::env::var_os("OXI_GRID_SCRIPT_NOT_MIXED_DISABLE").is_none()
+                && line_has_mixed_sizes
+                && !page.doc_grid_no_type
+                && para.style.snap_to_grid
+                && grid_pitch.is_some_and(|p| p > 0.0)
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                && line.fragments.iter().any(|f| !f.text.is_empty() && is_script_fragment(f))
+                && {
+                    let mut sizes = line.fragments.iter()
+                        .filter(|f| !f.text.is_empty() && !is_script_fragment(f))
+                        .map(|f| f.style.font_size.unwrap_or(para_font_size));
+                    match sizes.next() {
+                        Some(first) => sizes.all(|fs| (fs - first).abs() <= 0.01),
+                        None => false,
+                    }
+                };
 
             // OXI_GRID_MIXED_FACE_BASELINE (2026-10-20, default ON, opt-out _DISABLE):
             // on a typed-grid AUTO line that carries a CJK 83/64 face, the Latin
@@ -7617,7 +7647,7 @@ impl<'a> ParagraphLayouter<'a> {
             // Word's PDF has both faces at 220.70 / 405.29 / 565.87 (p1) and 125.06 (p2);
             // Oxi drew Century 3.0 / 2.3 / 2.3 / 2.3pt lower -- 72 such lines.
             let grid_mixed_cjk_ref: Option<f32> = if std::env::var_os("OXI_GRID_MIXED_FACE_BASELINE_DISABLE").is_none()
-                && !line_has_mixed_sizes
+                && (!line_has_mixed_sizes || grid_script_only_mix)
                 && !page.doc_grid_no_type
                 && para.style.snap_to_grid
                 && grid_pitch.is_some_and(|p| p > 0.0)
@@ -7625,7 +7655,9 @@ impl<'a> ParagraphLayouter<'a> {
             {
                 let mut cjk_ref: f32 = 0.0;
                 let mut has_latin = false;
-                for f in line.fragments.iter().filter(|f| !f.text.trim().is_empty()) {
+                for f in line.fragments.iter().filter(|f| !f.text.trim().is_empty())
+                    .filter(|f| !(grid_script_only_mix && is_script_fragment(f)))
+                {
                     let m = self.metrics_for_text(&f.text, &f.style, &para.style);
                     if m.is_cjk_83_64_font() {
                         cjk_ref = cjk_ref.max(m.baseline_ascent() * f.style.font_size.unwrap_or(para_font_size));
@@ -7926,7 +7958,8 @@ impl<'a> ParagraphLayouter<'a> {
                 // same-size line is left exactly where it was.
                 let baseline_adjust = baseline_adjust
                     + match grid_mixed_cjk_ref {
-                        Some(r) if !frag_metrics.is_cjk_83_64_font() && !frag.text.trim().is_empty() =>
+                        Some(r) if !frag_metrics.is_cjk_83_64_font() && !frag.text.trim().is_empty()
+                            && !(grid_script_only_mix && is_script_fragment(frag)) =>
                             r - frag_metrics.baseline_ascent() * resolved_font_size,
                         _ => 0.0,
                     };
@@ -7965,6 +7998,7 @@ impl<'a> ParagraphLayouter<'a> {
                         // differ by their ascents, 7.21 vs 5.46; Oxi aligned tops).
                         && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1641_DISABLE").is_none())
                         && line_has_mixed_sizes
+                        && !(grid_script_only_mix && !is_script_fragment(frag))
                     {
                         (line_max_render_ascent
                             - frag_metrics.baseline_ascent() * resolved_font_size)

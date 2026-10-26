@@ -15,7 +15,7 @@ Arms: face ＭＳ 明朝 x size 9 / 10.5 / 14 x grid (none / lines 360) x snapTo
 (1 / 0) x sup (plain / sup / sup14: a 14pt superscript in a size-SIZE line / supc, supc14: the
 superscript «1» in Century, as a footnote reference under a Latin minorHAnsi theme is).
 PB_SUP=plain,supc,supc14 picks the sup arms; supcs = supc + a normal-size Century space run (the
-footnote line's shape), cs = that space run alone.
+footnote line's shape), cs = that space run alone; supcA / cA the same with a Century «A».
 
     python tools/metrics/_pb_sup_line_gen.py          (PB_OXI=<exe>[;<exe>] adds Oxi)
 """
@@ -52,12 +52,16 @@ def build(name, size, grid, snap, sup):
         lead = ""
     elif sup == "cs":  # a normal-size Century space run only (no superscript)
         lead = '<w:r><w:rPr><w:rFonts w:ascii="Century" w:hAnsi="Century"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>' % sz
+    elif sup == "cA":  # a normal-size Century «A» run only (no superscript)
+        lead = '<w:r><w:rPr><w:rFonts w:ascii="Century" w:hAnsi="Century"/><w:sz w:val="%d"/></w:rPr><w:t>A</w:t></w:r>' % sz
     else:
         ssz = 28 if sup.endswith("14") else sz
         face = '<w:rFonts w:ascii="Century" w:hAnsi="Century"/>' if sup.startswith("supc") else ""
         lead = '<w:r><w:rPr>%s<w:sz w:val="%d"/><w:vertAlign w:val="superscript"/></w:rPr><w:t>1</w:t></w:r>' % (face, ssz)
         if sup == "supcs":  # + a normal-size Century space run, as the footnote line has
             lead += '<w:r><w:rPr><w:rFonts w:ascii="Century" w:hAnsi="Century"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>' % sz
+        if sup == "supcA":  # + a normal-size Century «A» run (ink, not a space)
+            lead += '<w:r><w:rPr><w:rFonts w:ascii="Century" w:hAnsi="Century"/><w:sz w:val="%d"/></w:rPr><w:t>A</w:t></w:r>' % sz
     paras = "".join('<w:p><w:pPr>%s%s</w:pPr>%s<w:r>%s<w:t>本文の行%d</w:t></w:r></w:p>' % (snap_ppr, rpr, lead, rpr, i) for i in range(N))
     g = '<w:docGrid w:type="lines" w:linePitch="360"/>' if grid == "lines" else ""
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document %s><w:body>%s<w:p><w:r><w:t>後</w:t></w:r></w:p>'
