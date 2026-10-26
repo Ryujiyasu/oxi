@@ -3064,7 +3064,18 @@ impl<'a> TableFitLayouter<'a> {
                 // [[tokyoshugyo_wrap_not_cellheight]] (S585c).
                 let content_right_edge = start_x + content_width;
                 let s585c_over = cell_w - content_width;
+                // OXI_FLOAT_NO_PAGE_CLAMP (default ON, opt-out _DISABLE): a positioned
+                // (tblpPr) table stands where it is placed, so the text column's right
+                // edge does not clamp its cells. blind-I ja/educational__2507e036 p11:
+                // a page-anchored 465pt float at x 524.55 in a two-column section
+                // (column 1 ends at 505.35) -- its gridSpan-3 rows were clamped to that
+                // edge, left a cell a glyph wide, grew the table past the page and
+                // carried column 1's flow into column 2 (Word: the float in the right
+                // column, «題材の評価規準» on one line, column 1 untouched).
+                let positioned_float = table.style.position.is_some()
+                    && std::env::var_os("OXI_FLOAT_NO_PAGE_CLAMP_DISABLE").is_none();
                 let s585c_clamp_base = std::env::var("OXI_S585C_DISABLE").is_err()
+                    && !positioned_float
                     && !is_nested
                     && row.cells.len() == 1
                     && !table.style.has_explicit_cellmar
@@ -3089,6 +3100,7 @@ impl<'a> TableFitLayouter<'a> {
                 // (< 11 = the auto-fit envelope) mirrors the eff_cell_w clamp geometry.
                 let s585c_border_over = (cell_x + cell_w) - (content_right_edge + pad_r);
                 let s767b_tblind = std::env::var("OXI_S767_DISABLE").is_err()
+                    && !positioned_float
                     && !s585c_clamp_base
                     && !is_nested
                     && row.cells.len() == 1
