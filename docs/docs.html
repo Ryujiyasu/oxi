@@ -611,6 +611,8 @@ function applyI18n() {
 }
 
 import init, { create_blank_docx, parse_document, layout_document, docx_to_pdf, build_docx, build_docx_with_template, edit_docx_advanced, update_docx_comments } from './oxidocs_wasm.js';
+import * as wasm from './oxidocs_wasm.js';
+import { withFonts } from './font-catalog.js';
 await init();
 
 const editor = document.getElementById('editor');
@@ -714,7 +716,7 @@ function renderPageToCanvas(ctx, pg) {
 async function renderPreview() {
   previewArea.innerHTML = `<div style="color:#fff;padding:20px;font-size:14px">${t('rendering')}</div>`;
   try {
-    const result = layout_document(currentDocx);
+    const result = await withFonts(wasm, () => layout_document(currentDocx));
     previewArea.innerHTML = '';
     const isMobile = window.innerWidth < 769;
     const SCALE = isMobile ? window.innerWidth / (result.pages[0]?.width || 595) : 1.5;
@@ -2401,9 +2403,9 @@ $('btnSave').addEventListener('click', () => {
   dl(currentDocx, (fileName||'doc')+'.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   markClean();
 });
-$('btnPdf').addEventListener('click', () => {
+$('btnPdf').addEventListener('click', async () => {
   syncDocx();
-  try { dl(docx_to_pdf(currentDocx), (fileName||'doc')+'.pdf', 'application/pdf'); }
+  try { dl(await withFonts(wasm, () => docx_to_pdf(currentDocx)), (fileName||'doc')+'.pdf', 'application/pdf'); }
   catch(e) { alert('PDF: ' + e.message); }
 });
 
@@ -2534,12 +2536,13 @@ editor.addEventListener('input', () => { updatePageInfo(); });
 updatePageInfo();
 
 // ---- Print ----
-function handlePrint() {
+async function handlePrint() {
   syncDocx();
-  // Use layout engine to render pages, then print canvases
+  // Use layout engine to render pages, then print canvases. The window is opened
+  // before the (possibly two-pass) layout so the popup keeps the user gesture.
   try {
-    const result = layout_document(currentDocx);
     const printWin = window.open('', '_blank', 'width=800,height=1100');
+    const result = await withFonts(wasm, () => layout_document(currentDocx));
     printWin.document.write('<html><head><title>' + fileName + '</title>');
     printWin.document.write('<style>@page{size:A4;margin:0}body{margin:0}canvas{display:block;page-break-after:always;width:100%;height:auto}</style>');
     printWin.document.write('</head><body>');

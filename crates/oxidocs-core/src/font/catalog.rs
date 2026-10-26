@@ -16,7 +16,90 @@ use serde::Deserialize;
 
 use super::{FontMetrics, RawFontMetrics};
 
+#[cfg(not(feature = "external-font-catalog"))]
 const DATA: &[u8] = include_bytes!("data/font_catalog_metrics.gz");
+
+/// The compressed member of face `i`. Bundled builds slice the compiled-in
+/// catalog; `external-font-catalog` builds hold only what the host registered
+/// and record the miss, so the host can fetch exactly those members and lay
+/// the document out again. A miss reads as "face not available" -- the same
+/// answer an unknown face gets -- so no partial metrics are ever used.
+#[cfg(not(feature = "external-font-catalog"))]
+fn member(face: &Face, _i: usize) -> Option<&'static [u8]> {
+    Some(&DATA[face.offset..face.offset + face.length])
+}
+
+#[cfg(feature = "external-font-catalog")]
+fn member(_face: &Face, i: usize) -> Option<&'static [u8]> {
+    let got = external::members().read().expect("font catalog members poisoned").get(&i).copied();
+    if got.is_none() {
+        external::misses().lock().expect("font catalog misses poisoned").insert(i);
+    }
+    got
+}
+
+#[cfg(feature = "external-font-catalog")]
+mod external {
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::{Mutex, OnceLock, RwLock};
+
+    pub(super) fn members() -> &'static RwLock<HashMap<usize, &'static [u8]>> {
+        static M: OnceLock<RwLock<HashMap<usize, &'static [u8]>>> = OnceLock::new();
+        M.get_or_init(|| RwLock::new(HashMap::new()))
+    }
+
+    pub(super) fn misses() -> &'static Mutex<BTreeSet<usize>> {
+        static M: OnceLock<Mutex<BTreeSet<usize>>> = OnceLock::new();
+        M.get_or_init(|| Mutex::new(BTreeSet::new()))
+    }
+}
+
+/// A catalog member the last layouts asked for and did not have:
+/// its key and byte range inside `font_catalog_metrics.gz`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingCatalogMember {
+    pub key: String,
+    pub offset: usize,
+    pub length: usize,
+}
+
+/// Drain the members requested since the last call that were not registered.
+/// Always empty when the catalog is bundled.
+pub fn take_missing_members() -> Vec<MissingCatalogMember> {
+    #[cfg(feature = "external-font-catalog")]
+    {
+        let taken = std::mem::take(&mut *external::misses().lock().expect("font catalog misses poisoned"));
+        let catalog = catalog();
+        return taken.into_iter().map(|i| {
+            let face = &catalog.faces[i];
+            MissingCatalogMember { key: face.key.clone(), offset: face.offset, length: face.length }
+        }).collect();
+    }
+    #[cfg(not(feature = "external-font-catalog"))]
+    Vec::new()
+}
+
+/// Register the compressed member for `key` (the exact bytes at its range in
+/// `font_catalog_metrics.gz`). Returns false for an unknown key or a length
+/// that does not match the index; the member is then not used.
+pub fn register_member(key: &str, bytes: Vec<u8>) -> bool {
+    #[cfg(feature = "external-font-catalog")]
+    {
+        let catalog = catalog();
+        let Some(i) = catalog.faces.iter().position(|f| f.key == key) else { return false; };
+        if bytes.len() != catalog.faces[i].length {
+            return false;
+        }
+        let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        external::members().write().expect("font catalog members poisoned").entry(i).or_insert(leaked);
+        return true;
+    }
+    #[cfg(not(feature = "external-font-catalog"))]
+    {
+        let _ = (key, bytes);
+        true
+    }
+}
 
 #[derive(Deserialize)]
 struct Face {
@@ -56,6 +139,7 @@ impl Catalog {
         assert_eq!(index.schema, 1, "unsupported font catalog schema");
         let mut names: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, face) in index.faces.iter().enumerate() {
+            #[cfg(not(feature = "external-font-catalog"))]
             assert!(
                 face.offset
                     .checked_add(face.length)
@@ -108,11 +192,16 @@ impl Catalog {
             })
     }
 
-    fn metrics(&self, i: usize) -> &FontMetrics {
-        self.metrics[i].get_or_init(|| {
-            let face = &self.faces[i];
-            let decoder =
-                flate2::read::GzDecoder::new(&DATA[face.offset..face.offset + face.length]);
+    /// None only in an `external-font-catalog` build whose host has not
+    /// registered this member yet (the miss is recorded for it to fetch).
+    fn metrics(&self, i: usize) -> Option<&FontMetrics> {
+        if let Some(m) = self.metrics[i].get() {
+            return Some(m);
+        }
+        let face = &self.faces[i];
+        let bytes = member(face, i)?;
+        Some(self.metrics[i].get_or_init(|| {
+            let decoder = flate2::read::GzDecoder::new(bytes);
             let raw: RawFontMetrics = serde_json::from_reader(decoder)
                 .expect("generated font catalog member must contain metrics");
             let em = f32::from(raw.units_per_em);
@@ -142,7 +231,7 @@ impl Catalog {
                     })
                     .collect(),
             }
-        })
+        }))
     }
 }
 
@@ -164,9 +253,10 @@ pub(super) fn resolve_styled(family: &str, bold: bool, italic: bool) -> Option<&
     let catalog = catalog();
     let index = catalog.select(&key.0, bold, italic)?;
     let face = &catalog.faces[index];
+    let base = catalog.metrics(index)?;
     let mut cache = cache.write().expect("font catalog cache poisoned");
     Some(*cache.entry(key.clone()).or_insert_with(|| {
-        let mut metrics = catalog.metrics(index).clone();
+        let mut metrics = base.clone();
         metrics.family = if face.families.iter().any(|name| name == &key.0) {
             let suffix = match (face.bold, face.italic) {
                 (true, true) => " Bold Italic",
@@ -247,9 +337,10 @@ pub(super) fn resolve(family: &str, bold: bool, italic: bool) -> Option<&'static
     }
     let catalog = catalog();
     let index = catalog.select(&key.0, bold, italic)?;
+    let base = catalog.metrics(index)?;
     let mut cache = cache.write().expect("font catalog cache poisoned");
     Some(*cache.entry(key).or_insert_with(|| {
-        let mut metrics = catalog.metrics(index).clone();
+        let mut metrics = base.clone();
         metrics.family = family.to_owned();
         Box::leak(Box::new(metrics))
     }))
@@ -265,7 +356,7 @@ mod tests {
         assert!(!catalog.faces.is_empty());
         for i in 0..catalog.faces.len() {
             let face = &catalog.faces[i];
-            let metrics = catalog.metrics(i);
+            let metrics = catalog.metrics(i).expect("bundled catalog has every member");
             assert!(metrics.units_per_em > 0, "{}", face.key);
             assert!(
                 !metrics.char_widths.is_empty(),
@@ -344,8 +435,14 @@ pub(crate) fn glyph_metrics(family: &str, bold: bool, italic: bool, c: char, scr
     let i = catalog.select(&name, bold, italic)
         .or_else(|| catalog.select(&name, false, false))?;
     let face = &catalog.faces[i];
+    // An unregistered member (external catalog) must not be cached as "no
+    // geometry": take the bytes first, and only then initialize.
+    let bytes = match catalog.glyph_geometry[i].get() {
+        Some(_) => &[][..],
+        None => member(face, i)?,
+    };
     let data = catalog.glyph_geometry[i].get_or_init(|| {
-        let decoder = flate2::read::GzDecoder::new(&DATA[face.offset..face.offset+face.length]);
+        let decoder = flate2::read::GzDecoder::new(bytes);
         let record: GlyphGeometryRecord = serde_json::from_reader(decoder)
             .expect("generated catalog glyph geometry must be valid");
         if let Some(ref geometry) = record.glyph_geometry {
@@ -390,7 +487,7 @@ pub(crate) fn glyph_face_metrics(family:&str,bold:bool,italic:bool)->Option<supe
     if let Some(metrics) = super::runtime::resolve_registered(family, bold, italic) { return Some(metrics); }
     let catalog=catalog();let name=family.trim().to_lowercase();
     let index=catalog.select(&name,bold,italic).or_else(||catalog.select(&name,false,false))?;
-    Some(catalog.metrics(index).into())
+    Some(catalog.metrics(index)?.into())
 }
 
 

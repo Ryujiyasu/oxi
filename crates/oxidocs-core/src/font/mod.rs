@@ -36,6 +36,7 @@ pub(crate) mod cjk_fallback;
 pub(crate) mod system_spacing_fallback;
 mod catalog;
 pub(crate) use catalog::{CatalogGlyphMetrics, glyph_metrics as catalog_glyph_metrics, glyph_corner_kern as catalog_glyph_corner_kern, glyph_face_metrics as catalog_glyph_face_metrics, glyph_rule_thickness as catalog_glyph_rule_thickness};
+pub use catalog::{MissingCatalogMember, take_missing_members as take_missing_catalog_members, register_member as register_catalog_member};
 pub mod shape;
 pub mod math_constants;
 pub mod math_glyphs;

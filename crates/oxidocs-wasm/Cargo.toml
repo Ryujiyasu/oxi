@@ -35,3 +35,6 @@ default = []
 suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba"]
 oxidocs-common = ["dep:oxidocs-common"]
 ovba = ["dep:ovba"]
+# Leave the ~34 MB per-face metric catalog out of the module; the page fetches
+# the members a document needs (font_catalog_missing / font_catalog_register).
+external-font-catalog = ["oxidocs-core/external-font-catalog"]

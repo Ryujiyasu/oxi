@@ -1,5 +1,7 @@
 mod font_program;
 mod runtime_fonts;
+mod font_catalog_api;
+pub use font_catalog_api::{font_catalog_missing, font_catalog_register};
 pub use runtime_fonts::{font_program_revision, register_font_program, clear_font_programs, has_font_program, get_font_glyph_outline, try_register_font_program_family, register_font_program_family, get_registered_font_sfnt};
 
 use wasm_bindgen::prelude::*;

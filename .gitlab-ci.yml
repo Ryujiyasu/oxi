@@ -26,7 +26,11 @@ stages:
 # history free of it and makes the demo exactly the commit it was deployed from.
 #
 # The full suite is built (`--features suite`): the Word, Excel and PowerPoint
-# demo pages all load this one module. If the build fails the job fails and
+# demo pages all load this one module. `external-font-catalog` leaves the ~34 MB
+# per-face metric catalog out of the module; it is published beside the pages
+# as font_catalog_metrics.bin (the .gz under another name, so no server
+# transparently decodes it) and docs/font-catalog.js fetches only the byte
+# ranges a document needs. If the build fails the job fails and
 # Pages keeps serving the previous deploy, so a broken toolchain cannot take the
 # site down.
 pages:
@@ -45,11 +49,12 @@ pages:
     - rustup target add wasm32-unknown-unknown
     - curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin --strip-components=1 "wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack"
     - wasm-pack --version
-    - (cd crates/oxidocs-wasm && wasm-pack build --target web --release -- --features suite)
+    - (cd crates/oxidocs-wasm && wasm-pack build --target web --release -- --features suite,external-font-catalog)
     - mkdir -p public
     - cp -r docs/* public/
     - cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm crates/oxidocs-wasm/pkg/oxidocs_wasm.d.ts crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm.d.ts public/
-    - ls -la public/oxidocs_wasm_bg.wasm
+    - cp crates/oxidocs-core/src/font/data/font_catalog_metrics.gz public/font_catalog_metrics.bin
+    - ls -la public/oxidocs_wasm_bg.wasm public/font_catalog_metrics.bin
   artifacts:
     paths:
       - public
