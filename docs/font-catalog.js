@@ -1,19 +1,19 @@
 // The engine module built for this site leaves its per-face font metric
 // catalog (~34 MB) out. A layout records the catalog members it needed and did
-// not have; this fetches exactly those byte ranges of the catalog file,
-// registers them, and the caller lays out again. A bundled build reports
-// nothing missing, so the same code runs against either build.
+// not have; this fetches exactly those members, registers them, and the caller
+// lays out again. A bundled build reports nothing missing, so the same code
+// runs against either build.
+//
+// Each member is published as its own file, font_catalog/<offset>.bin
+// (tools/site/split_font_catalog.sh): GitLab Pages answers a Range request
+// with the whole 34 MB file, so byte ranges of one file would not save anything.
 
-const CATALOG_URL = new URL('./font_catalog_metrics.bin', import.meta.url);
-let wholeFile = null; // only when the server ignores Range and sends the whole file
+const CATALOG_DIR = new URL('./font_catalog/', import.meta.url);
 
 async function fetchMember(m) {
-  const end = m.offset + m.length - 1;
-  const r = await fetch(CATALOG_URL, { headers: { Range: `bytes=${m.offset}-${end}` } });
-  if (!r.ok) throw new Error(`font catalog: HTTP ${r.status}`);
-  if (r.status === 206) return new Uint8Array(await r.arrayBuffer());
-  wholeFile ??= new Uint8Array(await r.arrayBuffer());
-  return wholeFile.slice(m.offset, m.offset + m.length);
+  const r = await fetch(new URL(`${m.offset}.bin`, CATALOG_DIR));
+  if (!r.ok) throw new Error(`font catalog: HTTP ${r.status} for ${m.key}`);
+  return new Uint8Array(await r.arrayBuffer());
 }
 
 // Fetch and register what the last layout was missing. True if anything was.

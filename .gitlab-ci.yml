@@ -27,10 +27,10 @@ stages:
 #
 # The full suite is built (`--features suite`): the Word, Excel and PowerPoint
 # demo pages all load this one module. `external-font-catalog` leaves the ~34 MB
-# per-face metric catalog out of the module; it is published beside the pages
-# as font_catalog_metrics.bin (the .gz under another name, so no server
-# transparently decodes it) and docs/font-catalog.js fetches only the byte
-# ranges a document needs. If the build fails the job fails and
+# per-face metric catalog out of the module; its members are published beside
+# the pages as font_catalog/<offset>.bin, one file per face (Pages does not
+# honour Range requests), and docs/font-catalog.js fetches only the faces a
+# document needs. If the build fails the job fails and
 # Pages keeps serving the previous deploy, so a broken toolchain cannot take the
 # site down.
 pages:
@@ -53,8 +53,8 @@ pages:
     - mkdir -p public
     - cp -r docs/* public/
     - cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm crates/oxidocs-wasm/pkg/oxidocs_wasm.d.ts crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm.d.ts public/
-    - cp crates/oxidocs-core/src/font/data/font_catalog_metrics.gz public/font_catalog_metrics.bin
-    - ls -la public/oxidocs_wasm_bg.wasm public/font_catalog_metrics.bin
+    - sh tools/site/split_font_catalog.sh public/font_catalog
+    - ls -la public/oxidocs_wasm_bg.wasm
   artifacts:
     paths:
       - public
