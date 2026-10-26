@@ -82,6 +82,10 @@ struct ComplexFieldRuns {
     style_reference: Option<String>,
     result: bool,
     parents: Vec<(Option<FieldType>, Option<String>, bool)>,
+    /// A PAGE / NUMPAGES field with `\* MERGEFORMAT` is waiting for its first
+    /// cached result run; that run's formatting is the field's display.
+    merge_pending: bool,
+    merge_style: Option<RunStyle>,
 }
 
 impl ComplexFieldRuns {
@@ -95,9 +99,19 @@ impl ComplexFieldRuns {
             self.kind = run.field_type.clone();
             self.style_reference = run.style.styleref.clone();
         }
+        let merge_format = run.text.contains('\u{F0001}');
+        run.text = run.text.replace('\u{F0001}', "");
         if run.text.contains('\u{FFFE}') {
             run.text = run.text.replace('\u{FFFE}', "");
             self.result = true;
+            self.merge_pending = merge_format
+                && matches!(self.kind, Some(FieldType::Page) | Some(FieldType::NumPages));
+        }
+        if self.merge_pending && self.result && run.field_type.is_none()
+            && run.text.chars().any(|c| c != '\u{FFFF}')
+        {
+            self.merge_pending = false;
+            self.merge_style = Some(run.style.clone());
         }
         for _ in 0..run.text.matches('\u{FFFF}').count() {
             (self.kind, self.style_reference, self.result) = self.parents.pop().unwrap_or_default();
@@ -109,6 +123,19 @@ impl ComplexFieldRuns {
                 run.text.clear();
             }
         }
+    }
+
+    /// OXI_FIELD_MERGEFORMAT (default ON, opt-out _DISABLE): Word shows a
+    /// `\* MERGEFORMAT` field in its cached result's formatting, and any other
+    /// field in its code's first character's. `_pb_field_result_face_gen.py`
+    /// (en/policies__009ad56e's footer `of NUMPAGES`, code runs bare = Calibri,
+    /// result Times): asis Times, result in Arial -> Arial, the switch removed or
+    /// CHARFORMAT -> Calibri, code in Arial -> Times; the footer line takes the
+    /// displayed face's height (753.72 Times vs 753.12 Calibri). Oxi drew the
+    /// count in the code's face and sized the line by it in every arm. Returns
+    /// the result formatting once, for the caller to put on the field's run.
+    fn take_merge_style(&mut self) -> Option<RunStyle> {
+        self.merge_style.take()
     }
 }
 
@@ -147,7 +174,15 @@ impl ParseContext {
                 }
                 b"separate" => {
                     if let Some(f) = fields.last_mut() { f.result = true; }
-                    if fields.iter().all(|f| f.result) { text.push('\u{FFFE}'); }
+                    if fields.iter().all(|f| f.result) {
+                        // U+F0001: the field asks for its result's formatting.
+                        if std::env::var_os("OXI_FIELD_MERGEFORMAT_DISABLE").is_none()
+                            && fields.last().is_some_and(|f| f.instruction.to_ascii_uppercase().contains("MERGEFORMAT"))
+                        {
+                            text.push('\u{F0001}');
+                        }
+                        text.push('\u{FFFE}');
+                    }
                 }
                 b"end" => {
                     let visible = fields.iter().take(fields.len().saturating_sub(1)).all(|f| f.result);
@@ -3225,7 +3260,7 @@ fn remap_source_text(position:&mut FloatingPosition, run:usize, before:&str, aft
     // ComplexFieldRuns removes private field controls and may suppress the
     // cached run. Keep the insertion point on the surviving source text.
     let prefix=before.chars().take(point.char_offset)
-        .filter(|ch|!matches!(ch,'\u{F0000}'|'\u{FFFE}'|'\u{FFFF}')).count();
+        .filter(|ch|!matches!(ch,'\u{F0000}'|'\u{F0001}'|'\u{FFFE}'|'\u{FFFF}')).count();
     point.char_offset=prefix.min(after.chars().count());
 }
 
@@ -3612,6 +3647,13 @@ fn parse_paragraph_with_inline_images_impl(
                             let mut dr = dr.take();
                             let source_text=run.text.clone();
                             complex_fields.consume(&mut run);
+                            if let Some(style) = complex_fields.take_merge_style() {
+                                if let Some(field_run) = runs.iter_mut().rev().find(|r|
+                                    matches!(r.field_type, Some(FieldType::Page) | Some(FieldType::NumPages)))
+                                {
+                                    field_run.style = style;
+                                }
+                            }
                             remap_drawing_source_text(dr.as_mut(),&source_text,&run.text);
                             for position in paragraph_flow_positions(&mut images,&mut found_shapes,&mut found_text_boxes){
                                 remap_source_text(position,runs.len(),&source_text,&run.text);
@@ -3698,6 +3740,13 @@ fn parse_paragraph_with_inline_images_impl(
                         for (mut run, mut dr) in hyperlink_runs {
                             let source_text=run.text.clone();
                             complex_fields.consume(&mut run);
+                            if let Some(style) = complex_fields.take_merge_style() {
+                                if let Some(field_run) = runs.iter_mut().rev().find(|r|
+                                    matches!(r.field_type, Some(FieldType::Page) | Some(FieldType::NumPages)))
+                                {
+                                    field_run.style = style;
+                                }
+                            }
                             remap_drawing_source_text(dr.as_mut(),&source_text,&run.text);
                             for position in paragraph_flow_positions(&mut images,&mut found_shapes,&mut found_text_boxes){
                                 remap_source_text(position,runs.len(),&source_text,&run.text);
@@ -7243,7 +7292,7 @@ fn parse_run(
     }
     let source_offset=drawing_source_text.as_deref().map_or(0,|prefix|{
         if run.text.starts_with(prefix){prefix.chars().count()}
-        else{prefix.chars().filter(|ch|!matches!(ch,'\u{F0000}'|'\u{FFFE}'|'\u{FFFF}')).count().min(run.text.chars().count())}
+        else{prefix.chars().filter(|ch|!matches!(ch,'\u{F0000}'|'\u{F0001}'|'\u{FFFE}'|'\u{FFFF}')).count().min(run.text.chars().count())}
     });
     let parsed=split_symbol_runs(run,symbol_spans);
     let mut remaining=source_offset;
