@@ -11167,9 +11167,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 .map(|e| e.y + e.height)
                                 .fold(0.0_f32, f32::max)
                         } else {
+                            // OXI_FN_BODY_FLOW_ONLY (default ON, opt-out _DISABLE): the body's
+                            // bottom is its flow content. A clip record (a text box's clip
+                            // reaches 2000pt past it for S1644's overflow) and a drawn shape
+                            // are not: Word keeps the notes on the page under a wrapNone
+                            // rectangle that runs 250pt past the bottom margin
+                            // (`_pb_fn_float_overlap_gen.py` wrapnone: rule 649.8 as with no
+                            // shape); a wrapping shape moves the text, which is measured.
+                            // en/forms__0068e33b's page frames and inline text box left Oxi
+                            // no room and dropped its footnote (Word 789.84).
+                            let flow_only = std::env::var_os("OXI_FN_BODY_FLOW_ONLY_DISABLE").is_none();
                             lp.elements[..body_element_count]
                                 .iter()
                                 .filter(|e| e.y < footnote_bottom)
+                                .filter(|e| !flow_only || !matches!(e.content,
+                                    LayoutContent::ClipStart | LayoutContent::ClipEnd | LayoutContent::PresetShape { .. }))
                                 .map(|e| {
                                     let height = if !self.doc_body_has_real_cjk
                                         && std::env::var("OXI_FN_PLACEMENT_FIT_DISABLE").is_err()
