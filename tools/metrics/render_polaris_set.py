@@ -51,6 +51,12 @@ def main() -> int:
             print(f"[{n:2}/{len(docs)}] {doc_id} already done", flush=True)
             done += 1
             continue
+        # A Polaris window left over from the previous document (a timeout, or a
+        # process that outlived its taskkill) takes the next document's keystrokes:
+        # on blind-I the Japanese arm failed every document in a row behind one.
+        # Start each export with no Polaris running.
+        subprocess.run(["taskkill", "/IM", "PWord_PC11.exe", "/F"], capture_output=True)
+        time.sleep(2)
         began = time.time()
         try:
             run = subprocess.run(

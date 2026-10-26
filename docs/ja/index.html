@@ -69,7 +69,7 @@
     {
       "@type": "Question",
       "name": "Microsoft Word とどれくらい同じ見た目になりますか？",
-      "acceptedAnswer": { "@type": "Answer", "text": "修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマークで、Word とピクセル単位の SSIM を測定しています。英語 blind-I50（2026-10-25 凍結・測定、比較エンジンはすべて最新版）で Oxi は文書平均 0.903、Word とのページ数一致は 50 文書中 47 で最多。ピクセルでは ONLYOFFICE がわずかに上（0.909、42/50）、LibreOffice が下（0.864、39/50）。日本語 blind-I50 では Oxi が 0.905 で LibreOffice（0.831）と WordCraft（0.827）を上回り、ページ数一致も最多（47/50）です。エンジンの順位は言語によって入れ替わるため、言語ごとにブラインドセットを持っています。" }
+      "acceptedAnswer": { "@type": "Answer", "text": "修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマークで、Word とピクセル単位の SSIM を測定しています。英語 blind-I50（2026-10-25 凍結・測定、比較エンジンはすべて最新版）で Oxi は文書平均 0.903、Word とのページ数一致は 50 文書中 47 で最多。ピクセルでは ONLYOFFICE がわずかに上（0.909、42/50）、LibreOffice が下（0.864、39/50）。日本語 blind-I50 では Oxi が 0.905 で Polaris Office（0.848）と LibreOffice（0.831）を上回り、ページ数一致も最多（47/50）です。エンジンの順位は言語によって入れ替わるため、言語ごとにブラインドセットを持っています。" }
     },
     {
       "@type": "Question",
@@ -241,7 +241,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       <p class="sub">ここに並ぶ数値はすべて、リポジトリで公開している測定パイプラインで誰でも再現できます。</p>
       <p><strong>技術記事:</strong> <a href="../articles/word-pagination-gdi-rounding.ja.html">Wordの改ページ位置は、GDIの整数丸めで決まっている</a> — Wordの量子化規則を実測し、Rustで再現した方法。</p>
       <h3>英語ブラインドセット — 初見の 50 文書</h3>
-      <p>英語は最初から一番厳しい測り方をしています — 公開 docx-corpus から、修正のターゲットには一切使わない<strong>凍結ブラインドベンチ</strong> 50 文書。現行セットは <strong>blind-I50</strong>（種別ごとに未使用の次の SHA-256 順位、2026-10-25 に<strong>測定前</strong>凍結、規則は <code>pipeline_data/FROZEN_BLIND_I.md</code>）で、これがその唯一の測定です。比較エンジンはすべて測定日の最新公開版です。<strong>英語で Oxi はピクセル 2 位（0.903）</strong> — ONLYOFFICE（0.909）に 0.006 差で次ぎ、WordCraft（0.885）と LibreOffice（0.864）を上回ります。Word とのページ数一致は Oxi が最多の 47/50（ONLYOFFICE 42/50）。ただし文書ごとに見ると、ONLYOFFICE は 50 文書中 37、WordCraft は 34 文書で Oxi より Word に近く、Oxi が LibreOffice に勝つのは 30 文書です — Oxi の平均が高いのは悪い文書が少ないからで、典型的な文書で勝っているからではありません。増減したページを 0 点で数える penalized 平均は ONLYOFFICE 0.888、Oxi 0.883、WordCraft 0.857、LibreOffice 0.828、SILURUS 0.806、GenOffice 0.747、ibisOffice 0.706、eigenpal 0.704、BetterOffice 0.636、OfficeCLI 0.443。真値は Microsoft Word（Microsoft 365 16.0.20430.20182）、150 DPI、文書ごとに新しい Word プロセスで出力。Polaris Office はインストールしたものの、ウィンドウ操作による書き出しが全文書で時間切れになったため未測定としています。</p>
+      <p>英語は最初から一番厳しい測り方をしています — 公開 docx-corpus から、修正のターゲットには一切使わない<strong>凍結ブラインドベンチ</strong> 50 文書。現行セットは <strong>blind-I50</strong>（種別ごとに未使用の次の SHA-256 順位、2026-10-25 に<strong>測定前</strong>凍結、規則は <code>pipeline_data/FROZEN_BLIND_I.md</code>）で、これがその唯一の測定です。比較エンジンはすべて測定日の最新公開版です。<strong>英語で Oxi はピクセル 2 位（0.903）</strong> — ONLYOFFICE（0.909）に 0.006 差で次ぎ、WordCraft（0.885）と LibreOffice（0.864）を上回ります。Word とのページ数一致は Oxi が最多の 47/50（ONLYOFFICE 42/50）。ただし文書ごとに見ると、ONLYOFFICE は 50 文書中 37、WordCraft は 34 文書で Oxi より Word に近く、Oxi が LibreOffice に勝つのは 30 文書です — Oxi の平均が高いのは悪い文書が少ないからで、典型的な文書で勝っているからではありません。増減したページを 0 点で数える penalized 平均は ONLYOFFICE 0.888、Oxi 0.883、WordCraft 0.857、LibreOffice 0.828、Polaris Office 0.813、SILURUS 0.806、GenOffice 0.747、ibisOffice 0.706、eigenpal 0.704、BetterOffice 0.636、OfficeCLI 0.443。真値は Microsoft Word（Microsoft 365 16.0.20430.20182）、150 DPI、文書ごとに新しい Word プロセスで出力。Polaris Office はコマンドラインが無いためウィンドウ操作で書き出しており、2 回試しても書き出せなかった英語 6 文書は「描画なし」として数えています。</p>
 
       <figure class="chart-card">
         <h4>英語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（2026-10-25）</h4>
@@ -270,6 +270,11 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
             <div class="blabel">SILURUS<span>ページ数一致 41/50 · v0.89.4</span></div>
             <div class="btrack"><div class="bfill" style="width:84.2%"></div></div>
             <div class="bval">0.842</div>
+          </div>
+          <div class="brow">
+            <div class="blabel">Polaris Office<span>ページ数一致 35/50 · v11.115 · 50 文書中 44 を描画</span></div>
+            <div class="btrack"><div class="bfill" style="width:83.0%"></div></div>
+            <div class="bval">0.830</div>
           </div>
           <div class="brow">
             <div class="blabel">GenOffice<span>ページ数一致 35/50 · v28cee5ca</span></div>
@@ -714,7 +719,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </figure>
 
       <h3>日本語ブラインドセット — 初見の 50 文書</h3>
-      <p>日本語も同じ厳しさで測ります。現行セットは <strong>jaBlind-I50</strong>（2026-10-25 に<strong>測定前</strong>凍結。公開マニフェストの日本語 <em>technical</em> は枯渇しているため、その 5 枠は事前に宣言した規則で他種別の次の順位から補充 — 5 本とも forms）。<strong>Oxi はピクセルで首位（0.905）</strong>で、2 位の LibreOffice（0.831）に 0.074 の差。文書ごとでも LibreOffice に 43、WordCraft に 43、ONLYOFFICE に 48 文書で勝ち、ページ数一致も最多です（47/50）。エンジンの順位は言語で入れ替わります — ONLYOFFICE は英語 1 位・日本語 8 位 — これが言語ごとにブラインドを持つ理由です。過去の日本語セットは当時のエンジンで 0.842 / 0.802 / 0.802 / 0.857。本セットが初めて 0.90 を超えました — ただし 1 サンプルなので、例の ±0.02 がそのまま付きます。</p>
+      <p>日本語も同じ厳しさで測ります。現行セットは <strong>jaBlind-I50</strong>（2026-10-25 に<strong>測定前</strong>凍結。公開マニフェストの日本語 <em>technical</em> は枯渇しているため、その 5 枠は事前に宣言した規則で他種別の次の順位から補充 — 5 本とも forms）。<strong>Oxi はピクセルで首位（0.905）</strong>で、2 位の Polaris Office（0.848、ページ数一致は Oxi と 1 文書差）に 0.057、LibreOffice（0.831）に 0.074 の差。文書ごとでも Polaris Office に 40、LibreOffice に 43、WordCraft に 43、ONLYOFFICE に 48 文書で勝ち、ページ数一致も最多です（47/50）。エンジンの順位は言語で入れ替わります — ONLYOFFICE は英語 1 位・日本語 9 位 — これが言語ごとにブラインドを持つ理由です。過去の日本語セットは当時のエンジンで 0.842 / 0.802 / 0.802 / 0.857。本セットが初めて 0.90 を超えました — ただし 1 サンプルなので、例の ±0.02 がそのまま付きます。</p>
 
       <figure class="chart-card">
         <h4>日本語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（2026-10-25）</h4>
@@ -723,6 +728,11 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
             <div class="blabel"><strong>Oxi</strong><span>ページ数一致 47/50</span></div>
             <div class="btrack"><div class="bfill oxi" style="width:90.5%"></div></div>
             <div class="bval"><strong>0.905</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">Polaris Office<span>ページ数一致 46/50 · v11.115</span></div>
+            <div class="btrack"><div class="bfill" style="width:84.8%"></div></div>
+            <div class="bval">0.848</div>
           </div>
           <div class="brow">
             <div class="blabel">LibreOffice<span>ページ数一致 41/50 · v26.8.1.1</span></div>
@@ -1267,7 +1277,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>Word とどれくらい同じ見た目になりますか？</summary>
-        <p>修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマークで、Word とピクセル単位の SSIM を測定しています。英語 blind-I50（2026-10-25 凍結・測定、比較エンジンはすべて最新版）で Oxi は文書平均 0.903、Word とのページ数一致は 50 文書中 47 で最多。ピクセルでは ONLYOFFICE がわずかに上（0.909、42/50）、LibreOffice が下（0.864、39/50）。日本語 blind-I50 では Oxi が 0.905 で LibreOffice（0.831）と WordCraft（0.827）を上回り、ページ数一致も最多（47/50）です。エンジンの順位は言語によって入れ替わるため、言語ごとにブラインドセットを持っています。 比較チャートと方法は<a href="#accuracy">精度の節</a>を参照。</p>
+        <p>修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマークで、Word とピクセル単位の SSIM を測定しています。英語 blind-I50（2026-10-25 凍結・測定、比較エンジンはすべて最新版）で Oxi は文書平均 0.903、Word とのページ数一致は 50 文書中 47 で最多。ピクセルでは ONLYOFFICE がわずかに上（0.909、42/50）、LibreOffice が下（0.864、39/50）。日本語 blind-I50 では Oxi が 0.905 で Polaris Office（0.848）と LibreOffice（0.831）を上回り、ページ数一致も最多（47/50）です。エンジンの順位は言語によって入れ替わるため、言語ごとにブラインドセットを持っています。 比較チャートと方法は<a href="#accuracy">精度の節</a>を参照。</p>
       </details>
       <details>
         <summary>対応している形式は？</summary>

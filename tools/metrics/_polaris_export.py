@@ -35,6 +35,11 @@ if os.path.exists(out):
 
 
 def shot(tag):
+    # A screenshot takes about a second, and the unattended run (no --shots)
+    # failed every export while the --shots run succeeded: the pause is part of
+    # the sequence, so it is kept when no picture is taken.
+    if not SHOTS:
+        time.sleep(1.5)
     if SHOTS:
         p = os.path.join(os.environ["TMP"], "claude", "polaris_%s.png" % tag)
         ImageGrab.grab().save(p)
@@ -125,7 +130,10 @@ time.sleep(0.3)
 keyboard.send_keys(out.replace("(", "{(}").replace(")", "{)}"), with_spaces=True, pause=0.01)
 time.sleep(0.6)
 shot("savedlg")
-mouse.click(button="left", coords=P_SAVE)
+# Enter, not a click on P_SAVE: the save dialog does not open at a fixed place
+# (on the 1920x1080 measurement PC it came up centred, its 保存(S) at 1418,762),
+# and the file-name field already holds the focus the path was typed into.
+keyboard.send_keys("{ENTER}")
 for _ in range(40):
     time.sleep(2.0)
     if os.path.exists(out) and os.path.getsize(out) > 1000:

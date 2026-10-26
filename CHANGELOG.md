@@ -38,6 +38,7 @@ penalized (missing pages score 0) / page counts equal to Word's.
 | WordCraft 0.10.0 | 0.885 / 0.857 / 41 | 0.827 / 0.749 / 37 |
 | LibreOffice 26.8.1.1 | 0.864 / 0.828 / 39 | 0.831 / 0.789 / 41 |
 | SILURUS @silurus/ooxml 0.89.4 | 0.842 / 0.806 / 41 | 0.821 / 0.719 / 31 (48 scored) |
+| Polaris Office 11.115 | 0.830 / 0.813 / 35 (44 scored) | 0.848 / 0.826 / 46 |
 | GenOffice 28cee5ca | 0.815 / 0.747 / 35 (49 scored) | 0.825 / 0.737 / 34 |
 | ibisOffice 0.8.4 | 0.783 / 0.706 / 33 | 0.819 / 0.776 / 41 |
 | OfficeCLI 1.0.158 (`--render html`) | 0.770 / 0.443 / 14 | 0.810 / 0.629 / 32 |
@@ -47,9 +48,12 @@ penalized (missing pages score 0) / page counts equal to Word's.
 Penalized two-language mean 0.8907 → **0.8.9**. Document by document, Oxi is closer to Word
 than LibreOffice on 30 of 50 English and 43 of 50 Japanese documents; in English, ONLYOFFICE
 (37 of 50) and WordCraft (34 of 50) win more documents than Oxi does, so Oxi's English mean
-rests on having fewer bad documents rather than on winning the typical one. Polaris Office
-11.115 was installed but its window-driven export timed out on every document, so it is
-reported as not measured. GenOffice's first run opened every file as a blank page (its newest
+rests on having fewer bad documents rather than on winning the typical one. In Japanese,
+Polaris Office is second (0.848) and within one document of Oxi on page breaks; Oxi is closer
+to Word on 40 of 50. Polaris Office has no command line and is driven through its window; the
+driver was fixed before any Polaris number was read (the save dialog had moved, and a leftover
+window took the next document's keystrokes), and six English documents it would not export
+are counted as not rendered. GenOffice's first run opened every file as a blank page (its newest
 build takes the file as a one-shot URL, the harness passed bytes); that run was discarded
 before scoring and redone.
 
