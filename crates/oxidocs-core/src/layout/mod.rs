@@ -12046,6 +12046,21 @@ cells={} pitch={:.2} text={:?}",
                         if let Some(last) = s803_prev_sa.take() {
                             footer_h += last;
                         }
+                        // OXI_FTR_TBL_NEXT_BEFORE (default ON, opt-out _DISABLE): and
+                        // the paragraph after the table keeps its whole space before,
+                        // as the header arm's `s813_first` does. `_pb_ftr_after_table_gen.py`
+                        // (en/technical__0061c884 footer3, picture top on p7): Word
+                        // 747.85 / 745.85 / 735.85 / 723.85 at before 0 / 2 / 12 / 24;
+                        // Oxi stayed at 747.85, so the footer and the notes above it
+                        // sat 2pt low on every page. A footer that OPENS with its table
+                        // already counts that paragraph's before as the first one (S806;
+                        // `_pb_ftr_after_table_multi.py` 0067cba8: Word and Oxi both rise
+                        // 12 at before 12), so only a table after a paragraph needs it.
+                        if !s806_first_before
+                            && std::env::var_os("OXI_FTR_TBL_NEXT_BEFORE_DISABLE").is_none()
+                        {
+                            s803_prev_sa = Some(0.0);
+                        }
                     }
                 }
             }
