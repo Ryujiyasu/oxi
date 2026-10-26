@@ -9036,10 +9036,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && (!self.doc_body_has_real_cjk
                             || std::env::var_os("OXI_CJK_INLINE_NATURAL").is_some())
                         && std::env::var("OXI_S1101_DISABLE").is_err();
+                    // OXI_EXACT_OBJ_NO_GRID (default ON, opt-out _DISABLE): an object in an
+                    // EXACT-spaced host line takes that exact height, never whole grid
+                    // cells -- an exact line does not snap to the document grid.
+                    // blind-I ja/reference__69a1a5a5 (linesAndChars 20pt): the 「あ」「い」
+                    // index heads are 28.9pt ovals in a line=450 exact host (before 6,
+                    // after 12); Word's next entry sits at 171.4 + 6 + 22.5 + 12 + its
+                    // own ascent = 225.9 (PDF 225.98) after every head, Oxi rounded the
+                    // 22.5 up to 40 and lost one index line per column.
+                    let s_exact_obj = img.host_exact_line.is_some_and(|v| v > 0.0)
+                        && std::env::var_os("OXI_EXACT_OBJ_NO_GRID_DISABLE").is_none();
                     let img_adv = match page.grid_line_pitch {
                         Some(p)
                             if p > 0.1
                                 && !s1101_no_type_exact
+                                && !s_exact_obj
                                 && std::env::var("OXI_S549_DISABLE").is_err() =>
                         {
                             (img_line / p).ceil() * p
