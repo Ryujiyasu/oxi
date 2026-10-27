@@ -1124,6 +1124,44 @@ impl<'a> PageLayouter<'a> {
                     }
             })
         };
+        // OXI_TB_PARA_SHAPE (2026-10-27, default ON, opt-out _DISABLE): a
+        // paragraph-relative wrapTopAndBottom SHAPE (VML «text» is the paragraph)
+        // is the same band as the picture / text box above. Only the
+        // page-relative one (S1461) was registered. en/educational__00736cb6 p1:
+        // a 0pt rule 20.2pt below an empty paragraph; Word sets «Key Words» at
+        // the rule (479.6), Oxi ran on at 470.2 and kept one paragraph too many.
+        let s_tb_para_shapes: Vec<(usize, f32, f32)> =
+            if std::env::var_os("OXI_TB_PARA_SHAPE_DISABLE").is_none() {
+                page.shapes
+                    .iter()
+                    .map(|sh| (sh.anchor_block_index, sh))
+                    .chain(page.blocks.iter().enumerate().flat_map(|(bi, b)| match b {
+                        Block::Paragraph(p) => p.shapes.iter().map(move |sh| (bi, sh)).collect::<Vec<_>>(),
+                        _ => Vec::new(),
+                    }))
+                    .filter(|(_, sh)| sh.wrap_type == Some(crate::ir::WrapType::TopAndBottom))
+                    .filter_map(|(bi, sh)| {
+                        sh.position
+                            .as_ref()
+                            .filter(|p| matches!(p.v_relative.as_deref(), Some("paragraph") | Some("text")))
+                            .map(|p| (bi, p.y, sh.height))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        // The resume point below a shape band follows S1486 (half the stroke,
+        // snapped to the 0.75pt grid), as the page-relative S1461 one does.
+        let s_tb_shape_stroke: std::collections::HashMap<usize, Option<f32>> = page.shapes
+            .iter()
+            .map(|sh| (sh.anchor_block_index, sh))
+            .chain(page.blocks.iter().enumerate().flat_map(|(bi, b)| match b {
+                Block::Paragraph(p) => p.shapes.iter().map(move |sh| (bi, sh)).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            }))
+            .filter(|(bi, _)| s_tb_para_shapes.iter().any(|&(b, _, _)| b == *bi))
+            .map(|(bi, sh)| (bi, sh.stroke_width))
+            .collect();
         let s1497_mid: std::collections::HashMap<usize, (f32, f32)> = if s1497_on {
             let mut m: std::collections::HashMap<usize, (f32, f32)> = Default::default();
             for (idx, off, h) in page
@@ -1138,6 +1176,7 @@ impl<'a> PageLayouter<'a> {
                         .filter(|tb| tb.wrap_type == Some(crate::ir::WrapType::TopAndBottom))
                         .filter_map(|tb| tb.position.as_ref().filter(|p| p.v_relative.as_deref() == Some("paragraph")).map(|p| (tb.anchor_block_index, p.y, tb.height))),
                 )
+                .chain(s_tb_para_shapes.iter().copied())
             {
                 if off > 0.0 {
                     let e = m.entry(idx).or_insert((off, h));
@@ -1230,6 +1269,10 @@ impl<'a> PageLayouter<'a> {
                     };
                     let e = m.entry(tb.anchor_block_index).or_insert(0.0_f32);
                     *e = e.max(off + tb.height);
+                }
+                for &(bi, off, h) in &s_tb_para_shapes {
+                    let e = m.entry(bi).or_insert(0.0_f32);
+                    *e = e.max(off.max(0.0) + h);
                 }
                 m
             } else {
@@ -1864,7 +1907,8 @@ impl<'a> PageLayouter<'a> {
             }
             // S1089: the same reservation for a wrapTopAndBottom wps SHAPE.
             if let Some(&band_h) = s1089_tb_bands.get(&block_idx)
-                .filter(|_| s1497b_tb_overlaps(block_idx, &block_y_positions, &block_col_x, start_x, content_width))
+                .filter(|_| s1497b_tb_overlaps(block_idx, &block_y_positions, &block_col_x, start_x, content_width)
+                    || s_tb_para_shapes.iter().any(|&(bi, _, _)| bi == block_idx))
             {
                 if crate::layout::s1467_float_column_flow()
                     && s734_flow_pos.contains_key(&block_idx)
@@ -6200,7 +6244,10 @@ impl<'a> PageLayouter<'a> {
                     // reservation used to guarantee this by advancing first).
                     if let Some(&(off, h)) = s1497_mid.get(&block_idx) {
                         if let Some(&(fp, fy)) = s734_flow_pos.get(&block_idx).or(s1089_flow_pos.get(&block_idx)) {
-                            let bottom = fy + off + h;
+                            let mut bottom = fy + off + h;
+                            if let Some(stroke) = s_tb_shape_stroke.get(&block_idx) {
+                                bottom = s1486_wrap_bottom(bottom, *stroke);
+                            }
                             if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height {
                                 if std::env::var_os("OXI_S1500_DISABLE").is_none() {
                                     s1500_unpushed = Some((block_idx + 1, current_page_idx, cursor.cursor_y));

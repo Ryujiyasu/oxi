@@ -10019,6 +10019,34 @@ fn parse_vml_pict(
                         if is_hr && std::env::var("OXI_S852_DISABLE").is_err() {
                             shape_type = Some("hr".to_string());
                         }
+                        // OXI_VML_LINE_FROM_TO (2026-10-27, default ON, opt-out _DISABLE): a
+                        // <v:line> carries its geometry in from/to, not in style
+                        // margin/width/height. en/educational__00736cb6 p1: a page-wide
+                        // rule (from 60.25pt,20.2pt to 544.85pt,20.2pt, topAndBottom)
+                        // pushes «Key Words» below it in Word; Oxi read a 0x0 shape at
+                        // the anchor and the page held one paragraph too many.
+                        if local == "line"
+                            && !(s850 && group_depth > 0)
+                            && std::env::var_os("OXI_VML_LINE_FROM_TO_DISABLE").is_none()
+                        {
+                            let point = |name: &str| {
+                                e.attributes()
+                                    .flatten()
+                                    .find(|a| local_name(a.key.as_ref()) == name)
+                                    .and_then(|a| {
+                                        let v = String::from_utf8_lossy(&a.value).to_string();
+                                        let xy: Vec<f32> =
+                                            v.split(',').map(|n| parse_css_length(n.trim())).collect();
+                                        (xy.len() == 2).then(|| (xy[0], xy[1]))
+                                    })
+                            };
+                            if let (Some(f), Some(t)) = (point("from"), point("to")) {
+                                margin_left = f.0.min(t.0);
+                                margin_top = f.1.min(t.1);
+                                width = (t.0 - f.0).abs();
+                                height = (t.1 - f.1).abs();
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -10226,6 +10254,34 @@ fn parse_vml_pict(
                         }
                         if is_hr && std::env::var("OXI_S852_DISABLE").is_err() {
                             shape_type = Some("hr".to_string());
+                        }
+                        // OXI_VML_LINE_FROM_TO (2026-10-27, default ON, opt-out _DISABLE): a
+                        // <v:line> carries its geometry in from/to, not in style
+                        // margin/width/height. en/educational__00736cb6 p1: a page-wide
+                        // rule (from 60.25pt,20.2pt to 544.85pt,20.2pt, topAndBottom)
+                        // pushes «Key Words» below it in Word; Oxi read a 0x0 shape at
+                        // the anchor and the page held one paragraph too many.
+                        if local == "line"
+                            && !(s850 && group_depth > 0)
+                            && std::env::var_os("OXI_VML_LINE_FROM_TO_DISABLE").is_none()
+                        {
+                            let point = |name: &str| {
+                                e.attributes()
+                                    .flatten()
+                                    .find(|a| local_name(a.key.as_ref()) == name)
+                                    .and_then(|a| {
+                                        let v = String::from_utf8_lossy(&a.value).to_string();
+                                        let xy: Vec<f32> =
+                                            v.split(',').map(|n| parse_css_length(n.trim())).collect();
+                                        (xy.len() == 2).then(|| (xy[0], xy[1]))
+                                    })
+                            };
+                            if let (Some(f), Some(t)) = (point("from"), point("to")) {
+                                margin_left = f.0.min(t.0);
+                                margin_top = f.1.min(t.1);
+                                width = (t.0 - f.0).abs();
+                                height = (t.1 - f.1).abs();
+                            }
                         }
                     }
                     _ => {}
