@@ -3736,8 +3736,12 @@ fn styled_cell_wrap_matches_word() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+// Word truth re-exported on the current machine (2026-10-27): an inline page
+// break and pageBreakBefore both drop the 6pt before at the page top (baseline
+// 84.02). The 2026-10-10 truth (old machine, word_oldpc_20261010.json) kept it
+// for the inline break (90.02).
 #[test]
-fn modern_inline_and_paragraph_breaks_preserve_distinct_spacing() {
+fn modern_inline_and_paragraph_breaks_drop_top_spacing() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/modern_break_spacing");
     let cases: serde_json::Value = serde_json::from_slice(

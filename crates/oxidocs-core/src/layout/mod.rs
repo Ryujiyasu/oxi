@@ -12502,7 +12502,14 @@ cells={} pitch={:.2} text={:?}",
                 // An AUTO space-before never survives a page top.
                 effective_spacing = 0.0;
             } else if pbb_top && self.compat_mode_explicit && self.compat_mode >= 15
-                && !para.style.page_break_before_from_inline
+                // OXI_INLINE_PB_TOP_SPACE (2026-10-27, default ON, opt-out _DISABLE):
+                // a paragraph that opens with an inline page break is the same as
+                // pageBreakBefore here. `_pb_inline_pagebreak_before_gen.py`: 16 arms
+                // (compat 15/14, Arial/ＭＳ明朝, header 0/2 lines) give identical y for
+                // the two; compat 15 drops the 18pt before. en/reports__00b179e8 p10:
+                // Heading1 «<br type=page/>II. Undergraduate Education» at 71.7, Oxi 89.3.
+                && (!para.style.page_break_before_from_inline
+                    || std::env::var_os("OXI_INLINE_PB_TOP_SPACE_DISABLE").is_none())
                 && !s1073_section_first_page {
                 // Modern pagination suppresses before-spacing after a paragraph's
                 // page break. Section boundaries retain their own spacing rule.

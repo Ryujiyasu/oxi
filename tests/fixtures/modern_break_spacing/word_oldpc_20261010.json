@@ -1,0 +1,66 @@
+[
+  {
+    "name": "latin_manual_twip",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 90.02001953125
+    }
+  },
+  {
+    "name": "latin_manual_lines",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 90.02001953125
+    }
+  },
+  {
+    "name": "latin_paragraph_twip",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 84.02001953125
+    }
+  },
+  {
+    "name": "latin_paragraph_lines",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 84.02001953125
+    }
+  },
+  {
+    "name": "cjk_manual_twip",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 90.02001953125
+    }
+  },
+  {
+    "name": "cjk_manual_lines",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 90.02001953125
+    }
+  },
+  {
+    "name": "cjk_paragraph_twip",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 84.02001953125
+    }
+  },
+  {
+    "name": "cjk_paragraph_lines",
+    "pages": 2,
+    "word": {
+      "page": 2,
+      "y": 84.02001953125
+    }
+  }
+]
