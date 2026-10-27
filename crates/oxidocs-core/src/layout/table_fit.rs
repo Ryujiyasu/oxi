@@ -7501,6 +7501,18 @@ impl<'a> TableFitLayouter<'a> {
                                                     continue;
                                                 }
                                             }
+                                            // OXI_CELL_LINESTART_AKI (2026-10-27, default ON, opt-out _DISABLE):
+                                            // a character that opens a cell line carries no CJK/Latin
+                                            // auto-space -- the joint it belonged to is the line break.
+                                            let cw = if auto_space_extra > 0.0
+                                                && current_line.is_empty()
+                                                && buf.is_empty()
+                                                && std::env::var_os("OXI_CELL_LINESTART_AKI_DISABLE").is_none()
+                                            {
+                                                cw - auto_space_extra
+                                            } else {
+                                                cw
+                                            };
                                             buf.push(ch);
                                             buf_w += cw;
                                             buf_chars.push(

@@ -20573,6 +20573,16 @@ cells={} pitch={:.2} text={:?}",
                         current_line_chars.clear();
                     }
                 }
+                // OXI_CELL_LINESTART_AKI: the cell renderer's line-start rule, mirrored.
+                let cw = if auto_space_extra > 0.0
+                    && !line_nonempty
+                    && !buf_nonempty
+                    && std::env::var_os("OXI_CELL_LINESTART_AKI_DISABLE").is_none()
+                {
+                    cw - auto_space_extra
+                } else {
+                    cw
+                };
                 buf_w += cw;
                 buf_nonempty = true;
                 buf_chars.push(CellFitChar {
