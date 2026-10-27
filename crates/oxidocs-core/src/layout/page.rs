@@ -6257,6 +6257,29 @@ impl<'a> PageLayouter<'a> {
                         }
                     }
                     S1497_BAND.with(|c| c.set(None));
+                    // OXI_BR_CLEAR (2026-10-27, default ON, opt-out _DISABLE): a
+                    // clearing text-wrapping break ends the paragraph's run beside
+                    // the floats; the flow resumes below every float band that
+                    // spans the current position. en/forms__0068e33b p1: two
+                    // side-by-side floating tables, then «<w:br w:clear="all"/>»;
+                    // Word starts the next table under both (446), Oxi at 337
+                    // over them.
+                    if let Block::Paragraph(para) = block {
+                        if para.style.clear_break {
+                            let cy = cursor.cursor_y;
+                            let below = s758_bands
+                                .iter()
+                                .filter(|b| b.0 == current_page_idx && b.1 < cy && b.2 > cy)
+                                .map(|b| b.2)
+                                .fold(f32::NEG_INFINITY, f32::max);
+                            // The paragraph mark's line follows the break, so it
+                            // sits under the floats too.
+                            let mark_h = elements.last().map_or(0.0, |e| e.height.max(0.0));
+                            if below > cy && below + mark_h < start_y + content_height {
+                                cursor.set(below + mark_h);
+                            }
+                        }
+                    }
                     // S1461: drop the cursor below a page-anchored
                     // wrapTopAndBottom shape hosted by this block.
                     if let Some(&bot) = s1461_tb_shapes.get(&block_idx) {

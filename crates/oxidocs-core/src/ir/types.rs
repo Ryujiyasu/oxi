@@ -1691,6 +1691,11 @@ impl Default for Alignment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParagraphStyle {
+    /// OXI_BR_CLEAR: the paragraph holds a `<w:br w:type="textWrapping"
+    /// w:clear="all|left|right"/>` -- what follows the break resumes below the
+    /// floating objects beside it.
+    #[serde(default)]
+    pub clear_break: bool,
     /// S730 (2026-07-03): this paragraph carries the sectPr of a section
     /// merged as CONTINUOUS into the same IR Page. Word renders the empty
     /// continuous section-break paragraph at ZERO height (probexmargins
@@ -2022,6 +2027,7 @@ fn default_true() -> bool {
 impl Default for ParagraphStyle {
     fn default() -> Self {
         Self {
+            clear_break: false,
             continuous_section_break: false,
             page_section_break: false,
             heading_level: None,

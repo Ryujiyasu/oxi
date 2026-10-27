@@ -40,6 +40,12 @@ pub struct OoxmlParser {
 }
 
 /// Context passed through parsing functions for resource resolution
+thread_local! {
+    /// OXI_BR_CLEAR: set by a clearing text-wrapping break inside the paragraph
+    /// being parsed (saved and restored around nested paragraphs).
+    static BR_CLEAR_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 struct ParseContext {
     // Complex fields can span runs and paragraphs within one text story.
     fields: std::cell::RefCell<Vec<ParseField>>,
@@ -3383,6 +3389,7 @@ fn parse_paragraph_with_inline_images_impl(
     keep_inline_images: bool,
     preserve_header_image_host: bool,
 ) -> Result<ParagraphResult, ParseError> {
+    let br_clear_outer = BR_CLEAR_SEEN.with(|c| c.replace(false));
     let mut runs = Vec::new();
     let mut images = Vec::new();
     // S854: (run_index, image) for INLINE (non-positioned) images. A paragraph
@@ -5480,6 +5487,9 @@ fn parse_paragraph_with_inline_images_impl(
             point.char_offset=point.char_offset.min(runs.get(point.run_index).map_or(0,|run|run.text.chars().count()));
         }
     }
+    let mut style = style;
+    style.clear_break = BR_CLEAR_SEEN.with(|c| c.replace(br_clear_outer))
+        && std::env::var_os("OXI_BR_CLEAR_DISABLE").is_none();
     Ok(ParagraphResult {
         paragraph: Paragraph {
             runs,
@@ -7020,10 +7030,17 @@ fn parse_run(
                     }
                     "br" => {
                         let mut br_type = None;
+                        let mut br_clear = false;
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "type" {
                                 br_type = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
+                            if local_name(attr.key.as_ref()) == "clear" {
+                                br_clear = matches!(attr.value.as_ref(), b"all" | b"left" | b"right");
+                            }
+                        }
+                        if br_clear && matches!(br_type.as_deref(), None | Some("textWrapping")) {
+                            BR_CLEAR_SEEN.with(|c| c.set(true));
                         }
                         match br_type.as_deref() {
                             Some("page") => text.push('\x0C'),   // form feed = page break
