@@ -6930,7 +6930,18 @@ impl<'a> TableFitLayouter<'a> {
                                                         let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
                                                         loop {
                                                             let head = carry[0].ch;
-                                                            let tail = buf.chars().last();
+                                                            // OXI_CELL_CARRY_FLUSHED_TAIL (2026-10-27, default ON, opt-out
+                                                            // _DISABLE): the tail is the line's last character even when
+                                                            // it was flushed to an earlier fragment (a run boundary) --
+                                                            // S443 already pops from there. ja/policies__262cde95 p43
+                                                            // «（INR）»: «R» and «）» moved down, «IN» stayed behind.
+                                                            let tail = buf.chars().last().or_else(|| {
+                                                                if std::env::var_os("OXI_CELL_CARRY_FLUSHED_TAIL_DISABLE").is_none() {
+                                                                    current_line.last().and_then(|f| f.0.chars().last())
+                                                                } else {
+                                                                    None
+                                                                }
+                                                            });
                                                             let need =
                                                                 kinsoku::is_line_start_prohibited(
                                                                     head,
