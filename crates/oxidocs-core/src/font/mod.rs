@@ -2348,6 +2348,23 @@ impl FontMetricsRegistry {
         if let Some(w) = self.catalog_width_before_gdi(c, font_size, metrics) {
             return w;
         }
+        // OXI_RUNTIME_BEFORE_GDI (2026-10-27, default ON, opt-out _DISABLE): a Latin
+        // face whose measured table simply lacks the glyph uses the installed
+        // font's design advance, not the GDI pixel map. Word's PDF of
+        // en/reports__00cede27 sets Arial 11pt «•» at 3.864 (design 3.851 at the
+        // PDF's 11.04 size) and «'» at 2.42 (design 2.444); the 15ppem pixel map
+        // gave 3.75 / 2.25, and the 0.1pt short bullet let «quarter» fit a line
+        // Word wraps.
+        if std::env::var_os("OXI_RUNTIME_BEFORE_GDI_DISABLE").is_none()
+            && !metrics.char_widths.is_empty()
+            && metrics.units_per_em != 256
+            && !is_cjk_font_family(&metrics.family)
+            && !is_fullwidth(c)
+        {
+            if let Some(w) = self.runtime_width_fallback(c, font_size, metrics) {
+                return w;
+            }
+        }
         // GDI hinting override via pre-resolved map (for fonts without metric data)
         if let Some(char_widths) = gdi_map {
             if let Some(&width_px) = char_widths.get(&(c as u32)) {
