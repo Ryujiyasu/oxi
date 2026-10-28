@@ -496,6 +496,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxidocs-docling"
+version = "0.1.0"
+dependencies = [
+ "oxidocs-core",
+ "serde_json",
+]
+
+[[package]]
 name = "oxidocs-fonts"
 version = "0.8.9"
 dependencies = [
