@@ -166,6 +166,29 @@ The blind sets are the published claim; the development corpus is how regression
 
 These numbers are *tuned* — every document in them has been individually root-caused — so they belong in a gate, not in a headline. The date-by-date development history is in [docs/layout_accuracy.md](docs/layout_accuracy.md); the derivation log is [RESEARCH_LOG.md](RESEARCH_LOG.md).
 
+### Word's saved page breaks — a hint the benchmark must not see
+
+When Word saves a .docx it writes `<w:lastRenderedPageBreak/>` wherever its own render started a new page. That marker is part of the answer every number on this page is scored against, and **Oxi's parser reads it by default**: several layout rules use it as a hint. The blind-set numbers above were measured that way. Whether the other engines in the tables read the marker has not been checked, so the page-count column may favour Oxi.
+
+From now on the benchmarks run **blind**: `OXI_IGNORE_LRPB=1` makes the parser drop the marker, so no layout rule can see it, and `tools/metrics/bench_env.py` sets it for benchmark scripts unless `OXI_BENCH_WITH_LRPB=1` asks for the hinted mode. The blind-I sets will be re-measured in both modes and both numbers published here; if the blind number is lower, the tables above get corrected, not footnoted.
+
+The same marker also makes a **Word-free pagination check** that anyone can run on their own files. `tools/oxi-lrpb-bench` derives the page every paragraph and table row starts on from the markers, checks that derivation against the page count Word wrote in `docProps/app.xml`, then scores Oxi blind and hinted:
+
+```bash
+cd tools/oxi-lrpb-bench && cargo build --release
+./target/release/oxi-lrpb-bench <file.docx | folder>... [--json out.json]
+```
+
+First run, on the Word-saved files of [docling](https://github.com/docling-project/docling)'s public `tests/data/docx` (2026-10-28; English only, so a smoke test rather than a claim):
+
+| | blind | hinted |
+|---|---|---|
+| paragraphs and table rows on Word's page | 286 / 304 | 286 / 304 |
+| page count matches Word | 8 / 10 | 8 / 10 |
+| Word's page breaks placed at the same spot | 16 / 17 | |
+
+The derived page counts matched `docProps/app.xml` on all 10 files. The marker cannot replace Oxi: it gives a page number but no position on the page, files saved by anything other than Word do not carry it, and it goes stale as soon as the document is edited.
+
 ### Reproduce
 
 ```bash
@@ -176,6 +199,7 @@ tools/metrics/render_libra.py           # LibreOffice headless → PDF → PNG
 tools/metrics/render_onlyoffice.py      # ONLYOFFICE x2t headless → PDF → PNG
 tools/metrics/browser_oracle.py         # @silurus/ooxml via Playwright (tools/browser-oracle/)
 tools/metrics/compare_renderers_3way.py # cross-renderer scoring on identical inputs
+tools/oxi-lrpb-bench                    # Word-free page-break check against Word's saved markers
 ```
 
 ---

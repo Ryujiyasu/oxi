@@ -9,7 +9,15 @@ them against the same word_pdf/ with the frozen script's own functions, writes
 ssim_blindH50/_remeasure_<tag>.json and prints the per-arm means next to the
 frozen ones.
 
-    python tools/metrics/blindH_oxi_remeasure.py <tag> [en|ja|both] [dwrite.exe]
+    python tools/metrics/blindH_oxi_remeasure.py <tag> [en|ja|both] [dwrite.exe] [--set I]
+
+`--set` picks another frozen blind set by its letter (default H): the frozen
+scripts follow one naming rule, `_measure_ssim_blind<L>50.py` (en) and
+`_measure_ssim_jablind<L>50.py` (ja). The frozen result is only read.
+
+Runs BLIND by default: Word's saved page-break markers are hidden from Oxi (see
+bench_env.py). OXI_BENCH_WITH_LRPB=1 measures the hinted mode. The mode is part
+of the output folder and file name, so the two runs sit side by side.
 """
 import importlib.util
 import json
@@ -18,10 +26,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = {
-    "en": REPO / "pipeline_data/en_benchmark/_measure_ssim_blindH50.py",
-    "ja": REPO / "pipeline_data/ja_benchmark/_measure_ssim_jablindH50.py",
-}
+sys.path.insert(0, str(REPO / "tools" / "metrics"))
+import bench_env  # noqa: E402
+
+LRPB_MODE = bench_env.apply()
+def scripts(letter="H"):
+    return {
+        "en": REPO / f"pipeline_data/en_benchmark/_measure_ssim_blind{letter}50.py",
+        "ja": REPO / f"pipeline_data/ja_benchmark/_measure_ssim_jablind{letter}50.py",
+    }
+
+
+SCRIPTS = scripts()
 
 
 def load(lang):
@@ -33,6 +49,7 @@ def load(lang):
 
 def run(lang, tag, dwrite):
     mod = load(lang)
+    tag = f"{tag}_{LRPB_MODE}"
     mod.OXI_PNG = mod.OUT / f"oxi_png_{tag}"
     if dwrite:
         mod.DWRITE = Path(dwrite)
@@ -50,7 +67,8 @@ def run(lang, tag, dwrite):
             print(f"[{lang} SSIM {i:2}/{len(docs)}] {row['doc']} oxi={row['oxi']['common_mean']}", flush=True)
     summary = mod.aggregate(rows)
     out = mod.OUT / f"_remeasure_{tag}.json"
-    out.write_text(json.dumps({"summary": summary, "docs": rows, "renderer": str(mod.DWRITE)}, indent=1),
+    out.write_text(json.dumps({"summary": summary, "docs": rows, "renderer": str(mod.DWRITE),
+                               "lrpb": LRPB_MODE}, indent=1),
                    encoding="utf-8")
     frozen = json.loads(mod.RESULT.read_text(encoding="utf-8"))
     fz = {r["doc"]: r["oxi"] for r in frozen["docs"]}
@@ -73,8 +91,13 @@ def run(lang, tag, dwrite):
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    tag = sys.argv[1]
-    langs = ("en", "ja") if len(sys.argv) < 3 or sys.argv[2] == "both" else (sys.argv[2],)
-    dwrite = sys.argv[3] if len(sys.argv) > 3 else None
+    argv = sys.argv[1:]
+    if "--set" in argv:
+        i = argv.index("--set")
+        SCRIPTS = scripts(argv[i + 1].upper())
+        del argv[i:i + 2]
+    tag = argv[0]
+    langs = ("en", "ja") if len(argv) < 2 or argv[1] == "both" else (argv[1],)
+    dwrite = argv[2] if len(argv) > 2 else None
     for lang in langs:
         run(lang, tag, dwrite)
