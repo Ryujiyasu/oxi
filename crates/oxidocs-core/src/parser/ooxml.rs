@@ -7773,6 +7773,7 @@ fn parse_drawing(
     let mut gradient_angle: Option<f32> = None;
     // Text body insets (from bodyPr lIns/rIns/tIns/bIns, in EMU)
     let mut text_inset_left: Option<f32> = None;
+    let mut text_upright = false;
     let mut text_inset_right: Option<f32> = None;
     let mut text_inset_top: Option<f32> = None;
     let mut text_inset_bottom: Option<f32> = None;
@@ -8319,6 +8320,9 @@ fn parse_drawing(
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
+                                "upright" => {
+                                    text_upright = val == "1" || val == "true";
+                                }
                                 "lIns" => {
                                     text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0);
                                 }
@@ -8956,6 +8960,9 @@ fn parse_drawing(
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
+                                "upright" => {
+                                    text_upright = val == "1" || val == "true";
+                                }
                                 "lIns" => {
                                     text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0);
                                 }
@@ -9528,7 +9535,30 @@ fn parse_drawing(
     // (line/bracket decorations — S535b's revert case: reserving those
     // regressed 3a4f by 282 paras).
     let s741_has_txbx_text = !shape_text_blocks.is_empty() || !s839_text_children.is_empty();
-    let tb_position = position.clone().or_else(|| {
+    // OXI_UPRIGHT_TXBX_TURN (2026-10-28, default ON, opt-out _DISABLE): a text box
+    // turned a quarter by `a:xfrm rot` with `bodyPr upright="1"` keeps its text
+    // horizontal and lays it out in the TURNED box. ja/creative__13152ea1's
+    // roundRect (wp:extent 105.8 x 478, rot 5400000, upright) is a 478 x 106 band
+    // with horizontal lines in Word; Oxi set the text in the unturned narrow
+    // column down the middle of the page. The turn is about the centre, so an
+    // offset axis moves by (w - h) / 2; an aligned axis keeps its alignment.
+    let upright_turn = text_upright
+        && std::env::var_os("OXI_UPRIGHT_TXBX_TURN_DISABLE").is_none()
+        && rotation.is_some_and(|r| {
+            let t = r.rem_euclid(360.0);
+            (t - 90.0).abs() < 0.5 || (t - 270.0).abs() < 0.5
+        });
+    let (tb_width, tb_height) = if upright_turn { (height, width) } else { (width, height) };
+    let turned_position = position.as_ref().map(|p| {
+        let mut p = p.clone();
+        if upright_turn {
+            let d = (width - height) / 2.0;
+            if p.h_align.is_none() { p.x += d; }
+            if p.v_align.is_none() { p.y -= d; }
+        }
+        p
+    });
+    let tb_position = turned_position.or_else(|| {
         if inline_tb {
             Some(FloatingPosition {
             flow_page_offset: 0,
@@ -9569,8 +9599,8 @@ fn parse_drawing(
             blocks: shape_text_blocks,
             inline: inline_tb,
             font_ref_color: font_ref_color.clone(),
-            width,
-            height,
+            width: tb_width,
+            height: tb_height,
             position: tb_position,
             border: !has_no_stroke && !s839_attach,
             stroke_color: if has_no_stroke || s839_attach {
