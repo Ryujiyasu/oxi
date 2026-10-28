@@ -1012,8 +1012,9 @@ pub struct Image {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop: Option<ImageCrop>,
     /// OXI_PICTURE_ROTATION: the picture's `a:xfrm rot`, degrees clockwise in
-    /// [0, 360). Set for inline pictures only; a quarter turn has already
-    /// swapped `width`/`height` to the visual box.
+    /// [0, 360). An INLINE quarter turn has already swapped `width`/`height` to
+    /// the visual box; an anchored picture and any other angle keep the unturned
+    /// box and the renderer turns the bitmap about its centre.
     #[serde(default)]
     pub rotation: f32,
     /// Index of the anchor paragraph block (for paragraph-relative positioning)

@@ -864,10 +864,18 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                 };
                                 // OXI_PICTURE_ROTATION: a quarter or half turn rotates the pixels; the element
                                 // box is already the turned one. Other angles draw unturned.
-                                let img = match rotation.rem_euclid(360.0).round() as i32 {
-                                    90 => img.rotate90(),
+                                let turn_deg = rotation.rem_euclid(360.0).round() as i32;
+                                // A quarter turn whose box still has the image's own aspect is an anchored
+                                // picture's unturned box: turn the drawing about the centre instead.
+                                let box_unturned = (turn_deg == 90 || turn_deg == 270) && {
+                                    let (iw, ih) = (img.width() as f32, img.height() as f32);
+                                    let ba = ew as f32 / (eh as f32).max(1e-3);
+                                    (ba - iw / ih.max(1.0)).abs() < (ba - ih / iw.max(1.0)).abs()
+                                };
+                                let img = match turn_deg {
+                                    90 if !box_unturned => img.rotate90(),
                                     180 => img.rotate180(),
-                                    270 => img.rotate270(),
+                                    270 if !box_unturned => img.rotate270(),
                                     _ => img,
                                 };
                                 let rgba = img.to_rgba8();
@@ -893,10 +901,27 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                     pixels.push(pixel[0]); // R
                                     pixels.push(pixel[3]); // A
                                 }
+                                // OXI_PICTURE_ROTATION: an angle that is not a quarter turn draws the
+                                // unturned box turned about its centre (quarter turns were done on the pixels).
+                                let turn = rotation.rem_euclid(360.0);
+                                let free_turn = box_unturned || ((turn / 90.0).round() * 90.0 - turn).abs() > 0.01;
+                                let old_mode = if free_turn {
+                                    let mode = SetGraphicsMode(mem_dc, GM_ADVANCED);
+                                    let (sin, cos) = turn.to_radians().sin_cos();
+                                    let (cx, cy) = (x as f32 + ew as f32 / 2.0, y as f32 + eh as f32 / 2.0);
+                                    let xf = XFORM { eM11: cos, eM12: sin, eM21: -sin, eM22: cos,
+                                        eDx: cx - cx * cos + cy * sin, eDy: cy - cx * sin - cy * cos };
+                                    let _ = SetWorldTransform(mem_dc, &xf);
+                                    Some(mode)
+                                } else { None };
                                 StretchDIBits(mem_dc, x, y, ew, eh,
                                     0, 0, pw as i32, ph as i32,
                                     Some(pixels.as_ptr() as *const _),
                                     &bmi, DIB_RGB_COLORS, SRCCOPY);
+                                if let Some(mode) = old_mode {
+                                    let _ = ModifyWorldTransform(mem_dc, None, MWT_IDENTITY);
+                                    SetGraphicsMode(mem_dc, GRAPHICS_MODE(mode));
+                                }
                             }
                         }
                     }

@@ -9376,15 +9376,17 @@ fn parse_drawing(
     // rot=5400000, 1970x1477 JPEG without an EXIF orientation) stands 483 wide and
     // 644 tall in Word's PDF (top 94.6, bottom 738.6). Oxi drew it unturned and
     // 483 tall. Anchored pictures turn about their centre from an unturned
-    // position box -- not handled here (rotation stays 0 for them).
-    let picture_rotation = if position.is_none()
-        && std::env::var_os("OXI_PICTURE_ROTATION_DISABLE").is_none()
+    // position box: Word places, wraps and page-fits it by the UNTURNED box
+    // (ja/administrative__05e3143c: the swapped box ran 28pt past the page and
+    // made a page Word does not have), so only the drawing turns.
+    let picture_rotation = if std::env::var_os("OXI_PICTURE_ROTATION_DISABLE").is_none()
     {
         rotation.map_or(0.0, |r| r.rem_euclid(360.0))
     } else {
         0.0
     };
-    let picture_quarter_turn = (picture_rotation - 90.0).abs() < 0.5 || (picture_rotation - 270.0).abs() < 0.5;
+    let picture_quarter_turn = position.is_none()
+        && ((picture_rotation - 90.0).abs() < 0.5 || (picture_rotation - 270.0).abs() < 0.5);
     let image = if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();

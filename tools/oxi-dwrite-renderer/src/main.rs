@@ -783,10 +783,18 @@ unsafe fn render_image(
     };
     // OXI_PICTURE_ROTATION: a quarter or half turn rotates the pixels; the element
     // box is already the turned one. Other angles draw unturned.
-    let img = match rotation.rem_euclid(360.0).round() as i32 {
-        90 => img.rotate90(),
+    let turn_deg = rotation.rem_euclid(360.0).round() as i32;
+    // A quarter turn whose box still has the image's own aspect is an anchored
+    // picture's unturned box: turn the drawing about the centre instead.
+    let box_unturned = (turn_deg == 90 || turn_deg == 270) && {
+        let (iw, ih) = (img.width() as f32, img.height() as f32);
+        let ba = w_pt / (h_pt).max(1e-3);
+        (ba - iw / ih.max(1.0)).abs() < (ba - ih / iw.max(1.0)).abs()
+    };
+    let img = match turn_deg {
+        90 if !box_unturned => img.rotate90(),
         180 => img.rotate180(),
-        270 => img.rotate270(),
+        270 if !box_unturned => img.rotate270(),
         _ => img,
     };
     let rgba = img.to_rgba8();
@@ -820,8 +828,30 @@ unsafe fn render_image(
         right:  (x_pt + w_pt) * PT_TO_DIP,
         bottom: (y_pt + h_pt) * PT_TO_DIP,
     };
+    // OXI_PICTURE_ROTATION: an angle that is not a quarter turn draws the
+    // unturned box turned about its centre (quarter turns were done on the pixels).
+    let turn = rotation.rem_euclid(360.0);
+    let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
+    rt.GetTransform(&mut saved);
+    if box_unturned || ((turn / 90.0).round() * 90.0 - turn).abs() > 0.01 {
+        let mut rot = windows::Foundation::Numerics::Matrix3x2::default();
+        D2D1MakeRotateMatrix(turn, D2D_POINT_2F {
+            x: (x_pt + w_pt / 2.0) * PT_TO_DIP,
+            y: (y_pt + h_pt / 2.0) * PT_TO_DIP,
+        }, &mut rot);
+        let m = windows::Foundation::Numerics::Matrix3x2 {
+            M11: rot.M11 * saved.M11 + rot.M12 * saved.M21,
+            M12: rot.M11 * saved.M12 + rot.M12 * saved.M22,
+            M21: rot.M21 * saved.M11 + rot.M22 * saved.M21,
+            M22: rot.M21 * saved.M12 + rot.M22 * saved.M22,
+            M31: rot.M31 * saved.M11 + rot.M32 * saved.M21 + saved.M31,
+            M32: rot.M31 * saved.M12 + rot.M32 * saved.M22 + saved.M32,
+        };
+        rt.SetTransform(&m);
+    }
     rt.DrawBitmap(&bitmap, Some(&dest), 1.0,
         D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+    rt.SetTransform(&saved);
     Ok(())
 }
 
