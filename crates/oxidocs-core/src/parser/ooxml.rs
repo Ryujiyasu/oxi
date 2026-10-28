@@ -9659,7 +9659,26 @@ fn parse_drawing(
     // Preset shapes without text content (e.g. bracketPair outlines) should NOT generate
     // a TextBox — they are rendered via PresetShape only. A TextBox with white fill would
     // cover the underlying body text that Word renders behind/through the shape.
-    let is_outline_shape = shape.is_some() && shape_text_blocks.is_empty() && s839_text_children.is_empty();
+    // OXI_DML_RECT_BOX (2026-10-29, default ON, opt-out _DISABLE): an anchored,
+    // unturned, text-less DrawingML rect/roundRect whose fill or outline is
+    // painted becomes an empty box so it is drawn in the floats' z-order pass;
+    // as a PresetShape it drew nothing (the renderers outline only brackets,
+    // lines and ellipses). ja/creative__13152ea1's masthead: two rects (accent4
+    // lumMod 20%/lumOff 80% fill, 6699FF outline) under the logo group. Only an
+    // explicit fill counts -- the box's white default stays off -- and the flow
+    // is unchanged (wrapNone; the Shape keeps its own anchor wrap).
+    let dml_rect_box = is_anchor
+        && std::env::var_os("OXI_DML_RECT_BOX_DISABLE").is_none()
+        && shape_text_blocks.is_empty()
+        && s839_text_children.is_empty()
+        && s839_vector_shapes.is_empty()
+        && matches!(shape_type.as_deref(), Some("rect") | Some("roundRect"))
+        && rotation.map_or(true, |r| r.rem_euclid(360.0).abs() < 0.01)
+        && image.is_none()
+        && ((!has_no_fill && shape_fill.is_some())
+            || (!has_no_stroke && stroke_color_saved.is_some()));
+    let is_outline_shape = shape.is_some() && shape_text_blocks.is_empty() && s839_text_children.is_empty()
+        && !dml_rect_box;
     let has_visual = !has_no_fill || !has_no_stroke;
     // S535 (2026-06-10): an INLINE drawing (wp:inline, no wp:anchor position)
     // that carries a text box — e.g. a wordprocessingCanvas (wpc) figure with
@@ -9762,6 +9781,8 @@ fn parse_drawing(
             },
             fill: if has_no_fill || s839_attach {
                 None
+            } else if dml_rect_box {
+                shape_fill.clone()
             } else {
                 shape_fill
                     .clone()
@@ -9779,7 +9800,7 @@ fn parse_drawing(
             // ~2415) fires on its new synthetic position and pushes following
             // tables below the canvas band (3a4f pagination 0.9931 -> 0.7434,
             // 395 paras +1). Real anchored textboxes keep their parsed wrap.
-            wrap_type: if inline_tb && wrap_type.is_none() {
+            wrap_type: if (inline_tb && wrap_type.is_none()) || dml_rect_box {
                 Some(crate::ir::WrapType::None)
             } else {
                 wrap_type
