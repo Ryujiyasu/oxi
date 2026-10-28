@@ -44,6 +44,9 @@ pub struct ThemeColors {
     pub minor_font_bidi: Option<String>,
     /// Script named by settings `themeFontLang bidi` (hi-IN -> "Deva", ar -> "Arab").
     pub theme_bidi_script: Option<String>,
+    /// `fmtScheme/lnStyleLst` line widths in points, in order: a shape's
+    /// `lnRef idx="n"` with no `a:ln w` draws at entry n-1.
+    pub ln_style_widths: Vec<f32>,
 }
 
 impl ThemeColors {
@@ -307,6 +310,7 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     let mut reader = Reader::from_str(xml);
 
     let mut in_clr_scheme = false;
+    let mut in_ln_style_lst = false;
     let mut current_color_name: Option<String> = None;
     let mut in_major_font = false;
     let mut in_minor_font = false;
@@ -342,6 +346,8 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "clrScheme" => in_clr_scheme = true,
+                    "lnStyleLst" => in_ln_style_lst = true,
+                    "ln" if in_ln_style_lst => theme.ln_style_widths.push(ln_style_width(&e)),
                     "majorFont" => in_major_font = true,
                     "minorFont" => in_minor_font = true,
                     // Theme color elements: dk1, lt1, dk2, lt2, accent1-6, hlink, folHlink
@@ -357,6 +363,7 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
             Ok(Event::Empty(e)) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "ln" if in_ln_style_lst => theme.ln_style_widths.push(ln_style_width(&e)),
                     // Color value elements: srgbClr or sysClr
                     "srgbClr" if current_color_name.is_some() => {
                         for attr in e.attributes().flatten() {
@@ -535,6 +542,7 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "clrScheme" => in_clr_scheme = false,
+                    "lnStyleLst" => in_ln_style_lst = false,
                     "majorFont" => in_major_font = false,
                     "minorFont" => in_minor_font = false,
                     "dk1" | "lt1" | "dk2" | "lt2" | "accent1" | "accent2" | "accent3"
@@ -657,6 +665,14 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     }
 
     theme
+}
+
+fn ln_style_width(e: &quick_xml::events::BytesStart) -> f32 {
+    e.attributes()
+        .flatten()
+        .find(|a| local_name(a.key.as_ref()) == "w")
+        .and_then(|a| String::from_utf8_lossy(&a.value).parse::<f32>().ok())
+        .map_or(0.0, |w| w / 12700.0)
 }
 
 fn local_name(name: &[u8]) -> String {

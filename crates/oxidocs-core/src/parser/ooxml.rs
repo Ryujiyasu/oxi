@@ -8671,6 +8671,32 @@ fn parse_drawing(
                                 _ => {}
                             }
                         }
+                        // lnRef idx n with no a:ln w draws at the theme's
+                        // lnStyleLst entry n (Word PDF: 2007 theme idx2 = 2pt,
+                        // 2013 theme idx2 = 1pt, idx1 = 0.5pt).
+                        if ln_ref_idx > 0
+                            && std::env::var_os("OXI_THEME_LN_WIDTH_DISABLE").is_none()
+                        {
+                            if let Some(&w) = ctx
+                                .theme
+                                .ln_style_widths
+                                .get(ln_ref_idx as usize - 1)
+                                .filter(|w| **w > 0.0)
+                            {
+                                match s839_wsp.as_mut() {
+                                    Some(wsp) => {
+                                        if wsp.ln_w.is_none() {
+                                            wsp.ln_w = Some(w);
+                                        }
+                                    }
+                                    None => {
+                                        if stroke_width.is_none() {
+                                            stroke_width = Some(w);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         depth -= 1; // consumed the style end tag
                     }
                     _ => {}
