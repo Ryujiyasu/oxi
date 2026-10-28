@@ -7830,6 +7830,17 @@ fn parse_drawing(
     let wpg_children_on = std::env::var_os("OXI_WPG_TEXT_CHILDREN_DISABLE").is_none();
     let mut s839_grp_stack: Vec<(((f32, f32), (f32, f32), (f32, f32), (f32, f32)), bool)> = Vec::new();
     let mut s839_text_children: Vec<TextBox> = Vec::new();
+    // OXI_WPG_PICTURE_CHILDREN (2026-10-28, default ON, opt-out _DISABLE): each
+    // pic:pic member of an anchored wpg group becomes a borderless, inset-free
+    // child box holding just that picture, placed through the group stack like
+    // a text member. The drawing kept one blip (last wins) and stretched it
+    // over the whole group extent: ja/creative__13152ea1's masthead (464 x 94pt
+    // group, a 62.6 x 55.3pt logo at child (90980,190209) and a 51.9 x 50.8pt
+    // mark at (2043388,21738)) drew only the mark, 464pt wide.
+    let wpg_pics_on = std::env::var_os("OXI_WPG_PICTURE_CHILDREN_DISABLE").is_none();
+    // (off, ext, blip rel id) of the open pic member
+    let mut s839_pic: Option<((f32, f32), (f32, f32), Option<String>)> = None;
+    let mut s839_pic_children: Vec<TextBox> = Vec::new();
     let mut s839_in_wgp = false;
     let mut s839_in_grpsppr = false;
     // group xfrm: off, ext, chOff, chExt (EMU)
@@ -7895,6 +7906,9 @@ fn parse_drawing(
                             s839_grp = ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 1.0));
                             s839_grp_seen = false;
                         }
+                    }
+                    "pic" if s839_in_wgp && wpg_children_on && wpg_pics_on => {
+                        s839_pic = Some(((0.0, 0.0), (0.0, 0.0), None));
                     }
                     "wsp" if s839_in_wgp => {
                         if wpg_children_on {
@@ -8421,6 +8435,9 @@ fn parse_drawing(
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "r:embed" || key.ends_with(":embed") || key == "embed" {
                                 rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                if let Some(pm) = s839_pic.as_mut() {
+                                    pm.2 = rel_id.clone();
+                                }
                             } else if (key == "r:link" || key.ends_with(":link") || key == "link")
                                 && rel_id.is_none()
                                 && std::env::var_os("OXI_S1507_DISABLE").is_none()
@@ -8790,6 +8807,9 @@ fn parse_drawing(
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "r:embed" || key.ends_with(":embed") || key == "embed" {
                                 rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                if let Some(pm) = s839_pic.as_mut() {
+                                    pm.2 = rel_id.clone();
+                                }
                             } else if (key == "r:link" || key.ends_with(":link") || key == "link")
                                 && rel_id.is_none()
                                 && std::env::var_os("OXI_S1507_DISABLE").is_none()
@@ -8861,6 +8881,8 @@ fn parse_drawing(
                                 s839_grp.1 = (s839_cx, s839_cy);
                             } else if let Some(wsp) = s839_wsp.as_mut() {
                                 wsp.ext = (s839_cx, s839_cy);
+                            } else if let Some(pm) = s839_pic.as_mut() {
+                                pm.1 = (s839_cx, s839_cy);
                             }
                         }
                     }
@@ -9027,6 +9049,8 @@ fn parse_drawing(
                         } else if local == "off" {
                             if let Some(wsp) = s839_wsp.as_mut() {
                                 wsp.off = (x, y);
+                            } else if let Some(pm) = s839_pic.as_mut() {
+                                pm.0 = (x, y);
                             }
                         }
                     }
@@ -9324,6 +9348,97 @@ fn parse_drawing(
                             }
                         }
                     }
+                    "pic" if s839_in_wgp && s839_pic.is_some() => {
+                        if let Some((off, ext, Some(rid))) = s839_pic.take() {
+                            // the member's rect through the group stack (as member_rect)
+                            let e2p = 1.0 / 12700.0;
+                            let (mut x, mut y, mut cw, mut ch) = (off.0, off.1, ext.0, ext.1);
+                            for (((gx, gy), (gex, gey), (cx0, cy0), (cex, cey)), seen) in s839_grp_stack.iter().rev() {
+                                let (sx, sy) = if *seen && *cex > 0.0 && *cey > 0.0 {
+                                    (gex / cex, gey / cey)
+                                } else {
+                                    (1.0, 1.0)
+                                };
+                                x = gx + (x - cx0) * sx;
+                                y = gy + (y - cy0) * sy;
+                                cw *= sx;
+                                ch *= sy;
+                            }
+                            let (cx, cy, cw, ch) = (x * e2p, y * e2p, cw * e2p, ch * e2p);
+                            if cw > 0.0 && ch > 0.0 {
+                                let img = Image {
+                                    rotation: 0.0,
+                                    paragraph_space_before: 0.0,
+                                    paragraph_space_after: 0.0,
+                                    host_paragraph: None,
+                                    allow_cell_overflow,
+                                    host_exact_line: None,
+                                    page_break_before: false,
+                                    page_break_after: false,
+                                    placeholder_outline: None,
+                                    advance_extra_w: 0.0,
+                                    wrap_polygon: Vec::new(),
+                                    effect_extent_t: 0.0,
+                                    effect_extent_b: 0.0,
+                                    data: ctx.media.get(&rid).cloned().unwrap_or_default(),
+                                    width: cw,
+                                    height: ch,
+                                    alt_text: None,
+                                    content_type: ctx.media_types.get(&rid).cloned(),
+                                    position: None,
+                                    wrap_type: None,
+                                    crop: None,
+                                    anchor_block_index: 0,
+                                    relative_height,
+                                    behind_doc,
+                                };
+                                s839_pic_children.push(TextBox {
+                                    wrap_polygon: Vec::new(),
+                                    text_outline_inset: 0.0,
+                                    vertical_text: false,
+                                    blocks: vec![Block::Image(img)],
+                                    inline: false,
+                                    font_ref_color: None,
+                                    width: cw,
+                                    height: ch,
+                                    position: Some(FloatingPosition {
+                                        flow_page_offset: 0,
+                                        flow_boundary_offset: 0,
+                                        flow_source: None,
+                                        x: cx,
+                                        y: cy,
+                                        h_relative: Some("group".to_string()),
+                                        v_relative: Some("group".to_string()),
+                                        h_align: None,
+                                        v_align: None,
+                                        dist_l: None,
+                                        dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
+                                    }),
+                                    border: false,
+                                    stroke_color: None,
+                                    stroke_width: None,
+                                    fill: None,
+                                    anchor_block_index: 0,
+                                    corner_radius: None,
+                                    inset_left: Some(0.0),
+                                    inset_right: Some(0.0),
+                                    inset_top: Some(0.0),
+                                    auto_fit: false,
+                                    inset_bottom: Some(0.0),
+                                    wrap_type: Some(crate::ir::WrapType::None),
+                                    v_text_anchor: None,
+                                    relative_height,
+                                    behind_doc,
+                                    vert_overflow: None,
+                                    compat_line_spacing: false,
+                                    vector_shapes: Vec::new(),
+                                    host_break_after: false,
+                                    children: Vec::new(),
+                                    body_wrap_none: false,
+                                });
+                            }
+                        }
+                    }
                     "wgp" => {
                         s839_in_wgp = false;
                         s839_wsp = None;
@@ -9394,8 +9509,19 @@ fn parse_drawing(
     };
     let picture_quarter_turn = position.is_none()
         && ((picture_rotation - 90.0).abs() < 0.5 || (picture_rotation - 270.0).abs() < 0.5);
+    // the group-sized picture stays as a data-less placeholder (renderers skip
+    // empty data) so its wrap and flow are unchanged: blind en/reference__00825ae3
+    // wraps the body square around a picture group
+    let pics_as_children = position.is_some() && !s839_pic_children.is_empty();
+    if pics_as_children {
+        s839_text_children.append(&mut s839_pic_children);
+    }
     let image = if let Some(rid) = rel_id {
-        let data = ctx.media.get(&rid).cloned().unwrap_or_default();
+        let data = if pics_as_children {
+            Vec::new()
+        } else {
+            ctx.media.get(&rid).cloned().unwrap_or_default()
+        };
         let content_type = ctx.media_types.get(&rid).cloned();
         Some(Image {
             rotation: picture_rotation,
