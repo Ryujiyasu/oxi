@@ -1771,9 +1771,21 @@ impl<'a> LineBreaker<'a> {
             // +8pt phantom width → «Suckling6;» wrapped → a 3-line phase
             // shift by p3 (the {+1:3} residual). The S655/S677 fragment-
             // flattening class; None==None for ref-free text → byte-identical.
+            // OXI_SUP_WORD_UNIT (2026-10-28, default ON, opt-out _DISABLE): inside a
+            // Latin word the vertAlign seam is a metric segment, not a break
+            // opportunity (see metric_style_boundary below). Word keeps «Potton» +
+            // superscript «18» + «.» on one line in every arm of
+            // `_pb_supref_word_unit_gen.py` (footnote reference / plain superscript /
+            // none, 8 widths each) and carries all three down together; the flush
+            // let Oxi wrap «.» alone (en/legal__00081e80 p2 last line, so footnote
+            // 18 went to p4 instead of p3).
+            let sup_word_unit = std::env::var_os("OXI_SUP_WORD_UNIT_DISABLE").is_none()
+                && latin_wordwrap
+                && !word.is_empty();
             if std::env::var("OXI_S899_DISABLE").is_err()
                 && frag_outer_idx > 0
                 && fragments[frag_outer_idx - 1].1.vertical_align != style.vertical_align
+                && !sup_word_unit
             {
                 flush_word!(fragments[frag_outer_idx - 1].1);
             }
@@ -1813,7 +1825,8 @@ impl<'a> LineBreaker<'a> {
                                 || previous_style.font_family_cs != style.font_family_cs))
                         || previous_style.bold != style.bold
                         || previous_style.italic != style.italic
-                        || previous_style.run_border != style.run_border);
+                        || previous_style.run_border != style.run_border
+                        || (sup_word_unit && previous_style.vertical_align != style.vertical_align));
                 if metric_style_boundary || script_size_boundary || ((has_private_glyph(previous_text) || has_private_glyph(text))
                     && (previous_style.font_family != style.font_family
                         || previous_style.font_family_east_asia != style.font_family_east_asia
