@@ -789,7 +789,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     oxidocs_core::layout::LayoutContent::ClipEnd => {
                         RestoreDC(mem_dc, -1);
                     }
-                    oxidocs_core::layout::LayoutContent::Image { ref data, ref crop, .. } => {
+                    oxidocs_core::layout::LayoutContent::Image { ref data, ref crop, rotation, .. } => {
                         if !data.is_empty() {
                             // EMF/WMF: the `image` crate cannot decode a metafile, so
                             // `load_from_memory` just returns Err and the whole branch is
@@ -860,6 +860,14 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                             img.crop_imm(x0, y0, cw, ch)
                                         } else { img }
                                     }
+                                    _ => img,
+                                };
+                                // OXI_PICTURE_ROTATION: a quarter or half turn rotates the pixels; the element
+                                // box is already the turned one. Other angles draw unturned.
+                                let img = match rotation.rem_euclid(360.0).round() as i32 {
+                                    90 => img.rotate90(),
+                                    180 => img.rotate180(),
+                                    270 => img.rotate270(),
                                     _ => img,
                                 };
                                 let rgba = img.to_rgba8();

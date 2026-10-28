@@ -9370,10 +9370,26 @@ fn parse_drawing(
     };
 
     // Build image if we have a blip reference
+    // OXI_PICTURE_ROTATION (2026-10-28, default ON, opt-out _DISABLE): an INLINE
+    // picture's `a:xfrm rot` turns it. Word lays a quarter-turned inline picture
+    // out by its VISUAL box: en/creative__00d1200b (wp:extent 644 x 483,
+    // rot=5400000, 1970x1477 JPEG without an EXIF orientation) stands 483 wide and
+    // 644 tall in Word's PDF (top 94.6, bottom 738.6). Oxi drew it unturned and
+    // 483 tall. Anchored pictures turn about their centre from an unturned
+    // position box -- not handled here (rotation stays 0 for them).
+    let picture_rotation = if position.is_none()
+        && std::env::var_os("OXI_PICTURE_ROTATION_DISABLE").is_none()
+    {
+        rotation.map_or(0.0, |r| r.rem_euclid(360.0))
+    } else {
+        0.0
+    };
+    let picture_quarter_turn = (picture_rotation - 90.0).abs() < 0.5 || (picture_rotation - 270.0).abs() < 0.5;
     let image = if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
         Some(Image {
+            rotation: picture_rotation,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
@@ -9387,8 +9403,8 @@ fn parse_drawing(
             effect_extent_t: if std::env::var("OXI_BODY_IMAGE_TOP_EXTENT_DISABLE").is_err() { effect_extent_t } else { 0.0 },
             effect_extent_b: if std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() { effect_extent_b } else { 0.0 },
             data,
-            width,
-            height,
+            width: if picture_quarter_turn { height } else { width },
+            height: if picture_quarter_turn { width } else { height },
             alt_text,
             content_type,
             position: position.clone(),
@@ -9650,6 +9666,7 @@ fn parse_drawing(
         && std::env::var("OXI_S1182_DISABLE").is_err();
     let image = if s1182_visual {
         Some(Image {
+            rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
@@ -9682,6 +9699,7 @@ fn parse_drawing(
         && height > 0.0
     {
         Some(Image {
+            rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
@@ -10351,6 +10369,7 @@ fn parse_vml_pict(
         return Ok(DrawingResult {
             symbol_text: None,
             image: Some(Image {
+                rotation: 0.0,
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
                 host_paragraph: None,
@@ -10466,6 +10485,7 @@ fn parse_vml_pict(
             None
         };
         Some(Image {
+            rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
@@ -10572,6 +10592,7 @@ fn parse_vml_pict(
             body_wrap_none: false,
         });
         let placeholder = Some(Image {
+            rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
@@ -10845,6 +10866,7 @@ fn parse_ole_object(
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
         Some(Image {
+            rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
             host_paragraph: None,
@@ -13026,6 +13048,7 @@ fn parse_table_cell(
                             && pr.math_blocks.is_empty();
                         if s838_visual_only {
                             blocks.push(Block::Image(crate::ir::Image {
+                                rotation: 0.0,
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,
                                 host_paragraph: None,

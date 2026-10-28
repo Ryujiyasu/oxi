@@ -530,10 +530,10 @@ unsafe fn render_page_elements(
                 if exclude.iter().any(|e| e == "clip") { continue; }
                 rt.PopAxisAlignedClip();
             }
-            LayoutContent::Image { ref data, ref crop, .. } => {
+            LayoutContent::Image { ref data, ref crop, rotation, .. } => {
                 if exclude.iter().any(|e| e == "image") { continue; }
                 if !data.is_empty() {
-                    render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data, *crop)?;
+                    render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data, *crop, *rotation)?;
                 }
             }
             LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail } => {
@@ -730,6 +730,7 @@ unsafe fn render_image(
     x_pt: f32, y_pt: f32, w_pt: f32, h_pt: f32,
     data: &[u8],
     crop: Option<(f32, f32, f32, f32)>,
+    rotation: f32,
 ) -> windows::core::Result<()> {
     use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::Direct2D::Common::*;
@@ -778,6 +779,14 @@ unsafe fn render_image(
                 img.crop_imm(x0, y0, cw, ch)
             } else { img }
         }
+        _ => img,
+    };
+    // OXI_PICTURE_ROTATION: a quarter or half turn rotates the pixels; the element
+    // box is already the turned one. Other angles draw unturned.
+    let img = match rotation.rem_euclid(360.0).round() as i32 {
+        90 => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
         _ => img,
     };
     let rgba = img.to_rgba8();

@@ -2788,6 +2788,9 @@ pub enum LayoutContent {
         /// DfE crest: srcRect r=38.06% b=19.93% → the crest rendered at 62%
         /// width with a matching whitespace band below).
         crop: Option<(f32, f32, f32, f32)>,
+        /// OXI_PICTURE_ROTATION: degrees clockwise (see ir::Image::rotation); the
+        /// element box is already the visual one.
+        rotation: f32,
     },
     TableBorder {
         x1: f32,
@@ -7331,7 +7334,7 @@ impl LayoutEngine {
                 let (x, y) = self.resolve_floating_image_position(img, page, &anchor_y, top);
                 drawings.push((img.behind_doc, img.relative_height, target, vec![
                     LayoutElement::new(x, y, img.width, img.height, LayoutContent::Image {
-                        data: img.data.clone(),
+                        data: img.data.clone(), rotation: img.rotation,
                         content_type: img.content_type.clone(),
                         crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                     })
@@ -8515,7 +8518,7 @@ cells={} pitch={:.2} text={:?}",
         if col.image {
             if let Block::Image(img) = &page.blocks[recipe.block_idx] {
                 return vec![LayoutElement::new(x, y + col.top, img.width, img.height, LayoutContent::Image {
-                    data: img.data.clone(),
+                    data: img.data.clone(), rotation: img.rotation,
                     content_type: img.content_type.clone(),
                     crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                 })];
@@ -9634,7 +9637,7 @@ cells={} pitch={:.2} text={:?}",
                         img.width.min(inner_width),
                         img.height,
                         LayoutContent::Image {
-                            data: img.data.clone(),
+                            data: img.data.clone(), rotation: img.rotation,
                             content_type: img.content_type.clone(),
                             crop: img
                                 .crop

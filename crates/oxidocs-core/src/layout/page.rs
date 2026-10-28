@@ -9507,7 +9507,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         img.width,
                         img.height,
                         LayoutContent::Image {
-                            data: img.data.clone(),
+                            data: img.data.clone(), rotation: img.rotation,
                             content_type: img.content_type.clone(),
                             crop: img
                                 .crop
@@ -10420,7 +10420,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             img.width,
                             img.height,
                             LayoutContent::Image {
-                                data: img.data.clone(),
+                                data: img.data.clone(), rotation: img.rotation,
                                 content_type: img.content_type.clone(),
                                 crop: img
                                     .crop
@@ -10454,7 +10454,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             img.width,
                             img.height,
                             LayoutContent::Image {
-                                data: img.data.clone(),
+                                data: img.data.clone(), rotation: img.rotation,
                                 content_type: img.content_type.clone(),
                                 crop: img
                                     .crop
@@ -10739,7 +10739,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 img.width,
                                 img.height,
                                 LayoutContent::Image {
-                                    data: img.data.clone(),
+                                    data: img.data.clone(), rotation: img.rotation,
                                     content_type: img.content_type.clone(),
                                     crop: img
                                         .crop
@@ -10801,7 +10801,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 paint_w,
                                 paint_h,
                                 LayoutContent::Image {
-                                    data: img.data.clone(),
+                                    data: img.data.clone(), rotation: img.rotation,
                                     content_type: img.content_type.clone(),
                                     crop: paint_crop
                                         .as_ref()

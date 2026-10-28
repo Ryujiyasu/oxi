@@ -9356,7 +9356,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             img.width,
                                                             oh,
                                                             LayoutContent::Image {
-                                                                data: img.data.clone(),
+                                                                data: img.data.clone(), rotation: img.rotation,
                                                                 content_type: img
                                                                     .content_type
                                                                     .clone(),
@@ -9989,7 +9989,7 @@ impl<'a> TableFitLayouter<'a> {
                                         LayoutEngine::cell_float_position(img, &float_tops, (cell_w - pad_l - pad_r).max(0.0)));
                                 let mut element = LayoutElement::new(cell_x + pad_l + x, y,
                                     img.width, img.height, LayoutContent::Image {
-                                        data: img.data.clone(), content_type: img.content_type.clone(),
+                                        data: img.data.clone(), rotation: img.rotation, content_type: img.content_type.clone(),
                                         crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                                     });
                                 element.paragraph_index = block_idx;
@@ -10042,7 +10042,7 @@ impl<'a> TableFitLayouter<'a> {
                                     img.width,
                                     img.height,
                                     LayoutContent::Image {
-                                        data: img.data.clone(),
+                                        data: img.data.clone(), rotation: img.rotation,
                                         content_type: img.content_type.clone(),
                                         crop: img
                                             .crop

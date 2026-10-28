@@ -8389,7 +8389,7 @@ impl<'a> ParagraphLayouter<'a> {
                             ow,
                             image_h,
                             LayoutContent::Image {
-                                data: img.data.clone(),
+                                data: img.data.clone(), rotation: img.rotation,
                                 content_type: img.content_type.clone(),
                                 crop,
                             },
