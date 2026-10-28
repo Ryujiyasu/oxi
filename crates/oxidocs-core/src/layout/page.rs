@@ -2143,13 +2143,29 @@ impl<'a> PageLayouter<'a> {
             // Page-relative shapes keep their physical Y even when the anchor
             // paragraph moves. Their wrapping still excludes body text; behindDoc
             // controls painting order, not the wrap rectangle.
-            if std::env::var_os("OXI_PAGE_SHAPE_WRAP").is_some() {
+            // OXI_PAGE_SHAPE_WRAP (default ON since 2026-10-28, opt-out _DISABLE):
+            // en/policies__0026b7f7's left sidebar (a wrapTight text box, posV page
+            // 133.2, 1.2-192.4) pushes «New devices» to 200.7 (Word 201); without the
+            // band the body ran under the sidebar from 54.
+            if std::env::var_os("OXI_PAGE_SHAPE_WRAP_DISABLE").is_none() {
                 for tb in &page.text_boxes {
                     if tb.anchor_block_index != block_idx
                         || !matches!(tb.wrap_type, Some(crate::ir::WrapType::Square) | Some(crate::ir::WrapType::Tight))
                     { continue; }
                     let Some(pos) = tb.position.as_ref() else { continue };
                     if pos.v_relative.as_deref() != Some("page") { continue; }
+                    // A tight contour that is not a rectangle wraps by its outline,
+                    // which a band cannot express: golden/ukframework's cover box (a
+                    // notched polygon) lets Word set p1's paragraphs in the notches at
+                    // x 99-220, and its bounding band pushed all of p1 to p2.
+                    if tb.wrap_type == Some(crate::ir::WrapType::Tight) && !tb.wrap_polygon.is_empty() {
+                        let b = wrap_contour_bounds(tb.wrap_type, &tb.wrap_polygon);
+                        let rectangle = tb.wrap_polygon.iter().all(|&(x, y)| {
+                            ((x - b.0).abs() < 0.01 || (x - b.2).abs() < 0.01)
+                                && ((y - b.1).abs() < 0.01 || (y - b.3).abs() < 0.01)
+                        });
+                        if !rectangle { continue; }
+                    }
                     let (ref_x, ref_w) = if pos.h_relative.as_deref() == Some("page") {
                         (0.0, page.size.width)
                     } else if pos.h_relative.as_deref() == Some("column") {
@@ -10312,7 +10328,45 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if let Some(y) = attachment_y.get_mut(text_box.anchor_block_index) { *y = page.margin.top; }
                     }
                     let target_page = target_page + offset;
-                    let mut tb_elements = self.layout_text_box(text_box, page, &attachment_y, &block_col_x);
+                    // OXI_COLUMN_WRAPPED_LEFT (2026-10-28, default ON, opt-out _DISABLE): a
+                    // column-relative offset is measured from the anchor paragraph's
+                    // WRAPPED left edge when a float on its left narrows that paragraph.
+                    // `_pb_column_anchor_wrapped_gen.py` (150pt wrapSquare rectangle, distR
+                    // 9pt, marker posOffset 20pt): anchored beside it the column marker sits
+                    // at 233 = 204 + 9 + 20, below it at 74 = 54 + 20; margin / page are
+                    // unaffected. en/policies__0026b7f7: the WhatsApp box (column -187pt,
+                    // lIns 0) draws at 13.9 in Word beside a wrapTight rectangle ending at
+                    // 192.4 + 9, where Oxi put it at -133, off the page. A box that makes
+                    // its own band is left alone (the bands do not record their owner).
+                    let wrapped_col_x: Option<Vec<f32>> = (std::env::var_os("OXI_COLUMN_WRAPPED_LEFT_DISABLE").is_none()
+                        && text_box.position.as_ref().is_some_and(|p| p.h_relative.as_deref() == Some("column") && p.h_align.is_none())
+                        && matches!(text_box.wrap_type, None | Some(crate::ir::WrapType::None)))
+                        .then(|| {
+                            let ai = text_box.anchor_block_index;
+                            let (Some(&col), Some(&ay), Some(&pg)) = (block_col_x.get(ai), block_y_positions.get(ai), block_page_indices.get(ai)) else {
+                                return None;
+                            };
+                            let left = s758_bands
+                                .iter()
+                                // the band reaches the anchor's first line (to the next
+                                // block's top): 0026b7f7's anchor line is 130.5-140.3 and the
+                                // sidebar starts at 133.2
+                                .filter(|b| {
+                                    let line_bottom = block_y_positions.get(ai + 1).copied()
+                                        .filter(|&n| n > ay && block_page_indices.get(ai + 1) == Some(&pg))
+                                        .unwrap_or(ay + 12.0);
+                                    b.0 == pg && b.1 < line_bottom && b.2 > ay && b.3 <= col + 1.0 && b.4 > col + 1.0
+                                })
+                                .map(|b| b.4)
+                                .fold(col, f32::max);
+                            (left > col + 0.5).then(|| {
+                                let mut v = block_col_x.clone();
+                                v[ai] = left;
+                                v
+                            })
+                        })
+                        .flatten();
+                    let mut tb_elements = self.layout_text_box(text_box, page, &attachment_y, wrapped_col_x.as_deref().unwrap_or(&block_col_x));
                     // S1089: keep the band where it was RESERVED — the anchor
                     // paragraph has since moved below it, so the block-relative
                     // resolve would double-shift (the S734 image contract).
