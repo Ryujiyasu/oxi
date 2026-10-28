@@ -9060,6 +9060,23 @@ cells={} pitch={:.2} text={:?}",
                                 style: None,
                             },
                         ));
+                    } else if !vs.path.is_empty() && std::env::var_os("OXI_ANCHORED_GROUP_PATH_DISABLE").is_none() {
+                        // OXI_ANCHORED_GROUP_PATH (2026-10-29, default ON, opt-out
+                        // _DISABLE): an anchored group's curve member is its outline,
+                        // as on the inline path (S1120) -- it was filled as its box
+                        // (ja/creative__13152ea1's masthead circles drew as squares)
+                        elements.push(LayoutElement::new(
+                            vx,
+                            vy,
+                            vs.w,
+                            vs.h,
+                            LayoutContent::VectorPath {
+                                segs: vs.path.clone(),
+                                fill: vs.fill.clone(),
+                                stroke_color: vs.stroke.clone(),
+                                stroke_width: vs.stroke_width,
+                            },
+                        ));
                     } else {
                         elements.push(LayoutElement::new(
                             vx,

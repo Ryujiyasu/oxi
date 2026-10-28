@@ -9236,6 +9236,27 @@ fn parse_drawing(
                                     }
                                 }
                                 segs
+                            } else if w.cmds.is_empty()
+                                && w.prst.as_deref() == Some("ellipse")
+                                && std::env::var_os("OXI_WPG_ELLIPSE_DISABLE").is_none()
+                            {
+                                // OXI_WPG_ELLIPSE (2026-10-28, default ON, opt-out
+                                // _DISABLE): a preset ellipse member is the four
+                                // quarter arcs of its box (cubic, k = 0.5523) in the
+                                // same 0..1 space as a custGeom path. Only line/rect
+                                // members became vector shapes, so ja/creative__13152ea1's
+                                // nine filled circles behind the masthead letters
+                                // (FF0000 / 00CC00) were not drawn.
+                                use crate::ir::PathSeg::{C, M, Z};
+                                let k = 0.5523 * 0.5;
+                                vec![
+                                    M(1.0, 0.5),
+                                    C(1.0, 0.5 + k, 0.5 + k, 1.0, 0.5, 1.0),
+                                    C(0.5 - k, 1.0, 0.0, 0.5 + k, 0.0, 0.5),
+                                    C(0.0, 0.5 - k, 0.5 - k, 0.0, 0.5, 0.0),
+                                    C(0.5 + k, 0.0, 1.0, 0.5 - k, 1.0, 0.5),
+                                    Z,
+                                ]
                             } else {
                                 Vec::new()
                             };
