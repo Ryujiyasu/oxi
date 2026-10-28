@@ -13336,6 +13336,10 @@ fn parse_table_cell(
                                             image_host.style.has_direct_before = true;
                                             image_host.style.before_autospacing = false;
                                         }
+                                        // The host's anchored shapes paint once, from the first image.
+                                        if image_index > 0 {
+                                            image_host.shapes.clear();
+                                        }
                                         if image_index + 1 < image_count {
                                             image_host.style.space_after = Some(0.0);
                                             image_host.style.has_direct_after = true;

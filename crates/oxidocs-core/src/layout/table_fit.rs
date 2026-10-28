@@ -10050,6 +10050,40 @@ impl<'a> TableFitLayouter<'a> {
                                             .map(|c| (c.top, c.right, c.bottom, c.left)),
                                     },
                                 ));
+                                // An image-only cell paragraph is dropped (S536); its
+                                // anchored shapes ride on the image's host copy and
+                                // paint over the image from the same paragraph top.
+                                if std::env::var_os("OXI_CELL_IMAGE_HOST_SHAPES_DISABLE").is_none() {
+                                    for shape in img.host_paragraph.iter().flat_map(|h| h.shapes.iter()) {
+                                        if let Some(ref pos) = shape.position {
+                                            let content = shape_fill_boxrect(shape).unwrap_or_else(|| {
+                                                LayoutContent::PresetShape {
+                                                    shape_type: shape.shape_type.clone(),
+                                                    stroke_color: shape.stroke_color.clone(),
+                                                    stroke_width: shape.stroke_width.unwrap_or(0.5),
+                                                    flip_h: shape.flip_h,
+                                                    flip_v: shape.flip_v,
+                                                    arrow_head: shape.arrow_head,
+                                                    arrow_tail: shape.arrow_tail,
+                                                }
+                                            });
+                                            let sx = if shape.escapes_cell
+                                                && std::env::var("OXI_VMLRECT_DISABLE").is_err()
+                                            {
+                                                start_x + pos.x
+                                            } else {
+                                                cell_x + pad_l + pos.x
+                                            };
+                                            cell_elements.push(LayoutElement::new(
+                                                sx,
+                                                content_h + pos.y,
+                                                shape.width,
+                                                shape.height,
+                                                content,
+                                            ));
+                                        }
+                                    }
+                                }
                                 // S715: typed-grid cell image line snaps to whole grid cells
                                 // (mirrors the pre-pass arm; see comment there).
                                 let img_line =
