@@ -3990,8 +3990,23 @@ impl<'a> LineBreaker<'a> {
                         let default_fs = pitch / ratio;
                         let char_space_pt = pitch - default_fs;
                         if self.balance_single_byte_double_byte_width {
-                            let cell = if char_space_pt >= 0.0 {
+                            // OXI_HALF_CELL_ADDITIVE (2026-10-28, default ON, opt-out
+                            // _DISABLE): the half-width cell is half of the SAME additive
+                            // pitch the full-width branch uses since S1210 (fs + charSpace),
+                            // not the proportional fs * pitch / default. The two agree at the
+                            // default size and part with it: 0ea3ec86's p1 title (ＭＳ ゴシック
+                            // 36pt on the 11pt / charSpace 3194 grid) draws «(» «)» at 18.4
+                            // = (36 + 0.78) / 2 with no run spacing and 17.6-17.8 with -16
+                            // (`_pb_grid_bigchar_slice.py`, Word PDF); the proportional 19.28
+                            // / 18.48 put «)» past the floored edge and wrapped it, 40pt down
+                            // the page and three paragraphs onto p2.
+                            let cell = if char_space_pt >= 0.0
+                                && (std::env::var_os("OXI_HALF_CELL_ADDITIVE_DISABLE").is_some()
+                                    || std::env::var("OXI_S1210_DISABLE").is_ok())
+                            {
                                 font_size * pitch / default_fs
+                            } else if char_space_pt >= 0.0 {
+                                font_size + char_space_pt
                             } else {
                                 font_size + char_space_pt
                             };
