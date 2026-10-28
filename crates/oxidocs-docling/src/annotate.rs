@@ -408,7 +408,7 @@ fn union_of(provs: &[Value]) -> Vec<Value> {
     m.into_iter().map(|(p, r)| prov(p, r, (0, 0))).collect()
 }
 
-fn resolve<'v>(d: &'v Value, r: &str) -> (&'static str, usize) {
+fn resolve(d: &Value, r: &str) -> (&'static str, usize) {
     let _ = d;
     let mut it = r.trim_start_matches("#/").split('/');
     let kind = match it.next() {

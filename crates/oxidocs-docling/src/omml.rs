@@ -2,6 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Ported from docling's docling/backend/docx/latex/omml.py
+// (Copyright The Docling Contributors, MIT License), which was itself adapted
+// from dwml's dwml/omml.py (https://github.com/xiilei/dwml, Apache License 2.0).
+// Changes: rewritten in Rust over a roxmltree tree. Both licenses' terms are in
+// THIRD_PARTY_NOTICES.md and licenses/ next to this crate's Cargo.toml.
+
 //! OMML (`m:oMath`) → LaTeX, spelled the way docling's own converter spells it
 //! (`docling/backend/docx/latex/omml.py`, itself adapted from dwml), so a
 //! `formula` item's `text` matches docling's output for the same equation.

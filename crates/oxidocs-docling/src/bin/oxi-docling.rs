@@ -13,6 +13,18 @@ fn die(msg: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
+    // The layout engine recurses deeply on real documents; Windows gives the
+    // main thread 1 MB (a debug build overflowed it on a two-page report).
+    let worker = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(run)
+        .unwrap_or_else(|e| die(format!("cannot start the worker thread: {e}")));
+    if worker.join().is_err() {
+        std::process::exit(101);
+    }
+}
+
+fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = "usage: oxi-docling annotate <input.docx> <docling.json> [output.json]\n       oxi-docling <input.docx> [output.json]";
     let (out, path) = if args.first().map(String::as_str) == Some("annotate") {
