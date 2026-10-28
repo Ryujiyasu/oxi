@@ -1,0 +1,10 @@
+[package]
+name = "oxi-lrpb-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+oxidocs-core = { path = "../../crates/oxidocs-core" }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde_json = "1"

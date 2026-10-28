@@ -3238,6 +3238,16 @@ fn s1251_host(run: &Run, ws_host: bool) -> bool {
         || (ws_host && !run.text.is_empty() && !run.text.contains('\t'))
 }
 
+/// True when `OXI_IGNORE_LRPB` is set to anything but empty or `0`: the parser
+/// then records no `<w:lastRenderedPageBreak/>` (see its match arm).
+fn lrpb_ignored() -> bool {
+    lrpb_ignored_from(std::env::var("OXI_IGNORE_LRPB").ok().as_deref())
+}
+
+fn lrpb_ignored_from(value: Option<&str>) -> bool {
+    matches!(value, Some(v) if !v.is_empty() && v != "0")
+}
+
 
 fn offset_drawing_attachment(drawing: &mut DrawingResult, page_offset: usize, boundary_offset: usize) {
     for position in [
@@ -7059,8 +7069,15 @@ fn parse_run(
                             text.push('\u{2011}');
                         }
                     }
+                    // OXI_IGNORE_LRPB: drop Word's saved page-break hint at the
+                    // only place it enters the IR, so every downstream LRPB rule
+                    // (SOFT break, row/cell respect, total_lrpb_count) sees none.
+                    // Benchmarks scored against Word set this: the marker is
+                    // Word's own answer, and other engines do not get it.
                     "lastRenderedPageBreak" => {
-                        has_last_rendered_page_break = true;
+                        if !lrpb_ignored() {
+                            has_last_rendered_page_break = true;
+                        }
                     }
                     "fldChar" => ctx.field_control(&e, &mut text),
                     "footnoteReference" => {
