@@ -2865,7 +2865,14 @@ impl<'a> PageLayouter<'a> {
                 // different left/right margins, probexmargins).
                 let run_geom_differs = col_runs[active_run_idx].2 != col_x_positions
                     || col_runs[active_run_idx].3 != col_widths;
-                if run_cols != num_columns || run_geom_differs {
+                // A continuous section break closes a multi-column section
+                // even when the next section has the same columns: Word balances
+                // the closed section and starts the next below it
+                // (_pb_colbal_samecount_gen.py: 12/12 for same geometry, other
+                // margin, other spacing; educational__004f33a0 p5).
+                let closes_multicol = num_columns > 1
+                    && std::env::var_os("OXI_COLBAL_SAMECOUNT_DISABLE").is_none();
+                if run_cols != num_columns || run_geom_differs || closes_multicol {
                     section_geometry_changed = true;
                     // S750 (2026-07-05, default ON, opt-out OXI_S750_DISABLE):
                     // Word BALANCES the columns of a continuous multi-column
@@ -2878,7 +2885,7 @@ impl<'a> PageLayouter<'a> {
                     // are within one row of equal, then continue below the
                     // balanced band. v1 scope: 2 columns.
                     if num_columns == 2
-                        && run_cols != num_columns
+                        && (run_cols != num_columns || closes_multicol)
                         && std::env::var("OXI_S750_DISABLE").is_err()
                     {
                         let allocated_bottom = column_search.observe(
@@ -9809,7 +9816,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // than simply balancing whatever is left (`end_8lines_nothingafter`).
         if num_columns == 2
             && active_run_idx + 1 < col_runs.len()
-            && col_runs[active_run_idx + 1].1 != num_columns
+            && (col_runs[active_run_idx + 1].1 != num_columns
+                || std::env::var_os("OXI_COLBAL_SAMECOUNT_DISABLE").is_none())
             && std::env::var("OXI_S750_DISABLE").is_err()
             && std::env::var("OXI_TEXT_BALANCE_DISABLE").is_err()
             && std::env::var("OXI_COL_TRAILING_BALANCE_DISABLE").is_err()
