@@ -13489,6 +13489,35 @@ impl<'a> TableFitLayouter<'a> {
                     } else {
                         None
                     };
+                    // The S942 band is drawn as deep as it is reserved: the
+                    // continuation's box closes on the floor, not on its content
+                    // (policies__00602e8a p3: Word's empty continuation box runs
+                    // 113.9 -> 179.3 = trH 64.85 + bw; Oxi reserved it but drew
+                    // the rules only to 124.65).
+                    if let Some(fl) = s942_floor {
+                        let drawn = elements.iter().filter_map(|e| match &e.content {
+                            LayoutContent::TableBorder { y2, .. } => Some(*y2),
+                            _ => None,
+                        }).fold(f32::NEG_INFINITY, f32::max);
+                        if std::env::var_os("OXI_S942_BOX_DISABLE").is_none()
+                            && drawn.is_finite() && fl > drawn + 0.5
+                        {
+                            for e in elements.iter_mut() {
+                                if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
+                                    if (*y1 - *y2).abs() < 0.1 {
+                                        if (*y1 - drawn).abs() < 0.5 {
+                                            *y1 = fl;
+                                            *y2 = fl;
+                                            e.y = fl;
+                                        }
+                                    } else if (*y2 - drawn).abs() < 0.5 {
+                                        *y2 = fl;
+                                        e.height = fl - e.y;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let cont_max_y = if let Some(fl) = s942_floor {
                         cont_max_y.max(fl)
                     } else {
