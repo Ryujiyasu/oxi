@@ -10652,8 +10652,20 @@ impl<'a> TableFitLayouter<'a> {
                             .map(|b| b.width)
                             .unwrap_or(outer_width)
                     };
+                    // A table with no table style draws from its table border only
+                    // the sides its direct tblBorders declares.
+                    let edge_none = BorderDef { style: "none".to_string(), width: 0.0, color: None, space: 0.0 };
+                    let undeclared = |bit: u8| -> Option<&BorderDef> {
+                        match table.style.direct_edge_mask {
+                            Some(mask) if table.style.style_id.is_none() && mask & bit == 0 => Some(&edge_none),
+                            _ => None,
+                        }
+                    };
+                    let last_row = row_idx + 1 == num_rows;
+                    let last_cell = cell_idx + 1 == row.cells.len();
                     let (top_color, top_width, top_style) = resolve_border(
-                        cell_borders.and_then(|b| b.top.as_ref()).or(inherited_top_rule.as_ref()),
+                        cell_borders.and_then(|b| b.top.as_ref()).or(inherited_top_rule.as_ref())
+                            .or_else(|| undeclared(if row_idx == 0 { 1 } else { 16 })),
                         if row_idx == 0 {
                             outer_width
                         } else {
@@ -10663,11 +10675,12 @@ impl<'a> TableFitLayouter<'a> {
                     let (bot_color, bot_width, bot_style) = resolve_border(
                         cell_borders.and_then(|b| b.bottom.as_ref()).or_else(|| {
                             if row_idx + 1 == num_rows { inherited_bottom_rule.as_ref() } else { None }
-                        }),
+                        }).or_else(|| undeclared(if last_row { 4 } else { 16 })),
                         horizontal_width,
                     );
                     let (left_color, left_width, left_style) = resolve_border(
-                        cell_borders.and_then(|b| b.left.as_ref()),
+                        cell_borders.and_then(|b| b.left.as_ref())
+                            .or_else(|| undeclared(if cell_idx == 0 { 2 } else { 32 })),
                         if cell_idx == 0 {
                             outer_width
                         } else {
@@ -10675,7 +10688,8 @@ impl<'a> TableFitLayouter<'a> {
                         },
                     );
                     let (right_color, right_width, right_style) =
-                        resolve_border(cell_borders.and_then(|b| b.right.as_ref()), vertical_width);
+                        resolve_border(cell_borders.and_then(|b| b.right.as_ref())
+                            .or_else(|| undeclared(if last_cell { 8 } else { 32 })), vertical_width);
 
                     // When cells have their own borders (tcBorders), draw each side per cell.
                     // When using table-level borders, use collapsed model to avoid double-drawing.

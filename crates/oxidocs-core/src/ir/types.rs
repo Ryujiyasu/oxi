@@ -2121,6 +2121,12 @@ impl Default for ParagraphStyle {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TableStyle {
+    /// Sides a direct `w:tblBorders` declares (bits: top 1, left 2, bottom 4,
+    /// right 8, insideH 16, insideV 32). A table with no table style draws only
+    /// these sides from the table border; the rest are none (reports__001d0cb2's
+    /// top/bottom-only appendix table).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_edge_mask: Option<u8>,
     /// Default row cohesion inherited from this table style.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_cant_split: Option<bool>,

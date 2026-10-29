@@ -12555,6 +12555,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
     let mut style = TableStyle::default();
     let mut depth = 0;
     let mut in_borders = false;
+    let mut edge_mask: u8 = 0;
 
     loop {
         match reader.read_event()? {
@@ -12667,6 +12668,16 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 }
                                 _ => {}
                             }
+                        }
+                        if !is_none && in_borders {
+                            edge_mask |= match local.as_str() {
+                                "top" => 1,
+                                "left" | "start" => 2,
+                                "bottom" => 4,
+                                "right" | "end" => 8,
+                                "insideH" => 16,
+                                _ => 32,
+                            };
                         }
                         if !is_none {
                             style.border = true;
@@ -12888,6 +12899,9 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
         }
     }
 
+    if style.explicit_borders && std::env::var_os("OXI_TBL_EDGE_MASK_DISABLE").is_none() {
+        style.direct_edge_mask = Some(edge_mask);
+    }
     Ok(style)
 }
 
