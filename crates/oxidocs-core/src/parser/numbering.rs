@@ -231,8 +231,21 @@ impl NumberingDefinitions {
             let marker = if level.lvl_text.is_empty() {
                 "\u{2022}".to_string()
             } else {
-                // Map Symbol font private use area characters to standard Unicode
-                map_symbol_bullets(&level.lvl_text)
+                // A bullet drawn in a symbol font keeps its private-use code: the
+                // font owns the glyph (Wingdings 0xA7 is a small square, 0x76 a
+                // four-diamond). The Unicode stand-ins below were drawn in that same
+                // symbol font, which has none of them, so they came out as missing
+                // glyphs (technical__019d92d9, reference__00f45b1b).
+                let symbol_font = level.marker_font_for(&level.lvl_text).map_or(false, |f| {
+                    let f = f.to_ascii_lowercase();
+                    f == "symbol" || f.starts_with("wingdings") || f == "webdings"
+                });
+                if symbol_font && std::env::var_os("OXI_SYMFONT_BULLET_RAW_DISABLE").is_none() {
+                    level.lvl_text.clone()
+                } else {
+                    // Map Symbol font private use area characters to standard Unicode
+                    map_symbol_bullets(&level.lvl_text)
+                }
             };
             return ResolvedMarker { marker_font: level.marker_font_for(&marker), text: marker, marker_size: level.marker_size, marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left };
         }
