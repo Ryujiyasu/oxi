@@ -13676,6 +13676,21 @@ impl<'a> TableFitLayouter<'a> {
                         );
                     }
                 }
+                // A continuation with nothing on it takes no room: the next row
+                // starts at the page top. reference__00f45b1b: the brochure's outer
+                // row 0 overran page 1 by its padding and split into an empty
+                // continuation; the geometric remainder set row 1 92.75pt down
+                // page 2 (Word: at the top) and its last lines spilled to page 3.
+                if std::env::var_os("OXI_EMPTY_CONT_DISABLE").is_none()
+                    && elements.is_empty()
+                    && row.height.is_none()
+                    && !(s1168 && split_y <= row_top + 0.1)
+                {
+                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        eprintln!("[SPLIT-CURSOR] empty continuation {:.2} -> {:.2}", cursor.cursor_y, page_top);
+                    }
+                    cursor.set(page_top);
+                }
                 // Preserve the terminal spacing in branches that use geometric
                 // extents instead of the last text line. Whole-row pushes and
                 // collapsed empty tails retain their separate cursor rules.
