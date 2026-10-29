@@ -1397,6 +1397,40 @@ unsafe fn render_font_glyph(
     Ok(())
 }
 
+/// A weight-named family ("Calibri Light") that DirectWrite's collection does
+/// not list by that name is one face of its base family there: draw the base
+/// family at that weight rather than a fallback face (policies__003e3c66: the
+/// Calibri Light body drew as Calibri Regular, wider than the layout's Light
+/// advances, so the words ran together). Bold Light is the Light face
+/// emboldened -- Word's PDF headings stay Calibri-Light, half as heavy as
+/// Calibri Bold -- so the caller overprints it like the MS faux bold.
+unsafe fn weight_named_family<'a>(
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    font_family: &'a str,
+) -> (&'a str, Option<windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT>) {
+    use windows::Win32::Graphics::DirectWrite::*;
+    if std::env::var_os("OXI_DW_WEIGHT_FAMILY_DISABLE").is_some() {
+        return (font_family, None);
+    }
+    for (suffix, weight) in [
+        ("Semilight", DWRITE_FONT_WEIGHT_SEMI_LIGHT),
+        ("SemiLight", DWRITE_FONT_WEIGHT_SEMI_LIGHT),
+        ("ExtraLight", DWRITE_FONT_WEIGHT_EXTRA_LIGHT),
+        ("Light", DWRITE_FONT_WEIGHT_LIGHT),
+        ("Thin", DWRITE_FONT_WEIGHT_THIN),
+    ] {
+        if let Some(base) = font_family.strip_suffix(suffix).and_then(|b| b.strip_suffix(' ')) {
+            if !dwrite_knows_family(dwrite_factory, font_family)
+                && dwrite_knows_family(dwrite_factory, base)
+            {
+                return (base, Some(weight));
+            }
+            break;
+        }
+    }
+    (font_family, None)
+}
+
 unsafe fn render_text(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
@@ -1469,6 +1503,10 @@ unsafe fn render_text(
     // predates S1354 / NATBOX / S1261, which place CJK lines from Word's PDFs
     // rather than on top of DWrite's number. Where the two tables agree (the
     // ＭＳ / HG / Latin faces) the shift is 0 and the output is byte-identical.
+    // The face DirectWrite will actually draw (see `weight_named_family`); the
+    // baseline below is measured on it, not on a fallback for the raw name.
+    let (render_family, light_weight) = weight_named_family(dwrite_factory, font_family);
+    let ascent_bold = bold && light_weight.is_none();
     let table_ascent_on = std::env::var_os("OXI_DWRITE_TABLE_ASCENT_DISABLE").is_none();
     let y_pt = if is_vertical
         || std::env::var("OXI_S1265_DISABLE").is_ok()
@@ -1481,7 +1519,7 @@ unsafe fn render_text(
             || (table_ascent_on && font_registry().knows_family(font_family));
         if own_entry {
             let want = m.baseline_ascent() * font_size_pt;
-            let have = font_ascent_pt(dwrite_factory, font_family, font_size_pt, bold, italic);
+            let have = font_ascent_pt(dwrite_factory, render_family, font_size_pt, ascent_bold, italic);
             y_pt + (want - have)
         } else {
             y_pt
@@ -1490,7 +1528,7 @@ unsafe fn render_text(
 
     let y_pt = if !is_vertical {
         baseline_pt.map(|b| b + 1.0
-            - font_ascent_pt(dwrite_factory, font_family, font_size_pt, bold, italic))
+            - font_ascent_pt(dwrite_factory, render_family, font_size_pt, ascent_bold, italic))
             .unwrap_or(y_pt)
     } else {
         y_pt
@@ -1523,6 +1561,10 @@ unsafe fn render_text(
     {
         "Times New Roman"
     } else { font_family };
+    let (font_family, weight, light_faux_bold) = match light_weight {
+        Some(w) => (render_family, w, bold),
+        None => (font_family, weight, false),
+    };
     let family_wide: Vec<u16> = font_family.encode_utf16()
         .chain(std::iter::once(0)).collect();
     let locale_wide: Vec<u16> = "ja-jp".encode_utf16()
@@ -1546,7 +1588,8 @@ unsafe fn render_text(
     let is_ms_legacy = font_family.starts_with("ＭＳ")
         || font_family.to_ascii_lowercase().starts_with("ms ");
     // Default ON (opt-out OXI_S493F_DISABLE): faux-bold MS-legacy CJK bold to match Word.
-    let faux_bold: bool = bold && is_ms_legacy && std::env::var("OXI_S493F_DISABLE").is_err();
+    let faux_bold: bool = (bold && is_ms_legacy && std::env::var("OXI_S493F_DISABLE").is_err())
+        || light_faux_bold;
     // dx=0.4pt overprint => bold-line ink ratio 1.41 ≈ Word's measured 1.396 (calibrated
     // on the MS Gothic/Mincho repro: REG vs BOLD lines, Word bold/reg=1.396).
     let faux_dx: f32 = std::env::var("OXI_FAUXBOLD_DX").ok()
