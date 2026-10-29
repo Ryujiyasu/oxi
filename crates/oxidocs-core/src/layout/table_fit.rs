@@ -12392,6 +12392,16 @@ impl<'a> TableFitLayouter<'a> {
                                 }
                             }
                         }
+                        // An inline cell image below the last text line is part of the
+                        // fragment too: Word closes under it (reference__006cec p4, the
+                        // list image ends 707.1, rule 707.8; Oxi closed on the empty
+                        // line above it at 579.2).
+                        let image_bottom = if std::env::var_os("OXI_SPLIT_CLOSE_IMAGES_DISABLE").is_none() {
+                            current_page_elems.iter().filter_map(|e| match e.content {
+                                LayoutContent::Image { .. } if e.y + e.height <= split_y + 0.5 => Some(e.y + e.height),
+                                _ => None,
+                            }).fold(f32::NEG_INFINITY, f32::max)
+                        } else { f32::NEG_INFINITY };
                         let close_y = if !self.doc_body_has_real_cjk {
                             current_page_elems.iter().filter_map(|e| {
                                 if !matches!(e.content, LayoutContent::Text { .. }) { return None; }
@@ -12410,6 +12420,8 @@ impl<'a> TableFitLayouter<'a> {
                                     .then_some(e.y + e.height)
                             }).fold(last_text_y + max_nat, f32::max)
                         };
+                        let close_y = close_y.max(image_bottom
+                            + if !self.doc_body_has_real_cjk { s819_q } else { 0.0 });
                         if close_y <= split_y + 0.5 {
                             let border_style = |e: &LayoutElement| match &e.content {
                                 LayoutContent::TableBorder { x1, x2, y1, y2, color, width, style }
