@@ -647,6 +647,9 @@ impl<'a> ParagraphLayouter<'a> {
         // computes text_y_off). Only set for NON-bullet markers (number markers
         // like ①/(1)); bullets keep their own marker_y_offset tuning untouched.
         let mut s517_marker_el_idx: Option<usize> = None;
+        // OXI_LANE_HANGING_FIRST: the list marker element and its x, moved once the
+        // first line knows how far a float pushed it.
+        let mut lane_marker: Option<(usize, f32)> = None;
         // G5: the marker's page check was left to line 0 (see the marker site).
         let mut g5_marker_deferred = false;
         // S776 (2026-07-10, opt-out OXI_S776_DISABLE): suff="nothing" — Word
@@ -1119,6 +1122,7 @@ impl<'a> ParagraphLayouter<'a> {
             if marker_y_offset == 0.0 {
                 s517_marker_el_idx = Some(elements.len());
             }
+            lane_marker = Some((elements.len(), marker_x));
             elements.push(LayoutElement::new(
                 marker_x,
                 marker_base_y + marker_y_offset,
@@ -6602,6 +6606,39 @@ impl<'a> ParagraphLayouter<'a> {
             // fragment loop below does the jump at `seg2_at`).
             let row_two_segments=word_fit_segments.get(line_idx).copied()
                 .unwrap_or(if !s758_rebroken {s758_two_seg} else {None});
+            // OXI_LANE_HANGING_FIRST (2026-10-30, default ON, opt-out _DISABLE): a hanging
+            // first line beside a float that pushes the paragraph's left edge.
+            // `_pb_colanchor_ownband_gen.py` (lane edge 213; the other lines sit at
+            // max(edge, margin + left) in every mode): legacy layout sets the first line
+            // at edge + left - hanging (left 36 / hanging 18 -> 231; left 0 -> 195; left
+            // 216 -> 411), compatibilityMode 15 at max(edge, that line - hanging) (213,
+            // 213, 252). A positive firstLine adds to the edge in both (231). Oxi put the
+            // first line at edge - hanging, so en/correspondence__00e272ee's and
+            // en/policies__0026b7f7's bullets (compat 14, ind 720 / hanging 360) went
+            // under the sidebar; Word draws them at edge + 18.
+            // A list paragraph's hanging line is its marker (drawn on its own at
+            // margin + left - hanging) plus text at left: legacy layout moves both by
+            // edge - margin, i.e. the marker to edge + left - hanging (00e272ee 219.3)
+            // and the text to edge + left (237.3). Compat 15 lists are unmeasured and
+            // keep the old placement.
+            let lane_legacy = (self.compat_mode < 15 || !self.compat_mode_explicit)
+                && line_idx == 0 && s758_line_shift > 0.0 && row_two_segments.is_none()
+                && std::env::var_os("OXI_LANE_HANGING_FIRST_DISABLE").is_none();
+            let extra_indent = if line_idx == 0 && s758_line_shift > 0.0 && extra_indent < 0.0
+                && row_two_segments.is_none()
+                && std::env::var_os("OXI_LANE_HANGING_FIRST_DISABLE").is_none()
+            {
+                if self.compat_mode < 15 || !self.compat_mode_explicit { indent_left + extra_indent } else { 0.0 }
+            } else if lane_legacy && extra_indent == 0.0 && indent_left > 0.0
+                && lane_marker.is_some_and(|(_, mx)| mx < start_x + indent_left - 0.5)
+            {
+                if let Some((idx, mx)) = lane_marker.take() {
+                    if let Some(el) = elements.get_mut(idx) {
+                        if (el.x - mx).abs() < 0.01 { el.x = mx + s758_line_shift + indent_left; }
+                    }
+                }
+                indent_left
+            } else { extra_indent };
             let line_x = match (row_two_segments, line.seg2_at) {
                 (Some((seg1_x, _, _, _)), Some(_)) => seg1_x + extra_indent,
                 _ => start_x + indent_left + extra_indent + s758_line_shift,
