@@ -9707,8 +9707,10 @@ fn parse_drawing(
     // as a PresetShape it drew nothing (the renderers outline only brackets,
     // lines and ellipses). ja/creative__13152ea1's masthead: two rects (accent4
     // lumMod 20%/lumOff 80% fill, 6699FF outline) under the logo group. Only an
-    // explicit fill counts -- the box's white default stays off -- and the flow
-    // is unchanged (wrapNone; the Shape keeps its own anchor wrap).
+    // explicit fill counts -- the box's white default stays off. The box keeps the
+    // anchor's wrap: once it is a box the Shape no longer registers a band, and
+    // `_pb_colanchor_ownband_gen.py`'s 150 x 300pt wrapSquare rect lost its wrap
+    // (Word 213, Oxi set every line at 54 under the rect).
     let dml_rect_box = is_anchor
         && std::env::var_os("OXI_DML_RECT_BOX_DISABLE").is_none()
         && shape_text_blocks.is_empty()
@@ -9842,7 +9844,9 @@ fn parse_drawing(
             // ~2415) fires on its new synthetic position and pushes following
             // tables below the canvas band (3a4f pagination 0.9931 -> 0.7434,
             // 395 paras +1). Real anchored textboxes keep their parsed wrap.
-            wrap_type: if (inline_tb && wrap_type.is_none()) || dml_rect_box {
+            wrap_type: if (inline_tb && wrap_type.is_none())
+                || (dml_rect_box && std::env::var_os("OXI_DML_RECT_BOX_WRAP_DISABLE").is_some())
+            {
                 Some(crate::ir::WrapType::None)
             } else {
                 wrap_type

@@ -12946,6 +12946,52 @@ cells={} pitch={:.2} text={:?}",
         } else {
             None
         };
+        // OXI_TWOSEG_UNION (2026-10-30, default ON, opt-out _DISABLE): the pair of
+        // strips is read from the UNION of the bands the line crosses (the S1640
+        // rule for the single lane). en/correspondence__00e272ee p2: «Minecraft
+        // Legends ...» hosts a picture (band 139-401) next to the Microsoft Family
+        // Safety box (band from 390.5); the picture alone left a 140pt right strip,
+        // which is the box, and Oxi ran the text through it. Word keeps the text in
+        // the left strip only.
+        let s758_two_seg = if std::env::var_os("OXI_TWOSEG_UNION_DISABLE").is_none() && s758_two_seg.is_some() {
+            let overl: Vec<(f32, f32)> = s758_bands
+                .iter()
+                .filter(|(pg, top, bot, bx0, bx1, _, _)| {
+                    *pg == current_page_idx
+                        && (if intersection { line_top + line_height > *top } else { cursor_y >= *top - 0.5 })
+                        && line_top < *bot - 0.5
+                        && *bx0 < start_x + content_width - 6.0
+                        && *bx1 > start_x + 6.0
+                })
+                .map(|b| (b.3, b.4))
+                .collect();
+            if overl.len() >= 2 {
+                let (pl, _, _, _) = s758_two_seg.unwrap();
+                let (bx1, right) = (s758_two_seg.unwrap().2, s758_two_seg.unwrap().3);
+                let pr = bx1 + right;
+                let mut iv: Vec<(f32, f32)> = overl.iter().map(|&(a, b)| (a.max(pl), b.min(pr))).collect();
+                iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                let mut free: Vec<(f32, f32)> = Vec::new();
+                let mut x = pl;
+                for (x0, x1) in iv {
+                    if x0 > x { free.push((x, x0)); }
+                    x = x.max(x1);
+                }
+                if pr > x { free.push((x, pr)); }
+                free.retain(|(a, b)| b - a >= 30.0);
+                // three or more strips (ja/reports__28abf02c's rows of 4pt bars) keep the
+                // single-band pair: the union only removes a strip another band fills
+                match free.len() {
+                    0 | 1 => None,
+                    2 => Some((free[0].0, free[0].1 - free[0].0, free[1].0, free[1].1 - free[1].0)),
+                    _ => s758_two_seg,
+                }
+            } else {
+                s758_two_seg
+            }
+        } else {
+            s758_two_seg
+        };
         (s758_para_band, s758_two_seg, advance)
     }
 

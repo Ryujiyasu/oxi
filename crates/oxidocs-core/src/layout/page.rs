@@ -1461,9 +1461,16 @@ impl<'a> PageLayouter<'a> {
                     // ways) / 0 JP / ssim_ab 0 changed.
                     let s981 = std::env::var("OXI_S981_DISABLE").is_err()
                         && tb.wrap_type == Some(crate::ir::WrapType::Tight);
+                    // OXI_S758_TB_ABOVE_ANCHOR (2026-10-30, default ON, opt-out _DISABLE):
+                    // a box that starts above its anchor still keeps the text out
+                    // below the anchor (the pictures never had the `y >= 0` test).
+                    // en/correspondence__00e272ee p2: the Microsoft Family Safety box
+                    // (wrapSquare, paragraph -70.7, 194 x 407) heads the right column;
+                    // Word sets the Minecraft text left of it, Oxi ran it underneath.
+                    let above_anchor = std::env::var_os("OXI_S758_TB_ABOVE_ANCHOR_DISABLE").is_none();
                     if (tb.wrap_type == Some(crate::ir::WrapType::Square) || s981)
                         && tb.position.as_ref().map_or(false, |tp| {
-                            tp.v_relative.as_deref() == Some("paragraph") && tp.y >= 0.0
+                            tp.v_relative.as_deref() == Some("paragraph") && (tp.y >= 0.0 || above_anchor)
                         })
                     {
                         m.entry(tb.anchor_block_index).or_default().push(ti);
@@ -1506,6 +1513,16 @@ impl<'a> PageLayouter<'a> {
                 Default::default()
             };
         let mut s758_bands: Vec<(usize, f32, f32, f32, f32, bool, BodyWrapPolicy)> = Vec::new();
+        // OXI_COLUMN_WRAPPED_LEFT for floats that make their own band: the anchor
+        // block's wrapped left edge, recorded when its square sources register, so
+        // the painter puts the float where its band went.
+        let mut s758_wrapped_left: std::collections::HashMap<usize, f32> = Default::default();
+        // OXI_MOVED_PARA_START: the bands a block registered, so a paragraph that moves
+        // whole to the next page takes them along -- a paragraph-relative source band
+        // re-resolved from the new anchor (offset below the anchor, height), a page /
+        // margin-relative one kept at its y.
+        let mut s758_src_band_geom: std::collections::HashMap<usize, (f32, f32)> = Default::default();
+        let mut s758_abs_bands: std::collections::HashSet<usize> = Default::default();
         // S847 (2026-07-14): CONSECUTIVE paragraphs sharing an IDENTICAL
         // page-anchored framePr form ONE text frame — Word stacks them
         // vertically from (x, y) and the continuation paragraphs INHERIT the
@@ -1579,6 +1596,7 @@ impl<'a> PageLayouter<'a> {
             std::collections::HashMap<String, String>,
         > = std::collections::HashMap::new();
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            let block_bands_start = s758_bands.len();
             // A paragraph-owned band must end even when an empty anchor takes
             // an early continuation path. Nested layouts restore their caller.
             let _paragraph_float_band = ParagraphFloatBandGuard::new();
@@ -2178,6 +2196,7 @@ impl<'a> PageLayouter<'a> {
                         _ => ref_x + pos.x,
                     };
                     let bounds=wrap_contour_bounds(tb.wrap_type,&tb.wrap_polygon);
+                    s758_abs_bands.insert(s758_bands.len());
                     s758_bands.push((current_page_idx, pos.y + bounds.1*tb.height, pos.y + bounds.3*tb.height,
                         x + bounds.0*tb.width - pos.dist_l.unwrap_or(9.0), x + bounds.2*tb.width + pos.dist_r.unwrap_or(9.0),
                         tb.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT));
@@ -2298,10 +2317,14 @@ impl<'a> PageLayouter<'a> {
                             } else {
                                 (align, x)
                             };
+                            // the band starts at the anchor (the py.max(0) below) and
+                            // ends where the box does, so a box above the anchor loses
+                            // the part over the anchor from its height
+                            let above = (tp.y + bounds.1*tb.height - gt).min(0.0);
                             v.push((
                                 tp.y + bounds.1*tb.height - gt,
                                 width + gl + gr,
-                                height + gt + gb,
+                                (height + gt + gb + above).max(0.0),
                                 align,
                                 x - gl,
                                 tp.dist_l.unwrap_or(9.0),
@@ -2463,6 +2486,29 @@ impl<'a> PageLayouter<'a> {
                 if shared_origin.is_some() {
                     shared_float_anchors.insert(block_idx, (current_page_idx, s758_anchor_y));
                 }
+                // OXI_COLUMN_WRAPPED_LEFT also covers a column-relative float that
+                // makes its own band: en/correspondence__00e272ee's gamepad picture
+                // (wrapSquare, posH column 206.75) is anchored beside the wrapTight
+                // sidebar whose band ends at 201.3, and Word draws it at 408.0 =
+                // 201.3 + 206.75 (Oxi 260.8 = 54 + 206.75).
+                // Legacy layout only: `_pb_colanchor_ownband_gen.py` with compatibilityMode
+                // 15 puts the marker at 74 (the column), 12 / 14 / undeclared at 233.
+                // ja/policies__1411889624 (compat 15) stacks wrapSquare boxes at the
+                // column edge beside each other's bands (Word 84.8, all seven).
+                let wrapped_left = if std::env::var_os("OXI_COLUMN_WRAPPED_LEFT_DISABLE").is_none()
+                    && (self.compat_mode < 15 || !self.compat_mode_explicit)
+                    && crate::layout::s1467_float_column_flow()
+                    && s758_srcs.iter().any(|src| src.9 && src.3.is_none())
+                {
+                    s758_bands.iter()
+                        .filter(|b| b.0 == current_page_idx && b.1 < s758_anchor_y + 12.0 && b.2 > s758_anchor_y
+                            && b.3 <= start_x + 1.0 && b.4 > start_x + 1.0)
+                        .map(|b| b.4)
+                        .fold(start_x, f32::max)
+                } else { start_x };
+                if wrapped_left > start_x + 0.5 {
+                    s758_wrapped_left.insert(block_idx, wrapped_left);
+                }
                 for (py, w, h, h_align, px, dl, dr, physical, tight, column_relative) in &s758_srcs {
                     let nat_top = s758_anchor_y + py.max(0.0);
                     // S981: a physical (behindDoc Tight) float may extend into the
@@ -2489,6 +2535,7 @@ impl<'a> PageLayouter<'a> {
                         Some("right") => content_left + band_width - w,
                         Some("center") => content_left + (band_width - w) * 0.5,
                         Some("left") => content_left,
+                        _ if column_scope => wrapped_left + px,
                         _ => content_left + px,
                     };
                     // the keep-out rect includes the wp:anchor distL/distR
@@ -2514,6 +2561,7 @@ impl<'a> PageLayouter<'a> {
                             continue;
                         }
                     }
+                    s758_src_band_geom.insert(s758_bands.len(), (py.max(0.0), *h));
                     s758_bands.push(nb);
                 }
                 // S1635: margin / page-relative square pictures anchored here (absolute y,
@@ -2545,6 +2593,7 @@ impl<'a> PageLayouter<'a> {
                         if std::env::var_os("OXI_DBG_BANDS").is_some() {
                             eprintln!("[S1635] blk={} band={:?} eff_r={} eff_b={} dist_t={:?} dist_b={:?}", block_idx, nb, ip.eff_r, ip.eff_b, ip.dist_t, ip.dist_b);
                         }
+                        s758_abs_bands.insert(s758_bands.len());
                         s758_bands.push(nb);
                     }
                 }
@@ -2637,6 +2686,7 @@ impl<'a> PageLayouter<'a> {
                         if std::env::var_os("OXI_DBG_BANDS").is_some() {
                             eprintln!("[S1635] blk={} band={:?} eff_r={} eff_b={} dist_t={:?} dist_b={:?}", block_idx, nb, ip.eff_r, ip.eff_b, ip.dist_t, ip.dist_b);
                         }
+                        s758_abs_bands.insert(s758_bands.len());
                         s758_bands.push(nb);
                     }
                 }
@@ -6091,6 +6141,7 @@ impl<'a> PageLayouter<'a> {
                     }
 
                     let pages_before = pages.len();
+                    let elements_before = elements.len();
                     // S758: does this paragraph START inside a wrapSquare band on
                     // the current page? Right-side bands only (v1): pass
                     // (band_bottom, width_reduction). Reduction = the part of the
@@ -6823,11 +6874,44 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // AFTER layout_paragraph had already placed overflow on a new
                         // page's column 0) is removed; only the page-index advance
                         // and footnote bookkeeping remain.
+                        let old_page_idx = current_page_idx;
                         current_page_idx += pages_added;
                         // Update block_page_index: if the paragraph moved entirely
                         // to the new page (no elements left on the old page), update
                         // the index so footnote rendering assigns to the correct page.
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
+                        // OXI_MOVED_PARA_START (2026-10-30, default ON, opt-out _DISABLE):
+                        // a paragraph whose first line did not fit STARTS on the next
+                        // page, and the floats anchored to it go with it (the S1293b
+                        // rule for image paragraphs). en/correspondence__00e272ee: the
+                        // empty paragraph that anchors the «Minecraft Legends» banner and
+                        // the Microsoft Family Safety box (wrapSquare) is set at 757 on
+                        // p1, does not fit and moves to p2; Word draws all four boxes at
+                        // the top of p2, Oxi drew them over p1's footer and let p2's text
+                        // run under the Family Safety box.
+                        if std::env::var_os("OXI_MOVED_PARA_START_DISABLE").is_none()
+                            && pages.get(pages_before).is_some_and(|old| old.elements.len() == elements_before)
+                        {
+                            let moved_to = old_page_idx + 1;
+                            let old_y = *block_y_positions.last().unwrap();
+                            let new_y = s755_geom.as_ref().map_or(start_y, |g| g.top(moved_to + 1));
+                            *block_start_page_indices.last_mut().unwrap() = moved_to;
+                            *block_y_positions.last_mut().unwrap() = new_y;
+                            if std::env::var_os("OXI_DBG_MOVED").is_some() { eprintln!("[MOVED] blk={} old_pg={} y {}->{} bands {}..{} {:?}", block_idx, old_page_idx, old_y, new_y, block_bands_start, s758_bands.len(), &s758_bands[block_bands_start..]); }
+                            for i in block_bands_start..s758_bands.len() {
+                                let b = &mut s758_bands[i];
+                                if b.0 != old_page_idx { continue; }
+                                b.0 = moved_to;
+                                if s758_abs_bands.contains(&i) { continue; }
+                                if let Some(&(below, h)) = s758_src_band_geom.get(&i) {
+                                    b.1 = new_y + below;
+                                    b.2 = b.1 + h;
+                                } else {
+                                    b.1 += new_y - old_y;
+                                    b.2 += new_y - old_y;
+                                }
+                            }
+                        }
                         if std::env::var("OXI_FN_PROBE").is_ok() {
                             eprintln!("[FN_MID_BREAK] block_idx={} pages_added={} now_page={} reserve_before_clear={:.1} ids={:?}",
                                 block_idx, pages_added, current_page_idx,
@@ -10346,10 +10430,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // lIns 0) draws at 13.9 in Word beside a wrapTight rectangle ending at
                     // 192.4 + 9, where Oxi put it at -133, off the page. A box that makes
                     // its own band is left alone (the bands do not record their owner).
+                    let own_band_left = matches!(text_box.wrap_type, Some(crate::ir::WrapType::Square) | Some(crate::ir::WrapType::Tight))
+                        .then(|| s758_wrapped_left.get(&text_box.anchor_block_index).copied())
+                        .flatten();
                     let wrapped_col_x: Option<Vec<f32>> = (std::env::var_os("OXI_COLUMN_WRAPPED_LEFT_DISABLE").is_none()
+                        && (self.compat_mode < 15 || !self.compat_mode_explicit)
                         && text_box.position.as_ref().is_some_and(|p| p.h_relative.as_deref() == Some("column") && p.h_align.is_none())
-                        && matches!(text_box.wrap_type, None | Some(crate::ir::WrapType::None)))
+                        && (own_band_left.is_some() || matches!(text_box.wrap_type, None | Some(crate::ir::WrapType::None))))
                         .then(|| {
+                            if let Some(left) = own_band_left {
+                                let mut v = block_col_x.clone();
+                                if let Some(x) = v.get_mut(text_box.anchor_block_index) { *x = left; }
+                                return Some(v);
+                            }
                             let ai = text_box.anchor_block_index;
                             let (Some(&col), Some(&ay), Some(&pg)) = (block_col_x.get(ai), block_y_positions.get(ai), block_page_indices.get(ai)) else {
                                 return None;
@@ -10454,7 +10547,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             && _pos.h_relative.as_deref() == Some("column")
                             && _pos.h_align.is_none()
                         {
-                            abs_x += block_col_x.get(img.anchor_block_index).copied().unwrap_or(page.margin.left) - page.margin.left;
+                            let col = block_col_x.get(img.anchor_block_index).copied().unwrap_or(page.margin.left);
+                            let left = s758_wrapped_left.get(&img.anchor_block_index).copied().unwrap_or(col);
+                            abs_x += left - page.margin.left;
                         }
                         if source_positioned_image(img,page){
                             if let Some(anchor)=source_anchors.known.get(&(ir_index,*fi))
