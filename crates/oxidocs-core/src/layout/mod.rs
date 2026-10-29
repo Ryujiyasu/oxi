@@ -10431,6 +10431,33 @@ cells={} pitch={:.2} text={:?}",
                 _ => None,
             })
             .fold(0.0f32, f32::max)
+            .max(self.header_text_box_band(blocks, page, column_w))
+    }
+
+    /// The same band for the header's anchored TEXT BOXES (`Page::hf_text_boxes`
+    /// of the variant `blocks` belongs to): `_pb_hdr_float_push_gen.py` puts the
+    /// body's first line at the box bottom for topAndBottom and for a full-width
+    /// square box, not for a half-width square box or wrapNone (forms__001ae487's
+    /// header banner, Word body 47.25 + the paragraph's 12 before).
+    fn header_text_box_band(&self, blocks: &[Block], page: &Page, column_w: f32) -> f32 {
+        if std::env::var_os("OXI_HDR_TEXTBOX_BAND_DISABLE").is_some() || page.hf_text_boxes.is_empty() {
+            return 0.0;
+        }
+        let is = |v: &Vec<Block>| !blocks.is_empty() && std::ptr::eq(blocks.as_ptr(), v.as_ptr());
+        let code = if is(&page.header_first) { 1u8 } else if is(&page.header_even) { 2 } else { 0 };
+        let header_y = page.header_distance.unwrap_or(36.0);
+        page.hf_text_boxes
+            .iter()
+            .filter(|(c, tb)| *c == code && !tb.inline
+                && (tb.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                    || (matches!(tb.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight))
+                        && tb.width >= column_w - 30.0)))
+            .filter_map(|(_, tb)| tb.position.as_ref().and_then(|p| match p.v_relative.as_deref() {
+                Some("page") => Some(p.y + tb.height),
+                Some("paragraph") | Some("text") => Some(header_y + p.y + tb.height),
+                _ => None,
+            }))
+            .fold(0.0f32, f32::max)
     }
 
     fn header_inline_image_leading(&self, image: &Image) -> f32 {
