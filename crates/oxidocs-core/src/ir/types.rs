@@ -218,6 +218,11 @@ pub struct Page {
     pub header_even: Vec<Block>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footer_even: Vec<Block>,
+    /// Text boxes anchored in the header/footer parts, by variant: 0 header,
+    /// 1 first-page header, 2 even header, 3 footer, 4 first-page footer,
+    /// 5 even footer. Drawn on every page that shows that part, behind the body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hf_text_boxes: Vec<(u8, TextBox)>,
     /// WATERMARK (2026-07-08): a VML WordArt watermark from a header part
     /// (`v:shape type="#_x0000_t136"` + `v:textpath string=…`, the Word
     /// PowerPlusWaterMarkObject idiom — «SAMPLE»/«DRAFT» diagonal text on

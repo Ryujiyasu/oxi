@@ -44,6 +44,13 @@ thread_local! {
     /// OXI_BR_CLEAR: set by a clearing text-wrapping break inside the paragraph
     /// being parsed (saved and restored around nested paragraphs).
     static BR_CLEAR_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Anchored text boxes met while parsing a header/footer part, drained by
+    /// the caller into `Page::hf_text_boxes` for the variant it was parsing.
+    static HF_TEXT_BOXES: std::cell::RefCell<Vec<TextBox>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn take_hf_text_boxes() -> Vec<TextBox> {
+    HF_TEXT_BOXES.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
 
 struct ParseContext {
@@ -828,6 +835,8 @@ impl OoxmlParser {
                 }
                 Vec::new()
             }
+            let _ = take_hf_text_boxes();
+            let mut hf_text_boxes: Vec<(u8, TextBox)> = Vec::new();
             let header = if !use_headers.is_empty() {
                 self.parse_header_footer_blocks(&use_headers, &ctx, &styles, &mut watermark_found)
             } else {
@@ -838,6 +847,7 @@ impl OoxmlParser {
                     Vec::new()
                 }
             };
+            hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (0, t)));
             let footer = if !use_footers.is_empty() {
                 self.parse_header_footer_blocks(&use_footers, &ctx, &styles, &mut watermark_found)
             } else {
@@ -848,6 +858,7 @@ impl OoxmlParser {
                     Vec::new()
                 }
             };
+            hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (3, t)));
             // S755: parse the first/even variants (no fallback — an absent
             // variant means the layout falls back to the default blocks).
             let hf_variant = |refs: &[HdrFtrRef], t: &str| -> Vec<HdrFtrRef> {
@@ -859,18 +870,21 @@ impl OoxmlParser {
             } else {
                 Vec::new()
             };
+            hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (1, t)));
             let ff = hf_variant(effective_footer_refs, "first");
             let footer_first = if section.properties.title_pg && !ff.is_empty() {
                 self.parse_header_footer_blocks(&ff, &ctx, &styles, &mut watermark_found)
             } else {
                 Vec::new()
             };
+            hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (4, t)));
             let eh = hf_variant(effective_header_refs, "even");
             let header_even = if even_odd_hf && !eh.is_empty() {
                 self.parse_header_footer_blocks(&eh, &ctx, &styles, &mut watermark_found)
             } else {
                 Vec::new()
             };
+            hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (2, t)));
             let ef = hf_variant(effective_footer_refs, "even");
             let footer_even = if even_odd_hf && !ef.is_empty() {
                 self.parse_header_footer_blocks(&ef, &ctx, &styles, &mut watermark_found)
@@ -878,6 +892,7 @@ impl OoxmlParser {
                 Vec::new()
             };
 
+            hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (5, t)));
             // Collect referenced footnotes and endnotes for this section
             let mut footnotes_list = Vec::new();
             let mut endnotes_list = Vec::new();
@@ -1196,6 +1211,7 @@ impl OoxmlParser {
                     footer_first,
                     header_even,
                     footer_even,
+                    hf_text_boxes: hf_text_boxes.clone(),
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
                     footnotes: footnotes_list,
@@ -14672,6 +14688,15 @@ fn parse_header_footer_xml(
                     }
                     "p" if in_root && depth == 0 => {
                         let mut pr = parse_paragraph_with_inline_images_context(&mut reader, ctx, styles, in_footer, false, None, in_footer || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some(), !in_footer)?;
+                        // Header/footer text boxes were dropped here (forms__001ae487's
+                        // header banner, administrative__0069bb's «Communiqué» box).
+                        if std::env::var_os("OXI_HF_TEXT_BOXES_DISABLE").is_none() {
+                            let mut tbs = std::mem::take(&mut pr.text_boxes);
+                            for tb in &mut tbs {
+                                tb.anchor_block_index = blocks.len();
+                            }
+                            HF_TEXT_BOXES.with(|v| v.borrow_mut().extend(tbs));
+                        }
                         // S742 (2026-07-04): keep header/footer inline images —
                         // they were silently DROPPED (only pr.paragraph was
                         // pushed), so a header logo contributed no height and

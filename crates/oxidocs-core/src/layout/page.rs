@@ -10624,6 +10624,31 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 hs_ftr
             };
+            // Header/footer text boxes: the part's variant chosen as above, drawn
+            // behind the body like the rest of the header layer, each anchored to
+            // the header/footer block it was parsed in (tops recorded below).
+            let hf_draw = s1553_run.is_none() && !page.hf_text_boxes.is_empty();
+            let hf_variant = |base: u8| -> u8 {
+                if s755_on && hs_title_pg && s755_pno == 1 {
+                    base + 1
+                } else if s755_on && hs_even_odd && (first_logical as usize + page_idx) % 2 == 0 {
+                    base + 2
+                } else {
+                    base
+                }
+            };
+            let (hf_hv, hf_fv) = (hf_variant(0), hf_variant(3));
+            let hf_paint = |this: &Self, code: u8, tops: &[f32], fallback_y: f32| -> Vec<LayoutElement> {
+                let tops: Vec<f32> = if tops.is_empty() { vec![fallback_y] } else { tops.to_vec() };
+                let col_x = vec![page.margin.left; tops.len()];
+                let mut out = Vec::new();
+                for (_, tb) in page.hf_text_boxes.iter().filter(|(c, _)| *c == code) {
+                    let mut tb = tb.clone();
+                    tb.anchor_block_index = tb.anchor_block_index.min(tops.len() - 1);
+                    out.extend(this.layout_text_box(&tb, page, &tops, &col_x));
+                }
+                out
+            };
             // S1174: draw the page's re-resolved STYLEREF text. Pages that
             // began mid-paragraph carry no snapshot — use the nearest earlier
             // page's map, else the section's end state.
@@ -10685,7 +10710,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // adds the after; its CJK multiple is OXI_HF_CJK_MULTIPLE.
                 let hf_para_after = std::env::var_os("OXI_HF_PARA_AFTER_DISABLE").is_none();
                 let hf_no_grid = std::env::var_os("OXI_HF_NO_GRID_DISABLE").is_none();
+                let mut hf_tops: Vec<f32> = Vec::new();
                 for block in hdr_blocks {
+                    hf_tops.push(cy.cursor_y);
                     if let Block::Paragraph(para) = block {
                         if LayoutEngine::is_floating_header_frame(para) {
                             let (elements, _, _) = self.layout_header_frame(para, page, cy.cursor_y);
@@ -10922,6 +10949,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         prev_block_top = this_block_top;
                     }
                 }
+                if hf_draw {
+                    let hf_elems = hf_paint(self, hf_hv, &hf_tops, header_y);
+                    if !hf_elems.is_empty() {
+                        let at = usize::from(page.watermark.is_some()).min(lp.elements.len());
+                        lp.elements.splice(at..at, hf_elems);
+                    }
+                }
                 // Order floating images by their explicit stacking levels while
                 // retaining the existing positions of non-image paint operations.
                 let slots: Vec<usize> = header_float_indices.iter().map(|(_, index)| *index).collect();
@@ -11041,7 +11075,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // OXI_HF_TBL_AFTER: see the header loop.
                 let hf_tbl_after = std::env::var_os("OXI_HF_TBL_AFTER_DISABLE").is_none();
                 let mut hf_prev_after = 0.0f32;
+                let mut hf_ftr_tops: Vec<f32> = Vec::new();
                 for block in ftr_blocks {
+                    hf_ftr_tops.push(cy.cursor_y);
                     // OXI_FTR_FRAME_PAINT (2026-10-12, default ON, opt-out _DISABLE): a
                     // footer framePr paragraph is placed by its frame (xAlign / hAnchor /
                     // vAnchor), as the header loop has done since the header frame rule;
@@ -11167,6 +11203,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             );
                             lp.elements.extend(tbl_elements);
                         }
+                    }
+                }
+                if hf_draw {
+                    let hf_elems = hf_paint(self, hf_fv, &hf_ftr_tops, footer_top);
+                    if !hf_elems.is_empty() {
+                        let at = usize::from(page.watermark.is_some()).min(lp.elements.len());
+                        lp.elements.splice(at..at, hf_elems);
                     }
                 }
             }
