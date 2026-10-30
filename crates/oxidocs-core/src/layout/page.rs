@@ -10851,6 +10851,67 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     ),
                 );
             }
+            // OXI_PAGE_BORDERS (2026-10-30, default ON, opt-out _DISABLE): draw
+            // w:pgBorders. `_pb_pgborder_draw_gen.py` (A4, margins 72/72/90/72,
+            // header/footer 36): offsetFrom text puts each stroke's OUTER edge
+            // space + stroke outside the text area (sz 24 space 24: x 63.0, y 45.0)
+            // and, with a header/footer, outside them instead (top 36 - 4.48 =
+            // 31.56, bottom 841.9 - 36 + 4.48); offsetFrom page puts the outer
+            // edge `space` from the page edge (24.0 / 571.4). display firstPage /
+            // notFirstPage choose the section's pages. Parsed since long ago,
+            // never drawn: 15 corpus docs.
+            if let Some(pb) = page.page_borders.as_ref()
+                .filter(|_| std::env::var_os("OXI_PAGE_BORDERS_DISABLE").is_none())
+            {
+                let show = match pb.display.as_deref() {
+                    Some("firstPage") => page_idx == 0,
+                    Some("notFirstPage") => page_idx != 0,
+                    _ => true,
+                };
+                if show {
+                    let (pw, ph) = (page.size.width, page.size.height);
+                    let ext = |b: &Option<crate::ir::BorderDef>| b.as_ref()
+                        .map_or(0.0, |b| crate::layout::paragraph::pbdr_stroke_extent(&b.style, b.width));
+                    let sp = |b: &Option<crate::ir::BorderDef>| b.as_ref().map_or(0.0, |b| b.space);
+                    let (ol, ot, or, ob) = if pb.offset_from_page {
+                        (sp(&pb.left), sp(&pb.top), pw - sp(&pb.right), ph - sp(&pb.bottom))
+                    } else {
+                        let has_hdr = !(page.header.is_empty() && page.header_first.is_empty() && page.header_even.is_empty());
+                        let has_ftr = !(page.footer.is_empty() && page.footer_first.is_empty() && page.footer_even.is_empty());
+                        let top_ref = if has_hdr { page.margin.top.min(header_y) } else { page.margin.top };
+                        let bot_ref = if has_ftr { (ph - page.margin.bottom).max(ph - footer_dist) } else { ph - page.margin.bottom };
+                        (page.margin.left - sp(&pb.left) - ext(&pb.left),
+                         top_ref - sp(&pb.top) - ext(&pb.top),
+                         pw - page.margin.right + sp(&pb.right) + ext(&pb.right),
+                         bot_ref + sp(&pb.bottom) + ext(&pb.bottom))
+                    };
+                    // One side: (outer-edge rect origin, length, inward direction).
+                    let mut strokes: Vec<LayoutElement> = Vec::new();
+                    let mut side = |b: &Option<crate::ir::BorderDef>, horizontal: bool, inward: f32, outer: f32| {
+                        let Some(b) = b.as_ref() else { return };
+                        let color = format!("#{}", b.color.clone().unwrap_or_else(|| "000000".to_string()));
+                        let w = b.width.max(0.25);
+                        // double: two strokes of w with a w gap; other styles draw one stroke.
+                        let offsets: &[f32] = if b.style == "double" { &[0.0, 2.0] } else { &[0.0] };
+                        for k in offsets {
+                            let edge = outer + inward * k * w;
+                            let lo = if inward > 0.0 { edge } else { edge - w };
+                            let el = if horizontal {
+                                LayoutElement::new(ol, lo, or - ol, w, LayoutContent::CellShading { color: color.clone() })
+                            } else {
+                                LayoutElement::new(lo, ot, w, ob - ot, LayoutContent::CellShading { color: color.clone() })
+                            };
+                            strokes.push(el);
+                        }
+                    };
+                    side(&pb.top, true, 1.0, ot);
+                    side(&pb.bottom, true, -1.0, ob);
+                    side(&pb.left, false, 1.0, ol);
+                    side(&pb.right, false, -1.0, or);
+                    let at = usize::from(page.watermark.is_some()).min(lp.elements.len());
+                    lp.elements.splice(at..at, strokes);
+                }
+            }
             // S755: per-page header/footer variant selection — page 1 of a
             // titlePg section renders the FIRST-type blocks, even physical
             // pages render the EVEN-type blocks (blank when the flag is set

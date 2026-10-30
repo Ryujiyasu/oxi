@@ -14121,6 +14121,12 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                 if local == "pgBorders" && depth == 0 {
                     // Parse page borders - child elements: top, bottom, left, right
                     let mut pb = PageBorders {
+                        offset_from_page: e.attributes().flatten().any(|a| {
+                            local_name(a.key.as_ref()) == "offsetFrom" && a.value.as_ref() == b"page"
+                        }),
+                        display: e.attributes().flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "display")
+                            .map(|a| String::from_utf8_lossy(&a.value).to_string()),
                         top: None,
                         bottom: None,
                         left: None,

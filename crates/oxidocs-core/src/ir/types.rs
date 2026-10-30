@@ -387,6 +387,13 @@ pub struct Page {
 /// Page border definitions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageBorders {
+    /// w:offsetFrom="page": each side's space is measured from the page edge
+    /// (default "text": from the text area, or the header/footer it surrounds).
+    #[serde(default)]
+    pub offset_from_page: bool,
+    /// w:display: "allPages" (default), "firstPage" or "notFirstPage".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<BorderDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
