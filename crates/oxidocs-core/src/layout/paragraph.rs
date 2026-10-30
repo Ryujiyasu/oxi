@@ -559,8 +559,24 @@ impl<'a> ParagraphLayouter<'a> {
         // their body twins, e.g. 12pt kanji 11.04 at -3930). Oxi dropped the
         // pitch in boxes, so ja/correspondence__14012ac2's boxed heading wrapped
         // one word early (+17 on every later line of the box).
-        let txbx_chargrid = std::env::var_os("OXI_TXBX_CHARGRID_DISABLE").is_none();
-        let effective_char_pitch = if (in_textbox && !txbx_chargrid) || snap_gate_active {
+        // OXI_HF_TXBX_NO_CHARGRID (2026-10-30, default ON, opt-out _DISABLE): the
+        // grid is the body story's -- a text box in a header or footer keeps the
+        // font's own advance, as header paragraphs do. `_pb_hf_txbx_chargrid_gen.py`
+        // (ＭＳ 明朝 10.5, Word PDF): body and body-box kanji advance 21.23 / 21.23
+        // under linesAndChars 44093, the header paragraph and the header box 10.56 /
+        // 10.56 under every grid type. ja/creative__3d2bf04c / 285f61cb's footer
+        // box «20 × 20» spread over grid cells in Oxi.
+        let txbx_chargrid = std::env::var_os("OXI_TXBX_CHARGRID_DISABLE").is_none()
+            && !(super::IN_HF_TEXT_BOX.with(|c| c.get())
+                && std::env::var_os("OXI_HF_TXBX_NO_CHARGRID_DISABLE").is_none());
+        // OXI_HF_NO_CHARGRID (2026-10-30, default ON, opt-out _DISABLE): header and
+        // footer paragraphs keep the font's own advance too (same probe: the header
+        // paragraph's kanji 10.56 apart under linesAndChars / snapToChars 44093 and
+        // 4096, where Oxi used the body's 21.27 / 11.52 cells). OXI_HF_NO_GRID only
+        // took the line grid off them.
+        let hf_no_chargrid = is_header_footer && !in_textbox
+            && std::env::var_os("OXI_HF_NO_CHARGRID_DISABLE").is_none();
+        let effective_char_pitch = if (in_textbox && !txbx_chargrid) || snap_gate_active || hf_no_chargrid {
             None
         } else {
             page.grid_char_pitch

@@ -1240,6 +1240,10 @@ pub struct TextBox {
     /// Corner radius for rounded rectangles (in points)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner_radius: Option<f32>,
+    /// The box is a DrawingML `ellipse`: its fill and outline are the ellipse and
+    /// its text sits in the ellipse's inscribed text rectangle.
+    #[serde(default)]
+    pub ellipse: bool,
     /// Text inset left (in points, default 7.2pt = 91440 EMU)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_left: Option<f32>,

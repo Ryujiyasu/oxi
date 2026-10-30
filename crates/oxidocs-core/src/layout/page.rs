@@ -67,6 +67,7 @@ impl<'a> PageLayouter<'a> {
                     let tops = [page.margin.top];
                     let col_x = [page.margin.left];
                     let mut behind = Vec::new();
+                    super::IN_HF_TEXT_BOX.with(|c| c.set(true));
                     for code in [variant(0), variant(3)] {
                         for (_, tb) in page.hf_text_boxes.iter().filter(|(c, _)| *c == code) {
                             let mut tb = tb.clone();
@@ -74,6 +75,7 @@ impl<'a> PageLayouter<'a> {
                             behind.extend(self.layout_text_box(&tb, page, &tops, &col_x));
                         }
                     }
+                    super::IN_HF_TEXT_BOX.with(|c| c.set(false));
                     lp.elements.splice(0..0, behind);
                 }
             }
@@ -10821,11 +10823,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let tops: Vec<f32> = if tops.is_empty() { vec![fallback_y] } else { tops.to_vec() };
                 let col_x = vec![page.margin.left; tops.len()];
                 let mut out = Vec::new();
+                super::IN_HF_TEXT_BOX.with(|c| c.set(true));
                 for (_, tb) in page.hf_text_boxes.iter().filter(|(c, _)| *c == code) {
                     let mut tb = tb.clone();
                     tb.anchor_block_index = tb.anchor_block_index.min(tops.len() - 1);
                     out.extend(this.layout_text_box(&tb, page, &tops, &col_x));
                 }
+                super::IN_HF_TEXT_BOX.with(|c| c.set(false));
                 out
             };
             // S1174: draw the page's re-resolved STYLEREF text. Pages that

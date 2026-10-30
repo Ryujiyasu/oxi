@@ -3794,6 +3794,8 @@ thread_local! {
     /// header / footer frame paragraph (the Latin baseline law applies there
     /// even in a CJK document).
     static IN_HF_FRAME_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_HF_TXBX_NO_CHARGRID: set while a header / footer text box is laid out.
+    static IN_HF_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// S816 (2026-07-13): true once the document's FIRST IR section has been
     /// laid out. The page-top space-before suppression keys on
     /// `!pages.is_empty() || !current_elements.is_empty()`, but those vecs are
@@ -9105,7 +9107,30 @@ cells={} pitch={:.2} text={:?}",
         // 2. Background fill + border as a single BoxRect (supports corner radius)
         let has_fill = text_box.fill.is_some();
         let has_border = text_box.border;
-        if has_fill || has_border {
+        // OXI_TXBX_ELLIPSE (2026-10-30): an ellipse text box paints an ellipse, not
+        // its bounding box. en/correspondence__00e272ee's «What is Online Grooming?»
+        // (wps prstGeom ellipse, FAC090 fill, 2pt 4F81BD outline, 172.9pt) drew as
+        // a square in Oxi.
+        if text_box.ellipse && (has_fill || has_border) {
+            use crate::ir::PathSeg;
+            let c = 0.5 * 0.552_284_8;
+            elements.push(LayoutElement::new(abs_x, abs_y, text_box.width, text_box.height,
+                LayoutContent::VectorPath {
+                    segs: vec![
+                        PathSeg::M(1.0, 0.5),
+                        PathSeg::C(1.0, 0.5 + c, 0.5 + c, 1.0, 0.5, 1.0),
+                        PathSeg::C(0.5 - c, 1.0, 0.0, 0.5 + c, 0.0, 0.5),
+                        PathSeg::C(0.0, 0.5 - c, 0.5 - c, 0.0, 0.5, 0.0),
+                        PathSeg::C(0.5 + c, 0.0, 1.0, 0.5 - c, 1.0, 0.5),
+                        PathSeg::Z,
+                    ],
+                    fill: text_box.fill.clone(),
+                    stroke_color: if has_border {
+                        text_box.stroke_color.clone().or_else(|| Some("000000".to_string()))
+                    } else { None },
+                    stroke_width: if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 },
+                }));
+        } else if has_fill || has_border {
             let fill_hex = text_box.fill.as_ref().map(|f| {
                 if f.starts_with('#') {
                     f.clone()
@@ -9187,6 +9212,13 @@ cells={} pitch={:.2} text={:?}",
         };
         let (inset_l, inset_r, inset_t, inset_b) =
             (inset_l + txbx_outline, inset_r + txbx_outline, inset_t + txbx_outline, inset_b + txbx_outline);
+        // the ellipse preset's text rectangle: hc -+ wd2*cos45, vc -+ hd2*sin45
+        let (ell_x, ell_y) = if text_box.ellipse {
+            let k = (1.0 - std::f32::consts::FRAC_1_SQRT_2) * 0.5;
+            (text_box.width * k, text_box.height * k)
+        } else { (0.0, 0.0) };
+        let (inset_l, inset_r, inset_t, inset_b) =
+            (inset_l + ell_x, inset_r + ell_x, inset_t + ell_y, inset_b + ell_y);
         // roundRect corner pushes the inscribed text area inward by r·(1−cos 45°) ≈ 0.293r per side.
         let corner_inset = text_box
             .corner_radius
@@ -9826,6 +9858,36 @@ cells={} pitch={:.2} text={:?}",
                         .entry((el.y * 10.0).round() as i64)
                         .or_default()
                         .push(i);
+                }
+            }
+            // OXI_CLNSP_MARKER_MERGE (2026-10-30, default ON, opt-out _DISABLE): a list
+            // bullet sits 0.15 em above its line's text, so grouping by the exact y
+            // made it a line of its own and the law chain pushed every bulleted
+            // paragraph's text one line down. en/correspondence__00e272ee's Microsoft
+            // Family Safety box (compatLnSpc): Word sets «• The ability…» on one line
+            // (bullet 161.5, text 164.3), Oxi drew the text at 175.1. A group within
+            // 0.3 em above the next joins it, after that line's own elements (the
+            // chain measures the line from its first element).
+            if std::env::var_os("OXI_CLNSP_MARKER_MERGE_DISABLE").is_none() {
+                let groups: Vec<(i64, Vec<usize>)> = std::mem::take(&mut lines).into_iter().collect();
+                let fs_of = |idxs: &[usize]| idxs.iter().filter_map(|&i| match &elements[i].content {
+                    LayoutContent::Text { font_size, .. } => Some(*font_size),
+                    _ => None,
+                }).fold(0.0f32, f32::max);
+                let mut carry: Vec<usize> = Vec::new();
+                for (k, (key, idxs)) in groups.iter().enumerate() {
+                    let next = groups.get(k + 1);
+                    let fs = fs_of(idxs);
+                    let joins = next.is_some_and(|(nk, nidx)| {
+                        ((nk - key) as f32 / 10.0) < 0.3 * fs.max(fs_of(nidx))
+                    });
+                    if joins {
+                        carry.extend(idxs.iter().copied());
+                    } else {
+                        let mut v = idxs.clone();
+                        v.extend(carry.drain(..));
+                        lines.insert(*key, v);
+                    }
                 }
             }
             // v2 (2026-07-08): RELATIVE chain — the first line KEEPS its

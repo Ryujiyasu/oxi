@@ -9378,6 +9378,7 @@ fn parse_drawing(
                                     fill: None,
                                     anchor_block_index: 0,
                                     corner_radius: None,
+                                    ellipse: false,
                                     inset_left: text_inset_left,
                                     inset_right: text_inset_right,
                                     inset_top: text_inset_top,
@@ -9485,6 +9486,7 @@ fn parse_drawing(
                                     fill: None,
                                     anchor_block_index: 0,
                                     corner_radius: None,
+                                    ellipse: false,
                                     inset_left: Some(0.0),
                                     inset_right: Some(0.0),
                                     inset_top: Some(0.0),
@@ -9842,6 +9844,9 @@ fn parse_drawing(
             },
             anchor_block_index: 0, // set by caller in parse_body
             corner_radius,
+            // OXI_TXBX_ELLIPSE (2026-10-30, default ON, opt-out _DISABLE)
+            ellipse: shape_type.as_deref() == Some("ellipse")
+                && std::env::var_os("OXI_TXBX_ELLIPSE_DISABLE").is_none(),
             inset_left: text_inset_left,
             inset_right: text_inset_right,
             inset_top: text_inset_top,
@@ -10065,6 +10070,7 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         fill: sh.fill.clone(),
         anchor_block_index: 0,
         corner_radius: None,
+        ellipse: false,
         inset_left: Some(7.2),
         inset_right: Some(7.2),
         inset_top: Some(3.6),
@@ -10928,6 +10934,7 @@ fn parse_vml_pict(
             fill: None,
             anchor_block_index: 0,
             corner_radius: None,
+            ellipse: false,
             inset_left: None,
             inset_right: None,
             inset_top: None,
@@ -10999,6 +11006,7 @@ fn parse_vml_pict(
             } else {
                 None
             },
+            ellipse: false,
             inset_left: None,
             inset_right: None,
             inset_top: None,
