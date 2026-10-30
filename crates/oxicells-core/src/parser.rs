@@ -4921,6 +4921,15 @@ fn parse_worksheet(
         }
     }
 
+    // Physical empty cells still contribute to the imported used extent.
+    // The host refreshes this extent when UsedRange is explicitly requested.
+    let pending_used_bounds = rows.iter().flat_map(|row| row.cells.iter().map(move |cell| (cell.col, row.index.saturating_sub(1))))
+        .filter(|(col, row)| *col <= oxicells_calc::reference::MAX_COL && *row <= oxicells_calc::reference::MAX_ROW)
+        .fold(None, |bounds: Option<(u32, u32, u32, u32)>, (col, row)| Some(match bounds {
+            Some((left, top, right, bottom)) => (left.min(col), top.min(row), right.max(col), bottom.max(row)),
+            None => (col, row, col, row),
+        }));
+
     // Ensure col_widths covers all columns
     let col_count = max_col as usize;
     if col_widths.len() < col_count {
@@ -5065,7 +5074,7 @@ fn parse_worksheet(
         col_widths,
         col_custom_widths,
         cached_spills: None,
-        pending_used_bounds: None,
+        pending_used_bounds,
         column_width_font,
         default_col_width,
         default_col_width_explicit,
@@ -5835,6 +5844,21 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn physical_empty_cells_preserve_the_imported_used_extent() {
+        let xml = r#"<worksheet><dimension ref="A1:Z100"/><sheetData>
+            <row r="1"><c r="A1"><v></v></c></row>
+            <row r="3"><c r="C3"><f t="array" ref="C3:C8">ROW(A1:A6)</f><v>1</v></c></row>
+            <row r="5"><c r="E5"/></row>
+        </sheetData></worksheet>"#;
+        let sheet = super::parse_worksheet(xml, "Sheet1", &[], &super::StyleSheet::default(), &super::Theme::default()).unwrap();
+        assert_eq!(sheet.pending_used_bounds, Some((0, 0, 4, 4)));
+        assert!(sheet.rows.iter().find(|row| row.index == 8).unwrap().cells.iter().any(|cell| cell.col == 2));
+        let empty = super::parse_worksheet("<worksheet><dimension ref=\"A1:Z100\"/><sheetData/></worksheet>",
+            "Sheet1", &[], &super::StyleSheet::default(), &super::Theme::default()).unwrap();
+        assert_eq!(empty.pending_used_bounds, None);
+    }
+
     #[test]
     fn extended_conditional_rule_does_not_create_a_second_base_rule() {
         let xml = r#"<worksheet><conditionalFormatting sqref="B2:B6"><cfRule type="dataBar" priority="2"><dataBar/><extLst><ext><x14:id>{ABC}</x14:id></ext></extLst></cfRule></conditionalFormatting><extLst><ext><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="dataBar" id="{ABC}"><x14:dataBar/></x14:cfRule><xm:sqref>B2:B6</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst></worksheet>"#;

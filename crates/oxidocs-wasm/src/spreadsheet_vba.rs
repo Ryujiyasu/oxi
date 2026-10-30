@@ -15384,7 +15384,7 @@ impl<'a> WorkbookHost<'a> {
                 if matches!(cell.value, CellValue::Empty)
                     && cell.formula.is_none()
                     && cell.runs.is_empty()
-                    && cell.style == bare
+                    && (cell.style == bare || cell.style == self.workbook.default_style)
                 {
                     continue;
                 }
@@ -44290,6 +44290,46 @@ mod tests {
         }
         assert_eq!(checked,240);
         assert!(failures.is_empty(),"{}",failures.into_iter().take(40).collect::<Vec<_>>().join("\n"));
+    }
+
+    #[test]
+    fn imported_array_presence_refreshes_physical_empty_cells_under_normal_style() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let seed = parse_module(r#"Public Sub Seed()
+            Range("A1:E5").ClearContents
+            Range("C3:C4").FormulaArray="=ROW(A1:A2)"
+            Dim observed As Object
+            Set observed=ActiveSheet.UsedRange
+        End Sub
+        Public Sub FormatBlank()
+            Range("D8").Font.Bold=True
+        End Sub
+        Public Function ReadFlags() As String
+            ReadFlags=CStr(IsNull(Range("C3:C5").HasArray))
+            ReadFlags=ReadFlags & "|" & ActiveSheet.UsedRange.Address
+            If IsNull(Range("C3:C5").HasArray) Then
+                ReadFlags=ReadFlags & "|N"
+            Else
+                ReadFlags=ReadFlags & "|" & CStr(Range("C3:C5").HasArray)
+            End If
+        End Function"#).unwrap();
+        for styled in [false, true] {
+            let mut book = oxicells_core::parse_xlsx(original).unwrap();
+            {
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                execute_with_host(&seed, "Seed", vec![], &mut host).unwrap();
+                if styled { execute_with_host(&seed, "FormatBlank", vec![], &mut host).unwrap(); }
+            }
+            let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let bytes = editor.save().unwrap();
+            let mut imported = oxicells_core::parse_xlsx(&bytes).unwrap();
+            assert_eq!(imported.sheets[0].pending_used_bounds,
+                Some((0, 0, 4, if styled { 7 } else { 4 })));
+            let actual = execute_with_host(&seed, "ReadFlags", vec![], &mut WorkbookHost::new(&mut imported, 0).unwrap()).unwrap();
+            assert_eq!(actual, Value::String(if styled { "True|$C$3:$D$8|N" } else { "True|$C$3:$C$4|True" }.into()));
+            assert_eq!(imported.sheets[0].pending_used_bounds, None);
+        }
     }
 
     #[test]
