@@ -380,6 +380,9 @@ impl<'a> ParagraphLayouter<'a> {
         // merged group (the immediately-previous paragraph has the same pBdr). A
         // non-bordered paragraph between two boxes breaks the merge (prev != cur) and
         // correctly re-reserves. Default ON, opt-out OXI_S658_DISABLE.
+        // OXI_PBDR_PUSH_INSET: the top-border reservation, kept to re-apply on the
+        // next page when the paragraph's first line moves there.
+        let mut s658_top_inset = 0.0f32;
         if std::env::var("OXI_S658_DISABLE").is_err() {
             if let Some(ref borders) = para.style.borders {
                 if let Some(ref top) = borders.top {
@@ -398,6 +401,7 @@ impl<'a> ParagraphLayouter<'a> {
                         let s1504 = std::env::var_os("OXI_S1504_DISABLE").is_none();
                         let tw = if s1504 { pbdr_stroke_extent(&top.style, top.width) } else { top.width };
                         cursor.advance(top.space + tw);
+                        s658_top_inset = top.space + tw;
                     }
                 }
             }
@@ -6397,6 +6401,19 @@ impl<'a> ParagraphLayouter<'a> {
                     }
                     cursor.set(page_top);
                     s842_apply(cursor);
+                    // OXI_PBDR_PUSH_INSET (2026-10-30, default ON, opt-out _DISABLE): a
+                    // bordered paragraph whose first line moves to the next page starts
+                    // there below its top border too. `_pb_pbdr_pagetop_gen.py` prevflow
+                    // (a differently bordered paragraph ends page 1): Word's baseline
+                    // 45.96 / 40.56 / 42.48 for threeDEngrave 24 / single 4 / triple 4;
+                    // Oxi reserved the border on page 1, moved the line, and set it on
+                    // the margin (38.88), drawing the rule above the margin.
+                    // en/reference__005a8ec8 p2 «LENT GROUPS»: every line 7pt high.
+                    if line_idx == 0 && s658_top_inset > 0.0
+                        && std::env::var_os("OXI_PBDR_PUSH_INSET_DISABLE").is_none()
+                    {
+                        cursor.advance(s658_top_inset);
+                    }
                     if g5_carry_marker {
                         let dy = cursor.visual_y - g5_old_visual;
                         for e in elements.iter_mut() {
