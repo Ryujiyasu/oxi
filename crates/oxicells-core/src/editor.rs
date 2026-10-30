@@ -6377,6 +6377,111 @@ fn clear_rich_error_records(metadata: &str, structures: &str, values: &str, requ
     Ok((output, ids))
 }
 
+fn patch_rich_error_workbook(xml: &str) -> Result<String, XlsxError> {
+    const FEATURES: &str = "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures";
+    const EXTENSION: &str = "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}";
+    // Rich error caches need the calculation capability and version markers,
+    // including when a reader leaves a workbook in manual calculation mode.
+    fn root(xml: &str) -> Result<(BytesStart<'static>, bool, usize, usize), XlsxError> {
+        let mut reader = Reader::from_str(xml);
+        loop {
+            let start = reader.buffer_position() as usize;
+            let event = reader.read_event().map_err(XlsxError::Xml)?;
+            let empty = matches!(event, Event::Empty(_));
+            match event {
+                Event::Start(tag) | Event::Empty(tag) => return Ok((tag.into_owned(), empty, start, reader.buffer_position() as usize)),
+                Event::Eof => return Err(XlsxError::InvalidData("workbook element is missing".into())),
+                _ => {}
+            }
+        }
+    }
+    fn append(xml: &str, child: &str) -> Result<String, XlsxError> {
+        let (tag, empty, start, end) = root(xml)?;
+        if empty {
+            let name = String::from_utf8_lossy(tag.name().as_ref()).into_owned();
+            return Ok(format!("{}{}{child}</{name}>{}", &xml[..start], xml_start_text(tag)?, &xml[end..]));
+        }
+        append_xml_child(xml, &local_name(tag.name().as_ref()), child)
+    }
+    let version_span = direct_xml_child(xml, "fileVersion")?.0;
+    let version = version_span.map(|(start, end)| &xml[start..end]).unwrap_or(
+        r#"<fileVersion xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#);
+    let (tag, _, _, _) = root(version)?;
+    let mut changes = Vec::new();
+    if get_attr(&tag, "appName").as_deref() != Some("xl") { changes.push(("appName", Some("xl".to_string()))); }
+    for name in ["lastEdited", "lowestEdited"] {
+        if get_attr(&tag, name).is_none() { changes.push((name, Some("7".to_string()))); }
+    }
+    let version = if changes.is_empty() { version.to_string() } else { xml_root_attributes(version, &changes)? };
+    let mut output = if version_span.is_some() {
+        replace_direct_xml_child(xml, "fileVersion", Some(&version))?
+    } else {
+        let (_, empty, _, end) = root(xml)?;
+        if empty { append(xml, &version)? } else { format!("{}{}{}", &xml[..end], version, &xml[end..]) }
+    };
+    let calc_span = direct_xml_child(&output, "calcPr")?.0;
+    let calc = calc_span.map(|(start, end)| &output[start..end]).unwrap_or(
+        r#"<calcPr xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#);
+    let (tag, _, _, _) = root(calc)?;
+    let calc = if get_attr(&tag, "calcId").and_then(|id| id.parse::<u32>().ok()).is_some_and(|id| id >= 191029) {
+        calc.to_string()
+    } else { xml_root_attributes(calc, &[("calcId", Some("191029".into()))])? };
+    output = set_worksheet_drawing_child(&output, "calcPr", &calc,
+        &["oleSize", "customWorkbookViews", "pivotCaches", "smartTagPr", "smartTagTypes", "webPublishing", "fileRecoveryPr", "webPublishObjects", "extLst"])?;
+
+    let mut reader = quick_xml::NsReader::from_str(&output);
+    let mut depth = 0usize;
+    let mut extension_start = None;
+    let mut feature_start = None;
+    let mut extension_span = None;
+    let mut feature_span = None;
+    loop {
+        let start = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let spreadsheet = matches!(&namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == SPREADSHEET_METADATA_NS.as_bytes());
+        let feature_namespace = matches!(&namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == FEATURES.as_bytes());
+        let end = reader.buffer_position() as usize;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(tag) | Event::Empty(tag) => {
+                let local = local_name(tag.name().as_ref());
+                if depth == 2 && spreadsheet && local == "ext" && get_attr(&tag, "uri").as_deref() == Some(EXTENSION) {
+                    if empty { extension_span = Some((start, end)); } else { extension_start = Some(start); }
+                }
+                if depth == 3 && extension_start.is_some() && feature_namespace && local == "calcFeatures" {
+                    if empty { feature_span = Some((start, end)); } else { feature_start = Some(start); }
+                }
+                if depth == 4 && feature_start.is_some() && feature_namespace && local == "feature"
+                    && get_attr(&tag, "name").as_deref() == Some("microsoft.com:RD") { return Ok(output); }
+                if !empty { depth += 1; }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 3 { if let Some(start) = feature_start.take() { feature_span = Some((start, end)); } }
+                if depth == 2 { if let Some(start) = extension_start.take() { extension_span = Some((start, end)); } }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let feature = format!(r#"<xcalcf:feature xmlns:xcalcf="{FEATURES}" name="microsoft.com:RD"/>"#);
+    if let Some((start, end)) = feature_span {
+        let changed = append(&output[start..end], &feature)?;
+        return Ok(format!("{}{}{}", &output[..start], changed, &output[end..]));
+    }
+    let features = format!(r#"<xcalcf:calcFeatures xmlns:xcalcf="{FEATURES}">{feature}</xcalcf:calcFeatures>"#);
+    if let Some((start, end)) = extension_span {
+        let changed = append(&output[start..end], &features)?;
+        return Ok(format!("{}{}{}", &output[..start], changed, &output[end..]));
+    }
+    let extension = format!(r#"<ext xmlns="{SPREADSHEET_METADATA_NS}" uri="{EXTENSION}">{features}</ext>"#);
+    let extensions = match direct_xml_child(&output, "extLst")?.0 {
+        Some((start, end)) => append(&output[start..end], &extension)?,
+        None => format!(r#"<extLst xmlns="{SPREADSHEET_METADATA_NS}">{extension}</extLst>"#),
+    };
+    replace_direct_xml_child(&output, "extLst", Some(&extensions))
+}
+
 fn patch_rich_error_package(data: &[u8], clear_plan: &[std::collections::BTreeSet<(u32, u32)>]) -> Result<Vec<u8>, XlsxError> {
     let mut source = OoxmlArchive::new(data)?;
     let mut rels = source.read_part("xl/_rels/workbook.xml.rels")?;
@@ -6458,6 +6563,10 @@ fn patch_rich_error_package(data: &[u8], clear_plan: &[std::collections::BTreeSe
         replacements.insert(path, result.into_bytes());
     }
     for (path, xml) in parts { replacements.insert(path, xml.into_bytes()); }
+    if !requests.is_empty() {
+        let workbook = source.read_part("xl/workbook.xml")?;
+        replacements.insert("xl/workbook.xml".into(), patch_rich_error_workbook(&workbook)?.into_bytes());
+    }
     replacements.insert("xl/_rels/workbook.xml.rels".into(), rels.into_bytes());
     replacements.insert("[Content_Types].xml".into(), types.into_bytes());
     replace_package_parts(data, replacements)
@@ -11988,6 +12097,68 @@ mod tests {
                 assert_eq!(crate::parse_xlsx_preserving_values(&bytes).unwrap().calculation, workbook.calculation);
             }
         }
+    }
+
+    #[test]
+    fn rich_error_cache_markers_preserve_manual_calculation_and_existing_extensions() {
+        let ns = SPREADSHEET_METADATA_NS;
+        let feature_ns = "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures";
+        let extension = "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}";
+        let sources = [
+            format!(r#"<workbook xmlns="{ns}"><sheets/></workbook>"#),
+            format!(r#"<workbook xmlns="{ns}"/>"#),
+            format!(r#"<workbook xmlns="{ns}"><fileVersion appName="other" lastEdited="4" lowestEdited="4" custom="keep"/><sheets/><calcPr calcId="123" calcMode="manual" calcOnSave="0" iterate="1" calcCompleted="0"/><extLst/></workbook>"#),
+            format!(r#"<s:workbook xmlns:s="{ns}" xmlns:f="{feature_ns}" xmlns:v="urn:vendor"><s:sheets/><s:calcPr calcId="999999" calcMode="autoNoTable" calcOnSave="0"/><s:extLst custom="keep"><s:ext uri="urn:opaque"><v:calcFeatures><v:feature name="microsoft.com:RD"/></v:calcFeatures></s:ext><s:ext uri="{extension}"><f:calcFeatures><f:feature name="microsoft.com:FV"/></f:calcFeatures></s:ext></s:extLst></s:workbook>"#),
+            format!(r#"<workbook xmlns="{ns}"><sheets/><extLst><ext uri="{extension}"><f:calcFeatures xmlns:f="{feature_ns}"/></ext></extLst></workbook>"#),
+        ];
+        for (index, source) in sources.iter().enumerate() {
+            let changed = patch_rich_error_workbook(source).unwrap();
+            assert_eq!(patch_rich_error_workbook(&changed).unwrap(), changed, "idempotence: {index}");
+            let (version, _, _, _) = direct_xml_child(&changed, "fileVersion").unwrap();
+            let (start, end) = version.unwrap();
+            assert!(changed[start..end].contains("appName=\"xl\""));
+            let mut reader = quick_xml::NsReader::from_str(&changed);
+            let mut rich = 0;
+            loop {
+                let (resolved, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    Event::Start(ref tag) | Event::Empty(ref tag)
+                        if matches!(resolved, quick_xml::name::ResolveResult::Bound(ref bound) if bound.as_ref() == feature_ns.as_bytes())
+                            && tag.local_name().as_ref() == b"feature"
+                            && get_attr(tag, "name").as_deref() == Some("microsoft.com:RD") => rich += 1,
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(rich, 1, "{changed}");
+            assert_eq!(changed.matches(extension).count(), 1);
+            if let Some((sheets, _)) = direct_xml_child(&changed, "sheets").unwrap().0 { assert!(start < sheets); }
+            let calc = direct_xml_child(&changed, "calcPr").unwrap().0.unwrap();
+            let extensions = direct_xml_child(&changed, "extLst").unwrap().0.unwrap();
+            assert!(calc.0 < extensions.0);
+            if index == 2 {
+                for held in [r#"lastEdited="4""#, r#"lowestEdited="4""#, r#"custom="keep""#,
+                    r#"calcMode="manual""#, r#"calcOnSave="0""#, r#"iterate="1""#, r#"calcCompleted="0""#] {
+                    assert!(changed.contains(held), "{held}: {changed}");
+                }
+                assert!(changed.contains(r#"calcId="191029""#));
+            }
+            if index == 3 {
+                for held in [r#"calcId="999999""#, r#"calcMode="autoNoTable""#, r#"custom="keep""#,
+                    "<v:calcFeatures><v:feature name=\"microsoft.com:RD\"/></v:calcFeatures>",
+                    "<f:feature name=\"microsoft.com:FV\"/>"] { assert!(changed.contains(held), "{changed}"); }
+            }
+        }
+        let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut editor = XlsxEditor::new(data).unwrap();
+        editor.set_cell_value(0, 2, 3, CellEditValue::Error("#CALC!".into()));
+        let saved = editor.save().unwrap();
+        let mut archive = OoxmlArchive::new(&saved).unwrap();
+        let xml = archive.read_part("xl/workbook.xml").unwrap();
+        assert!(xml.contains("microsoft.com:RD") && xml.contains(r#"appName="xl""#) && xml.contains(r#"calcId="191029""#));
+        let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert!(matches!(&reopened.sheets[0].rows.iter().find(|row| row.index == 2).unwrap().cells.iter().find(|cell| cell.col == 3).unwrap().value,
+            crate::ir::CellValue::Error(text) if text == "#CALC!"));
     }
 
     #[test]
