@@ -47,6 +47,25 @@ impl CompileReferenceLibrary {
         Some(signatures.iter().fold(0, |flags, signature| flags | signature.invocation))
     }
 
+    /// Parameter names of a referenced invocation, in declaration order.
+    pub fn member_parameter_names(&self, owner: &str, name: &str, invocation: u8) -> Option<Vec<String>> {
+        let (owner, _) = self.resolve_type(owner)?;
+        let signature = self.interfaces.get(&owner)?.members.get(&name.to_ascii_lowercase())?
+            .iter().find(|signature| signature.invocation & invocation != 0)?;
+        Some(signature.parameters.iter().map(|(name, _)| name.clone()).collect())
+    }
+
+    /// The static interface of a host global, when it has one.
+    pub fn global_type_name(&self, name: &str) -> Option<String> {
+        self.global(name).map(|(name, _)| name)
+    }
+
+    /// The declared result of a referenced property getter or method.
+    pub fn member_result_type(&self, owner: &str, name: &str) -> Option<String> {
+        let (owner, _) = self.resolve_type(owner)?;
+        self.member(&owner, name).map(|signature| signature.result.clone())
+    }
+
     pub fn from_tsv(source: &str) -> Result<Self, String> {
         fn signature(
             result: &str,

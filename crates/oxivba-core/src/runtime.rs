@@ -106,7 +106,7 @@ enum RecordStep {
 /// Where a `With` block's subject lives while its body runs.
 enum WithSubject {
     /// A host object, which carries a reference of its own.
-    Object { receiver: ObjectRef, class: Option<String>, early_application: bool },
+    Object { receiver: ObjectRef, class: Option<String>, early_application: bool, assignment_type: Option<String> },
     /// A record, which carries none. VBA's `With` takes a user-defined type as
     /// readily as an object -- `With This` over a `Private Type` is how half
     /// the class modules in the wild are written -- so the PLACE is kept
@@ -119,6 +119,17 @@ enum WithSubject {
     Record {
         root: ValueSlot,
     },
+}
+
+struct PreparedAssignmentArguments {
+    values: Vec<Option<EvaluatedArgument>>,
+    parameters: Option<Vec<crate::ast::Param>>,
+}
+
+#[derive(Clone, Copy)]
+struct ArgumentSelection<'a> {
+    indices: &'a [usize],
+    defer_byval_references: bool,
 }
 
 /// Whether a chain bottoms out at the `With` subject rather than at a name.
@@ -230,6 +241,20 @@ pub trait Host {
     fn prepare_automation_get(&self, _receiver: &ObjectRef, _name: &str, _args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
         Ok(None)
     }
+
+    /// Bind a host property's named indices without invoking its getter.
+    /// None leaves resolution to a getter returning the assignment object.
+    fn bind_indexed_assignment(&self, _receiver: &ObjectRef, _name: &str, args: &[Value], names: &[Option<String>]) -> Result<Option<Vec<Value>>, String> {
+        Ok((!names.iter().any(Option::is_some)).then(|| args.to_vec()))
+    }
+
+    fn assignment_global_type(&self, _name: &str) -> Option<String> { None }
+
+    fn assignment_call_parameters(&self, _receiver_type: Option<&str>, _name: &str) -> Option<Vec<String>> { None }
+
+    fn assignment_call_result(&self, _receiver_type: Option<&str>, _name: &str) -> Option<String> { None }
+
+    fn assignment_indices_first(&self, _receiver_type: &str, _name: &str) -> bool { false }
 
     /// Help metadata for an error whose source belongs to the host itself.
     /// Language errors use the runtime's `ErrorEnvironment` instead.
@@ -2167,22 +2192,119 @@ impl<'a> Runtime<'a> {
         target: &Expr,
         frame: &mut Frame,
         object_value: bool,
-    ) -> Result<Option<Vec<EvaluatedArgument>>, RuntimeError> {
-        let Expr::Index {
-            target,
-            args,
-            force_by_value,
-            ..
-        } = target
-        else {
-            return Ok(None);
+    ) -> Result<Option<PreparedAssignmentArguments>, RuntimeError> {
+        let Expr::Index { target, args, force_by_value, .. } = target else { return Ok(None); };
+        if args.is_empty() { return Ok(None); }
+        let receiver_type = match target.as_ref() {
+            Expr::Member { object, .. } => self.assignment_receiver_type(object, frame),
+            Expr::WithMember(..) | Expr::WithBangMember(..) => match frame.with_objects.last() {
+                Some(WithSubject::Object { assignment_type, .. }) => assignment_type.clone(),
+                _ => None,
+            },
+            Expr::Index { .. } => self.assignment_receiver_type(target, frame),
+            _ if expr_name(target).is_some_and(|name| self.lookup_slot(frame, name).is_some()) => self.assignment_receiver_type(target, frame),
+            _ => None,
         };
-        if !args.iter().any(|argument| argument.name.is_some()) {
+        let late_member = matches!(target.as_ref(), Expr::Member { .. } | Expr::WithMember(..) | Expr::WithBangMember(..))
+            && receiver_type.is_none();
+        let setter = self.source_setter_parameters(target, frame, object_value);
+        if let Some(parameters) = setter {
+            if !late_member && !args.iter().any(|argument| argument.name.is_some()) { return Ok(None); }
+            let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame, None)?;
+            return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
+        }
+        if let Some(name) = expr_name(target) {
+            if self.lookup_slot(frame, name).is_none() && self.has_visible_procedure(name) {
+                if object_value || args.len() < 2 { return Ok(None); }
+                let (_, procedure) = self.find_procedure(name, Some(target.span().line))?;
+                let parameters = procedure.params.clone();
+                let mut order: Vec<_> = (0..args.len()).collect();
+                order.sort_by_key(|&index| args[index].name.as_ref()
+                    .and_then(|name| parameters.iter().position(|parameter| parameter.name.eq_ignore_ascii_case(name)))
+                    .unwrap_or(index));
+                order.pop();
+                let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame,
+                    Some(ArgumentSelection { indices: &order, defer_byval_references: true }))?;
+                return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
+            }
+            if self.lookup_slot(frame, name).is_some_and(|slot| !matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)) {
+                return Ok(None);
+            }
+        }
+        let member = match target.as_ref() {
+            Expr::Index { .. } if receiver_type.is_some() => Some("_Default"),
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } if self.lookup_slot(frame, name).is_some() => Some("_Default"),
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } | Expr::Member { name, .. }
+                | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => Some(name.as_str()),
+            _ => None,
+        };
+        let direct_indices = receiver_type.as_deref().zip(member).is_some_and(|(kind, name)|
+            self.host.as_deref().is_some_and(|host| host.assignment_indices_first(kind, name)));
+        let signature = if late_member { None } else {
+            member.and_then(|name| self.host.as_deref()?.assignment_call_parameters(receiver_type.as_deref(), name))
+        };
+        let default_indices = signature.as_ref().is_some_and(Vec::is_empty);
+        let compound_argument = args.iter().any(|argument| match argument.value.as_ref() {
+            Some(Expr::Index { args, .. }) => !args.is_empty(),
+            Some(Expr::Binary { .. } | Expr::Unary { .. }) => true,
+            _ => false,
+        });
+        if !late_member && !direct_indices && !default_indices && (object_value || (args.len() == 1 && !compound_argument)) {
             return Ok(None);
         }
-        let parameters = self.source_setter_parameters(target, frame, object_value);
-        self.evaluate_source_arguments(args, *force_by_value, parameters.as_deref(), frame)
-            .map(Some)
+        let parameters = signature.filter(|names| !names.is_empty()).map(|names| names.into_iter().map(|name| crate::ast::Param {
+                    mode: ParamMode::ByRef, optional: true, name, is_array: false,
+                    type_name: TypeName::implicit(), default: None,
+                }).collect::<Vec<_>>());
+        let mut values = self.evaluate_selected_arguments(args, *force_by_value, parameters.as_deref(), frame, None)?;
+        if direct_indices || default_indices {
+            for value in &mut values {
+                if let Some(captured) = value.take() { *value = Some(EvaluatedArgument::new(captured.value(), None)); }
+            }
+        }
+        Ok(Some(PreparedAssignmentArguments { values, parameters }))
+    }
+
+    fn finish_assignment_arguments(&mut self, target: &Expr, prepared: Option<PreparedAssignmentArguments>, frame: &mut Frame) -> Result<Option<Vec<EvaluatedArgument>>, RuntimeError> {
+        let Some(mut prepared) = prepared else { return Ok(None); };
+        let Expr::Index { args, force_by_value, .. } = target else { unreachable!("prepared indexed assignment"); };
+        let missing: Vec<_> = prepared.values.iter().enumerate().filter_map(|(index, value)| value.is_none().then_some(index)).collect();
+        if !missing.is_empty() {
+            let remaining = self.evaluate_selected_arguments(args, *force_by_value, prepared.parameters.as_deref(), frame,
+                Some(ArgumentSelection { indices: &missing, defer_byval_references: false }))?;
+            for (index, value) in remaining.into_iter().enumerate() {
+                if value.is_some() { prepared.values[index] = value; }
+            }
+        }
+        Ok(Some(prepared.values.into_iter().map(Option::unwrap).collect()))
+    }
+
+    fn assignment_receiver_type(&self, object: &Expr, frame: &Frame) -> Option<String> {
+        if self.early_application_expression(object, frame) { return Some("Application".into()); }
+        self.source_expression_type(object, frame)
+            .filter(|kind| !matches!(key(&kind.name).as_str(), "object" | "variant"))
+            .map(|kind| kind.name).or_else(|| {
+                if let Some(name) = expr_name(object) {
+                    if self.lookup_slot(frame, name).is_some() || self.has_visible_procedure(name) { return None; }
+                    return self.host.as_deref()?.assignment_global_type(name);
+                }
+                let (callee, indexed) = match object {
+                    Expr::Index { target, args, .. } => (target.as_ref(), !args.is_empty()),
+                    _ => (object, false),
+                };
+                let (owner, name) = match callee {
+                    Expr::Ident(name, _) | Expr::TypedIdent { name, .. }
+                        if self.lookup_slot(frame, name).is_none() && !self.has_visible_procedure(name) => (None, name.as_str()),
+                    Expr::Member { object, name, .. } => (Some(self.assignment_receiver_type(object, frame)?), name.as_str()),
+                    _ => return None,
+                };
+                let host = self.host.as_deref()?;
+                if indexed && host.assignment_call_parameters(owner.as_deref(), name).is_none_or(|parameters| parameters.is_empty()) {
+                    return None;
+                }
+                host.assignment_call_result(owner.as_deref(), name)
+                    .filter(|kind| !matches!(key(kind).as_str(), "object" | "variant"))
+            })
     }
 
     fn call_instance_set_source(
@@ -2344,7 +2466,19 @@ impl<'a> Runtime<'a> {
         parameters: Option<&[crate::ast::Param]>,
         frame: &mut Frame,
     ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
-        let mut order: Vec<_> = (0..args.len()).collect();
+        self.evaluate_selected_arguments(args, force_by_value, parameters, frame, None)
+            .map(|values| values.into_iter().map(Option::unwrap).collect())
+    }
+
+    fn evaluate_selected_arguments(
+        &mut self,
+        args: &[Argument],
+        force_by_value: bool,
+        parameters: Option<&[crate::ast::Param]>,
+        frame: &mut Frame,
+        selected: Option<ArgumentSelection<'_>>,
+    ) -> Result<Vec<Option<EvaluatedArgument>>, RuntimeError> {
+        let mut order: Vec<_> = selected.map_or_else(|| (0..args.len()).collect(), |selection| selection.indices.to_vec());
         if let Some(parameters) = parameters {
             order.sort_by_key(|index| {
                 args[*index]
@@ -2392,12 +2526,13 @@ impl<'a> Runtime<'a> {
             evaluated[index] = Some(match bound {
                 BoundArgument::Reference(slot) => {
                     if let Some(parameter) = parameter.filter(|p| p.mode == ParamMode::ByVal) {
-                        let value = slot.snapshot();
-                        drop(slot);
-                        EvaluatedArgument::new(
-                            self.prepare_byval_argument(value, parameter, frame, line)?,
-                            None,
-                        )
+                        if selected.is_some_and(|selection| selection.defer_byval_references) {
+                            EvaluatedArgument::deferred(slot)
+                        } else {
+                            let value = slot.snapshot();
+                            drop(slot);
+                            EvaluatedArgument::new(self.prepare_byval_argument(value, parameter, frame, line)?, None)
+                        }
                     } else {
                         let fixed = argument.value.as_ref().and_then(|expression| {
                             self.reference_fixed_width(expression, &slot, frame)
@@ -2434,7 +2569,7 @@ impl<'a> Runtime<'a> {
                 }
             });
         }
-        Ok(evaluated.into_iter().map(Option::unwrap).collect())
+        Ok(evaluated)
     }
 
     /// The procedure a class marks with `VB_UserMemId = id`: 0 is its
@@ -3843,6 +3978,10 @@ impl<'a> Runtime<'a> {
                     if taken == Some(true) {
                         return Ok(Flow::Continue);
                     }
+                    let view = self.source_member_view(target, frame);
+                    let value = self.let_value(value, frame, span.line)?;
+                    self.assign_member_value(receiver, name, value, frame, at.line, view.as_deref())?;
+                    return Ok(Flow::Continue);
                 }
                 let value = self.let_value(value, frame, span.line)?;
                 // A variable that held an object, or an array that might,
@@ -3851,6 +3990,7 @@ impl<'a> Runtime<'a> {
                 let held = expr_name(target)
                     .and_then(|name| self.lookup_slot(frame, name))
                     .is_some_and(|slot| matches!(&*slot.borrow(), Value::Object(_) | Value::Array(_)));
+                let evaluated = self.finish_assignment_arguments(target, evaluated, frame)?;
                 self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref())?;
                 if held {
                     self.collect_instances(span.line)?;
@@ -3887,6 +4027,7 @@ impl<'a> Runtime<'a> {
                         vba_default_description: true,
                     });
                 }
+                let evaluated = self.finish_assignment_arguments(target, evaluated, frame)?;
                 self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref())?;
                 // What the variable held may have been the last reference.
                 self.collect_instances(span.line)?;
@@ -3975,7 +4116,7 @@ impl<'a> Runtime<'a> {
                     Some(held) => held,
                     None => {
                         let class=self.source_class_name(subject,frame);
-                        WithSubject::Object {early_application:self.early_application_expression(subject,frame),receiver:self.eval_object(subject, frame, line)?,class}
+                        WithSubject::Object {early_application:self.early_application_expression(subject,frame),assignment_type:self.assignment_receiver_type(subject,frame),receiver:self.eval_object(subject, frame, line)?,class}
                     },
                 };
                 frame.with_objects.push(held);
@@ -6481,6 +6622,30 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn assign_returned_object(&mut self, destination: Value, value: Value, frame: &mut Frame, line: u32) -> Result<(), RuntimeError> {
+        if matches!(value, Value::Object(_) | Value::Nothing) {
+            return Err(language_error(450, "invalid object assignment to a call result", line));
+        }
+        if !matches!(destination, Value::Object(_) | Value::Nothing) {
+            return Err(language_error(424, "Object required", line));
+        }
+        self.assign_object_default(destination, "Object", &value, frame, line)?;
+        Ok(())
+    }
+
+    fn assign_member_value(&mut self, receiver: ObjectRef, name: &str, value: Value, frame: &mut Frame, line: u32, view: Option<&str>) -> Result<(), RuntimeError> {
+        if is_err_object(&receiver) { return err_set(frame, name, value, line); }
+        if self.call_instance_set_source(&receiver, name, &[], &[], value.clone(), view, frame, line)? {
+            return Ok(());
+        }
+        if self.host_set(&receiver, name, value.clone(), line)? { return Ok(()); }
+        match self.host_get(&receiver, name, line)? {
+            Some(destination @ (Value::Object(_) | Value::Nothing)) => self.assign_returned_object(destination, value, frame, line),
+            _ => Err(error(RuntimeErrorKind::Unsupported,
+                format!("host property is not writable: {}.{name}", receiver.kind), Some(line))),
+        }
+    }
+
     fn assign_evaluated(
         &mut self,
         target: &Expr,
@@ -6490,6 +6655,7 @@ impl<'a> Runtime<'a> {
         evaluated: Option<&[EvaluatedArgument]>,
     ) -> Result<(), RuntimeError> {
         self.ensure_expression_module(target, frame)?;
+        let full_target = target;
         let mut value = value;
         if let Expr::Index {
             target: callee,
@@ -6891,6 +7057,23 @@ impl<'a> Runtime<'a> {
                 force_by_value,
                 ..
             } => {
+                if let Some(name) = expr_name(target).filter(|name| self.lookup_slot(frame, name).is_none()) {
+                    let destination = if let Some(evaluated) = evaluated {
+                        if self.has_visible_procedure(name) {
+                            let (module, procedure) = self.find_procedure(name, Some(line))?;
+                            let answer = self.call_resolved_source_body(module, &procedure, None, args,
+                                *force_by_value, Some(evaluated), frame, Some(line));
+                            let collected = self.collect_instances(line);
+                            if answer.is_ok() { collected?; }
+                            answer?
+                        } else {
+                            let values = evaluated.iter().map(EvaluatedArgument::value).collect();
+                            let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                            self.call_named(name, values, &names, Some(line), frame)?
+                        }
+                    } else { self.eval_call(full_target, frame)? };
+                    return self.assign_returned_object(destination, value, frame, line);
+                }
                 let potential = matches!(
                     target.as_ref(),
                     Expr::Member { .. } | Expr::WithMember(..) | Expr::WithBangMember(..)
@@ -6948,13 +7131,6 @@ impl<'a> Runtime<'a> {
                     }
                     let mut values = Vec::with_capacity(args.len());
                     for (index, argument) in args.iter().enumerate() {
-                        if argument.name.is_some() {
-                            return Err(error(
-                                RuntimeErrorKind::ArgumentCount,
-                                "indexed property arguments cannot be named",
-                                Some(line),
-                            ));
-                        }
                         values.push(if let Some(evaluated) = evaluated {
                             evaluated[index].value()
                         } else {
@@ -6964,27 +7140,47 @@ impl<'a> Runtime<'a> {
                             }
                         });
                     }
-                    return match self.host_set_indexed(&receiver, &member, &values, value, line)? {
-                        true => Ok(()),
-                        false => Err(error(
-                            RuntimeErrorKind::Unsupported,
-                            format!(
-                                "indexed property is not writable: {}.{member}",
-                                receiver.kind
-                            ),
-                            Some(line),
-                        )),
+                    let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                    let bound = if names.iter().any(Option::is_some) {
+                        self.host.as_deref().map(|host| host.bind_indexed_assignment(&receiver, &member, &values, &names))
+                            .transpose().map_err(|message| host_failure(message, line))?.flatten()
+                    } else { Some(values.clone()) };
+                    if let Some(bound) = bound {
+                        if self.host_set_indexed(&receiver, &member, &bound, value.clone(), line)? { return Ok(()); }
+                    }
+                    return match self.host_call_named(Some(&receiver), &member, &values, &names, line)? {
+                        Some(destination) => self.assign_returned_object(destination, value, frame, line),
+                        None => Err(error(RuntimeErrorKind::Unsupported,
+                            format!("indexed property is not writable: {}.{member}", receiver.kind), Some(line))),
                     };
                 }
                 // An array held in an element: `b(2)(0) = 99` writes into the
                 // array b(2) holds, as measured -- read it, change it, put it
                 // back where it came from.
                 if let Expr::Index { .. } = target.as_ref() {
-                    if let Value::Array(mut inner) = self.eval_expr(target, frame)? {
-                        let indices = self.array_arguments(args, frame, line)?;
-                        let offset = array_offset(&inner, &indices, line)?;
-                        inner.values[offset] = value;
-                        return self.assign(target, Value::Array(inner), frame, line);
+                    match self.eval_expr(target, frame)? {
+                        Value::Array(mut inner) => {
+                            let indices = match evaluated {
+                                Some(values) => values.iter().map(|value| index_from(&value.value(), line)).collect::<Result<Vec<_>, _>>()?,
+                                None => self.array_arguments(args, frame, line)?,
+                            };
+                            let offset = array_offset(&inner, &indices, line)?;
+                            inner.values[offset] = value;
+                            return self.assign(target, Value::Array(inner), frame, line);
+                        }
+                        Value::Object(receiver) => {
+                            let values = match evaluated {
+                                Some(values) => values.iter().map(EvaluatedArgument::value).collect(),
+                                None => args.iter().map(|argument| match &argument.value {
+                                    Some(expression) => self.eval_expr(expression, frame), None => Ok(Value::Missing),
+                                }).collect::<Result<Vec<_>, _>>()?,
+                            };
+                            if self.host_set_indexed(&receiver, "Item", &values, value.clone(), line)? { return Ok(()); }
+                            if let Some(destination) = self.host_call(Some(&receiver), "Item", &values, line)? {
+                                return self.assign_returned_object(destination, value, frame, line);
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 let name = expr_name(target).ok_or_else(|| {
@@ -7037,61 +7233,15 @@ impl<'a> Runtime<'a> {
                 array.values[offset] = value;
                 Ok(())
             }
-            Expr::Member {
-                object, name, span, ..
-            } => {
+            Expr::Member { object, name, span, .. } => {
                 let receiver = self.eval_object(object, frame, span.line)?;
-                if is_err_object(&receiver) {
-                    return err_set(frame, name, value, span.line);
-                }
                 let view = self.source_member_view(target, frame);
-                if self.call_instance_set_source(
-                    &receiver,
-                    name,
-                    &[],
-                    &[],
-                    value.clone(),
-                    view.as_deref(),
-                    frame,
-                    span.line,
-                )? {
-                    return Ok(());
-                }
-                match self.host_set(&receiver, name, value, span.line)? {
-                    true => Ok(()),
-                    false => Err(error(
-                        RuntimeErrorKind::Unsupported,
-                        format!("host property is not writable: {}.{name}", receiver.kind),
-                        Some(span.line),
-                    )),
-                }
+                self.assign_member_value(receiver, name, value, frame, span.line, view.as_deref())
             }
             Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
                 let receiver = current_with_object(frame, span.line)?;
-                if is_err_object(&receiver) {
-                    return err_set(frame, name, value, span.line);
-                }
                 let view = self.source_member_view(target, frame);
-                if self.call_instance_set_source(
-                    &receiver,
-                    name,
-                    &[],
-                    &[],
-                    value.clone(),
-                    view.as_deref(),
-                    frame,
-                    span.line,
-                )? {
-                    return Ok(());
-                }
-                match self.host_set(&receiver, name, value, span.line)? {
-                    true => Ok(()),
-                    false => Err(error(
-                        RuntimeErrorKind::Unsupported,
-                        format!("host property is not writable: {}.{name}", receiver.kind),
-                        Some(span.line),
-                    )),
-                }
+                self.assign_member_value(receiver, name, value, frame, span.line, view.as_deref())
             }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,

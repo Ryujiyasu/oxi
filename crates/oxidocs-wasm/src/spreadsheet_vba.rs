@@ -19168,11 +19168,12 @@ impl<'a> WorkbookHost<'a> {
                     }
                 }
                 let formula_text = matches!(&value, Value::String(text) if text.starts_with('='));
+                let invalid_error = matches!(&value, Value::Error(code) if spreadsheet_error_text_exact(*code).is_none());
                 let input = match cell_input(value, self.this_year()) {
                     Ok(input) => input,
-                    Err(error) if formula_text => {
+                    Err(error) if formula_text || (array_input && invalid_error) => {
                         // Excel commits earlier array members and reports 7
-                        // when a later formula cannot be entered. Finalize the
+                        // when a later formula or error cannot be entered. Finalize the
                         // written prefix before propagating that failure.
                         let error = if array_input { host_error(7, "Out of memory") } else { error };
                         if !writes.wrote { return Err(error); }
@@ -24252,6 +24253,39 @@ impl<'a> WorkbookHost<'a> {
 }
 
 impl Host for WorkbookHost<'_> {
+    fn assignment_global_type(&self, name: &str) -> Option<String> {
+        builtin_compilation_references().library.global_type_name(name)
+    }
+
+    fn assignment_call_parameters(&self, receiver_type: Option<&str>, name: &str) -> Option<Vec<String>> {
+        let owner = receiver_type.unwrap_or("Excel._Global");
+        if builtin_compilation_references().library.member_invocation_flags(owner, name).is_some_and(|flags| flags & 12 != 0) {
+            return None;
+        }
+        builtin_compilation_references().library.member_parameter_names(owner, name, 3)
+    }
+
+    fn assignment_call_result(&self, receiver_type: Option<&str>, name: &str) -> Option<String> {
+        builtin_compilation_references().library.member_result_type(receiver_type.unwrap_or("Excel._Global"), name)
+    }
+
+    fn assignment_indices_first(&self, receiver_type: &str, name: &str) -> bool {
+        // A range setter's indices are values of the write operation.
+        matches!(receiver_type.to_ascii_lowercase().as_str(), "range" | "excel.range" | "_range" | "excel._range")
+            && builtin_compilation_references().library.member_parameter_names(receiver_type, name, 12)
+                .is_some_and(|parameters| parameters.len() > 1)
+    }
+
+    fn bind_indexed_assignment(&self, receiver: &ObjectRef, name: &str, args: &[Value], names: &[Option<String>]) -> Result<Option<Vec<Value>>, String> {
+        if !names.iter().any(Option::is_some) { return Ok(Some(args.to_vec())); }
+        let Some(mut parameters) = builtin_compilation_references().library
+            .member_parameter_names(&receiver.kind, name, 12) else { return Ok(None); };
+        // The setter's last parameter is the value being assigned.
+        parameters.pop();
+        let parameters: Vec<_> = parameters.iter().map(String::as_str).collect();
+        normalize_named_arguments(args, names, &parameters, name).map(Some)
+    }
+
     fn prepare_automation_get(&self, receiver: &ObjectRef, name: &str, args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
         if self.is_workbook(receiver) && name.eq_ignore_ascii_case("colors") {
             if args.len() > 1 {
@@ -44679,6 +44713,549 @@ mod tests {
             execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
         };
         assert_eq!(answer, Value::String("0Empty|a|0Empty|a|1|1".to_string()));
+    }
+
+    #[test]
+    fn call_result_targets_match_native_assignment_semantics() {
+        let module = parse_module(r#"Private assignmentTrace As String
+Public Function NextAddress() As String
+ assignmentTrace=assignmentTrace & "I"
+ NextAddress="B1"
+End Function
+Public Function TargetObject(ByVal address As String) As Object
+ assignmentTrace=assignmentTrace & "G"
+ Set TargetObject=Range(address)
+End Function
+Public Function TargetVariant(ByVal address As String) As Variant
+ assignmentTrace=assignmentTrace & "V"
+ Set TargetVariant=Range(address)
+End Function
+Public Function TargetScalar(ByVal address As String) As Variant
+ assignmentTrace=assignmentTrace & "S"
+ TargetScalar=123
+End Function
+Public Function TargetNothing(ByVal address As String) As Object
+ assignmentTrace=assignmentTrace & "N"
+ Set TargetNothing=Nothing
+End Function
+Public Function AssignmentValue(ByVal mode As Long) As Variant
+ assignmentTrace=assignmentTrace & "R"
+ Select Case mode
+ Case 0:AssignmentValue=42
+ Case 1:AssignmentValue=CVErr(2007)
+ Case 2:AssignmentValue=CVErr(1)
+ Case 3:AssignmentValue=Null
+ Case 4:AssignmentValue=Array(7,8)
+ Case 5:AssignmentValue="=1+2"
+ Case 6:Set AssignmentValue=Range("C1")
+ Case 7:AssignmentValue=Empty
+ End Select
+End Function
+Public Function CallTargetProbe(ByVal accessor As Long, ByVal mode As Long) As Variant
+ On Error Resume Next
+ Range("B1").Clear:Range("B1").Value2="sentinel":Range("C1").Value2=88
+ assignmentTrace="":Err.Clear
+ Select Case accessor
+ Case 0:Range(NextAddress())=AssignmentValue(mode)
+ Case 1:Cells(1,2)=AssignmentValue(mode)
+ Case 2:ActiveSheet.Range(NextAddress())=AssignmentValue(mode)
+ Case 3:Application.Range(NextAddress())=AssignmentValue(mode)
+ Case 4:Worksheets(1).Range(NextAddress())=AssignmentValue(mode)
+ Case 5:Range("A1:B2").Cells(1,2)=AssignmentValue(mode)
+ Case 6:Range("A1:B2").Item(1,2)=AssignmentValue(mode)
+ Case 7:Range("A1:B2")(1,2)=AssignmentValue(mode)
+ Case 8:[B1]=AssignmentValue(mode)
+ Case 9:TargetObject(NextAddress())=AssignmentValue(mode)
+ Case 10:TargetVariant(NextAddress())=AssignmentValue(mode)
+ Case 11:TargetScalar(NextAddress())=AssignmentValue(mode)
+ Case 12:TargetNothing(NextAddress())=AssignmentValue(mode)
+ Case 13:Range("B1").Cells=AssignmentValue(mode)
+ Case 14:Range("B1").Columns=AssignmentValue(mode)
+ Case 15:Range("B1").Rows(1)=AssignmentValue(mode)
+ Case 16:Range(NextAddress()).Value=AssignmentValue(mode)
+ Case 17:ActiveSheet.Cells(1,2)=AssignmentValue(mode)
+ Case 18:TargetObject(NextAddress()).Value=AssignmentValue(mode)
+ Case 19:TargetObject(address:=NextAddress())=AssignmentValue(mode)
+ End Select
+ Dim n As Long:n=Err.Number
+ Err.Clear
+ CallTargetProbe=Array(n,Range("B1").Value2,assignmentTrace)
+End Function
+"#).unwrap();
+        let traces = ["RI", "R", "IR", "RI", "IR", "R", "R", "R", "R", "RIG", "RIV", "RIS", "RIN", "R", "R", "R", "RI", "R", "RIG", "RIG"];
+        let mut failures = Vec::new();
+        let mut checked = 0;
+        for accessor in 0..20 {
+            for mode in 0..8 {
+                let mut book = workbook();
+                let actual = execute_with_host(&module, "CallTargetProbe", vec![Value::Integer(accessor), Value::Integer(mode)],
+                    &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+                let error = match accessor { 11 => 424, 12 => 91, _ if mode == 2 => 1004, _ => 0 };
+                let value = if error != 0 { Value::String("sentinel".into()) } else { match mode {
+                    0 => Value::Double(42.), 1 => Value::Error(2007), 3 | 7 => Value::Empty,
+                    4 => Value::Double(7.), 5 => Value::Double(3.), 6 => Value::Double(88.), _ => unreachable!(),
+                } };
+                let expected = vec![Value::Integer(error), value, Value::String(traces[accessor as usize].into())];
+                checked += 1;
+                match actual {
+                    Value::Array(answer) if answer.values == expected => {}
+                    other => failures.push(format!("accessor={accessor} mode={mode}: {other:?} != {expected:?}")),
+                }
+            }
+        }
+        assert_eq!(checked, 160);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn array_error_assignments_keep_native_prefix_and_error_codes() {
+        let module = parse_module(r#"Public Function ArrayPayloadProbe(ByVal prop As Long, ByVal position As Long, ByVal shape As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Clear
+ Range("B1:C2").Value2=99
+ Dim a(1 To 2,1 To 2) As Variant
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case position
+ Case 1:a(1,1)=CVErr(1)
+ Case 2:a(1,2)=CVErr(1)
+ Case 3:a(2,1)=CVErr(1)
+ Case 4:a(2,2)=CVErr(1)
+ Case 5:a(1,2)=CVErr(2007)
+ Case 6:a(1,2)=CVErr(0)
+ Case 7:a(1,2)=CVErr(2044)
+ Case 8:a(1,2)=CVErr(2046)
+ Case 9:a(1,2)=CVErr(2043)
+ End Select
+ Dim target As Range
+ Select Case shape
+ Case 0:Set target=Range("B1:C2")
+ Case 1:Set target=Range("B1")
+ Case 2:Set target=Range("B1:C1")
+ Case 3:Set target=Range("B1:B2")
+ End Select
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=a
+ Case 1:target.Value2=a
+ Case 2:target.Formula=a
+ Case 3:target.Formula2=a
+ Case 4:target=a
+ End Select
+ Dim n As Long:n=Err.Number
+ Err.Clear
+ ArrayPayloadProbe=Array(n,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2)
+End Function
+"#).unwrap();
+        let reaches: [&[usize]; 4] = [&[0,1,2,3], &[0], &[0,1], &[0,2]];
+        let mut checked = 0;
+        for property in 0..5 {
+            for position in 0..10 {
+                for shape in 0..4 {
+                    let mut book = workbook();
+                    let actual = execute_with_host(&module, "ArrayPayloadProbe",
+                        vec![Value::Integer(property), Value::Integer(position), Value::Integer(shape)],
+                        &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+                    let bad = match position { 1..=4 => Some((position - 1) as usize), 6 | 7 => Some(1), _ => None };
+                    let mut values = vec![Value::Double(1.), Value::Double(2.), Value::Double(3.), Value::Double(4.)];
+                    if let Some(code) = match position { 5 => Some(2007), 8 => Some(2046), 9 => Some(2043), _ => None } { values[1] = Value::Error(code); }
+                    let mut expected = vec![Value::Integer(0), Value::Double(99.), Value::Double(99.), Value::Double(99.), Value::Double(99.)];
+                    for &index in reaches[shape as usize] {
+                        if Some(index) == bad { expected[0] = Value::Integer(7); break; }
+                        expected[index+1] = values[index].clone();
+                    }
+                    let Value::Array(answer) = actual else { panic!("expected assignment results"); };
+                    assert_eq!(answer.values, expected, "property={property} position={position} shape={shape}");
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 200);
+    }
+
+    #[test]
+    fn call_result_assignment_captures_variables_at_native_times() {
+        let module = parse_module(r#"Private aliasFirst As String
+Private aliasSecond As String
+Private aliasRow As Long
+Private aliasColumn As Long
+Private aliasTrace As String
+Private aliasSheet As Worksheet
+Private aliasRange As Range
+Public Function AliasDestination(ByVal first As String,ByVal second As String) As Object
+ aliasTrace=aliasTrace & "G"
+ Set AliasDestination=Range(first,second)
+End Function
+Public Function AliasDestinationRef(ByRef first As String,ByRef second As String) As Object
+ aliasTrace=aliasTrace & "G"
+ Set AliasDestinationRef=Range(first,second)
+End Function
+Public Function AliasAssignmentValue() As Long
+ aliasTrace=aliasTrace & "R"
+ aliasFirst="C1":aliasSecond="D2":aliasRow=2:aliasColumn=3
+ AliasAssignmentValue=42
+End Function
+Public Function AliasAssignmentProbe(ByVal accessor As Long) As Variant
+ On Error Resume Next
+ Range("B1:D3").Value2=0
+ aliasFirst="B1":aliasSecond="C2":aliasRow=1:aliasColumn=2
+ Set aliasSheet=ActiveSheet:Set aliasRange=Range("A1:D3")
+ aliasTrace="":Err.Clear
+ Select Case accessor
+ Case 0:Range(aliasFirst,aliasSecond)=AliasAssignmentValue()
+ Case 1:Application.Range(aliasFirst,aliasSecond)=AliasAssignmentValue()
+ Case 2:ActiveSheet.Range(aliasFirst,aliasSecond)=AliasAssignmentValue()
+ Case 3:aliasSheet.Range(aliasFirst,aliasSecond)=AliasAssignmentValue()
+ Case 4:AliasDestination(aliasFirst,aliasSecond)=AliasAssignmentValue()
+ Case 5:AliasDestination(second:=aliasSecond,first:=aliasFirst)=AliasAssignmentValue()
+ Case 6:AliasDestinationRef(aliasFirst,aliasSecond)=AliasAssignmentValue()
+ Case 7:AliasDestinationRef(second:=aliasSecond,first:=aliasFirst)=AliasAssignmentValue()
+ Case 8:Cells(aliasRow,aliasColumn)=AliasAssignmentValue()
+ Case 9:ActiveSheet.Cells(aliasRow,aliasColumn)=AliasAssignmentValue()
+ Case 10:aliasSheet.Cells(aliasRow,aliasColumn)=AliasAssignmentValue()
+ Case 11:aliasRange.Item(aliasRow,aliasColumn)=AliasAssignmentValue()
+ Case 12:Range("A1:D3").Item(aliasRow,aliasColumn)=AliasAssignmentValue()
+ Case 13:Range("A1:D3").Cells(aliasRow,aliasColumn)=AliasAssignmentValue()
+ Case 14:Range("A1:D3")(aliasRow,aliasColumn)=AliasAssignmentValue()
+ Case 15:aliasRange(aliasRow,aliasColumn)=AliasAssignmentValue()
+ End Select
+ Dim n As Long:n=Err.Number:Err.Clear
+ AliasAssignmentProbe=Array(n,aliasTrace,Range("B1").Value2,Range("C1").Value2,Range("D1").Value2,Range("B2").Value2,Range("C2").Value2,Range("D2").Value2,Range("B3").Value2,Range("C3").Value2,Range("D3").Value2)
+End Function
+"#).unwrap();
+        let golden = [[0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [0.0, 42.0, 42.0, 0.0, 42.0, 42.0, 0.0, 0.0, 0.0], [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 42.0, 0.0, 0.0, 0.0, 0.0], [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]];
+        let traces = ["R", "R", "R", "R", "RG", "RG", "RG", "RG", "R", "R", "R", "R", "R", "R", "R", "R"];
+        for accessor in 0..16 {
+            let mut book = workbook();
+            let actual = execute_with_host(&module, "AliasAssignmentProbe", vec![Value::Integer(accessor)],
+                &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+            let mut expected = vec![Value::Integer(0), Value::String(traces[accessor as usize].into())];
+            expected.extend(golden[accessor as usize].iter().copied().map(Value::Double));
+            let Value::Array(answer) = actual else { panic!("expected assignment results"); };
+            assert_eq!(answer.values, expected, "accessor={accessor}");
+        }
+    }
+
+    #[test]
+    fn indexed_assignment_zero_argument_indices_match_native_order() {
+        let module = parse_module(r#"Private namedSettingTrace As String
+Private namedHeldRange As Range
+Public Function NamedSettingIndex(ByVal mark As String, ByVal value As Long) As Long
+ namedSettingTrace=namedSettingTrace & mark
+ NamedSettingIndex=value
+End Function
+Public Function NamedSettingAddress(ByVal mark As String, ByVal value As String) As String
+ namedSettingTrace=namedSettingTrace & mark
+ NamedSettingAddress=value
+End Function
+Public Function NamedSettingValue() As Long
+ namedSettingTrace=namedSettingTrace & "R"
+ NamedSettingValue=42
+End Function
+Public Function NamedSettingProbe(ByVal accessor As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99
+ ThisWorkbook.Colors(1)=0
+ Set namedHeldRange=Range("B1:C2")
+ namedSettingTrace=""
+ Err.Clear
+ Select Case accessor
+ Case 0:Range("B1:C2").Item(ColumnIndex:=NativeIndexC(),RowIndex:=NativeIndexW())=NamedSettingValue()
+ Case 1:Range("B1").Value(RangeValueDataType:=NativeIndexI10())=NamedSettingValue()
+ Case 2:ThisWorkbook.Colors(Index:=NativeIndexI1())=NamedSettingValue()
+ Case 3:Worksheets(1).Range(Cell2:=NativeAddressD(),Cell1:=NativeAddressA())=NamedSettingValue()
+ Case 4:Range("B1:C2").Cells(ColumnIndex:=NativeIndexC(),RowIndex:=NativeIndexW())=NamedSettingValue()
+ Case 5:Range(Cell2:=NativeAddressD(),Cell1:=NativeAddressA())=NamedSettingValue()
+ Case 6:Application.Range(Cell2:=NativeAddressD(),Cell1:=NativeAddressA())=NamedSettingValue()
+ Case 7:Range("B1").Value(10)=NamedSettingValue()
+ Case 8:NamedSettingDestination(second:=NativeAddressD(),first:=NativeAddressA())=NamedSettingValue()
+ Case 9:NamedSettingDestination(first:=NativeAddressA(),second:=NativeAddressD())=NamedSettingValue()
+ Case 10:Range(Cell1:=NativeAddressA(),Cell2:=NativeAddressD())=NamedSettingValue()
+ Case 11:Application.Range(Cell1:=NativeAddressA(),Cell2:=NativeAddressD())=NamedSettingValue()
+ Case 12:Worksheets(1).Range(Cell1:=NativeAddressA(),Cell2:=NativeAddressD())=NamedSettingValue()
+ Case 13:NamedSettingDestination(NativeAddressA(),NativeAddressD())=NamedSettingValue()
+ Case 14:Range(NativeAddressA(),NativeAddressD())=NamedSettingValue()
+ Case 15:Application.Range(NativeAddressA(),NativeAddressD())=NamedSettingValue()
+ Case 16:Cells(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 17:ActiveSheet.Cells(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 18:Application.Cells(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 19:Range("B1:C2").Cells(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 20:Range("B1:C2").Item(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 21:Range("B1:C2")(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 22:Range(NativeAddressA())=NamedSettingValue()
+ Case 23:Application.Range(NativeAddressA())=NamedSettingValue()
+ Case 24:namedHeldRange.Cells(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 25:namedHeldRange.Item(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 26:namedHeldRange(NativeIndexW(),NativeIndexC())=NamedSettingValue()
+ Case 27:namedHeldRange.Value(NativeIndexI10())=NamedSettingValue()
+ Case 28:Range("B1").Value(NativeIndexI10())=NamedSettingValue()
+ Case 29:NamedSettingDestination3(NativeAddressA(),NativeAddressD(),NativeAddressT())=NamedSettingValue()
+ Case 30:NamedSettingDestination3(third:=NativeAddressT(),second:=NativeAddressD(),first:=NativeAddressA())=NamedSettingValue()
+ Case 31:ThisWorkbook.Colors(NativeIndexI1())=NamedSettingValue()
+ End Select
+ Dim n As Long
+ n=Err.Number
+ Err.Clear
+ NamedSettingProbe=Array(n,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,ThisWorkbook.Colors(1),namedSettingTrace)
+End Function
+Public Function NamedSettingDestination(ByVal first As String, ByVal second As String) As Object
+ namedSettingTrace=namedSettingTrace & "G"
+ Set NamedSettingDestination=Range(first & ":" & second)
+End Function
+Public Function NamedSettingDestination3(ByVal first As String, ByVal second As String, ByVal third As String) As Object
+ namedSettingTrace=namedSettingTrace & "G"
+ Set NamedSettingDestination3=Range(first & ":" & second)
+End Function
+Public Function NativeAddressA() As String
+ namedSettingTrace=namedSettingTrace & "A"
+ NativeAddressA="B1"
+End Function
+Public Function NativeAddressD() As String
+ namedSettingTrace=namedSettingTrace & "D"
+ NativeAddressD="C2"
+End Function
+Public Function NativeAddressT() As String
+ namedSettingTrace=namedSettingTrace & "T"
+ NativeAddressT="B1"
+End Function
+Public Function NativeIndexW() As Long
+ namedSettingTrace=namedSettingTrace & "W"
+ NativeIndexW=1
+End Function
+Public Function NativeIndexC() As Long
+ namedSettingTrace=namedSettingTrace & "C"
+ NativeIndexC=2
+End Function
+Public Function NativeIndexI1() As Long
+ namedSettingTrace=namedSettingTrace & "I"
+ NativeIndexI1=1
+End Function
+Public Function NativeIndexI10() As Long
+ namedSettingTrace=namedSettingTrace & "I"
+ NativeIndexI10=10
+End Function
+"#).unwrap();
+        let golden = [[99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [99.0, 99.0, 99.0, 99.0, 42.0], [42.0, 42.0, 42.0, 42.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [99.0, 99.0, 99.0, 99.0, 42.0]];
+        let traces = ["CWR", "IR", "RI", "DAR", "CWR", "ADR", "ADR", "R", "ARDG", "ARDG", "ADR", "ADR", "ADR", "ARDG", "ADR", "ADR", "WCR", "WCR", "WCR", "WCR", "WCR", "WCR", "RA", "RA", "WCR", "WCR", "WCR", "IR", "IR", "ADRTG", "ADRTG", "RI"];
+        let mut failures = Vec::new();
+        for accessor in 0..32 {
+            let mut book = workbook();
+            let actual = execute_with_host(&module, "NamedSettingProbe", vec![Value::Integer(accessor)],
+                &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+            let Value::Array(answer) = &actual else { panic!("expected assignment results"); };
+            if answer.values.len() != 7 || answer.values[0] != Value::Integer(0)
+                || answer.values[1..6].iter().map(number_of).collect::<Vec<_>>() != golden[accessor as usize].iter().copied().map(Some).collect::<Vec<_>>()
+                || answer.values[6] != Value::String(traces[accessor as usize].into()) {
+                failures.push(format!("accessor={accessor}: {actual:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn named_indexed_assignment_preserves_native_binding_and_order() {
+        let module = parse_module(r#"Private namedSettingTrace As String
+Private namedHeldRange As Range
+Public Function NamedSettingIndex(ByVal mark As String, ByVal value As Long) As Long
+ namedSettingTrace=namedSettingTrace & mark
+ NamedSettingIndex=value
+End Function
+Public Function NamedSettingAddress(ByVal mark As String, ByVal value As String) As String
+ namedSettingTrace=namedSettingTrace & mark
+ NamedSettingAddress=value
+End Function
+Public Function NamedSettingValue() As Long
+ namedSettingTrace=namedSettingTrace & "R"
+ NamedSettingValue=42
+End Function
+Public Function NamedSettingProbe(ByVal accessor As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99
+ ThisWorkbook.Colors(1)=0
+ Set namedHeldRange=Range("B1:C2")
+ namedSettingTrace=""
+ Err.Clear
+ Select Case accessor
+ Case 0:Range("B1:C2").Item(ColumnIndex:=NamedSettingIndex("C",2),RowIndex:=NamedSettingIndex("W",1))=NamedSettingValue()
+ Case 1:Range("B1").Value(RangeValueDataType:=NamedSettingIndex("I",10))=NamedSettingValue()
+ Case 2:ThisWorkbook.Colors(Index:=NamedSettingIndex("I",1))=NamedSettingValue()
+ Case 3:Worksheets(1).Range(Cell2:=NamedSettingAddress("D","C2"),Cell1:=NamedSettingAddress("A","B1"))=NamedSettingValue()
+ Case 4:Range("B1:C2").Cells(ColumnIndex:=NamedSettingIndex("C",2),RowIndex:=NamedSettingIndex("W",1))=NamedSettingValue()
+ Case 5:Range(Cell2:=NamedSettingAddress("D","C2"),Cell1:=NamedSettingAddress("A","B1"))=NamedSettingValue()
+ Case 6:Application.Range(Cell2:=NamedSettingAddress("D","C2"),Cell1:=NamedSettingAddress("A","B1"))=NamedSettingValue()
+ Case 7:Range("B1").Value(10)=NamedSettingValue()
+ Case 8:NamedSettingDestination(second:=NamedSettingAddress("D","C2"),first:=NamedSettingAddress("A","B1"))=NamedSettingValue()
+ Case 9:NamedSettingDestination(first:=NamedSettingAddress("A","B1"),second:=NamedSettingAddress("D","C2"))=NamedSettingValue()
+ Case 10:Range(Cell1:=NamedSettingAddress("A","B1"),Cell2:=NamedSettingAddress("D","C2"))=NamedSettingValue()
+ Case 11:Application.Range(Cell1:=NamedSettingAddress("A","B1"),Cell2:=NamedSettingAddress("D","C2"))=NamedSettingValue()
+ Case 12:Worksheets(1).Range(Cell1:=NamedSettingAddress("A","B1"),Cell2:=NamedSettingAddress("D","C2"))=NamedSettingValue()
+ Case 13:NamedSettingDestination(NamedSettingAddress("A","B1"),NamedSettingAddress("D","C2"))=NamedSettingValue()
+ Case 14:Range(NamedSettingAddress("A","B1"),NamedSettingAddress("D","C2"))=NamedSettingValue()
+ Case 15:Application.Range(NamedSettingAddress("A","B1"),NamedSettingAddress("D","C2"))=NamedSettingValue()
+ Case 16:Cells(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 17:ActiveSheet.Cells(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 18:Application.Cells(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 19:Range("B1:C2").Cells(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 20:Range("B1:C2").Item(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 21:Range("B1:C2")(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 22:Range(NamedSettingAddress("A","B1"))=NamedSettingValue()
+ Case 23:Application.Range(NamedSettingAddress("A","B1"))=NamedSettingValue()
+ Case 24:namedHeldRange.Cells(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 25:namedHeldRange.Item(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 26:namedHeldRange(NamedSettingIndex("W",1),NamedSettingIndex("C",2))=NamedSettingValue()
+ Case 27:namedHeldRange.Value(NamedSettingIndex("I",10))=NamedSettingValue()
+ Case 28:Range("B1").Value(NamedSettingIndex("I",10))=NamedSettingValue()
+ Case 29:NamedSettingDestination3(NamedSettingAddress("A","B1"),NamedSettingAddress("D","C2"),NamedSettingAddress("T","B1"))=NamedSettingValue()
+ Case 30:NamedSettingDestination3(third:=NamedSettingAddress("T","B1"),second:=NamedSettingAddress("D","C2"),first:=NamedSettingAddress("A","B1"))=NamedSettingValue()
+ Case 31:ThisWorkbook.Colors(NamedSettingIndex("I",1))=NamedSettingValue()
+ End Select
+ Dim n As Long
+ n=Err.Number
+ Err.Clear
+ NamedSettingProbe=Array(n,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,ThisWorkbook.Colors(1),namedSettingTrace)
+End Function
+Public Function NamedSettingDestination(ByVal first As String, ByVal second As String) As Object
+ namedSettingTrace=namedSettingTrace & "G"
+ Set NamedSettingDestination=Range(first & ":" & second)
+End Function
+Public Function NamedSettingDestination3(ByVal first As String, ByVal second As String, ByVal third As String) As Object
+ namedSettingTrace=namedSettingTrace & "G"
+ Set NamedSettingDestination3=Range(first & ":" & second)
+End Function
+"#).unwrap();
+        let golden = [[99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [99.0, 99.0, 99.0, 99.0, 42.0], [42.0, 42.0, 42.0, 42.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [99.0, 42.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 99.0, 99.0, 99.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [42.0, 42.0, 42.0, 42.0, 0.0], [99.0, 99.0, 99.0, 99.0, 42.0]];
+        let traces = ["CWR", "IR", "IR", "DAR", "CWR", "ADR", "ADR", "R", "ARDG", "ARDG", "ADR", "ADR", "ADR", "ARDG", "ADR", "ADR", "WCR", "WCR", "WCR", "WCR", "WCR", "WCR", "AR", "AR", "WCR", "WCR", "WCR", "IR", "IR", "ADRTG", "ADRTG", "IR"];
+        let mut failures = Vec::new();
+        for accessor in 0..32 {
+            let mut book = workbook();
+            let actual = execute_with_host(&module, "NamedSettingProbe", vec![Value::Integer(accessor)],
+                &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+            let Value::Array(answer) = &actual else { panic!("expected assignment results"); };
+            if answer.values.len() != 7 || answer.values[0] != Value::Integer(0)
+                || answer.values[1..6].iter().map(number_of).collect::<Vec<_>>() != golden[accessor as usize].iter().copied().map(Some).collect::<Vec<_>>()
+                || answer.values[6] != Value::String(traces[accessor as usize].into()) {
+                failures.push(format!("accessor={accessor}: {actual:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn call_result_targets_preserve_native_argument_and_receiver_order() {
+        let module = parse_module(r#"Private captureTrace As String
+Private heldObject As Object
+Private heldSheet As Worksheet
+Private emptyObject As Object
+Private idxAddress As String
+Private variantApp As Object
+Private typedApp As Application
+Public Function CaptureAddress() As String
+ captureTrace=captureTrace & "I"
+ CaptureAddress="B1"
+End Function
+Public Function CaptureSheet() As Object
+ captureTrace=captureTrace & "S"
+ Set CaptureSheet=ActiveSheet
+End Function
+Public Function CaptureTypedSheet() As Worksheet
+ captureTrace=captureTrace & "T"
+ Set CaptureTypedSheet=ActiveSheet
+End Function
+Public Function CaptureValue(ByVal mode As Long) As Variant
+ captureTrace=captureTrace & "R"
+ Worksheets(2).Activate
+ Set heldObject=Worksheets(2)
+ Set heldSheet=Worksheets(2)
+ idxAddress="C1"
+ Select Case mode
+ Case 0:CaptureValue=42
+ Case 1:CaptureValue=CVErr(1)
+ Case 2:Set CaptureValue=Worksheets(2).Range("C2")
+ End Select
+End Function
+Public Function CaptureProbe(ByVal accessor As Long, ByVal mode As Long) As Variant
+ On Error Resume Next
+ Worksheets(1).Range("B1:C2").Value2=11
+ Worksheets(2).Range("B1:C2").Value2=22
+ Worksheets(2).Range("C2").Value2=88
+ Worksheets(1).Activate
+ Set heldObject=Worksheets(1)
+ Set heldSheet=Worksheets(1)
+ Set emptyObject=Nothing
+ Set variantApp=Application
+ Set typedApp=Application
+ idxAddress="B1"
+ captureTrace=""
+ Err.Clear
+ Select Case accessor
+ Case 0:ActiveSheet.Range(CaptureAddress())=CaptureValue(mode)
+ Case 1:Application.Range(CaptureAddress())=CaptureValue(mode)
+ Case 2:Range(CaptureAddress())=CaptureValue(mode)
+ Case 3:Worksheets(1).Range(CaptureAddress())=CaptureValue(mode)
+ Case 4:CaptureSheet().Range(CaptureAddress())=CaptureValue(mode)
+ Case 5:CaptureTypedSheet().Range(CaptureAddress())=CaptureValue(mode)
+ Case 6:heldObject.Range(CaptureAddress())=CaptureValue(mode)
+ Case 7:heldSheet.Range(CaptureAddress())=CaptureValue(mode)
+ Case 8:ActiveSheet.Range(CaptureAddress()).Value=CaptureValue(mode)
+ Case 9:heldObject.Range(CaptureAddress()).Value=CaptureValue(mode)
+ Case 10:CaptureSheet().Range(CaptureAddress()).Value=CaptureValue(mode)
+ Case 11:CaptureTypedSheet().Range(CaptureAddress()).Value=CaptureValue(mode)
+ Case 12:emptyObject.Range(CaptureAddress())=CaptureValue(mode)
+ Case 13:ActiveSheet.Range(idxAddress)=CaptureValue(mode)
+ Case 14:Application.Range(idxAddress)=CaptureValue(mode)
+ Case 15:heldObject.Range(idxAddress)=CaptureValue(mode)
+ Case 16:heldSheet.Range(idxAddress)=CaptureValue(mode)
+ Case 17:ActiveSheet.Range(Cell1:=CaptureAddress())=CaptureValue(mode)
+ Case 18:Application.Range(Cell1:=CaptureAddress())=CaptureValue(mode)
+ Case 19:Range(Cell1:=CaptureAddress())=CaptureValue(mode)
+ Case 20:CaptureSheet().Range(Cell1:=CaptureAddress())=CaptureValue(mode)
+ Case 21:CaptureTypedSheet().Range(Cell1:=CaptureAddress())=CaptureValue(mode)
+ Case 22:With ActiveSheet
+ .Range(CaptureAddress())=CaptureValue(mode)
+ End With
+ Case 23:With Application
+ .Range(CaptureAddress())=CaptureValue(mode)
+ End With
+ Case 24:With variantApp
+ .Range(CaptureAddress())=CaptureValue(mode)
+ End With
+ Case 25:With typedApp
+ .Range(CaptureAddress())=CaptureValue(mode)
+ End With
+ End Select
+ Dim n As Long
+ n=Err.Number
+ Err.Clear
+ CaptureProbe=Array(n,Worksheets(1).Range("B1").Value2,Worksheets(1).Range("C1").Value2,Worksheets(2).Range("B1").Value2,Worksheets(2).Range("C1").Value2,captureTrace)
+End Function
+"#).unwrap();
+        let traces = ["IR", "RI", "RI", "IR", "IRS", "RIT", "IR", "RI", "RI", "RI", "RIS", "RIT", "IR", "R", "R", "R", "R", "IR", "RI", "RI", "IRS", "RIT", "IR", "RI", "IR", "RI"];
+        let mut failures = Vec::new();
+        let mut checked = 0;
+        for accessor in 0..26 {
+            for mode in 0..3 {
+                let mut book = workbook();
+                let mut other = book.sheets[0].clone();
+                other.name = "Sheet2".into();
+                book.sheets.push(other);
+                let actual = execute_with_host(&module, "CaptureProbe",
+                    vec![Value::Integer(accessor), Value::Integer(mode)],
+                    &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+                let error = if accessor == 12 { 91 } else if mode == 1 { 1004 } else { 0 };
+                let mut expected = vec![Value::Integer(error), Value::Double(11.), Value::Double(11.),
+                    Value::Double(22.), Value::Double(22.), Value::String(traces[accessor as usize].into())];
+                if error == 0 {
+                    let index = match accessor { 3 | 22 => 1, 13..=16 => 4, _ => 3 };
+                    expected[index] = Value::Double(if mode == 0 { 42. } else { 88. });
+                }
+                checked += 1;
+                match actual {
+                    Value::Array(answer) if answer.values == expected => {}
+                    other => failures.push(format!("accessor={accessor} mode={mode}: {other:?} != {expected:?}")),
+                }
+            }
+        }
+        assert_eq!(checked, 78);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// Only a real error code may be put in a cell.
