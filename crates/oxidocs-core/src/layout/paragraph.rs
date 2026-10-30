@@ -1438,6 +1438,20 @@ impl<'a> ParagraphLayouter<'a> {
         } else {
             wrap_width
         };
+        // OXI_LANE_HANGING_FIRST, list paragraphs: in legacy layout the first line's
+        // text beside a left float starts at edge + left (its marker at edge + left -
+        // hanging), so the line is that much narrower too. b5064770 moved the text
+        // but broke the line at the old width: en/policies__0026b7f7's «• Nintendo
+        // Switch: https://…/Nintendo-» ran 2.8pt past the column, where Word ends
+        // line 1 after the label and starts the URL on line 2.
+        let lane_list_first = std::env::var_os("OXI_LANE_HANGING_FIRST_DISABLE").is_none()
+            && (self.compat_mode < 15 || !self.compat_mode_explicit)
+            && s758_two_seg.is_none()
+            && s758_band.is_some_and(|b| b.2 > 0.0)
+            && indent_left > 0.0
+            && first_line_indent == 0.0
+            && lane_marker.is_some_and(|(_, mx)| mx < start_x + indent_left - 0.5);
+        let effective_first_indent = if lane_list_first { effective_first_indent + indent_left } else { effective_first_indent };
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
         if let Ok(needle) = std::env::var("OXI_DBGFLUSH") {
@@ -6645,15 +6659,13 @@ impl<'a> ParagraphLayouter<'a> {
                 && std::env::var_os("OXI_LANE_HANGING_FIRST_DISABLE").is_none()
             {
                 if self.compat_mode < 15 || !self.compat_mode_explicit { indent_left + extra_indent } else { 0.0 }
-            } else if lane_legacy && extra_indent == 0.0 && indent_left > 0.0
-                && lane_marker.is_some_and(|(_, mx)| mx < start_x + indent_left - 0.5)
-            {
+            } else if lane_legacy && lane_list_first {
                 if let Some((idx, mx)) = lane_marker.take() {
                     if let Some(el) = elements.get_mut(idx) {
                         if (el.x - mx).abs() < 0.01 { el.x = mx + s758_line_shift + indent_left; }
                     }
                 }
-                indent_left
+                extra_indent
             } else { extra_indent };
             let line_x = match (row_two_segments, line.seg2_at) {
                 (Some((seg1_x, _, _, _)), Some(_)) => seg1_x + extra_indent,

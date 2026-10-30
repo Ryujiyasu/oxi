@@ -48,6 +48,25 @@ impl<'a> PageLayouter<'a> {
         // Vertical writing (tategaki) section: route to the dedicated path.
         if page.vertical_section && std::env::var("OXI_VERTICAL_DISABLE").is_err() {
             let mut out = self.layout_page_vertical(page);
+            // OXI_SNAP_CHARS_CENTER, vertical: a tbRl column under snapToChars centres
+            // each glyph in its cell DOWN the column. ja/creative__3d2bf04c (原稿用紙
+            // 20x20, cells 22.57 high): Word's «望» sits 5.9 below its cell top =
+            // (22.57 - 10.56) / 2; Oxi drew it at the cell top.
+            if page.doc_grid_snap_to_chars && std::env::var_os("OXI_SNAP_CHARS_CENTER_DISABLE").is_none() {
+                let wide = |c: char| ('\u{2E80}'..='\u{9FFF}').contains(&c)
+                    || ('\u{F900}'..='\u{FAFF}').contains(&c)
+                    || ('\u{FF01}'..='\u{FF60}').contains(&c);
+                for lp in &mut out {
+                    for el in &mut lp.elements {
+                        if el.paragraph_index.is_none() { continue; }
+                        let LayoutContent::Text { text, font_size, is_vertical: true, .. } = &el.content else { continue };
+                        let n = text.chars().count();
+                        if n == 0 || !text.chars().all(wide) { continue; }
+                        let gap = (el.height - n as f32 * *font_size) / n as f32;
+                        if gap > 0.0 { el.y += gap * 0.5; }
+                    }
+                }
+            }
             // OXI_VERTICAL_HF_BOXES (2026-10-30, default ON, opt-out _DISABLE): the
             // vertical builder lays out no header or footer; draw at least their
             // anchored boxes, behind the body, with the part variant the horizontal
@@ -11902,14 +11921,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             for lp in &mut pages {
                 for el in &mut lp.elements {
                     if el.paragraph_index.is_none() { continue; }
-                    let LayoutContent::Text { text, font_size, character_spacing, .. } = &el.content else { continue };
+                    let LayoutContent::Text { text, font_size, .. } = &el.content else { continue };
                     let n = text.chars().count();
                     if n == 0 || !text.chars().all(wide) { continue; }
-                    let gap = if *character_spacing > 0.0 {
-                        *character_spacing
-                    } else {
-                        (el.width - n as f32 * *font_size) / n as f32
-                    };
+                    // the cell's spare width -- a justified line's extra spacing
+                    // (character_spacing) is not part of the cell
+                    let gap = (el.width - n as f32 * *font_size) / n as f32;
                     if gap > 0.0 { el.x += gap * 0.5; }
                 }
             }
