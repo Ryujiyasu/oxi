@@ -4013,14 +4013,12 @@ impl<'a> Runtime<'a> {
                     // Into an object variable it is 424, into a Variant 13:
                     // measured, `Set o = d` (o As Object, d = "x") and
                     // `Set v = d` (v As Variant, d = 5).
-                    let into_object = expr_name(target).is_some_and(|name| {
-                        self.lookup_slot(frame, name).is_some() && !self.is_variant_variable(frame, name)
-                    });
+                    let into_variant = self.set_target_is_variant_storage(target, frame);
                     return Err(RuntimeError {
                         kind: RuntimeErrorKind::TypeMismatch,
                         message: "Set requires an object value or Nothing".to_string(),
                         line: Some(span.line),
-                        vba_number: Some(if into_object { 424 } else { 13 }),
+                        vba_number: Some(if into_variant { 13 } else { 424 }),
                         vba_source: None,
                         vba_help_file: None,
                         vba_help_context: None,
@@ -6557,6 +6555,20 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn set_target_is_variant_storage(&self, target: &Expr, frame: &Frame) -> bool {
+        if self.place_type(target, frame).is_some_and(|kind| kind.name.eq_ignore_ascii_case("Variant")) { return true; }
+        let (class, name) = match target {
+            Expr::Member { object, name, .. } => (self.source_class_name(object, frame), name),
+            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => (self.source_member_view(target, frame), name),
+            _ => return false,
+        };
+        class.and_then(|class| self.source_class_module(&class)).is_some_and(|module| module.items.iter().any(|item| match item {
+            ModuleItem::Variables(declaration) => declaration.items.iter().any(|variable|
+                variable.name.eq_ignore_ascii_case(name) && variable.type_name.name.eq_ignore_ascii_case("Variant")),
+            _ => false,
+        }))
+    }
+
     fn assign(
         &mut self,
         target: &Expr,
@@ -6624,7 +6636,7 @@ impl<'a> Runtime<'a> {
 
     fn assign_returned_object(&mut self, destination: Value, value: Value, frame: &mut Frame, line: u32) -> Result<(), RuntimeError> {
         if matches!(value, Value::Object(_) | Value::Nothing) {
-            return Err(language_error(450, "invalid object assignment to a call result", line));
+            return Err(no_such_member("a getter's result has no Property Set".into(), Some(line)));
         }
         if !matches!(destination, Value::Object(_) | Value::Nothing) {
             return Err(language_error(424, "Object required", line));
@@ -6638,12 +6650,24 @@ impl<'a> Runtime<'a> {
         if self.call_instance_set_source(&receiver, name, &[], &[], value.clone(), view, frame, line)? {
             return Ok(());
         }
+        self.check_host_object_assignment(&receiver, name, &value, line)?;
         if self.host_set(&receiver, name, value.clone(), line)? { return Ok(()); }
+        if matches!(value, Value::Object(_) | Value::Nothing) {
+            return Err(no_such_member(format!("{}.{} has no Property Set", receiver.kind, name), Some(line)));
+        }
         match self.host_get(&receiver, name, line)? {
             Some(destination @ (Value::Object(_) | Value::Nothing)) => self.assign_returned_object(destination, value, frame, line),
             _ => Err(error(RuntimeErrorKind::Unsupported,
                 format!("host property is not writable: {}.{name}", receiver.kind), Some(line))),
         }
+    }
+
+    fn check_host_object_assignment(&self, receiver: &ObjectRef, name: &str, value: &Value, line: u32) -> Result<(), RuntimeError> {
+        if matches!(value, Value::Object(_) | Value::Nothing)
+            && self.host.as_deref().is_some_and(|host| !host.automation_invocation_allowed(receiver, name, 8)) {
+            return Err(no_such_member(format!("{}.{} has no Property Set", receiver.kind, name), Some(line)));
+        }
+        Ok(())
     }
 
     fn assign_evaluated(
@@ -7141,6 +7165,7 @@ impl<'a> Runtime<'a> {
                         });
                     }
                     let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                    self.check_host_object_assignment(&receiver, &member, &value, line)?;
                     let bound = if names.iter().any(Option::is_some) {
                         self.host.as_deref().map(|host| host.bind_indexed_assignment(&receiver, &member, &values, &names))
                             .transpose().map_err(|message| host_failure(message, line))?.flatten()
@@ -7175,6 +7200,7 @@ impl<'a> Runtime<'a> {
                                     Some(expression) => self.eval_expr(expression, frame), None => Ok(Value::Missing),
                                 }).collect::<Result<Vec<_>, _>>()?,
                             };
+                            self.check_host_object_assignment(&receiver, "Item", &value, line)?;
                             if self.host_set_indexed(&receiver, "Item", &values, value.clone(), line)? { return Ok(()); }
                             if let Some(destination) = self.host_call(Some(&receiver), "Item", &values, line)? {
                                 return self.assign_returned_object(destination, value, frame, line);

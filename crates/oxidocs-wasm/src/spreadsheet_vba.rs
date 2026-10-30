@@ -41713,7 +41713,7 @@ mod tests {
     #[test]
     fn loaded_icon_rule_keeps_added_operator_after_format_conversions() {
         let bytes = include_bytes!("../../../tests/fixtures/conditional/visual_rules.xlsx");
-        let source = "Public Function Change() As String\nDim c As Object, p As Object\nSet c=Range(\"C2\").FormatConditions(1)\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42\nSet c.IconSet=ActiveWorkbook.IconSets(18)\nSet c.IconSet=ActiveWorkbook.IconSets(15)\nFor Each p In c.IconCriteria\nChange=Change & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nEnd Function";
+        let source = "Public Function Change() As String\nDim c As Object, p As Object\nSet c=Range(\"C2\").FormatConditions(1)\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42\nc.IconSet=ActiveWorkbook.IconSets(18)\nc.IconSet=ActiveWorkbook.IconSets(15)\nFor Each p In c.IconCriteria\nChange=Change & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nEnd Function";
         let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(bytes).unwrap(), source, Some("Change"), vec![], 0, failure_context(), &mut None).unwrap();
         assert!(result.error.is_none(), "{:?}", result.error.as_ref().map(|error| &error.message));
         assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"string", "value":"0:7,42:7,67:7,67:5,67:5,"}));
@@ -41745,7 +41745,7 @@ mod tests {
     #[test]
     fn icon_criteria_and_icon_collection_read_like_excel() {
         let bytes = include_bytes!("../../../tests/fixtures/conditional/custom_icons.xlsx");
-        let source = "Public Function ReadRule() As String\nDim c As Object, p As Object, s As Object, i As Long\nSet c=Range(\"A2\").FormatConditions(1)\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Icon) & \",\"\nNext p\nReadRule=ReadRule & \"|\"\nSet c=Range(\"F2:F6\").FormatConditions.AddIconSetCondition\nFor i=1 To 20\nSet c.IconSet=ActiveWorkbook.IconSets(i)\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Icon) & \",\"\nNext p\nReadRule=ReadRule & \";\"\nNext i\nSet s=ActiveWorkbook.IconSets(1)\nFor Each p In s\nReadRule=ReadRule & TypeName(p) & \":\" & CStr(p.Index) & \":\" & CStr(p.Parent.ID) & \",\"\nNext p\nReadRule=ReadRule & CStr(s.Item(2).Index)\nEnd Function";
+        let source = "Public Function ReadRule() As String\nDim c As Object, p As Object, s As Object, i As Long\nSet c=Range(\"A2\").FormatConditions(1)\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Icon) & \",\"\nNext p\nReadRule=ReadRule & \"|\"\nSet c=Range(\"F2:F6\").FormatConditions.AddIconSetCondition\nFor i=1 To 20\nc.IconSet=ActiveWorkbook.IconSets(i)\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Icon) & \",\"\nNext p\nReadRule=ReadRule & \";\"\nNext i\nSet s=ActiveWorkbook.IconSets(1)\nFor Each p In s\nReadRule=ReadRule & TypeName(p) & \":\" & CStr(p.Index) & \":\" & CStr(p.Parent.ID) & \",\"\nNext p\nReadRule=ReadRule & CStr(s.Item(2).Index)\nEnd Function";
         let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(bytes).unwrap(), source, Some("ReadRule"), vec![], 0, failure_context(), &mut None).unwrap();
         assert!(result.error.is_none(), "{:?}", result.error.as_ref().map(|error| &error.message));
         assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"string", "value":"9,1,7,|3,2,1,;6,5,4,;9,8,7,;12,11,10,;16,15,14,;18,17,10,;21,20,19,;24,23,22,;3,26,25,1,;6,28,27,4,;32,31,30,29,;38,39,40,41,;13,12,11,10,;3,26,2,25,1,;6,28,5,27,4,;37,38,39,40,41,;36,35,34,33,32,;44,43,42,;47,46,45,;52,51,50,49,48,;Icon:1:1,Icon:2:1,Icon:3:1,2"}));
@@ -41755,7 +41755,7 @@ mod tests {
     fn assigning_icon_set_removes_custom_icons_like_excel() {
         let bytes = include_bytes!("../../../tests/fixtures/conditional/custom_icons.xlsx");
         for target in [19, 20, 4, 15] {
-            let source = format!("Public Function Change() As String\nDim c As Object\nSet c=Range(\"A2\").FormatConditions(1)\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42\nSet c.IconSet=ActiveWorkbook.IconSets(19)\nc.ReverseOrder=True\nSet c.IconSet=ActiveWorkbook.IconSets({target})\nChange=ReadRule()\nEnd Function\nPublic Function ReadRule() As String\nDim c As Object, p As Object\nSet c=Range(\"A2\").FormatConditions(1)\nReadRule=CStr(c.IconSet.ID) & \"|\"\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nEnd Function");
+            let source = format!("Public Function Change() As String\nDim c As Object\nSet c=Range(\"A2\").FormatConditions(1)\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42\nc.IconSet=ActiveWorkbook.IconSets(19)\nc.ReverseOrder=True\nc.IconSet=ActiveWorkbook.IconSets({target})\nChange=ReadRule()\nEnd Function\nPublic Function ReadRule() As String\nDim c As Object, p As Object\nSet c=Range(\"A2\").FormatConditions(1)\nReadRule=CStr(c.IconSet.ID) & \"|\"\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nEnd Function");
             let thresholds = if target == 20 || target == 15 { "0:7,42:7,67:7,67:5,67:5," } else { "0:7,42:7,67:7," };
             let expected = serde_json::json!({"type":"string", "value":format!("{target}|{thresholds}")});
             let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(bytes).unwrap(), &source, Some("Change"), vec![], 0, failure_context(), &mut None).unwrap();
@@ -41783,7 +41783,7 @@ mod tests {
     #[test]
     fn icon_set_resize_rebalances_defaults_and_preserves_manual_values() {
         let bytes = include_bytes!("../../../tests/fixtures/conditional/visual_rules.xlsx");
-        let source = "Public Function Change() As String\nDim c As Object, p As Object\nSet c=Range(\"C2\").FormatConditions(1)\nSet c.IconSet=ActiveWorkbook.IconSets(15)\nFor Each p In c.IconCriteria\nChange=Change & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nChange=Change & \"|\"\nSet c=Range(\"F2:F6\").FormatConditions.AddIconSetCondition\nSet c.IconSet=ActiveWorkbook.IconSets(15)\nFor Each p In c.IconCriteria\nChange=Change & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nEnd Function";
+        let source = "Public Function Change() As String\nDim c As Object, p As Object\nSet c=Range(\"C2\").FormatConditions(1)\nc.IconSet=ActiveWorkbook.IconSets(15)\nFor Each p In c.IconCriteria\nChange=Change & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nChange=Change & \"|\"\nSet c=Range(\"F2:F6\").FormatConditions.AddIconSetCondition\nc.IconSet=ActiveWorkbook.IconSets(15)\nFor Each p In c.IconCriteria\nChange=Change & CStr(p.Value) & \":\" & CStr(p.Operator) & \",\"\nNext p\nEnd Function";
         let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(bytes).unwrap(), source, Some("Change"), vec![], 0, failure_context(), &mut None).unwrap();
         assert!(result.error.is_none(), "{:?}", result.error.as_ref().map(|error| &error.message));
         assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"string", "value":"0:7,20:7,40:7,60:5,80:5,|0:7,20:7,40:7,60:7,80:7,"}));
@@ -41798,7 +41798,7 @@ mod tests {
             (&include_bytes!("../../../tests/fixtures/conditional/visual_rules.xlsx")[..], "C2", 20),
             (&include_bytes!("../../../tests/fixtures/conditional/x14_icons.xlsx")[..], "A2", 15),
         ] {
-            let source = format!("Public Function Change() As String\nDim c As Object\nSet c=Range(\"{address}\").FormatConditions(1)\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42: c.ReverseOrder=True\nSet c.IconSet=ActiveWorkbook.IconSets({target})\nChange=ReadRule()\nEnd Function\nPublic Function ReadRule() As String\nDim c As Object, p As Object\nSet c=Range(\"{address}\").FormatConditions(1)\nReadRule=CStr(c.IconSet.ID) & \"|\" & CStr(c.Priority) & \"|\" & CStr(c.ReverseOrder) & \"|\"\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Type) & \":\" & CStr(p.Value) & \",\"\nNext p\nEnd Function");
+            let source = format!("Public Function Change() As String\nDim c As Object\nSet c=Range(\"{address}\").FormatConditions(1)\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42: c.ReverseOrder=True\nc.IconSet=ActiveWorkbook.IconSets({target})\nChange=ReadRule()\nEnd Function\nPublic Function ReadRule() As String\nDim c As Object, p As Object\nSet c=Range(\"{address}\").FormatConditions(1)\nReadRule=CStr(c.IconSet.ID) & \"|\" & CStr(c.Priority) & \"|\" & CStr(c.ReverseOrder) & \"|\"\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Type) & \":\" & CStr(p.Value) & \",\"\nNext p\nEnd Function");
             let priority = if address == "C2" { 3 } else { 1 };
             let expected = serde_json::json!({"type":"string", "value":format!("{target}|{priority}|True|3:0,0:42,3:67,3:67,3:67,")});
             let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(bytes).unwrap(), &source, Some("Change"), vec![], 0, failure_context(), &mut None).unwrap();
@@ -41815,7 +41815,7 @@ mod tests {
     #[test]
     fn icon_set_assignment_preserves_criteria_and_roundtrips() {
         let bytes = include_bytes!("../../../tests/fixtures/conditional/x14_icons.xlsx");
-        let source = "Public Function Change() As String\nDim c As Object\nSet c=Range(\"F2:F6\").FormatConditions.AddIconSetCondition\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42: c.ShowIconOnly=True\nSet c.IconSet=ActiveWorkbook.IconSets(9)\nSet c.IconSet=ActiveWorkbook.IconSets(15)\nSet c=Range(\"A2\").FormatConditions(1)\nSet c.IconSet=ActiveWorkbook.IconSets(19)\nSet c.IconSet=ActiveWorkbook.IconSets(20)\nChange=ReadRule()\nEnd Function\nPublic Function ReadRule() As String\nDim c As Object, p As Object\nSet c=Range(\"F2\").FormatConditions(1)\nReadRule=CStr(c.IconSet.ID) & \"|\" & CStr(c.ShowIconOnly) & \"|\"\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Type) & \":\" & CStr(p.Value) & \",\"\nNext p\nSet c=Range(\"A2\").FormatConditions(1)\nReadRule=ReadRule & \"|\" & CStr(c.IconSet.ID)\nEnd Function";
+        let source = "Public Function Change() As String\nDim c As Object\nSet c=Range(\"F2:F6\").FormatConditions.AddIconSetCondition\nc.IconCriteria(2).Type=0: c.IconCriteria(2).Value=42: c.ShowIconOnly=True\nc.IconSet=ActiveWorkbook.IconSets(9)\nc.IconSet=ActiveWorkbook.IconSets(15)\nSet c=Range(\"A2\").FormatConditions(1)\nc.IconSet=ActiveWorkbook.IconSets(19)\nc.IconSet=ActiveWorkbook.IconSets(20)\nChange=ReadRule()\nEnd Function\nPublic Function ReadRule() As String\nDim c As Object, p As Object\nSet c=Range(\"F2\").FormatConditions(1)\nReadRule=CStr(c.IconSet.ID) & \"|\" & CStr(c.ShowIconOnly) & \"|\"\nFor Each p In c.IconCriteria\nReadRule=ReadRule & CStr(p.Type) & \":\" & CStr(p.Value) & \",\"\nNext p\nSet c=Range(\"A2\").FormatConditions(1)\nReadRule=ReadRule & \"|\" & CStr(c.IconSet.ID)\nEnd Function";
         let expected = serde_json::json!({"type":"string", "value":"15|True|3:0,0:42,3:67,3:67,3:67,|20"});
         let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(bytes).unwrap(), source, Some("Change"), vec![], 0, failure_context(), &mut None).unwrap();
         assert!(result.error.is_none(), "{:?}", result.error.as_ref().map(|error| &error.message));
@@ -44713,6 +44713,225 @@ mod tests {
             execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
         };
         assert_eq!(answer, Value::String("0Empty|a|0Empty|a|1|1".to_string()));
+    }
+
+    #[test]
+    fn iconset_reference_invocations_match_native_set_and_let() {
+        let module = parse_module(r#"Public Function IconSetReferenceProbe(ByVal invocation As Long,ByVal missing As Boolean) As Variant
+ On Error Resume Next
+ Range("A1:A3").Value2=1
+ Range("A1:A3").FormatConditions.Delete
+ Dim rule As Object,icons As Object
+ Set rule=Range("A1:A3").FormatConditions.AddIconSetCondition
+ If missing Then
+ Set icons=Nothing
+ Else
+ Set icons=ThisWorkbook.IconSets(18)
+ End If
+ Err.Clear
+ Select Case invocation
+ Case 0:Set rule.IconSet=icons
+ Case 1:CallByName rule,"IconSet",VbSet,icons
+ Case 2:rule.IconSet=icons
+ Case 3:CallByName rule,"IconSet",VbLet,icons
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ IconSetReferenceProbe=Array(n,d,s,hc,rule.IconSet.ID)
+End Function
+"#).unwrap();
+        for (invocation, missing) in [(0, false), (0, true), (1, false), (1, true), (2, false)] {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconSetReferenceProbe", vec![Value::Integer(invocation), Value::Boolean(missing)]).unwrap();
+            let rejected = invocation < 2;
+            let expected = vec![Value::Integer(if rejected { 438 } else { 0 }),
+                Value::String(if rejected { "オブジェクトは、このプロパティまたはメソッドをサポートしていません。" } else { "" }.into()),
+                Value::String(if rejected { "VBAProject" } else { "" }.into()),
+                Value::Integer(if rejected { 1_000_438 } else { 0 }),
+                Value::Integer(if rejected { 4 } else { 18 })];
+            let Value::Array(answer) = actual else { panic!("expected IconSet invocation results"); };
+            assert_eq!(answer.values, expected, "invocation={invocation} missing={missing}");
+        }
+    }
+
+    #[test]
+    fn source_set_properties_and_variant_storage_match_native_errors() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "SetTarget"
+Option Explicit
+Public Trace As String
+Public VariantField As Variant
+Public ObjectField As Object
+Public Property Set OnlyVariant(ByVal value As Variant)
+ Trace=TypeName(value)
+End Property
+Public Property Get PairVariant() As Variant
+ PairVariant=Empty
+End Property
+Public Property Set PairVariant(ByVal value As Variant)
+ Trace=TypeName(value)
+End Property
+Public Property Set OnlyObject(ByVal value As Object)
+ Trace=TypeName(value)
+End Property
+Public Property Get PairObject() As Object
+ Set PairObject=Nothing
+End Property
+Public Property Set PairObject(ByVal value As Object)
+ Trace=TypeName(value)
+End Property
+Attribute VB_Name = "SetDriver"
+Option Explicit
+Public Function ClassSetPayload(ByVal mode As Long) As Variant
+ Select Case mode
+ Case 0:Set ClassSetPayload=Range("C1")
+ Case 1:Set ClassSetPayload=Nothing
+ Case 2:ClassSetPayload=42
+ Case 3:Set ClassSetPayload=ActiveSheet
+ Case 4:ClassSetPayload=CVErr(2007)
+ End Select
+End Function
+Public Function ClassSetProbe(ByVal accessor As Long,ByVal mode As Long) As Variant
+ On Error Resume Next
+ Dim typed As SetTarget,loose As Object
+ Dim variantElements(0) As Variant,objectElements(0) As Object,dynamicElements As Variant
+ dynamicElements=Array(Empty)
+ Set typed=New SetTarget:Set loose=typed
+ Range("C1").Value2=88:Err.Clear
+ Select Case accessor
+ Case 0:Set typed.OnlyVariant=ClassSetPayload(mode)
+ Case 1:Set loose.OnlyVariant=ClassSetPayload(mode)
+ Case 2:Set typed.PairVariant=ClassSetPayload(mode)
+ Case 3:Set loose.PairVariant=ClassSetPayload(mode)
+ Case 4:Set typed.OnlyObject=ClassSetPayload(mode)
+ Case 5:Set loose.OnlyObject=ClassSetPayload(mode)
+ Case 6:Set typed.PairObject=ClassSetPayload(mode)
+ Case 7:Set loose.PairObject=ClassSetPayload(mode)
+ Case 8:Set typed.VariantField=ClassSetPayload(mode)
+ Case 9:Set loose.VariantField=ClassSetPayload(mode)
+ Case 10:Set typed.ObjectField=ClassSetPayload(mode)
+ Case 11:Set loose.ObjectField=ClassSetPayload(mode)
+ Case 12:Set variantElements(0)=ClassSetPayload(mode)
+ Case 13:Set objectElements(0)=ClassSetPayload(mode)
+ Case 14:Set dynamicElements(0)=ClassSetPayload(mode)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ClassSetProbe=Array(n,d,s,hc,typed.Trace)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let descriptions = [
+            (0, ""),
+            (13, "型が一致しません。"),
+            (424, "オブジェクトが必要です。"),
+        ];
+        for accessor in 0..15 {
+            for mode in 0..5 {
+                let mut book = workbook();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.error_language = ErrorLanguage::Japanese;
+                let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                    .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                    .call("SetDriver.ClassSetProbe", vec![Value::Integer(accessor), Value::Integer(mode)]).unwrap();
+                let error = if matches!(mode, 2 | 4) { if matches!(accessor, 8 | 12) { 13 } else { 424 } } else { 0 };
+                let description = descriptions.iter().find(|(number, _)| *number == error).unwrap().1;
+                let trace = if error != 0 || accessor >= 8 { "" } else { match mode { 0 => "Range", 1 => "Nothing", 3 => "Worksheet", _ => unreachable!() } };
+                let expected = vec![Value::Integer(error), Value::String(description.into()),
+                    Value::String(if error == 0 { "" } else { "VBAProject" }.into()),
+                    Value::Integer(if error == 0 { 0 } else { 1_000_000 + error }), Value::String(trace.into())];
+                let Value::Array(answer) = actual else { panic!("expected source Set results"); };
+                assert_eq!(answer.values, expected, "accessor={accessor} mode={mode}");
+            }
+        }
+    }
+
+    #[test]
+    fn set_assignment_refusals_match_native_error_fields() {
+        let module = parse_module(r#"Private setTrace As String
+Public Function SetAddress() As String
+ setTrace=setTrace & "I"
+ SetAddress="B1"
+End Function
+Public Function SetPayload(ByVal mode As Long) As Variant
+ setTrace=setTrace & "R"
+ Select Case mode
+ Case 0:Set SetPayload=Range("C1")
+ Case 1:Set SetPayload=Nothing
+ Case 2:SetPayload=42
+ Case 3:Set SetPayload=ActiveSheet
+ Case 4:SetPayload=CVErr(2007)
+ End Select
+End Function
+Public Function SetAssignmentProbe(ByVal accessor As Long,ByVal mode As Long) As Variant
+ On Error Resume Next
+ Range("B1").Value2="sentinel":Range("C1").Value2=88
+ Dim setSheet As Object,setApp As Object,setSpan As Object,held As Object,loose As Variant
+ Set setSheet=ActiveSheet:Set setApp=Application:Set setSpan=Range("B1:B2"):Set held=Range("B1")
+ setTrace="":Err.Clear
+ Select Case accessor
+ Case 0:Set setSheet.Range(SetAddress())=SetPayload(mode)
+ Case 1:Set setApp.Range(SetAddress())=SetPayload(mode)
+ Case 2:Set setSheet.Cells(1,2)=SetPayload(mode)
+ Case 3:Set setSpan.Item(1,1)=SetPayload(mode)
+ Case 4:Set setSpan.Cells(1,1)=SetPayload(mode)
+ Case 5:Set setSpan.Value=SetPayload(mode)
+ Case 6:Set setSpan.Value2=SetPayload(mode)
+ Case 7:Set setSpan.Formula=SetPayload(mode)
+ Case 8:Set setSpan.Cells=SetPayload(mode)
+ Case 9:Set setSpan.Rows=SetPayload(mode)
+ Case 10:Set setSpan.Columns=SetPayload(mode)
+ Case 11:Set held=SetPayload(mode)
+ Case 12:Set loose=SetPayload(mode)
+ Case 13:With setSheet
+ Set .Range(SetAddress())=SetPayload(mode)
+ End With
+ Case 14:With setSpan
+ Set .Item(1,1)=SetPayload(mode)
+ End With
+ Case 15:Set setSpan(1,1)=SetPayload(mode)
+ Case 16:Set held.Parent=SetPayload(mode)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext
+ Err.Clear
+ SetAssignmentProbe=Array(n,d,s,hc,Range("B1").Value2,TypeName(held),setTrace)
+End Function
+"#).unwrap();
+        let descriptions = [
+            (0, ""),
+            (13, "型が一致しません。"),
+            (424, "オブジェクトが必要です。"),
+            (438, "オブジェクトは、このプロパティまたはメソッドをサポートしていません。"),
+        ];
+        let mut checked = 0;
+        for accessor in 0..17 {
+            for mode in 0..5 {
+                let mut book = workbook();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.error_language = ErrorLanguage::Japanese;
+                let actual = Runtime::new(&module).with_host(&mut host)
+                    .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                    .call("SetAssignmentProbe", vec![Value::Integer(accessor), Value::Integer(mode)]).unwrap();
+                let error = if matches!(mode, 2 | 4) { if accessor == 12 { 13 } else { 424 } }
+                    else if matches!(accessor, 11 | 12) { 0 } else { 438 };
+                let description = descriptions.iter().find(|(number, _)| *number == error).unwrap().1;
+                let held = if accessor == 11 { match mode { 1 => "Nothing", 3 => "Worksheet", _ => "Range" } } else { "Range" };
+                let trace = if matches!(accessor, 0 | 1 | 13) { "IR" } else { "R" };
+                let expected = vec![Value::Integer(error), Value::String(description.into()),
+                    Value::String(if error == 0 { "" } else { "VBAProject" }.into()),
+                    Value::Integer(if error == 0 { 0 } else { 1_000_000 + error }),
+                    Value::String("sentinel".into()), Value::String(held.into()), Value::String(trace.into())];
+                let Value::Array(answer) = actual else { panic!("expected Set assignment results"); };
+                assert_eq!(answer.values, expected, "accessor={accessor} mode={mode}");
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 85);
     }
 
     #[test]
