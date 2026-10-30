@@ -49,6 +49,24 @@ pub fn latin_faces() -> Vec<(&'static str, &'static [u8])> {
         .collect()
 }
 
+/// The shipped Japanese face that stands in for an East Asian `family` when the
+/// machine does not have it: `OxiMincho` for a Mincho (serif) family,
+/// `OxiGothic` for everything else. Answered with the key and the file name, so
+/// a caller can look the face up in bytes or on disk.
+///
+/// The command-line tool and the browser build both ask here. Each used to
+/// decide on its own, and the tool's answer was "whatever sans face the system
+/// has" — so a document set in ＭＳ 明朝 came out of `docx-to-pdf` in Gothic
+/// while the browser drew it in Mincho.
+pub fn cjk_stand_in(family: &str) -> (&'static str, &'static str) {
+    let lower = family.to_lowercase();
+    if family.contains("明朝") || lower.contains("mincho") || lower.contains("serif") {
+        ("OxiMincho", "OxiMincho.ttf")
+    } else {
+        ("OxiGothic", "OxiGothic.ttf")
+    }
+}
+
 /// The folders holding these faces on disk, for a binary still running inside
 /// the source tree it was built in. Empty once it has left that tree, which is
 /// the point: an absolute path baked in at compile time means nothing on
@@ -85,6 +103,24 @@ mod tests {
             seen += 1;
         }
         assert_eq!(seen, 22, "a face went missing from one of the two halves");
+    }
+
+    /// A Mincho family is stood in for by the serif face, in either script and
+    /// either width; every other East Asian family by the sans one. Both
+    /// answers name a face this crate actually ships.
+    #[test]
+    fn mincho_families_get_the_serif_face() {
+        for family in ["ＭＳ 明朝", "ＭＳ Ｐ明朝", "MS Mincho", "Yu Mincho", "游明朝", "Noto Serif CJK JP"] {
+            assert_eq!(cjk_stand_in(family).0, "OxiMincho", "{family}");
+        }
+        for family in ["ＭＳ ゴシック", "MS PGothic", "游ゴシック", "メイリオ", "Meiryo"] {
+            assert_eq!(cjk_stand_in(family).0, "OxiGothic", "{family}");
+        }
+        for family in ["ＭＳ 明朝", "メイリオ"] {
+            let (key, file) = cjk_stand_in(family);
+            assert!(face(key).is_some(), "{key} is not shipped");
+            assert!(faces().any(|(k, f, _)| *k == key && *f == file), "{key} is not stored as {file}");
+        }
     }
 
     /// No key is claimed by both halves, or `face` would answer with whichever

@@ -973,6 +973,14 @@ fn bundled_font_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// One shipped face's file, from the first of `bundled_font_dirs` that holds it.
+fn bundled_face_file(file: &str) -> Option<std::path::PathBuf> {
+    bundled_font_dirs()
+        .into_iter()
+        .map(|dir| dir.join(file))
+        .find(|path| path.is_file())
+}
+
 /// Write the compiled-in faces into `where_to`, and say where they landed.
 ///
 /// Nothing is overwritten: a face already there is somebody's deliberate copy,
@@ -2779,39 +2787,50 @@ fn build_embedded_fonts(
         }
     }
 
-    // Per-family CJK font embedding: map font families to system font files
-    // Try system fonts first, fall back to bundled OxiGothic/OxiMincho (Noto-based, OFL)
-    let exe_dir = std::env::current_exe().ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_default();
-    let oxi_gothic = exe_dir.join("fonts").join("OxiGothic.ttf");
-    let oxi_mincho = exe_dir.join("fonts").join("OxiMincho.ttf");
-    let oxi_gothic_str = oxi_gothic.to_string_lossy().to_string();
-    let oxi_mincho_str = oxi_mincho.to_string_lossy().to_string();
-
-    let family_font_map: Vec<(&str, Vec<&str>)> = vec![
-        ("MS-Gothic",  vec!["C:\\Windows\\Fonts\\msgothic.ttc", oxi_gothic_str.as_str()]),
-        ("MS-PGothic", vec!["C:\\Windows\\Fonts\\msgothic.ttc", oxi_gothic_str.as_str()]),
-        ("MS-Mincho",  vec!["C:\\Windows\\Fonts\\msmincho.ttc", oxi_mincho_str.as_str()]),
-        ("MS-PMincho", vec!["C:\\Windows\\Fonts\\msmincho.ttc", oxi_mincho_str.as_str()]),
-    ];
-
-    // Embed per-family fonts: resolve original font names to PDF names, match against map
-    let mut embedded_families: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for name in &font_names_used {
-        let resolved = resolve_font(Some(name), false);
-        for (family, paths) in &family_font_map {
-            if resolved == *family {
-                if !embedded_families.contains(&resolved) {
-                    let label = resolved.replace('-', "_");
-                    let found_path = paths.iter().find(|p| std::path::Path::new(p).exists());
-                    if let Some(result) = found_path.and_then(|p| subset_font_file(p, &used_chars, &label)) {
-                        eprintln!("Embedding CJK font '{}' ({}) from {} ({} bytes)", resolved, name, found_path.unwrap(), result.data.len());
-                        fonts.insert(resolved.clone(), result);
-                        embedded_families.insert(resolved.clone());
-                    }
+    // The East Asian families the text is actually drawn in. The IR alone
+    // misses a family that only a style names -- ＭＳ 明朝 on Normal's
+    // eastAsia slot is the common case -- and the layout has already resolved
+    // every run to the family it draws with.
+    for page in &layout.pages {
+        for elem in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text { font_family: Some(family), .. } = &elem.content {
+                if is_cjk_family(family) && !font_names_used.contains(family) {
+                    font_names_used.push(family.clone());
                 }
-                break;
+            }
+        }
+    }
+
+    // Per-family CJK font embedding: the family's own file where the machine
+    // has it, then the shipped stand-in of the same kind -- Mincho for a
+    // Mincho family, Gothic otherwise. The stand-in is looked for where every
+    // other shipped face is, so a Mincho document is never handed to whatever
+    // sans face the system happens to carry.
+    let system_files: &[(&str, &str)] = &[
+        ("MS-Gothic", "C:\\Windows\\Fonts\\msgothic.ttc"),
+        ("MS-PGothic", "C:\\Windows\\Fonts\\msgothic.ttc"),
+        ("MS-Mincho", "C:\\Windows\\Fonts\\msmincho.ttc"),
+        ("MS-PMincho", "C:\\Windows\\Fonts\\msmincho.ttc"),
+    ];
+    for name in &font_names_used {
+        if !is_cjk_family(name) {
+            continue;
+        }
+        let resolved = resolve_font(Some(name), false);
+        if fonts.contains_key(&resolved) {
+            continue;
+        }
+        let system = system_files
+            .iter()
+            .find(|(family, _)| *family == resolved)
+            .map(|(_, path)| std::path::PathBuf::from(path))
+            .filter(|path| path.exists());
+        let found_path = system.or_else(|| bundled_face_file(oxidocs_fonts::cjk_stand_in(name).1));
+        let label = resolved.replace(['-', ' '], "_");
+        if let Some(path) = found_path {
+            if let Some(result) = subset_font_file(&path.to_string_lossy(), &used_chars, &label) {
+                eprintln!("Embedding CJK font '{}' ({}) from {} ({} bytes)", resolved, name, path.display(), result.data.len());
+                fonts.insert(resolved, result);
             }
         }
     }
@@ -3243,9 +3262,16 @@ fn collect_cjk_fonts_from_block(block: &Block, needs_cjk: &mut bool, font_names:
 }
 
 fn find_and_subset_cjk_font(used_chars: &std::collections::BTreeSet<char>) -> Option<EmbeddedFont> {
-    let font_path = CJK_FONT_PATHS.iter().find(|p| std::path::Path::new(p).exists())?;
-    eprintln!("Found CJK font: {}", font_path);
-    subset_font_file(font_path, used_chars, "cjk")
+    // The shipped Gothic is the last resort, so a machine with no Japanese
+    // face at all -- a server container, typically -- still draws the text
+    // rather than warning and dropping it.
+    let font_path = CJK_FONT_PATHS
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.exists())
+        .or_else(|| bundled_face_file("OxiGothic.ttf"))?;
+    eprintln!("Found CJK font: {}", font_path.display());
+    subset_font_file(&font_path.to_string_lossy(), used_chars, "cjk")
 }
 
 fn find_and_subset_cjk_font_bold(used_chars: &std::collections::BTreeSet<char>) -> Option<EmbeddedFont> {
