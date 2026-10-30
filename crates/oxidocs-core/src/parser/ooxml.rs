@@ -9721,8 +9721,14 @@ fn parse_drawing(
         && image.is_none()
         && ((!has_no_fill && shape_fill.is_some())
             || (!has_no_stroke && stroke_color_saved.is_some()));
+    // OXI_GROUP_MEMBERS_BOX (2026-10-30, default ON, opt-out _DISABLE): a text-less
+    // group whose members are drawable is not an outline shape -- the members ride on
+    // the box (S839). ja/creative__285f61cb's 原稿用紙 header group (wpg, 42 filled
+    // rects with 009300 outlines) came out as one outline shape that nothing paints.
+    let group_members_box = !s839_vector_shapes.is_empty()
+        && std::env::var_os("OXI_GROUP_MEMBERS_BOX_DISABLE").is_none();
     let is_outline_shape = shape.is_some() && shape_text_blocks.is_empty() && s839_text_children.is_empty()
-        && !dml_rect_box;
+        && !dml_rect_box && !group_members_box;
     let has_visual = !has_no_fill || !has_no_stroke;
     // S535 (2026-06-10): an INLINE drawing (wp:inline, no wp:anchor position)
     // that carries a text box — e.g. a wordprocessingCanvas (wpc) figure with
@@ -9995,6 +10001,85 @@ fn parse_drawing(
     })
 }
 
+/// A plain `<v:rect>` member of a VML group, in the group's coordinate units:
+/// style left/top/width/height, the VML default white fill unless `filled="f"`,
+/// and a stroke unless `stroked="f"` (default black, weight 0.75pt).
+fn vml_group_member(e: &quick_xml::events::BytesStart) -> Option<crate::ir::VectorShape> {
+    let (mut x, mut y, mut w, mut h) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let (mut fill, mut filled) = (None::<String>, true);
+    let (mut stroke, mut stroked, mut stroke_width) = (None::<String>, true, 0.75f32);
+    for attr in e.attributes().flatten() {
+        let val = String::from_utf8_lossy(&attr.value).to_string();
+        match local_name(attr.key.as_ref()).as_str() {
+            "style" => {
+                for part in val.split(';') {
+                    let (k, v) = match part.split_once(':') { Some(kv) => kv, None => continue };
+                    let n = v.trim().parse::<f32>().ok();
+                    match k.trim() {
+                        "left" => x = n.unwrap_or(0.0),
+                        "top" => y = n.unwrap_or(0.0),
+                        "width" => w = n.unwrap_or(0.0),
+                        "height" => h = n.unwrap_or(0.0),
+                        "visibility" if v.trim() == "hidden" => return None,
+                        _ => {}
+                    }
+                }
+            }
+            "filled" => filled = !(val == "f" || val == "false"),
+            "fillcolor" => fill = Some(val.trim_start_matches('#').to_string()),
+            "stroked" => stroked = !(val == "f" || val == "false"),
+            "strokecolor" => stroke = Some(val.trim_start_matches('#').to_string()),
+            "strokeweight" => stroke_width = parse_css_length_opt(&val).unwrap_or(0.75),
+            _ => {}
+        }
+    }
+    if w <= 0.0 || h <= 0.0 { return None; }
+    Some(crate::ir::VectorShape {
+        x, y, w, h,
+        fill: filled.then(|| fill.unwrap_or_else(|| "FFFFFF".to_string())),
+        stroke: stroked.then(|| stroke.unwrap_or_else(|| "000000".to_string())),
+        stroke_width: if stroked { stroke_width } else { 0.0 },
+        is_line: false,
+        path: Vec::new(),
+    })
+}
+
+/// An absolute VML text-box shape as a TextBox (wrap none, VML default insets).
+fn vml_shape_text_box(sh: &Shape) -> TextBox {
+    TextBox {
+        wrap_polygon: Vec::new(),
+        text_outline_inset: 0.0,
+        vertical_text: false,
+        blocks: sh.text_blocks.clone(),
+        inline: false,
+        font_ref_color: None,
+        auto_fit: false,
+        width: sh.width,
+        height: sh.height,
+        position: sh.position.clone(),
+        border: sh.stroke_color.is_some(),
+        stroke_color: sh.stroke_color.clone(),
+        stroke_width: sh.stroke_width,
+        fill: sh.fill.clone(),
+        anchor_block_index: 0,
+        corner_radius: None,
+        inset_left: Some(7.2),
+        inset_right: Some(7.2),
+        inset_top: Some(3.6),
+        inset_bottom: Some(3.6),
+        wrap_type: Some(WrapType::None),
+        v_text_anchor: sh.v_text_anchor.clone(),
+        relative_height: 0,
+        behind_doc: false,
+        vert_overflow: None,
+        compat_line_spacing: false,
+        vector_shapes: Vec::new(),
+        host_break_after: false,
+        children: Vec::new(),
+        body_wrap_none: false,
+    }
+}
+
 /// Parse VML w:pict element (legacy shapes/images)
 fn parse_vml_pict(
     reader: &mut Reader<&[u8]>,
@@ -10058,6 +10143,11 @@ fn parse_vml_pict(
     // outermost group's declared pt dims + margin position instead.
     let s850 = std::env::var("OXI_S850_DISABLE").is_err();
     let mut group_depth: i32 = 0;
+    // OXI_VML_GROUP_RECTS: the outer group's coordorigin / coordsize and its direct
+    // v:rect members (in group units), drawn as the group's vector shapes.
+    let vml_group_rects_on = std::env::var_os("OXI_VML_GROUP_RECTS_DISABLE").is_none();
+    let mut vml_group_coord: (f32, f32, f32, f32) = (0.0, 0.0, 0.0, 0.0);
+    let mut vml_group_rects: Vec<crate::ir::VectorShape> = Vec::new();
     // S852: an inline VML horizontal rule (<v:rect o:hr="t" .../>). Word draws
     // it on its OWN line (a full-width gray divider). Marked here so parse_run
     // routes it to the run style (reserve a line + draw the rule) instead of a
@@ -10116,6 +10206,20 @@ fn parse_vml_pict(
                             let mut g_abs = false;
                             let mut g_ml = 0.0;
                             let mut g_mt = 0.0;
+                            if outer {
+                                for attr in e.attributes().flatten() {
+                                    let key = local_name(attr.key.as_ref());
+                                    let v: Vec<f32> = String::from_utf8_lossy(&attr.value)
+                                        .split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                                    if key == "coordsize" && v.len() == 2 {
+                                        vml_group_coord.2 = v[0];
+                                        vml_group_coord.3 = v[1];
+                                    } else if key == "coordorigin" && v.len() == 2 {
+                                        vml_group_coord.0 = v[0];
+                                        vml_group_coord.1 = v[1];
+                                    }
+                                }
+                            }
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "style" {
                                     let val = String::from_utf8_lossy(&attr.value);
@@ -10131,6 +10235,14 @@ fn parse_vml_pict(
                                             g_mt = parse_css_length(mt.trim());
                                         } else if part.starts_with("position:absolute") {
                                             g_abs = true;
+                                        } else if outer && vml_group_rects_on {
+                                            // OXI_VML_GROUP_RECTS: the group's own anchors
+                                            // (the Genko grid is page-relative)
+                                            if let Some(r) = part.strip_prefix("mso-position-horizontal-relative:") {
+                                                vml_h_relative = Some(r.trim().to_string());
+                                            } else if let Some(r) = part.strip_prefix("mso-position-vertical-relative:") {
+                                                vml_v_relative = Some(r.trim().to_string());
+                                            }
                                         }
                                     }
                                 }
@@ -10177,6 +10289,9 @@ fn parse_vml_pict(
                     }
                     // VML shape types
                     "shape" | "rect" | "oval" | "roundrect" | "line" => {
+                        if vml_group_rects_on && group_depth == 1 && local == "rect" {
+                            vml_group_rects.extend(vml_group_member(&e));
+                        }
                         // Check VML type attribute for preset shape identification
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -10416,6 +10531,9 @@ fn parse_vml_pict(
                     "shape" | "rect" | "oval" | "roundrect" | "line"
                         if std::env::var("OXI_VMLRECT_DISABLE").is_err() =>
                     {
+                        if vml_group_rects_on && group_depth == 1 && local == "rect" {
+                            vml_group_rects.extend(vml_group_member(&e));
+                        }
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "wrapcoords" || key == "coordsize" {
@@ -10773,6 +10891,63 @@ fn parse_vml_pict(
     // branch never fires on the corpus (byte-identical by construction);
     // absolute VML textboxes keep the existing (dropped) behavior = the
     // separate S746b render task.
+    // OXI_VML_GROUP_RECTS (2026-10-30, default ON, opt-out _DISABLE): an absolute
+    // v:group of plain v:rect members draws each member (the group came out as one
+    // empty shape). ja/creative__3d2bf04c and 285f61cb: Word's 原稿用紙 (Genko:A4:20:20)
+    // is a header group of 20 full-width row rects and 21 5.5pt column-gap rects,
+    // white-filled with a 0.5pt #00008b outline; the later gap rects' fill cuts the
+    // row lines, which is what leaves the double rule between the columns.
+    if vml_group_rects.len() >= 2 && is_absolute && image.is_none() && text_blocks.is_empty()
+        && group_width > 0.0 && group_height > 0.0 && vml_group_coord.2 > 0.0 && vml_group_coord.3 > 0.0
+    {
+        let (ox, oy, cw, ch) = vml_group_coord;
+        let (sx, sy) = (group_width / cw, group_height / ch);
+        let vector_shapes = vml_group_rects.into_iter().map(|mut v| {
+            v.x = (v.x - ox) * sx;
+            v.y = (v.y - oy) * sy;
+            v.w *= sx;
+            v.h *= sy;
+            v
+        }).collect();
+        let text_box = Some(TextBox {
+            wrap_polygon: Vec::new(),
+            text_outline_inset: 0.0,
+            vertical_text: false,
+            blocks: Vec::new(),
+            inline: false,
+            font_ref_color: None,
+            auto_fit: false,
+            width: group_width,
+            height: group_height,
+            position: vml_position.clone(),
+            border: false,
+            stroke_color: None,
+            stroke_width: None,
+            fill: None,
+            anchor_block_index: 0,
+            corner_radius: None,
+            inset_left: None,
+            inset_right: None,
+            inset_top: None,
+            inset_bottom: None,
+            wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
+            v_text_anchor: None,
+            relative_height: 0,
+            behind_doc: vml_negative_z,
+            vert_overflow: None,
+            compat_line_spacing: false,
+            vector_shapes,
+            host_break_after: false,
+            children: Vec::new(),
+            body_wrap_none: false,
+        });
+        return Ok(DrawingResult {
+            symbol_text: None,
+            image: None,
+            shape: None,
+            text_box,
+        });
+    }
     let s746_inline_txbx = !is_absolute
         && !text_blocks.is_empty()
         && width > 0.0
@@ -14710,6 +14885,16 @@ fn parse_header_footer_xml(
                         // header banner, administrative__0069bb's «Communiqué» box).
                         if std::env::var_os("OXI_HF_TEXT_BOXES_DISABLE").is_none() {
                             let mut tbs = std::mem::take(&mut pr.text_boxes);
+                            // OXI_HF_VML_TEXTBOX (2026-10-30, default ON, opt-out _DISABLE): an
+                            // absolute VML text box (v:shape + v:textbox) stays a Shape that
+                            // nothing in a header or footer paints. ja/creative__3d2bf04c's
+                            // 原稿用紙 footer «20 × 20» (page 85 / 522.3, filled="f"
+                            // stroked="f") is one; draw it as the header text boxes are drawn.
+                            if std::env::var_os("OXI_HF_VML_TEXTBOX_DISABLE").is_none() {
+                                tbs.extend(pr.shapes.iter().chain(pr.paragraph.shapes.iter())
+                                    .filter(|sh| sh.is_vml && !sh.text_blocks.is_empty() && sh.position.is_some())
+                                    .map(vml_shape_text_box));
+                            }
                             for tb in &mut tbs {
                                 tb.anchor_block_index = blocks.len();
                             }

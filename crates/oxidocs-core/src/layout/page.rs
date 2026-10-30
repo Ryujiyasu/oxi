@@ -47,7 +47,36 @@ impl<'a> PageLayouter<'a> {
         let mut logical_base: i64 = first_logical as i64;
         // Vertical writing (tategaki) section: route to the dedicated path.
         if page.vertical_section && std::env::var("OXI_VERTICAL_DISABLE").is_err() {
-            let out = self.layout_page_vertical(page);
+            let mut out = self.layout_page_vertical(page);
+            // OXI_VERTICAL_HF_BOXES (2026-10-30, default ON, opt-out _DISABLE): the
+            // vertical builder lays out no header or footer; draw at least their
+            // anchored boxes, behind the body, with the part variant the horizontal
+            // path picks. ja/creative__3d2bf04c / 285f61cb (tbRl 原稿用紙): the grid is
+            // a header VML group and «20 × 20» a footer text box -- Oxi drew neither.
+            if std::env::var_os("OXI_VERTICAL_HF_BOXES_DISABLE").is_none() && !page.hf_text_boxes.is_empty() {
+                for (page_idx, lp) in out.iter_mut().enumerate() {
+                    let variant = |base: u8| -> u8 {
+                        if page.title_pg && page_idx == 0 {
+                            base + 1
+                        } else if page.even_odd_hf && (first_logical as usize + page_idx) % 2 == 0 {
+                            base + 2
+                        } else {
+                            base
+                        }
+                    };
+                    let tops = [page.margin.top];
+                    let col_x = [page.margin.left];
+                    let mut behind = Vec::new();
+                    for code in [variant(0), variant(3)] {
+                        for (_, tb) in page.hf_text_boxes.iter().filter(|(c, _)| *c == code) {
+                            let mut tb = tb.clone();
+                            tb.anchor_block_index = 0;
+                            behind.extend(self.layout_text_box(&tb, page, &tops, &col_x));
+                        }
+                    }
+                    lp.elements.splice(0..0, behind);
+                }
+            }
             *logical = (logical_base + out.len() as i64 - 1).max(0) as u32;
             return out;
         }
