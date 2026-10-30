@@ -152,6 +152,9 @@ pub struct XlsxEditor {
     legacy_comments: HashMap<usize, Vec<crate::ir::Comment>>,
     /// Final sheet-order table definitions, when VBA changed a table.
     table_plan: Option<Vec<Option<Vec<crate::ir::Table>>>>,
+    /// Final sheet-order dynamic-array owners, including one-cell and blocked
+    /// arrays. Their extents are independent of adjacent spill members.
+    dynamic_plan: Option<Vec<Vec<crate::ir::CachedSpill>>>,
 }
 
 /// One sheet of a rearranged workbook: either one the file already holds, or a
@@ -186,6 +189,7 @@ impl XlsxEditor {
         let workbook = parse_xlsx(data)?;
         Ok(Self {
             original_data: data.to_vec(),
+            dynamic_plan: None,
             workbook,
             edits: HashMap::new(),
             row_hidden: HashMap::new(),
@@ -274,6 +278,7 @@ impl XlsxEditor {
                 "a workbook must keep at least one sheet".to_string(),
             ));
         }
+        self.dynamic_plan = Some(dynamic_array_plan(edited));
         self.indexed_colors = (edited.indexed_colors != self.workbook.indexed_colors)
             .then(|| edited.indexed_colors.clone());
         let originals:HashMap<u32,&crate::ir::Chart>=self.workbook.sheets.iter().flat_map(|sheet|&sheet.drawings)
@@ -607,12 +612,15 @@ impl XlsxEditor {
             let mut changes: Vec<((usize, u32, u32), CellEditValue)> = Vec::new();
             let held = cells_of(before);
             let now = cells_of(after);
+            let visiting = std::cell::RefCell::new(std::collections::BTreeSet::new());
+            let memo = std::cell::RefCell::new(BTreeMap::new());
+            let multiple = |name: &str| named_array_shape(&edited.defined_names, &after.name, name, 0, &visiting, &memo);
             for (&(row, col), cell) in &now {
                 let same = held
                     .get(&(row, col))
                     .is_some_and(|before| same_content(before, cell));
                 if !same {
-                    if let Some(value) = edit_for(cell, row) {
+                    if let Some(value) = edit_for(cell, row, &multiple) {
                         changes.push(((index, row, col), value));
                     }
                 }
@@ -824,6 +832,7 @@ impl XlsxEditor {
             || !self.threaded_comment_resolved.is_empty()
             || !self.legacy_comments.is_empty()
             || self.table_plan.is_some()
+            || self.dynamic_plan.as_ref().is_some_and(|plan| *plan != dynamic_array_plan(&self.workbook))
             || !self.drawing_line_edits.is_empty()
             || !self.drawing_fill_edits.is_empty()
             || !self.drawing_text_edits.is_empty()
@@ -1638,11 +1647,16 @@ impl XlsxEditor {
                             relationship_ids.push(Some(id));
                         }
                     }
+                    let visiting = std::cell::RefCell::new(std::collections::BTreeSet::new());
+                    let memo = std::cell::RefCell::new(BTreeMap::new());
+                    let names = self.name_plan.as_deref().unwrap_or(&self.workbook.defined_names);
+                    let multiple = |name: &str| named_array_shape(names, &sheet.name, name, 0, &visiting, &memo);
                     let mut sheet_xml = write_new_sheet(
                         sheet,
                         added_cell_styles.get(&index).unwrap_or(&empty_styles),
                         added_row_band_styles.get(&index).unwrap_or(&empty_band_styles),
                         added_column_band_styles.get(&index).unwrap_or(&empty_band_styles),
+                        &multiple,
                     )?;
                     if !sheet.conditional_rules.is_empty() {
                         let ids = added_conditional_style_slots.iter().filter_map(|(&(sheet_index, priority), &slot)| (sheet_index == index).then_some((priority, conditional_style_indices[slot]))).collect();
@@ -1785,15 +1799,23 @@ impl XlsxEditor {
             writer.finish().map_err(|e| XlsxError::InvalidData(e.to_string()))?;
         }
 
-        if let Some(tables) = &self.table_plan {
-            return patch_workbook_tables(&output, tables);
+        let output = if let Some(tables) = &self.table_plan { patch_workbook_tables(&output, tables)? } else { output };
+        let mut arrays = self.dynamic_plan.clone().unwrap_or_else(|| dynamic_array_plan(&self.workbook));
+        if self.dynamic_plan.is_none() {
+            for (sheet, entries) in arrays.iter_mut().enumerate() {
+                entries.retain(|((col, row), _)| !self.edits.contains_key(&(sheet, row + 1, *col)));
+            }
         }
-        Ok(output)
+        patch_dynamic_array_package(&output, &arrays)
     }
 
     /// Resolve sheet index -> ZIP path for each sheet.
     fn resolve_sheet_paths(&self) -> Result<Vec<String>, XlsxError> {
-        let mut archive = OoxmlArchive::new(&self.original_data)?;
+        Self::sheet_paths_in(&self.original_data)
+    }
+
+    fn sheet_paths_in(data: &[u8]) -> Result<Vec<String>, XlsxError> {
+        let mut archive = OoxmlArchive::new(data)?;
         let workbook_xml = archive.read_part("xl/workbook.xml")?;
         let rels_xml = archive.read_part("xl/_rels/workbook.xml.rels")?;
 
@@ -5773,10 +5795,417 @@ fn same_merges(before: &[MergeCell], after: &[MergeCell]) -> bool {
     before == after
 }
 
+fn named_array_shape(names: &[(String, String)], sheet: &str, requested: &str, depth: usize,
+    visiting: &std::cell::RefCell<std::collections::BTreeSet<String>>, memo: &std::cell::RefCell<BTreeMap<String, bool>>) -> bool {
+    if depth > 64 { return false; }
+    let (owner, leaf) = crate::ir::defined_name_scope(requested).unwrap_or_else(|| (sheet.to_string(), requested));
+    let key = oxicells_calc::case_fold::name_key;
+    let definition = names.iter().find(|(held, _)| crate::ir::defined_name_scope(held)
+        .is_some_and(|(scope, name)| key(&scope) == key(&owner) && key(name) == key(leaf)))
+        .or_else(|| names.iter().find(|(held, _)| !held.contains('!') && key(held) == key(leaf)));
+    let Some((held, formula)) = definition else { return false; };
+    let identity = key(held);
+    if let Some(value) = memo.borrow().get(&identity) { return *value; }
+    if !visiting.borrow_mut().insert(identity.clone()) { return false; }
+    let scope = crate::ir::defined_name_scope(held).map(|(owner, _)| owner).unwrap_or_default();
+    let result = oxicells_calc::lexer::requires_array_storage(formula,
+        &|name| named_array_shape(names, &scope, name, depth + 1, visiting, memo));
+    visiting.borrow_mut().remove(&identity);
+    memo.borrow_mut().insert(identity, result);
+    result
+}
+
+fn dynamic_array_plan(book: &Workbook) -> Vec<Vec<crate::ir::CachedSpill>> {
+    book.sheets.iter().map(|sheet| {
+        let mut arrays = Vec::new();
+        let visiting = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        let memo = std::cell::RefCell::new(BTreeMap::new());
+        let multiple = |name: &str| named_array_shape(&book.defined_names, &sheet.name, name, 0, &visiting, &memo);
+        for row in &sheet.rows {
+            for cell in row.cells.iter().filter(|cell| cell.spill == crate::ir::Spill::Dynamic) {
+                let Some(formula) = cell.formula.as_deref() else { continue; };
+                let anchor = (cell.col, row.index.saturating_sub(1));
+                let cached = sheet.cached_spills.as_ref().and_then(|blocks| blocks.iter().find(|(at, _)| *at == anchor)).map(|(_, size)| *size);
+                if !oxicells_calc::lexer::requires_array_storage(formula, &multiple)
+                    && !cached.is_some_and(|(w, h)| w > 1 || h > 1) { continue; }
+                let size = cached.unwrap_or_else(|| {
+                    if sheet.cached_spills.is_some() { return (1, 1); }
+                    let member = |col, index| sheet.rows.iter().find(|r| r.index == index)
+                        .and_then(|r| r.cells.iter().find(|c| c.col == col)).is_some_and(|c| c.spill == crate::ir::Spill::Member);
+                    let (mut width, mut height) = (1, 1);
+                    while cell.col.checked_add(width).is_some_and(|col| col <= oxicells_calc::reference::MAX_COL && member(col, row.index)) { width += 1; }
+                    while row.index.checked_add(height).is_some_and(|row| row <= oxicells_calc::reference::MAX_ROW + 1 && member(cell.col, row)) { height += 1; }
+                    (width, height)
+                });
+                arrays.push((anchor, size));
+            }
+        }
+        arrays
+    }).collect()
+}
+
+const SPREADSHEET_METADATA_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+fn metadata_tag(e: &BytesStart<'_>, changes: &[(&str, Option<String>)]) -> BytesStart<'static> {
+    let mut tag = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+    for attr in e.attributes().flatten() {
+        if !changes.iter().any(|(key, _)| key.as_bytes() == attr.key.as_ref()) { tag.push_attribute(attr); }
+    }
+    for (key, value) in changes {
+        if let Some(value) = value { tag.push_attribute((*key, value.as_str())); }
+    }
+    tag
+}
+
+fn xml_start_text(tag: BytesStart<'_>) -> Result<String, XlsxError> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(Event::Start(tag)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+    String::from_utf8(writer.into_inner()).map_err(|e| XlsxError::InvalidData(e.to_string()))
+}
+
+/// Append one record without rebuilding existing metadata payloads or namespaces.
+fn append_metadata_record(xml: &str, section: &str, name: Option<&str>, record: &str) -> Result<String, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut depth = 0usize;
+    let mut target = None::<(usize, usize, BytesStart<'static>)>;
+    let mut count = 0usize;
+    let record_name = if section == "metadataTypes" { "metadataType" } else { "bk" };
+    loop {
+        let start = reader.buffer_position() as usize;
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        let empty = matches!(&event, Event::Empty(_));
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                if depth == 1 && local == section && name.is_none_or(|wanted| get_attr(&e, "name").as_deref() == Some(wanted)) {
+                    if empty {
+                        let header = xml_start_text(metadata_tag(&e, &[("count", Some("1".into()))]))?;
+                        let closing = format!("</{}>", String::from_utf8_lossy(e.name().as_ref()));
+                        return Ok(format!("{}{}{}{}{}", &xml[..start], header, record, closing, &xml[reader.buffer_position() as usize..]));
+                    }
+                    target = Some((start, reader.buffer_position() as usize, e.clone().into_owned()));
+                } else if target.is_some() && depth == 2 && local == record_name { count += 1; }
+                if !empty { depth += 1; }
+            }
+            Event::End(e) => {
+                if depth == 2 && local_name(e.name().as_ref()) == section {
+                    if let Some((first, content, tag)) = target.take() {
+                        let header = xml_start_text(metadata_tag(&tag, &[("count", Some((count + 1).to_string()))]))?;
+                        return Ok(format!("{}{}{}{}{}", &xml[..first], header, &xml[content..start], record, &xml[start..]));
+                    }
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let attribute = name.map(|name| format!(" name=\"{}\"", escape(name))).unwrap_or_default();
+    let addition = format!("<{section} xmlns=\"{SPREADSHEET_METADATA_NS}\"{attribute} count=\"1\">{record}</{section}>");
+    let rank = |name: &str| match name { "metadataTypes" => 0, "mdxMetadata" => 1, "futureMetadata" => 2, "cellMetadata" => 3, "valueMetadata" => 4, "extLst" => 5, _ => 0 };
+    let mut reader = Reader::from_str(xml);
+    let mut depth = 0usize;
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(e) => {
+                if depth == 1 && rank(&local_name(e.name().as_ref())) > rank(section) {
+                    return Ok(format!("{}{}{}", &xml[..start], addition, &xml[start..]));
+                }
+                depth += 1;
+            }
+            Event::Empty(e) => {
+                if depth == 0 && local_name(e.name().as_ref()) == "metadata" {
+                    let closing = format!("</{}>", String::from_utf8_lossy(e.name().as_ref()));
+                    return Ok(format!("{}{}{}{}{}", &xml[..start], xml_start_text(e.clone().into_owned())?, addition,
+                        closing, &xml[reader.buffer_position() as usize..]));
+                }
+                if depth == 1 && rank(&local_name(e.name().as_ref())) > rank(section) {
+                    return Ok(format!("{}{}{}", &xml[..start], addition, &xml[start..]));
+                }
+            }
+            Event::End(_) => {
+                if depth == 1 { return Ok(format!("{}{}{}", &xml[..start], addition, &xml[start..])); }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => return Err(XlsxError::InvalidData("metadata part has no root element".into())),
+            _ => {}
+        }
+    }
+}
+
+/// Remove only this metadata type from a cell block; keep all other records
+/// and extension payloads so mixed metadata survives formula replacement.
+fn without_dynamic_record(block: &str, type_index: usize) -> Result<(String, bool), XlsxError> {
+    let mut reader = Reader::from_str(block);
+    let mut writer = Writer::new(Vec::new());
+    let mut depth = 0usize;
+    let mut skip = 0usize;
+    let mut retained = false;
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        if skip > 0 {
+            match event { Event::Start(_) => skip += 1, Event::End(_) => skip -= 1, Event::Eof => break, _ => {} }
+            continue;
+        }
+        match &event {
+            Event::Start(e) | Event::Empty(e) => {
+                let empty = matches!(&event, Event::Empty(_));
+                if skip > 0 { if !empty { skip += 1; } continue; }
+                if depth == 1 && local_name(e.name().as_ref()) == "rc"
+                    && get_attr(e, "t").and_then(|s| s.parse::<usize>().ok()) == Some(type_index) {
+                    if !empty { skip = 1; }
+                    continue;
+                }
+                if depth == 1 { retained = true; }
+                if depth == 0 && e.attributes().flatten().any(|a| !a.key.as_ref().starts_with(b"xmlns")) { retained = true; }
+                if !empty { depth += 1; }
+            }
+            Event::End(_) => {
+                if skip > 0 { skip -= 1; continue; }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Text(text) if !text.as_ref().iter().all(u8::is_ascii_whitespace) => retained = true,
+            Event::Eof => break,
+            _ if skip > 0 => continue,
+            _ => {}
+        }
+        writer.write_event(event).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+    }
+    Ok((String::from_utf8(writer.into_inner()).map_err(|e| XlsxError::InvalidData(e.to_string()))?, retained))
+}
+
+fn append_cell_metadata_record(block: &str, record: &str) -> Result<String, XlsxError> {
+    let mut reader = Reader::from_str(block);
+    let mut depth = 0usize;
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(e) => {
+                if depth == 1 && local_name(e.name().as_ref()) == "extLst" {
+                    return Ok(format!("{}{}{}", &block[..start], record, &block[start..]));
+                }
+                depth += 1;
+            }
+            Event::Empty(e) => {
+                if depth == 0 {
+                    let closing = format!("</{}>", String::from_utf8_lossy(e.name().as_ref()));
+                    return Ok(format!("{}{}{}{}{}", &block[..start], xml_start_text(e.into_owned())?, record, closing, &block[reader.buffer_position() as usize..]));
+                }
+                if depth == 1 && local_name(e.name().as_ref()) == "extLst" {
+                    return Ok(format!("{}{}{}", &block[..start], record, &block[start..]));
+                }
+            }
+            Event::End(_) => {
+                if depth == 1 { return Ok(format!("{}{}{}", &block[..start], record, &block[start..])); }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => return Err(XlsxError::InvalidData("cell metadata block has no root".into())),
+            _ => {}
+        }
+    }
+}
+
+type DynamicMetadataChanges = BTreeMap<(bool, Option<usize>), Option<usize>>;
+
+fn dynamic_metadata_changes(xml: &str, requested: &std::collections::BTreeSet<(bool, Option<usize>)>)
+    -> Result<(String, DynamicMetadataChanges), XlsxError>
+{
+    let info = crate::parser::dynamic_metadata(xml)?;
+    let mut output = xml.to_string();
+    let mut changes = BTreeMap::new();
+    let adding = requested.iter().any(|(dynamic, id)| *dynamic && !id.is_some_and(|id| info.cells.contains(&id)));
+    let type_index = info.type_index.unwrap_or(info.type_count + 1);
+    if adding {
+        if info.type_index.is_none() {
+            let record = format!("<metadataType xmlns=\"{SPREADSHEET_METADATA_NS}\" name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/>");
+            output = append_metadata_record(&output, "metadataTypes", None, &record)?;
+        }
+        let record = format!("<bk xmlns=\"{SPREADSHEET_METADATA_NS}\"><extLst><ext uri=\"{{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}}\"><xda:dynamicArrayProperties xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\" fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk>");
+        output = append_metadata_record(&output, "futureMetadata", Some("XLDAPR"), &record)?;
+    }
+    let mut count = info.cell_count;
+    for &(dynamic, id) in requested {
+        if dynamic && id.is_some_and(|id| info.cells.contains(&id)) { changes.insert((dynamic, id), id); continue; }
+        let base = match id {
+            Some(index) => info.cell_blocks.get(index.saturating_sub(1)).ok_or_else(|| XlsxError::InvalidData("cell metadata index is out of range".into()))?.clone(),
+            None => format!("<bk xmlns=\"{SPREADSHEET_METADATA_NS}\"></bk>"),
+        };
+        let (mut block, retained) = without_dynamic_record(&base, type_index)?;
+        if !dynamic && !retained { changes.insert((dynamic, id), None); continue; }
+        if dynamic {
+            let record = format!("<rc xmlns=\"{SPREADSHEET_METADATA_NS}\" t=\"{type_index}\" v=\"{}\"/>", info.future_count);
+            block = append_cell_metadata_record(&block, &record)?;
+        }
+        output = append_metadata_record(&output, "cellMetadata", None, &block)?;
+        count += 1;
+        changes.insert((dynamic, id), Some(count));
+    }
+    Ok((output, changes))
+}
+
+fn cell_metadata_index(tag: &BytesStart<'_>) -> Option<usize> {
+    get_attr(tag, "cm").and_then(|s| s.parse().ok()).filter(|id| *id > 0)
+}
+
+fn dynamic_range(anchor: (u32, u32), size: (u32, u32)) -> Result<String, XlsxError> {
+    let (col, row) = anchor;
+    let (width, height) = size;
+    let right = width.checked_sub(1).and_then(|n| col.checked_add(n)).filter(|c| *c <= oxicells_calc::reference::MAX_COL);
+    let bottom = height.checked_sub(1).and_then(|n| row.checked_add(n)).filter(|r| *r <= oxicells_calc::reference::MAX_ROW);
+    let (Some(right), Some(bottom)) = (right, bottom) else { return Err(XlsxError::InvalidData("dynamic array extent is outside the worksheet".into())); };
+    let first = format!("{}{}", col_to_letter(col), row + 1);
+    Ok(if (col, row) == (right, bottom) { first } else { format!("{first}:{}{}", col_to_letter(right), bottom + 1) })
+}
+
+fn worksheet_metadata_requests(xml: &str, arrays: &BTreeMap<(u32, u32), (u32, u32)>, dynamic_ids: &std::collections::BTreeSet<usize>)
+    -> Result<std::collections::BTreeSet<(bool, Option<usize>)>, XlsxError>
+{
+    let mut reader = Reader::from_str(xml);
+    let mut path = Vec::<String>::new();
+    let mut requested = std::collections::BTreeSet::new();
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        match &event {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                if name == "c" && path.last().map(String::as_str) == Some("row")
+                    && path.iter().rev().nth(1).map(String::as_str) == Some("sheetData") {
+                    let dynamic = get_attr(e, "r").and_then(|s| oxicells_calc::reference::parse_a1(&s))
+                        .is_some_and(|r| arrays.contains_key(&(r.col, r.row)));
+                    let id = cell_metadata_index(e);
+                    if dynamic || id.is_some_and(|id| dynamic_ids.contains(&id)) { requested.insert((dynamic, id)); }
+                }
+                if matches!(&event, Event::Start(_)) { path.push(name); }
+            }
+            Event::End(_) => { path.pop(); }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(requested)
+}
+
+fn patch_dynamic_worksheet(xml: &str, arrays: &BTreeMap<(u32, u32), (u32, u32)>, dynamic_ids: &std::collections::BTreeSet<usize>, changes: &DynamicMetadataChanges)
+    -> Result<String, XlsxError>
+{
+    let mut reader = Reader::from_str(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut path = Vec::<String>::new();
+    let mut active = None;
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        let empty = matches!(&event, Event::Empty(_));
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                let mut tag = e.clone().into_owned();
+                if name == "c" && path.last().map(String::as_str) == Some("row")
+                    && path.iter().rev().nth(1).map(String::as_str) == Some("sheetData") {
+                    active = get_attr(&e, "r").and_then(|s| oxicells_calc::reference::parse_a1(&s)).map(|r| (r.col, r.row));
+                    let dynamic = active.is_some_and(|at| arrays.contains_key(&at));
+                    let id = cell_metadata_index(&e);
+                    if dynamic || id.is_some_and(|id| dynamic_ids.contains(&id)) {
+                        let replacement = changes.get(&(dynamic, id)).ok_or_else(|| XlsxError::InvalidData("missing dynamic metadata mapping".into()))?;
+                        tag = metadata_tag(&e, &[("cm", replacement.map(|n| n.to_string()))]);
+                    }
+                } else if name == "f" && path.last().map(String::as_str) == Some("c") {
+                    if let Some(at) = active {
+                        if let Some(size) = arrays.get(&at) {
+                            if !seen.insert(at) { return Err(XlsxError::InvalidData("multiple formulas for a dynamic anchor".into())); }
+                            tag = metadata_tag(&e, &[("t", Some("array".into())), ("ref", Some(dynamic_range(at, *size)?)), ("si", None)]);
+                        }
+                    }
+                }
+                writer.write_event(if empty { Event::Empty(tag) } else { Event::Start(tag) })
+                    .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                if !empty { path.push(name); } else if name == "c" { active = None; }
+            }
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "c" && path.iter().rev().nth(1).map(String::as_str) == Some("row") { active = None; }
+                path.pop();
+                writer.write_event(Event::End(e)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+            }
+            Event::Eof => break,
+            other => writer.write_event(other).map_err(|e| XlsxError::InvalidData(e.to_string()))?,
+        }
+    }
+    if seen.len() != arrays.len() { return Err(XlsxError::InvalidData("a dynamic array anchor has no saved formula".into())); }
+    String::from_utf8(writer.into_inner()).map_err(|e| XlsxError::InvalidData(e.to_string()))
+}
+
+fn patch_dynamic_array_package(data: &[u8], plan: &[Vec<crate::ir::CachedSpill>]) -> Result<Vec<u8>, XlsxError> {
+    let mut source = OoxmlArchive::new(data)?;
+    let mut rels = source.read_part("xl/_rels/workbook.xml.rels")?;
+    let relationships = parse_relationships(&rels)?;
+    let metadata_rel = relationships.values().find(|r| r.rel_type.ends_with("/sheetMetadata") && r.target_mode.as_deref() != Some("External"));
+    let metadata_path = match metadata_rel {
+        Some(rel) => oxidocs_common::security::sanitize_rel_target("xl", &rel.target)
+            .map_err(|e| XlsxError::InvalidData(e.to_string()))?,
+        None => {
+            let mut candidate = "xl/metadata.xml".to_string();
+            let mut index = 1;
+            while source.try_read_part(&candidate)?.is_some() { candidate = format!("xl/metadata{index}.xml"); index += 1; }
+            candidate
+        }
+    };
+    let original = source.try_read_part(&metadata_path)?.unwrap_or_else(|| format!("<metadata xmlns=\"{SPREADSHEET_METADATA_NS}\"></metadata>"));
+    let info = crate::parser::dynamic_metadata(&original)?;
+    if plan.iter().all(Vec::is_empty) && info.cells.is_empty() { return Ok(data.to_vec()); }
+    let paths = XlsxEditor::sheet_paths_in(data)?;
+    if paths.len() != plan.len() { return Err(XlsxError::InvalidData("dynamic array plan does not match the sheet order".into())); }
+    let mut sheets = Vec::new();
+    let mut requested = std::collections::BTreeSet::new();
+    for (path, arrays) in paths.iter().zip(plan) {
+        let arrays: BTreeMap<_, _> = arrays.iter().copied().collect();
+        for (at, size) in &arrays { dynamic_range(*at, *size)?; }
+        let xml = source.read_part(path)?;
+        let requests = worksheet_metadata_requests(&xml, &arrays, &info.cells)?;
+        if requests.is_empty() && arrays.is_empty() { continue; }
+        requested.extend(requests);
+        sheets.push((path.clone(), xml, arrays));
+    }
+    let (metadata, changes) = dynamic_metadata_changes(&original, &requested)?;
+    let mut replacements = BTreeMap::<String, Vec<u8>>::new();
+    for (path, xml, arrays) in sheets {
+        replacements.insert(path, patch_dynamic_worksheet(&xml, &arrays, &info.cells, &changes)?.into_bytes());
+    }
+    if metadata != original || metadata_rel.is_none() && plan.iter().any(|v| !v.is_empty()) {
+        replacements.insert(metadata_path.clone(), metadata.into_bytes());
+    }
+    if metadata_rel.is_none() && plan.iter().any(|v| !v.is_empty()) {
+        let target = metadata_path.strip_prefix("xl/").ok_or_else(|| XlsxError::InvalidData("metadata part is outside the workbook directory".into()))?;
+        rels = append_relationship(Some(&rels), "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata", target)?;
+        replacements.insert("xl/_rels/workbook.xml.rels".into(), rels.into_bytes());
+        let types = append_content_type(&source.read_part("[Content_Types].xml")?, &metadata_path,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml")?;
+        replacements.insert("[Content_Types].xml".into(), types.into_bytes());
+    }
+    let mut archive = ZipArchive::new(Cursor::new(data)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+        let path = entry.name().to_string();
+        if let Some(bytes) = replacements.remove(&path) {
+            writer.start_file(path, SimpleFileOptions::default().compression_method(entry.compression())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+            writer.write_all(&bytes).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+        } else {
+            writer.raw_copy_file(entry).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+        }
+    }
+    for (path, bytes) in replacements {
+        writer.start_file(path, SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+        writer.write_all(&bytes).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+    }
+    Ok(writer.finish().map_err(|e| XlsxError::InvalidData(e.to_string()))?.into_inner())
+}
+
 fn same_content(before: &crate::ir::Cell, after: &crate::ir::Cell) -> bool {
     before.formula == after.formula
         && before.formula_utf16 == after.formula_utf16
         && before.array_block == after.array_block
+        && before.spill == after.spill
         && same_value(&before.value, &after.value)
         && before.runs == after.runs
 }
@@ -5800,16 +6229,14 @@ fn same_value(before: &crate::ir::CellValue, after: &crate::ir::CellValue) -> bo
 /// A member of an array formula is written the way the file keeps it: the
 /// formula on the block's top-left cell, with the block beside it, and only
 /// a value on every other cell.
-fn edit_for(cell: &crate::ir::Cell, row: u32) -> Option<CellEditValue> {
-    let legacy = cell.array_block.is_none() && cell.spill != crate::ir::Spill::Dynamic;
+fn edit_for(cell: &crate::ir::Cell, row: u32, multiple: &dyn Fn(&str) -> bool) -> Option<CellEditValue> {
+    let legacy = cell.array_block.is_none();
     let saved_formula = |formula: &str| {
         if !legacy || !formula.contains('@') { return formula.to_string(); }
-        let plain = oxicells_calc::without_intersections(formula);
         // Ordinary OOXML formulas already imply scalar intersections. Drop
         // only operators that legacy evaluation can reproduce; an explicit
         // intersection inside SUM, for example, changes the result.
-        if oxicells_calc::implied_intersections(&plain, &|_| true) == formula { plain }
-        else { formula.to_string() }
+        oxicells_calc::lexer::legacy_formula(formula, multiple)
     };
     if let Some(units) = cell.formula_units() {
         let reach = cell.array_block.and_then(|(top, left, bottom, right)|
@@ -9122,6 +9549,7 @@ fn write_new_sheet(
     styles: &BTreeMap<(u32, u32), u32>,
     row_styles: &BTreeMap<u32, u32>,
     column_styles: &BTreeMap<u32, u32>,
+    multiple: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<u8>, XlsxError> {
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut root = BytesStart::new("worksheet");
@@ -9184,7 +9612,7 @@ fn write_new_sheet(
             let row = sheet.rows.iter().find(|row| row.index == index);
             let mut cells = BTreeMap::new();
             for cell in row.into_iter().flat_map(|row| &row.cells) {
-                if let Some(value) = edit_for(cell, index) {
+                if let Some(value) = edit_for(cell, index, multiple) {
                     cells.insert(cell.col, value);
                 }
             }
@@ -9218,7 +9646,7 @@ fn write_new_sheet(
 
     let mut part = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#.to_vec();
     part.extend(writer.into_inner().into_inner());
-    let edits: HashMap<_,_> = sheet.rows.iter().flat_map(|row|row.cells.iter().filter_map(move |cell|edit_for(cell,row.index).map(|value|((row.index,cell.col),value)))).collect();
+    let edits: HashMap<_,_> = sheet.rows.iter().flat_map(|row|row.cells.iter().filter_map(move |cell|edit_for(cell,row.index,multiple).map(|value|((row.index,cell.col),value)))).collect();
     let refs=edits.iter().map(|(at,value)|(*at,value)).collect();
     let rich = crate::rich_text::patch(std::str::from_utf8(&part).map_err(|error|XlsxError::InvalidData(error.to_string()))?, &refs)?;
     patch_data_validations_xml(&rich, &[], &sheet.validations).map(String::into_bytes)
@@ -11362,18 +11790,78 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_metadata_keeps_other_types_records_and_namespaces() {
+        let xml = r#"<m:metadata xmlns:m="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><m:metadataTypes count="2"><m:metadataType name="OTHER"/><m:metadataType name="XLDAPR"/></m:metadataTypes><m:futureMetadata name="OTHER" count="1"><m:bk><q:payload xmlns:q="urn:custom" keep="a&amp;b"/></m:bk></m:futureMetadata><m:futureMetadata name="XLDAPR" count="1"><m:bk><m:extLst><m:ext uri="native"><xda:dynamicArrayProperties fDynamic="1"/></m:ext></m:extLst></m:bk></m:futureMetadata><m:cellMetadata count="2"><m:bk><m:rc t="1" v="0"/></m:bk><m:bk><m:rc t="1" v="0"/><m:rc t="2" v="0"/></m:bk></m:cellMetadata></m:metadata>"#;
+        let requests = [(false, Some(2)), (true, None), (true, Some(1))].into_iter().collect();
+        let (changed, ids) = dynamic_metadata_changes(xml, &requests).unwrap();
+        let info = crate::parser::dynamic_metadata(&changed).unwrap();
+        assert_eq!(info.type_index, Some(2));
+        assert_eq!(info.type_count, 2);
+        assert_eq!(info.future_count, 2);
+        assert_eq!(info.cell_count, 5);
+        assert!(changed.contains(r#"<q:payload xmlns:q="urn:custom" keep="a&amp;b"/>"#));
+        let removed = ids[&(false, Some(2))].unwrap();
+        assert!(!info.cells.contains(&removed));
+        assert!(info.cell_blocks[removed - 1].contains(r#"t="1" v="0""#));
+        let merged = ids[&(true, Some(1))].unwrap();
+        assert!(info.cells.contains(&merged));
+        assert!(info.cell_blocks[merged - 1].contains(r#"t="1" v="0""#));
+        assert!(info.cells.contains(&ids[&(true, None)].unwrap()));
+        let (empty, _) = dynamic_metadata_changes(r#"<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><metadataTypes count="0"/><cellMetadata count="0"/><extLst/></metadata>"#,
+            &[(true, None)].into_iter().collect()).unwrap();
+        assert_eq!(crate::parser::dynamic_metadata(&empty).unwrap().cells.into_iter().collect::<Vec<_>>(), vec![1]);
+        assert!(empty.find("futureMetadata").unwrap() < empty.find("cellMetadata").unwrap());
+    }
+
+    #[test]
+    fn dynamic_array_mode_and_exact_owners_survive_save_and_recalculation() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut base = XlsxEditor::new(original).unwrap();
+        for (row, value) in [(1, 10.), (2, 20.), (3, 30.)] { base.set_cell_value(0, row, 0, CellEditValue::Number(value)); }
+        for row in 3..=8 { base.set_cell_value(0, row, 3, CellEditValue::Empty); }
+        let data = base.save().unwrap();
+        let mut edited = parse_xlsx(&data).unwrap();
+        let anchor = edited.sheets[0].rows.iter_mut().find(|r| r.index == 2).unwrap().cells.iter_mut().find(|c| c.col == 3).unwrap();
+        anchor.formula = Some("A1:A3".into());anchor.formula_utf16 = None;anchor.array_block = None;anchor.spill = crate::ir::Spill::Dynamic;
+        crate::formula::evaluate_workbook_formulas(&mut edited);
+        assert_eq!(edited.sheets[0].cached_spills, Some(vec![((3, 1), (1, 3))]));
+        let mut editor = XlsxEditor::new(&data).unwrap();editor.apply_workbook(&edited).unwrap();
+        let saved = editor.save().unwrap();
+        let mut reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(reopened.sheets[0].cached_spills, Some(vec![((3, 1), (1, 3))]));
+        for row in reopened.sheets[0].rows.iter().filter(|r| (2..=4).contains(&r.index)) {
+            let cell = row.cells.iter().find(|c| c.col == 3).unwrap();
+            assert!(cell.array_block.is_none());
+            assert_eq!(cell.spill, if row.index == 2 { crate::ir::Spill::Dynamic } else { crate::ir::Spill::Member });
+            if row.index != 2 { assert!(cell.formula.is_none()); }
+        }
+        crate::formula::evaluate_workbook_formulas(&mut reopened);
+        assert!(matches!(reopened.sheets[0].rows.iter().find(|r| r.index == 2).unwrap().cells.iter().find(|c| c.col == 3).unwrap().value, crate::ir::CellValue::Number(10.)));
+        let mut archive = OoxmlArchive::new(&saved).unwrap();
+        assert!(archive.read_part("xl/metadata.xml").unwrap().contains("XLDAPR"));
+        if std::env::var_os("OXI_EXPORT_DYNAMIC_XLSX").is_some() {
+            let hex: String = saved.iter().map(|byte| format!("{byte:02x}")).collect();
+            println!("OXI_DYNAMIC_XLSX_HEX:{hex}");
+        }
+    }
+
+    #[test]
     fn legacy_saved_formulas_omit_only_reproducible_intersections_and_keep_utf16() {
         let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         for (formula, modern, expected) in [
             ("@MYOWN(B1)", false, "MYOWN(B1)"),
             ("@B1:B3", false, "B1:B3"),
-            ("SUM(@B1:B3)", false, "SUM(@B1:B3)"),
-            ("SUM(@MYOWN(B1))", false, "SUM(@MYOWN(B1))"),
-            ("@MYOWN(B1)", true, "@MYOWN(B1)"),
+            ("SUM(@B1:B3)", false, "SUM(_xlfn.SINGLE(B1:B3))"),
+            ("SUM(@MYOWN(B1))", false, "SUM(_xlfn.SINGLE(MYOWN(B1)))"),
+            ("@MYOWN(B1)", true, "MYOWN(B1)"),
             ("@MYOWN(\"a@b!\")", false, "MYOWN(\"a@b!\")"),
+            ("SUM(@B1:B3)&\"a@!\"", false, "SUM(_xlfn.SINGLE(B1:B3))&\"a@!\""),
+            ("@Rate", false, "_xlfn.SINGLE(Rate)"),
+            ("@Rate", true, "_xlfn.SINGLE(Rate)"),
         ] {
             for unpaired in [false, true] {
                 let mut edited = parse_xlsx(data).unwrap();
+                edited.defined_names.push(("Rate".into(), "10".into()));
                 let cell = &mut edited.sheets[0].rows[1].cells[1];
                 let mut units: Vec<u16> = formula.encode_utf16().collect();
                 let mut expected: Vec<u16> = expected.encode_utf16().collect();

@@ -5166,6 +5166,143 @@ fn resolve_cell_value(
     }
 }
 
+#[derive(Default)]
+pub(crate) struct DynamicMetadata {
+    pub type_index: Option<usize>,
+    pub type_count: usize,
+    pub future_count: usize,
+    pub cell_count: usize,
+    pub cells: std::collections::BTreeSet<usize>,
+    pub cell_blocks: Vec<String>,
+}
+
+/// Resolve cell metadata records through their type and future-record indices.
+/// Other metadata types can precede XLDAPR and share a cell's metadata block.
+pub(crate) fn dynamic_metadata(xml: &str) -> Result<DynamicMetadata, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut path = Vec::<String>::new();
+    let mut types = Vec::new();
+    let mut future = Vec::new();
+    let mut records = Vec::<Vec<(usize, usize)>>::new();
+    let mut in_future = false;
+    let mut future_record = None;
+    let mut cell_record = None::<Vec<(usize, usize)>>;
+    let mut cell_start = 0;
+    let mut cell_blocks = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        match &event {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                let empty = matches!(&event, Event::Empty(_));
+                match (path.last().map(String::as_str), name.as_str()) {
+                    (Some("metadataTypes"), "metadataType") => types.push(get_attr(e, "name").unwrap_or_default()),
+                    (Some("metadata"), "futureMetadata") => in_future = get_attr(e, "name").as_deref() == Some("XLDAPR"),
+                    (Some("futureMetadata"), "bk") if in_future => {
+                        if empty { future.push(false); } else { future_record = Some(false); }
+                    }
+                    (Some("cellMetadata"), "bk") => {
+                        if empty {
+                            records.push(Vec::new());
+                            cell_blocks.push(xml[start..reader.buffer_position() as usize].to_string());
+                        } else {
+                            cell_record = Some(Vec::new());
+                            cell_start = start;
+                        }
+                    }
+                    (Some("bk"), "rc") if cell_record.is_some() => {
+                        if let (Some(t), Some(v)) = (get_attr(e, "t").and_then(|s| s.parse().ok()), get_attr(e, "v").and_then(|s| s.parse().ok())) {
+                            cell_record.as_mut().unwrap().push((t, v));
+                        }
+                    }
+                    (_, "dynamicArrayProperties") if future_record.is_some() => {
+                        future_record = Some(is_true(get_attr(e, "fDynamic").as_deref()));
+                    }
+                    _ => {}
+                }
+                if !empty { path.push(name); }
+                else if name == "futureMetadata" { in_future = false; }
+            }
+            Event::End(e) => {
+                let name = local_name(e.name().as_ref());
+                if name == "bk" {
+                    if path.iter().rev().nth(1).map(String::as_str) == Some("cellMetadata") {
+                        if let Some(record) = cell_record.take() {
+                            records.push(record);
+                            cell_blocks.push(xml[cell_start..reader.buffer_position() as usize].to_string());
+                        }
+                    } else if path.iter().rev().nth(1).map(String::as_str) == Some("futureMetadata") {
+                        if let Some(dynamic) = future_record.take() { future.push(dynamic); }
+                    }
+                }
+                if name == "futureMetadata" { in_future = false; }
+                path.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let type_index = types.iter().position(|s| s == "XLDAPR").map(|i| i + 1);
+    let cells = records.iter().enumerate().filter_map(|(i, record)| {
+        record.iter().any(|(t, v)| Some(*t) == type_index && future.get(*v) == Some(&true)).then_some(i + 1)
+    }).collect();
+    Ok(DynamicMetadata { type_index, type_count: types.len(), future_count: future.len(), cell_count: records.len(), cells, cell_blocks })
+}
+
+fn restore_dynamic_arrays(sheet: &mut Sheet, xml: &str, metadata: &DynamicMetadata) -> Result<(), XlsxError> {
+    if metadata.cells.is_empty() { return Ok(()); }
+    let mut reader = Reader::from_str(xml);
+    let mut anchor = None;
+    let mut blocks = Vec::new();
+    loop {
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(e) | Event::Empty(e) => match local_name(e.name().as_ref()).as_str() {
+                "c" => {
+                    anchor = get_attr(&e, "cm").and_then(|s| s.parse().ok()).filter(|id| metadata.cells.contains(id))
+                        .and_then(|_| get_attr(&e, "r")).and_then(|s| oxicells_calc::reference::parse_a1(&s));
+                }
+                "f" if anchor.is_some() && get_attr(&e, "t").as_deref() == Some("array") => {
+                    if let Some(reference) = get_attr(&e, "ref") {
+                        let block = parse_range_ref(&reference).or_else(|| oxicells_calc::reference::parse_a1(&reference)
+                            .map(|r| (r.col, r.row + 1, r.col, r.row + 1)));
+                        if let Some((left, top, right, bottom)) = block {
+                            let at = anchor.as_ref().unwrap();
+                            if left <= right && top >= 1 && top <= bottom && right <= oxicells_calc::reference::MAX_COL
+                                && bottom <= oxicells_calc::reference::MAX_ROW + 1 && at.col == left && at.row + 1 == top {
+                                blocks.push(((at.col, at.row), (left, top, right, bottom)));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Event::End(e) if local_name(e.name().as_ref()) == "c" => anchor = None,
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if blocks.is_empty() { return Ok(()); }
+    let mut cached = Vec::new();
+    for (anchor, (left, top, right, bottom)) in blocks {
+        cached.push((anchor, (right - left + 1, bottom - top + 1)));
+        for row in sheet.rows.iter_mut().filter(|row| (top..=bottom).contains(&row.index)) {
+            for cell in row.cells.iter_mut().filter(|cell| (left..=right).contains(&cell.col)) {
+                cell.array_block = None;
+                if (cell.col, row.index - 1) == anchor {
+                    cell.spill = crate::ir::Spill::Dynamic;
+                } else {
+                    cell.spill = crate::ir::Spill::Member;
+                    cell.formula = None;
+                    cell.formula_utf16 = None;
+                }
+            }
+        }
+    }
+    sheet.cached_spills = Some(cached);
+    Ok(())
+}
+
 /// Parse an .xlsx file from raw bytes into a Workbook IR.
 ///
 /// The values Excel cached in the file are **kept**. For display they are the
@@ -5219,6 +5356,12 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     // 4. Parse workbook relationships to map rIds to sheet file paths
     let rels_xml = archive.read_part("xl/_rels/workbook.xml.rels")?;
     let rels = parse_relationships(&rels_xml)?;
+    let dynamic = match rels.values().find(|rel| rel.rel_type.ends_with("/sheetMetadata") && rel.target_mode.as_deref() != Some("External")) {
+        Some(relation) => match archive.try_read_part(&part_beside("xl/workbook.xml", &relation.target))? {
+            Some(xml) => dynamic_metadata(&xml)?, None => DynamicMetadata::default(),
+        },
+        None => DynamicMetadata::default(),
+    };
     let persons = match rels.values().find(|rel| rel.rel_type.ends_with("/person")) {
         Some(relation) => {
             let path = part_beside("xl/workbook.xml", &relation.target);
@@ -5282,6 +5425,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
             Some(sheet_xml) => {
                 let mut sheet =
                     parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet, &theme)?;
+                restore_dynamic_arrays(&mut sheet, &sheet_xml, &dynamic)?;
                 sheet.kind=sheet_kinds.get(&info.r_id).copied().unwrap_or_default();
                 // What the sheet's own parts turn out to hold, which is only
                 // known once they have been read 遯ｶ繝ｻand which decides what the

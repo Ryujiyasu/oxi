@@ -597,11 +597,68 @@ pub fn formula_from_ooxml(input: &str) -> Result<String, String> {
 /// Future-function and parameter spelling used by workbook formulas in OOXML.
 pub fn name_formula_to_ooxml(input: &str) -> Result<String, String> {
     let tokens = tokenize(input).map_err(|e| e.to_string())?;
-    let needs_namespace = tokens.iter().enumerate().any(|(i, t)| matches!(t,
+    let needs_namespace = tokens.iter().enumerate().any(|(i, t)| *t == Token::At || matches!(t,
         Token::Name { sheet: None, name } if name.to_uppercase().starts_with("_XLFN.")
             || (matches!(tokens.get(i + 1), Some(Token::LParen)) && matches!(normalized_builtin_call(name).as_deref(), Some("LET" | "LAMBDA")))));
     if !needs_namespace { return Ok(input.to_string()); }
-    qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, true)
+    let namespaced = qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, true)?;
+    rewrite_intersection_syntax(&namespaced, true)
+}
+
+/// Keep the written formula while translating the OOXML spelling of `@`.
+/// Edits use token spans so text, whitespace and reference spelling survive.
+fn rewrite_intersection_syntax(input: &str, ooxml: bool) -> Result<String, String> {
+    if (ooxml && !input.contains('@')) || (!ooxml && !input.to_ascii_uppercase().contains("_XLFN.SINGLE")) {
+        return Ok(input.to_string());
+    }
+    let spanned = tokenize_spanned(input).map_err(|e| e.to_string())?;
+    let tokens: Vec<_> = spanned.iter().map(|(token, _)| token.clone()).collect();
+    let mut edits = Vec::<(usize, usize, String)>::new();
+    for (i, (token, start)) in spanned.iter().enumerate() {
+        if ooxml {
+            if *token != Token::At { continue; }
+            let used = crate::parser::unary_prefix_len(&tokens[i + 1..]).map_err(|e| e.to_string())?;
+            let end = spanned.get(i + 1 + used).map_or(input.len(), |(_, at)| *at);
+            let end = start + 1 + input[start + 1..end].trim_end().len();
+            edits.push((*start, start + 1, "_xlfn.SINGLE(".into()));
+            edits.push((end, end, ")".into()));
+            continue;
+        }
+        if !matches!(token, Token::Name { sheet: None, name } if name.eq_ignore_ascii_case("_xlfn.SINGLE"))
+            || tokens.get(i + 1) != Some(&Token::LParen) { continue; }
+        let mut stack = vec![Token::LParen];
+        let mut close = None;
+        let mut multiple = false;
+        for (j, item) in tokens.iter().enumerate().skip(i + 2) {
+            match item {
+                Token::LParen | Token::LBrace => stack.push(item.clone()),
+                Token::RParen | Token::RBrace => {
+                    let expected = if *item == Token::RParen { Token::LParen } else { Token::LBrace };
+                    if stack.pop() != Some(expected) { break; }
+                    if stack.is_empty() { close = Some(j); break; }
+                }
+                Token::Comma if stack.len() == 1 => multiple = true,
+                _ => {}
+            }
+        }
+        let Some(close) = close else { continue; };
+        if multiple || close == i + 2 { continue; }
+        let args = &tokens[i + 2..close];
+        let grouped = crate::parser::unary_prefix_len(args).map_or(true, |used| used != args.len());
+        edits.push((*start, spanned[i + 1].1 + 1, if grouped { "@(" } else { "@" }.into()));
+        edits.push((spanned[close].1, spanned[close].1 + 1, if grouped { ")" } else { "" }.into()));
+    }
+    edits.sort_by_key(|(start, end, _)| (*start, *end));
+    let mut output = String::with_capacity(input.len());
+    let mut from = 0;
+    for (start, end, replacement) in edits {
+        if start < from { return Err("overlapping intersection syntax".into()); }
+        output.push_str(&input[from..start]);
+        output.push_str(&replacement);
+        from = end;
+    }
+    output.push_str(&input[from..]);
+    Ok(output)
 }
 
 /// Compatibility identifiers exposed by Excel's Names collection. They are
@@ -630,7 +687,8 @@ fn qualify_name_formula_mode(
 ) -> Result<String, String> {
     use std::collections::HashMap;
     use crate::reference::{letters_to_col, parse_a1};
-    let input = canonical_formula(input, sheet_case, &|_| None);
+    let input = if ooxml { input.to_string() } else { rewrite_intersection_syntax(input, false)? };
+    let input = canonical_formula(&input, sheet_case, &|_| None);
     let tokens = tokenize_spanned(&input).map_err(|e| e.to_string())?;
     let mut counts = vec![0; tokens.len()];
     let mut stack = Vec::<(usize, usize)>::new();
@@ -726,8 +784,8 @@ fn qualify_name_formula_mode(
     Ok(output)
 }
 
-/// A formula as `.Formula` shows it: every `@` taken out. Measured, `=@A1:A3`
-/// written through `.Formula` reads back `=A1:A3`.
+/// Remove intersection operators while preserving `@` inside text literals.
+/// Use `legacy_formula` when deciding whether removal preserves a formula.
 pub fn without_intersections(input: &str) -> String {
     let Ok(tokens) = tokenize_spanned(input) else {
         return input.to_string();
@@ -745,6 +803,21 @@ pub fn without_intersections(input: &str) -> String {
     output
 }
 
+/// Excel removes all intersections from `.Formula` only when legacy
+/// evaluation would put every one back. Otherwise the whole formula retains
+/// its array semantics, including explicit intersections inside aggregates.
+pub fn legacy_formula(input: &str, multiple_name: &dyn Fn(&str) -> bool) -> String {
+    let plain = without_intersections(input);
+    if implied_intersections(&plain, multiple_name) == input { plain } else { input.to_string() }
+}
+
+/// Whether a modern formula needs array evaluation in its saved file, even
+/// when today's result is a scalar or its spill is blocked.
+pub fn requires_array_storage(input: &str, multiple_name: &dyn Fn(&str) -> bool) -> bool {
+    let shown = formula_from_ooxml(input).unwrap_or_else(|_| input.to_string());
+    implied_intersections(&shown, multiple_name) != shown
+}
+
 /// What a place in a formula wants: one value, a range (which an expression
 /// in it still works out one value at a time), or anything at all.
 #[derive(Clone, Copy, PartialEq)]
@@ -758,12 +831,12 @@ enum AtNode {
     /// A number, text, a single cell, or anything else that is one value.
     Plain { number: Option<f64>, cell: bool },
     /// A range, or a name standing for one.
-    Block { start: usize },
+    Block { start: usize, shape: Option<(u32, u32)> },
     Symbol { start: usize, name: String, multiple: bool },
     /// Operators, whose operands are worked one value at a time.
     Operation(Vec<AtNode>),
     /// A `@` already written.
-    Written,
+    Written(Box<AtNode>),
     Group(Vec<AtNode>),
     Call { start: usize, name: String, args: Vec<Option<AtNode>> },
     Invoke { start: usize, callee: Box<AtNode>, args: Vec<Option<AtNode>> },
@@ -818,10 +891,10 @@ impl AtReader<'_> {
             }
             Token::At => {
                 self.pos += 1;
-                self.unary()?;
-                Some(AtNode::Written)
+                Some(AtNode::Written(Box::new(self.unary()?)))
             }
             _ => {
+                let first = self.pos;
                 let start = self.start();
                 let mut node = self.primary()?;
                 while self.peek() == Some(&Token::LParen) {
@@ -834,11 +907,12 @@ impl AtReader<'_> {
                         self.pos += 1;
                         self.primary()?;
                     }
-                    node = AtNode::Block { start };
+                    let tokens: Vec<_> = self.tokens[first..self.pos].iter().map(|(t, _)| t.clone()).collect();
+                    node = AtNode::Block { start, shape: crate::parser::reference_extent(&tokens) };
                 }
                 if self.peek() == Some(&Token::Hash) {
                     self.pos += 1;
-                    node = AtNode::Block { start };
+                    node = AtNode::Block { start, shape: None };
                 }
                 while self.peek() == Some(&Token::Intersect) {
                     self.pos += 1;
@@ -847,7 +921,8 @@ impl AtReader<'_> {
                         self.pos += 1;
                         self.primary()?;
                     }
-                    node = AtNode::Block { start };
+                    let tokens: Vec<_> = self.tokens[first..self.pos].iter().map(|(t, _)| t.clone()).collect();
+                    node = AtNode::Block { start, shape: crate::parser::reference_extent(&tokens) };
                 }
                 if self.peek() == Some(&Token::Percent) {
                     while self.peek() == Some(&Token::Percent) {
@@ -869,6 +944,7 @@ impl AtReader<'_> {
             Token::Text(_) | Token::ErrorLit(_) | Token::Table { .. } => Some(AtNode::Plain { number: None, cell: false }),
             Token::Name { name, sheet } => {
                 if self.peek() == Some(&Token::LParen) {
+                    let stored_single = sheet.is_none() && name.eq_ignore_ascii_case("_xlfn.SINGLE");
                     let name = match sheet.as_deref() {
                         Some(owner) => format!("'{}'!{name}", owner.replace('\'', "''")),
                         None => name,
@@ -876,6 +952,9 @@ impl AtReader<'_> {
                     let name = normalized_builtin_call(&name).unwrap_or_else(|| name.to_ascii_uppercase());
                     self.pos += 1;
                     let args = self.arguments()?;
+                    // SINGLE already records an array-evaluated operand. Its
+                    // contents must not acquire legacy intersections on import.
+                    if stored_single { return Some(AtNode::Plain { number: None, cell: false }); }
                     return Some(AtNode::Call { start, name, args });
                 }
                 if parse_a1(&name).is_some() {
@@ -901,7 +980,7 @@ impl AtReader<'_> {
                     self.pos += 1;
                 }
                 self.pos += 1;
-                Some(AtNode::Plain { number: None, cell: false })
+                Some(AtNode::Block { start, shape: None })
             }
             _ => None,
         }
@@ -923,6 +1002,7 @@ impl AtReader<'_> {
 
 fn bind_intersection_shapes(node: &mut AtNode, outer: &std::collections::BTreeMap<String, bool>) {
     match node {
+        AtNode::Written(operand) => bind_intersection_shapes(operand, outer),
         AtNode::Symbol { name, multiple, .. } => {
             if let Some(bound) = outer.get(&crate::case_fold::name_key(name)) { *multiple = *bound; }
         }
@@ -1029,11 +1109,20 @@ fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
     match name {
         "LET" => args.last().is_some_and(is_block),
         "INDIRECT" | "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "SEQUENCE" | "TRANSPOSE" | "MMULT" => true,
-        "OFFSET" => args.iter().skip(3).take(2).any(|size| match size {
-            Some(AtNode::Plain { number: Some(number), .. }) => *number != 1.0,
-            None => false,
-            Some(_) => true,
-        }),
+        "OFFSET" => {
+            let base = match args.first().and_then(Option::as_ref) {
+                Some(AtNode::Block { shape, .. }) => *shape,
+                Some(AtNode::Plain { cell: true, .. }) => Some((1, 1)),
+                _ => None,
+            };
+            let dimension = |index: usize, inherited: Option<u32>| match args.get(index) {
+                Some(Some(AtNode::Plain { number: Some(number), .. })) => Some(*number),
+                None | Some(None) => inherited.map(|n: u32| n as f64),
+                _ => None,
+            };
+            dimension(3, base.map(|(_, h)| h)) != Some(1.0)
+                || dimension(4, base.map(|(w, _)| w)) != Some(1.0)
+        }
         "INDEX" => args.iter().skip(1).take(2).any(loose_index),
         "IF" => args.iter().skip(1).any(is_block),
         "CHOOSE" => args.iter().skip(1).any(is_block),
@@ -1044,8 +1133,9 @@ fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
 
 fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>) {
     match node {
-        AtNode::Plain { .. } | AtNode::Written | AtNode::Symbol { multiple: false, .. } => {}
-        AtNode::Block { start } | AtNode::Symbol { start, multiple: true, .. } => {
+        AtNode::Plain { .. } | AtNode::Symbol { multiple: false, .. } => {}
+        AtNode::Written(operand) => mark_intersections(operand, AtContext::Range, marks),
+        AtNode::Block { start, .. } | AtNode::Symbol { start, multiple: true, .. } => {
             if context == AtContext::Value {
                 marks.push(*start);
             }
@@ -3567,6 +3657,86 @@ mod shift_tests {
             assert_eq!(super::normalise_formula_ranges(written), stored, "{written}");
         }
     }
+    #[test]
+    fn essential_intersections_round_trip_through_excel_storage_syntax() {
+        for (shown, xml) in [
+            ("=SUM(@A1:A3)", "=SUM(_xlfn.SINGLE(A1:A3))"),
+            ("=SUM(@A1:A3)+@A1:A3", "=SUM(_xlfn.SINGLE(A1:A3))+_xlfn.SINGLE(A1:A3)"),
+            ("=@SUM(A1:A3)", "=_xlfn.SINGLE(SUM(A1:A3))"),
+            ("=SUM(@A1:A3)+A2", "=SUM(_xlfn.SINGLE(A1:A3))+A2"),
+            ("=IF(TRUE,@A1:A3,0)", "=IF(TRUE,_xlfn.SINGLE(A1:A3),0)"),
+            ("=LET(x,A1:A3,SUM(@x))", "=_xlfn.LET(_xlpm.x,A1:A3,SUM(_xlfn.SINGLE(_xlpm.x)))"),
+            ("=LET(x,A1:A3,@x+SUM(@x))", "=_xlfn.LET(_xlpm.x,A1:A3,_xlfn.SINGLE(_xlpm.x)+SUM(_xlfn.SINGLE(_xlpm.x)))"),
+            ("=SUM(@A1:A3,@A1:A3)", "=SUM(_xlfn.SINGLE(A1:A3),_xlfn.SINGLE(A1:A3))"),
+            ("=SUM(\"x@y\",@A1:A3)", "=SUM(\"x@y\",_xlfn.SINGLE(A1:A3))"),
+            ("=@@A1", "=_xlfn.SINGLE(_xlfn.SINGLE(A1))"),
+            ("=@(A1:A3%)", "=_xlfn.SINGLE((A1:A3%))"),
+            ("=@A1:A3%", "=_xlfn.SINGLE(A1:A3)%"),
+            ("=@(A1+A2)", "=_xlfn.SINGLE((A1+A2))"),
+        ] {
+            assert_eq!(super::name_formula_to_ooxml(shown).unwrap(), xml, "{shown}");
+            assert_eq!(super::formula_from_ooxml(xml).unwrap(), shown, "{xml}");
+            let stored_expr = crate::parser::parse(xml).unwrap();
+            let shown_expr = crate::parser::parse(shown).unwrap();
+            // Lexical parameter identifiers keep their storage namespace in
+            // the AST. The host round-trip tests check their actual values.
+            if !xml.contains("_xlpm.") { assert_eq!(stored_expr, shown_expr, "{shown}"); }
+        }
+        for (xml, shown) in [
+            ("=_xlfn.SINGLE(A1+A2)", "=@(A1+A2)"),
+            ("=_xlfn.SINGLE(A1:A3%)", "=@(A1:A3%)"),
+            ("=_xlfn.SINGLE()", "=_xlfn.SINGLE()"),
+            ("=_xlfn.SINGLE(A1,A2)", "=_xlfn.SINGLE(A1,A2)"),
+            ("=SINGLE(A1)", "=SINGLE(A1)"),
+            ("=\"_xlfn.SINGLE(@A1)\"", "=\"_xlfn.SINGLE(@A1)\""),
+        ] { assert_eq!(super::formula_from_ooxml(xml).unwrap(), shown); }
+        let units = vec![b'=' as u16, b'S' as u16, b'U' as u16, b'M' as u16, b'(' as u16,
+            b'@' as u16, b'A' as u16, b'1' as u16, b',' as u16, b'"' as u16, 0xd83d,
+            b'@' as u16, b'"' as u16, b')' as u16];
+        let xml = crate::parser::transform_utf16_formula(&units, super::name_formula_to_ooxml).unwrap();
+        assert_eq!(crate::parser::transform_utf16_formula(&xml, super::formula_from_ooxml).unwrap(), units);
+    }
+
+    #[test]
+    fn legacy_getters_retain_every_intersection_when_array_semantics_require_it() {
+        let stored = "=_xlfn.SINGLE(_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1)(2))";
+        assert_eq!(super::implied_intersections(stored, &|_| false), stored);
+        for (given, modern, legacy) in [
+            ("=A1:A3", "=@A1:A3", "=A1:A3"),
+            ("=SUM(@A1:A3)", "=SUM(@A1:A3)", "=SUM(@A1:A3)"),
+            ("=SUM(@A1:A3)+A1:A3", "=SUM(@A1:A3)+@A1:A3", "=SUM(@A1:A3)+@A1:A3"),
+            ("=@A2", "=@A2", "=@A2"),
+            ("=@A1:A3+A1:A3", "=@A1:A3+@A1:A3", "=A1:A3+A1:A3"),
+            ("=@LAMBDA(x,x+1)(2)", "=@LAMBDA(x,@x+1)(2)", "=LAMBDA(x,x+1)(2)"),
+        ] {
+            assert_eq!(super::implied_intersections(given, &|_| false), modern, "{given}");
+            assert_eq!(super::legacy_formula(modern, &|_| false), legacy, "{modern}");
+        }
+        for modern in ["=@A1:A3+A1:A3", "=@LAMBDA(x,x+1)(2)", "=SUM(\"x@y\",@A1:A3)"] {
+            assert_eq!(super::legacy_formula(modern, &|_| false), modern);
+        }
+        for (given, modern) in [
+            ("={1,2}", "=@{1,2}"), ("={1}", "=@{1}"),
+            ("=IF(TRUE,{1},0)", "=@IF(TRUE,{1},0)"),
+            ("=LET(x,{1},x)", "=@LET(x,{1},x)"),
+            ("=LET(x,{1},7)", "=LET(x,{1},7)"),
+            ("=LEN({\"a\",\"bb\"})", "=LEN(@{\"a\",\"bb\"})"),
+            ("=OFFSET(A1:A3,0,0)", "=@OFFSET(A1:A3,0,0)"),
+        ] { assert_eq!(super::implied_intersections(given, &|_| false), modern, "{given}"); }
+    }
+
+    #[test]
+    fn saved_array_mode_includes_latent_arrays_but_not_reproducible_intersections() {
+        for input in ["=A1:A1", "=SEQUENCE(1)", "=IF(A1=0,0,SEQUENCE(3))", "=IF(FALSE,A1:A3,5)",
+            "={1}", "=LET(x,{1},x)", "=@LAMBDA(x,x+1)(2)", "=OFFSET(A1:A3,0,0)"] {
+            assert!(super::requires_array_storage(input, &|_| false), "{input}");
+        }
+        for input in ["=A1", "=SUM(A1:A3)", "=1/0", "=@A1:A3", "=@IF(TRUE,A1:A3,0)", "=@SUM(A1:A3)",
+            "=SUM(@A1:A3)", "=LET(x,{1},7)", "=OFFSET(A1:A3,0,0,1)", "=OFFSET(A1:C1,0,0,,1)"] {
+            assert!(!super::requires_array_storage(input, &|_| false), "{input}");
+        }
+    }
+
     #[test]
     fn name_formulas_follow_excel_qualification_lexical_bindings_and_callers() {
         let sheets=|name:&str| (name.eq_ignore_ascii_case("Alpha")).then(|| "Alpha".to_string());

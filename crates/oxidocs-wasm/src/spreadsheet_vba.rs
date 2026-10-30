@@ -17238,13 +17238,15 @@ impl<'a> WorkbookHost<'a> {
     /// A cell's formula as `.Formula` shows it: without the `@` Excel keeps
     /// where a legacy formula takes one cell of a range.
     fn cell_formula(&self, address: CellAddress) -> Value {
+        let multiple = |name: &str| Self::name_can_be_multiple(&self.workbook.defined_names,
+            &self.workbook.sheets[address.sheet].name, name);
         match self.cell_formula2(address) {
             Value::String(written) if written.starts_with('=') && written.contains('@') => {
-                Value::String(oxicells_calc::without_intersections(&written))
+                Value::String(oxicells_calc::lexer::legacy_formula(&written, &multiple))
             }
             Value::Utf16(units) if units.contains(&(b'@' as u16)) => {
                 let rewritten = oxicells_calc::parser::transform_utf16_formula(&units, |formula| {
-                    Ok(oxicells_calc::without_intersections(formula))
+                    Ok(oxicells_calc::lexer::legacy_formula(formula, &multiple))
                 }).unwrap_or(units);
                 Value::from_utf16(rewritten)
             }
@@ -43886,6 +43888,66 @@ mod tests {
             answer,
             Value::String("Sheet1!loc|42|42|=Sheet1!$A$2".to_string())
         );
+    }
+
+    #[test]
+    fn essential_intersections_keep_excel_getters_values_and_storage() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut failures = Vec::new();
+        for (property, formula, legacy, modern, value) in [
+            ("Formula", "=A1:A3", "=A1:A3", "=@A1:A3", 20),
+            ("Formula2", "=A1:A3", "=A1:A3", "=A1:A3", 10),
+            ("Formula", "=SUM(@A1:A3)", "=SUM(@A1:A3)", "=SUM(@A1:A3)", 20),
+            ("Formula2", "=SUM(@A1:A3)", "=SUM(@A1:A3)", "=SUM(@A1:A3)", 20),
+            ("Formula", "=SUM(@A1:A3)+A1:A3", "=SUM(@A1:A3)+@A1:A3", "=SUM(@A1:A3)+@A1:A3", 40),
+            ("Formula2", "=SUM(@A1:A3)+A1:A3", "=SUM(@A1:A3)+A1:A3", "=SUM(@A1:A3)+A1:A3", 30),
+            ("Formula", "=@SUM(A1:A3)", "=@SUM(A1:A3)", "=@SUM(A1:A3)", 60),
+            ("Formula2", "=@A1:A3+A1:A3", "=@A1:A3+A1:A3", "=@A1:A3+A1:A3", 30),
+            ("Formula", "=@A2", "=@A2", "=@A2", 20),
+            ("Formula2", "=@A2", "=@A2", "=@A2", 20),
+            ("Formula", "=LET(x,A1:A3,SUM(@x))", "=LET(x,A1:A3,SUM(@x))", "=LET(x,A1:A3,SUM(@x))", 20),
+            ("Formula2", "=LET(x,A1:A3,SUM(@x))", "=LET(x,A1:A3,SUM(@x))", "=LET(x,A1:A3,SUM(@x))", 20),
+            ("Formula", "=@LAMBDA(x,x+1)(2)", "=LAMBDA(x,x+1)(2)", "=@LAMBDA(x,@x+1)(2)", 3),
+            ("Formula2", "=@LAMBDA(x,x+1)(2)", "=@LAMBDA(x,x+1)(2)", "=@LAMBDA(x,x+1)(2)", 3),
+            ("Formula2", "=A1:A1", "=A1:A1", "=A1:A1", 10),
+            ("Formula2", "=SEQUENCE(1)", "=SEQUENCE(1)", "=SEQUENCE(1)", 1),
+            ("Formula2", "=IF(FALSE,A1:A3,5)", "=IF(FALSE,A1:A3,5)", "=IF(FALSE,A1:A3,5)", 5),
+            ("Formula2", "={1,2}", "={1,2}", "={1,2}", 1),
+            ("Formula2", "=LEN({\"a\",\"bb\"})", "=LEN({\"a\",\"bb\"})", "=LEN({\"a\",\"bb\"})", 1),
+            ("Formula2", "=LET(x,{1},x)", "=LET(x,{1},x)", "=LET(x,{1},x)", 1),
+            ("Formula2", "=LET(x,{1},7)", "=LET(x,{1},7)", "=LET(x,{1},7)", 7),
+            ("Formula2", "=OFFSET(A1:A3,0,0)", "=OFFSET(A1:A3,0,0)", "=OFFSET(A1:A3,0,0)", 10),
+            ("Formula2", "=@Rate", "=@Rate", "=@Rate", 10),
+            ("Formula2", "=@Span", "=Span", "=@Span", 20),
+        ] {
+            let mut book = oxicells_core::parse_xlsx(original).unwrap();
+            let setup = parse_module(&format!(r#"Public Sub Setup()
+                Range("A1").Value2=10:Range("A2").Value2=20:Range("A3").Value2=30
+                ThisWorkbook.Names.Add "Rate","=10"
+                ThisWorkbook.Names.Add "Span","=Sales!$A$1:$A$3"
+                Range("D2:J8").ClearContents
+                Range("D2").{property}="{}"
+            End Sub"#, formula.replace('"', "\"\""))).unwrap();
+            execute_with_host(&setup, "Setup", vec![], &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+            let read = parse_module(r#"Public Function Read() As String
+                Application.CalculateFullRebuild
+                Read=Range("D2").Formula & "|" & Range("D2").Formula2 & "|" & CStr(Range("D2").Value2) & "|" & CStr(Range("D2").HasArray) & "|" & CStr(Range("D2").HasSpill)
+            End Function"#).unwrap();
+            for reopened in [false, true] {
+                if reopened {
+                    let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+                    editor.apply_workbook(&book).unwrap();
+                    book = oxicells_core::parse_xlsx(&editor.save().unwrap()).unwrap();
+                }
+                let answer = execute_with_host(&read, "Read", vec![], &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+                let spilled = property == "Formula2" && ["=A1:A3", "=SUM(@A1:A3)+A1:A3", "=@A1:A3+A1:A3", "={1,2}", "=LEN({\"a\",\"bb\"})", "=OFFSET(A1:A3,0,0)"].contains(&formula);
+                let expected = Value::String(format!("{legacy}|{modern}|{value}|False|{}", if spilled { "True" } else { "False" }));
+                if answer != expected {
+                    failures.push(format!("{property} {formula} reopened={reopened}: got {answer:?}, expected {expected:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]

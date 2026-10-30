@@ -41,6 +41,25 @@ pub fn parse(input: &str) -> Result<Expr, ParseError> {
     Ok(expr)
 }
 
+/// Number of tokens consumed by an implicit-intersection operand. Rewrites
+/// use the parser's precedence, including percent binding outside `@`.
+pub(crate) fn unary_prefix_len(tokens: &[Token]) -> Result<usize, ParseError> {
+    let mut parser = Parser { tokens: tokens.to_vec(), pos: 0 };
+    parser.parse_unary()?;
+    Ok(parser.pos)
+}
+
+pub(crate) fn reference_extent(tokens: &[Token]) -> Option<(u32, u32)> {
+    let mut parser = Parser { tokens: tokens.to_vec(), pos: 0 };
+    let expr = parser.parse_unary().ok()?;
+    if parser.pos != tokens.len() { return None; }
+    match expr {
+        Expr::Ref(reference) => Some((reference.range.width(), reference.range.height())),
+        Expr::Array(rows) => Some((rows.first()?.len() as u32, rows.len() as u32)),
+        _ => None,
+    }
+}
+
 fn protected_utf16_source(input: &[u16]) -> Result<(String, HashMap<char, u16>), ParseError> {
     let decoded: Vec<_> = std::char::decode_utf16(input.iter().copied()).collect();
     let occupied: HashSet<char> = decoded.iter().filter_map(|item| item.as_ref().ok().copied()).collect();
@@ -547,7 +566,11 @@ impl Parser {
             if sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LET") && (args.len() < 3 || args.len() % 2 == 0) {
                 return Err(ParseError::UnexpectedToken("LET needs name, value pairs and a calculation".to_string()));
             }
-            let called = crate::lexer::normalized_builtin_call(&name).unwrap_or_else(|| name.to_uppercase());
+            let called = if sheet.is_none() && name.eq_ignore_ascii_case("_xlfn.SINGLE") {
+                "_AT".to_string()
+            } else {
+                crate::lexer::normalized_builtin_call(&name).unwrap_or_else(|| name.to_uppercase())
+            };
             let called = match sheet.as_deref() {
                 Some(owner) => format!("'{}'!{called}", owner.replace('\'', "''")),
                 None => called,
