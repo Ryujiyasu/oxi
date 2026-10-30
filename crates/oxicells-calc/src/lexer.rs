@@ -576,6 +576,45 @@ pub(crate) fn normalized_builtin_call(name: &str) -> Option<String> {
         .then(|| plain.to_string())
 }
 
+/// Function namespaces used in OOXML, independent of how a formula is shown.
+fn future_function_prefix(builtin: &str) -> Option<&'static str> {
+    match builtin {
+        "FILTER" | "SORT" => Some("_xlws."),
+        "ACOT" | "ACOTH" | "AGGREGATE" | "ARABIC" | "ARRAYTOTEXT"
+        | "BASE" | "BETA.DIST" | "BETA.INV" | "BINOM.DIST" | "BINOM.DIST.RANGE"
+        | "BINOM.INV" | "BITAND" | "BITLSHIFT" | "BITOR" | "BITRSHIFT"
+        | "BITXOR" | "BYCOL" | "BYROW" | "CEILING.MATH" | "CEILING.PRECISE"
+        | "CHISQ.DIST" | "CHISQ.DIST.RT" | "CHISQ.INV" | "CHISQ.INV.RT" | "CHISQ.TEST"
+        | "CHOOSECOLS" | "CHOOSEROWS" | "COMBINA" | "CONCAT" | "CONFIDENCE.NORM"
+        | "CONFIDENCE.T" | "COT" | "COTH" | "COVARIANCE.P" | "COVARIANCE.S"
+        | "CSC" | "CSCH" | "DAYS" | "DECIMAL" | "DROP"
+        | "ENCODEURL" | "ERF.PRECISE" | "ERFC.PRECISE" | "EXPAND" | "EXPON.DIST"
+        | "F.DIST" | "F.DIST.RT" | "F.INV" | "F.INV.RT" | "F.TEST"
+        | "FLOOR.MATH" | "FLOOR.PRECISE" | "FORECAST.LINEAR" | "GAMMA" | "GAMMA.DIST"
+        | "GAMMA.INV" | "GAMMALN.PRECISE" | "GAUSS" | "GROUPBY" | "HSTACK"
+        | "HYPGEOM.DIST" | "IFNA" | "IFS" | "IMCOSH" | "IMCOT"
+        | "IMCSC" | "IMCSCH" | "IMSEC" | "IMSECH" | "IMSINH"
+        | "IMTAN" | "ISOMITTED" | "ISOWEEKNUM" | "LAMBDA" | "LET"
+        | "LOGNORM.DIST" | "LOGNORM.INV" | "MAKEARRAY" | "MAP" | "MODE.MULT"
+        | "MODE.SNGL" | "MUNIT" | "NEGBINOM.DIST" | "NORM.DIST" | "NORM.INV"
+        | "NORM.S.DIST" | "NORM.S.INV" | "NUMBERVALUE" | "PDURATION" | "PERCENTILE.EXC"
+        | "PERCENTILE.INC" | "PERCENTOF" | "PERCENTRANK.EXC" | "PERCENTRANK.INC" | "PERMUTATIONA"
+        | "PHI" | "PIVOTBY" | "POISSON.DIST" | "QUARTILE.EXC" | "QUARTILE.INC"
+        | "RANDARRAY" | "REDUCE" | "REGEXEXTRACT" | "REGEXREPLACE" | "REGEXTEST"
+        | "RRI" | "SCAN" | "SEC" | "SECH" | "SEQUENCE"
+        | "SHEET" | "SHEETS" | "SKEW.P" | "SORTBY" | "STDEV.P"
+        | "STDEV.S" | "SWITCH" | "T.DIST" | "T.DIST.2T" | "T.DIST.RT"
+        | "T.INV" | "T.INV.2T" | "T.TEST" | "TAKE" | "TEXTAFTER"
+        | "TEXTBEFORE" | "TEXTJOIN" | "TEXTSPLIT" | "TOCOL" | "TOROW"
+        | "TRIMRANGE" | "UNICHAR" | "UNICODE" | "UNIQUE" | "VALUETOTEXT"
+        | "VAR.P" | "VAR.S" | "VSTACK" | "WEIBULL.DIST" | "WRAPCOLS"
+        | "WRAPROWS" | "XLOOKUP" | "XMATCH" | "XOR" | "Z.TEST"
+        | "FORMULATEXT" | "ISFORMULA" | "MAXIFS" | "MINIFS" | "RANK.AVG"
+        | "RANK.EQ" => Some(""),
+        _ => None,
+    }
+}
+
 /// Qualify references and local names in a name definition. LET/LAMBDA
 /// bindings have lexical scope and do not become worksheet names.
 pub fn qualify_name_formula(
@@ -599,7 +638,7 @@ pub fn name_formula_to_ooxml(input: &str) -> Result<String, String> {
     let tokens = tokenize(input).map_err(|e| e.to_string())?;
     let needs_namespace = tokens.iter().enumerate().any(|(i, t)| *t == Token::At || matches!(t,
         Token::Name { sheet: None, name } if name.to_uppercase().starts_with("_XLFN.")
-            || (matches!(tokens.get(i + 1), Some(Token::LParen)) && matches!(normalized_builtin_call(name).as_deref(), Some("LET" | "LAMBDA")))));
+            || (matches!(tokens.get(i + 1), Some(Token::LParen)) && normalized_builtin_call(name).as_deref().and_then(future_function_prefix).is_some())));
     if !needs_namespace { return Ok(input.to_string()); }
     let namespaced = qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, true)?;
     rewrite_intersection_syntax(&namespaced, true)
@@ -742,9 +781,10 @@ fn qualify_name_formula_mode(
                 } else if calls && owner.is_none() && normalized_builtin_call(name).is_some() {
                     let builtin = normalized_builtin_call(name).unwrap();
                     let upper = name.to_uppercase();
-                    let future = matches!(builtin.as_str(), "LET" | "LAMBDA") || upper.starts_with("_XLFN.");
+                    let prefix = future_function_prefix(&builtin);
+                    let future = prefix.is_some() || upper.starts_with("_XLFN.");
                     let name = if ooxml && future {
-                        format!("_xlfn.{}{builtin}", if upper.starts_with("_XLFN._XLWS.") { "_xlws." } else { "" })
+                        format!("_xlfn.{}{builtin}", prefix.unwrap_or(if upper.starts_with("_XLFN._XLWS.") { "_xlws." } else { "" }))
                     } else { builtin };
                     replacement = Some(Token::Name { sheet: None, name });
                 } else if let Some((scope, name)) = name_case(owner.as_deref(), name) {
@@ -3657,6 +3697,23 @@ mod shift_tests {
             assert_eq!(super::normalise_formula_ranges(written), stored, "{written}");
         }
     }
+    #[test]
+    fn future_functions_keep_storage_namespaces_and_lexical_bindings() {
+        for (shown, xml) in [
+            ("=SEQUENCE(0)", "=_xlfn.SEQUENCE(0)"),
+            ("=FILTER(A1:A3,FALSE)", "=_xlfn._xlws.FILTER(A1:A3,FALSE)"),
+            ("=SORT(A1:A3)", "=_xlfn._xlws.SORT(A1:A3)"),
+            ("=XLOOKUP(1,A1:A3,B1:B3)", "=_xlfn.XLOOKUP(1,A1:A3,B1:B3)"),
+            ("=RANK.AVG(1,A1:A3)", "=_xlfn.RANK.AVG(1,A1:A3)"),
+            ("=SUMIF(A1:A3,1,B1:B3)", "=SUMIF(A1:A3,1,B1:B3)"),
+            ("=LET(SEQUENCE,LAMBDA(x,x),SEQUENCE(2))", "=_xlfn.LET(_xlpm.SEQUENCE,_xlfn.LAMBDA(_xlpm.x,_xlpm.x),_xlpm.SEQUENCE(2))"),
+            ("=CUSTOM(\"SEQUENCE(1)\")", "=CUSTOM(\"SEQUENCE(1)\")"),
+        ] {
+            assert_eq!(super::name_formula_to_ooxml(shown).unwrap(), xml);
+            assert_eq!(super::formula_from_ooxml(xml).unwrap(), shown);
+        }
+    }
+
     #[test]
     fn essential_intersections_round_trip_through_excel_storage_syntax() {
         for (shown, xml) in [

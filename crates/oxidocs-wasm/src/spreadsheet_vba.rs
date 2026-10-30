@@ -45440,6 +45440,21 @@ mod tests {
             to_cell_value(Value::Error(2007)).unwrap(),
             CellValue::Error(value) if value == "#DIV/0!"
         ));
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        for (code, error) in [(2045, "#SPILL!"), (2046, "#CONNECT!"), (2047, "#BLOCKED!"),
+            (2048, "#UNKNOWN!"), (2049, "#FIELD!"), (2050, "#CALC!")] {
+            assert_eq!(from_cell_value(&CellValue::Error(error.into())), Value::Error(code));
+            let source = parse_module(&format!("Public Sub Store()\nRange(\"Z1\").Value2=CVErr({code})\nEnd Sub\nPublic Function ReadError() As Variant\nReadError=Range(\"Z1\").Value2\nEnd Function")).unwrap();
+            let mut book = oxicells_core::parse_xlsx(original).unwrap();
+            execute_with_host(&source, "Store", vec![], &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+            for reopened in [false, true] {
+                if reopened {
+                    let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();editor.apply_workbook(&book).unwrap();
+                    book = oxicells_core::parse_xlsx(&editor.save().unwrap()).unwrap();
+                }
+                assert_eq!(execute_with_host(&source, "ReadError", vec![], &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap(), Value::Error(code), "{code} reopened={reopened}");
+            }
+        }
     }
 
     #[test]

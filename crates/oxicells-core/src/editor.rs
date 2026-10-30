@@ -1806,7 +1806,22 @@ impl XlsxEditor {
                 entries.retain(|((col, row), _)| !self.edits.contains_key(&(sheet, row + 1, *col)));
             }
         }
-        patch_dynamic_array_package(&output, &arrays)
+        let output = patch_dynamic_array_package(&output, &arrays)?;
+        let contains_rich_error = |sheet: &crate::ir::Sheet| sheet.rows.iter().flat_map(|row| &row.cells)
+            .any(|cell| matches!(&cell.value, crate::ir::CellValue::Error(error) if crate::parser::rich_error_type(error).is_some()));
+        if !self.edits.values().any(|value| value.error_text().and_then(crate::parser::rich_error_type).is_some())
+            && !self.workbook.sheets.iter().any(contains_rich_error)
+            && !self.sheet_plan.as_ref().is_some_and(|plan| plan.iter().any(|sheet| matches!(sheet, PlannedSheet::Added(sheet) if contains_rich_error(sheet)))) {
+            return Ok(output);
+        }
+        let origins: Vec<_> = match &self.sheet_plan {
+            Some(plan) => plan.iter().map(|sheet| match sheet { PlannedSheet::Held { origin, .. } => Some(*origin), PlannedSheet::Added(_) => None }).collect(),
+            None => (0..self.workbook.sheets.len()).map(Some).collect(),
+        };
+        let clear_errors: Vec<std::collections::BTreeSet<_>> = origins.iter().map(|origin| self.edits.iter()
+            .filter(|((sheet, _, _), value)| Some(*sheet) == *origin && value.error_text().and_then(crate::parser::rich_error_type).is_none())
+            .map(|((_, row, col), _)| (*row, *col)).collect()).collect();
+        patch_rich_error_package(&output, &clear_errors)
     }
 
     /// Resolve sheet index -> ZIP path for each sheet.
@@ -2244,6 +2259,14 @@ fn patch_workbook_tables(data: &[u8], planned: &[Option<Vec<crate::ir::Table>>])
 }
 
 impl CellEditValue {
+    fn error_text(&self) -> Option<&str> {
+        match self {
+            Self::Error(error) | Self::CachedFormula { value: crate::ir::CellValue::Error(error), .. }
+                | Self::CachedUtf16Formula { value: crate::ir::CellValue::Error(error), .. } => Some(error),
+            _ => None,
+        }
+    }
+
     fn cell_type(&self) -> Option<&'static str> {
         match self {
             Self::String(_) | Self::Utf16(_) | Self::RichText { .. } => Some("str"),
@@ -5936,7 +5959,7 @@ fn append_metadata_record(xml: &str, section: &str, name: Option<&str>, record: 
 
 /// Remove only this metadata type from a cell block; keep all other records
 /// and extension payloads so mixed metadata survives formula replacement.
-fn without_dynamic_record(block: &str, type_index: usize) -> Result<(String, bool), XlsxError> {
+fn without_metadata_type(block: &str, type_index: usize) -> Result<(String, bool), XlsxError> {
     let mut reader = Reader::from_str(block);
     let mut writer = Writer::new(Vec::new());
     let mut depth = 0usize;
@@ -6031,7 +6054,7 @@ fn dynamic_metadata_changes(xml: &str, requested: &std::collections::BTreeSet<(b
             Some(index) => info.cell_blocks.get(index.saturating_sub(1)).ok_or_else(|| XlsxError::InvalidData("cell metadata index is out of range".into()))?.clone(),
             None => format!("<bk xmlns=\"{SPREADSHEET_METADATA_NS}\"></bk>"),
         };
-        let (mut block, retained) = without_dynamic_record(&base, type_index)?;
+        let (mut block, retained) = without_metadata_type(&base, type_index)?;
         if !dynamic && !retained { changes.insert((dynamic, id), None); continue; }
         if dynamic {
             let record = format!("<rc xmlns=\"{SPREADSHEET_METADATA_NS}\" t=\"{type_index}\" v=\"{}\"/>", info.future_count);
@@ -6182,6 +6205,10 @@ fn patch_dynamic_array_package(data: &[u8], plan: &[Vec<crate::ir::CachedSpill>]
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml")?;
         replacements.insert("[Content_Types].xml".into(), types.into_bytes());
     }
+    replace_package_parts(data, replacements)
+}
+
+fn replace_package_parts(data: &[u8], mut replacements: BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, XlsxError> {
     let mut archive = ZipArchive::new(Cursor::new(data)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..archive.len() {
@@ -6199,6 +6226,248 @@ fn patch_dynamic_array_package(data: &[u8], plan: &[Vec<crate::ir::CachedSpill>]
         writer.write_all(&bytes).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
     }
     Ok(writer.finish().map_err(|e| XlsxError::InvalidData(e.to_string()))?.into_inner())
+}
+
+const RICH_DATA_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata";
+
+fn xml_root_attributes(xml: &str, changes: &[(&str, Option<String>)]) -> Result<String, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        let start = reader.buffer_position() as usize;
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        let empty = matches!(&event, Event::Empty(_));
+        match event {
+            Event::Start(tag) | Event::Empty(tag) => {
+                let mut writer = Writer::new(Vec::new());
+                let tag = metadata_tag(&tag, changes);
+                writer.write_event(if empty { Event::Empty(tag) } else { Event::Start(tag) }).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                let header = String::from_utf8(writer.into_inner()).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                return Ok(format!("{}{}{}", &xml[..start], header, &xml[reader.buffer_position() as usize..]));
+            }
+            Event::Eof => return Err(XlsxError::InvalidData("XML part has no root element".into())),
+            _ => {}
+        }
+    }
+}
+
+/// Rich-data tables count only their own records. Preserve all existing
+/// records, their order, namespaces and extension payloads while appending.
+fn append_rich_record(xml: &str, child: &str, record: &str) -> Result<String, XlsxError> {
+    let count = crate::parser::metadata_elements(xml)?.iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == child).count();
+    let xml = xml_root_attributes(xml, &[("count", Some((count + 1).to_string()))])?;
+    let (extension, end, empty, root) = direct_xml_child(&xml, "extLst")?;
+    let at = extension.map_or(end, |(start, _)| start);
+    if !empty { return Ok(format!("{}{}{}", &xml[..at], record, &xml[at..])); }
+    let mut reader = Reader::from_str(&xml);
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Empty(tag) => return Ok(format!("{}{}{}</{}>{}", &xml[..start], xml_start_text(tag.into_owned())?, record, root, &xml[end..])),
+            Event::Eof => return Err(XlsxError::InvalidData("rich-data table has no root element".into())),
+            _ => {}
+        }
+    }
+}
+
+struct RichErrorCell<'a> {
+    xml: &'a str,
+    metadata: Option<usize>,
+    kind: Option<u32>,
+}
+
+fn rich_error_cells<'a>(xml: &'a str, clears: &std::collections::BTreeSet<(u32, u32)>, known: &BTreeMap<usize, &'static str>) -> Result<Vec<RichErrorCell<'a>>, XlsxError> {
+    if !["#SPILL!", "#CONNECT!", "#BLOCKED!", "#UNKNOWN!", "#FIELD!", "#CALC!"].iter().any(|error| xml.contains(error))
+        && (clears.is_empty() || known.is_empty() || !xml.contains("vm=")) { return Ok(Vec::new()); }
+    let mut result = Vec::new();
+    for (_, data) in crate::parser::metadata_elements(xml)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "sheetData") {
+        for (_, row) in crate::parser::metadata_elements(data)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "row") {
+            for (tag, cell) in crate::parser::metadata_elements(row)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "c") {
+                let metadata = get_attr(&tag, "vm").and_then(|s| s.parse().ok()).filter(|index| *index > 0);
+                let clearing = metadata.is_some_and(|index| known.contains_key(&index)) && get_attr(&tag, "r")
+                    .and_then(|s| oxicells_calc::reference::parse_a1(&s)).is_some_and(|at| clears.contains(&(at.row + 1, at.col)));
+                let mut kind = None;
+                if get_attr(&tag, "t").as_deref() == Some("e") {
+                    if let Some((_, value)) = crate::parser::metadata_elements(cell)?.into_iter().find(|(tag, _)| local_name(tag.name().as_ref()) == "v") {
+                        let mut reader = Reader::from_str(value);
+                        if let Event::Start(start) = reader.read_event().map_err(XlsxError::Xml)? {
+                            let text = reader.read_text(start.name()).map_err(XlsxError::Xml)?;
+                            kind = crate::parser::rich_error_type(text.trim());
+                        }
+                    }
+                }
+                if kind.is_some() || clearing { result.push(RichErrorCell { xml: cell, metadata, kind }); }
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn generic_error_structure(xml: &mut String, subtype: bool) -> Result<usize, XlsxError> {
+    let structures = crate::parser::metadata_elements(xml)?;
+    let mut count = 0;
+    for (tag, record) in structures.iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "s") {
+        let fields = crate::parser::metadata_elements(record)?;
+        let keys: Vec<_> = fields.iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "k").map(|(tag, _)| (get_attr(tag, "n"), get_attr(tag, "t"))).collect();
+        let expected = if subtype { vec![(Some("errorType".into()), Some("i".into())), (Some("subType".into()), Some("i".into()))] }
+            else { vec![(Some("errorType".into()), Some("i".into()))] };
+        if get_attr(tag, "t").as_deref() == Some("_error") && keys == expected { return Ok(count); }
+        count += 1;
+    }
+    let second = if subtype { "<k n=\"subType\" t=\"i\"/>" } else { "" };
+    let record = format!("<s xmlns=\"{RICH_DATA_NS}\" t=\"_error\"><k n=\"errorType\" t=\"i\"/>{second}</s>");
+    *xml = append_rich_record(xml, "s", &record)?;
+    Ok(count)
+}
+
+/// New errors use Excel's generic error payload; existing compatible value
+/// metadata is reused verbatim, including subtype and spill-offset fields.
+fn rich_error_records(metadata: &str, structures: &mut String, values: &mut String,
+    requests: &std::collections::BTreeSet<(u32, Option<usize>)>) -> Result<(String, BTreeMap<(u32, Option<usize>), usize>), XlsxError> {
+    let info = crate::parser::rich_error_metadata(metadata, structures, values)?;
+    let type_index = info.type_index.unwrap_or(info.type_count + 1);
+    let mut output = metadata.to_string();
+    let mut future_count = info.future_count;
+    let mut count = info.blocks.len();
+    let mut added = BTreeMap::new();
+    let mut ids = BTreeMap::new();
+    for &(kind, old) in requests {
+        if old.and_then(|index| info.errors.get(&index)).is_some_and(|error| crate::parser::rich_error_type(error) == Some(kind)) {
+            ids.insert((kind, old), old.unwrap());
+            continue;
+        }
+        if info.type_index.is_none() && added.is_empty() {
+            let record = format!("<metadataType xmlns=\"{SPREADSHEET_METADATA_NS}\" name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\"/>");
+            output = append_metadata_record(&output, "metadataTypes", None, &record)?;
+        }
+        let future = match added.get(&kind) {
+            Some(index) => *index,
+            None => {
+                let structure = generic_error_structure(structures, kind != 11)?;
+                let index = crate::parser::metadata_elements(values)?.iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "rv").count();
+                let subtype = if kind == 11 { String::new() } else { format!("<v>{}</v>", if kind == 10 { -1 } else { 0 }) };
+                *values = append_rich_record(values, "rv", &format!("<rv xmlns=\"{RICH_DATA_NS}\" s=\"{structure}\"><v>{kind}</v>{subtype}</rv>"))?;
+                let record = format!("<bk xmlns=\"{SPREADSHEET_METADATA_NS}\"><extLst><ext uri=\"{{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}}\"><xlrd:rvb xmlns:xlrd=\"{RICH_DATA_NS}\" i=\"{index}\"/></ext></extLst></bk>");
+                output = append_metadata_record(&output, "futureMetadata", Some("XLRICHVALUE"), &record)?;
+                added.insert(kind, future_count);
+                future_count += 1;
+                future_count - 1
+            }
+        };
+        let base = match old {
+            Some(index) => info.blocks.get(index - 1).ok_or_else(|| XlsxError::InvalidData("value metadata index is out of range".into()))?.clone(),
+            None => format!("<bk xmlns=\"{SPREADSHEET_METADATA_NS}\"/>"),
+        };
+        let (base, _) = without_metadata_type(&base, type_index)?;
+        let block = append_cell_metadata_record(&base, &format!("<rc xmlns=\"{SPREADSHEET_METADATA_NS}\" t=\"{type_index}\" v=\"{future}\"/>"))?;
+        output = append_metadata_record(&output, "valueMetadata", None, &block)?;
+        count += 1;
+        ids.insert((kind, old), count);
+    }
+    Ok((output, ids))
+}
+
+fn clear_rich_error_records(metadata: &str, structures: &str, values: &str, requests: &std::collections::BTreeSet<usize>)
+    -> Result<(String, BTreeMap<usize, Option<usize>>), XlsxError> {
+    let info = crate::parser::rich_error_metadata(metadata, structures, values)?;
+    let mut output = metadata.to_string();
+    let mut ids = BTreeMap::new();
+    let mut count = info.blocks.len();
+    for index in requests {
+        let block = info.blocks.get(index - 1).ok_or_else(|| XlsxError::InvalidData("value metadata index is out of range".into()))?;
+        let (block, retained) = without_metadata_type(block, info.type_index.ok_or_else(|| XlsxError::InvalidData("rich error has no metadata type".into()))?)?;
+        if retained {
+            output = append_metadata_record(&output, "valueMetadata", None, &block)?;
+            count += 1;
+            ids.insert(*index, Some(count));
+        } else { ids.insert(*index, None); }
+    }
+    Ok((output, ids))
+}
+
+fn patch_rich_error_package(data: &[u8], clear_plan: &[std::collections::BTreeSet<(u32, u32)>]) -> Result<Vec<u8>, XlsxError> {
+    let mut source = OoxmlArchive::new(data)?;
+    let mut rels = source.read_part("xl/_rels/workbook.xml.rels")?;
+    let relationships = parse_relationships(&rels)?;
+    let mut types = source.read_part("[Content_Types].xml")?;
+    let mut type_info = String::from("<rvTypesInfo xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2017/richdata2\"><global><keyFlags>");
+    for key in ["_Self", "_DisplayString", "_Flags", "_Format", "_SubLabel", "_Attribution", "_Icon", "_Display", "_CanonicalPropertyNames", "_ClassificationId"] {
+        type_info.push_str(&format!("<key name=\"{key}\">{}<flag name=\"ExcludeFromCalcComparison\" value=\"1\"/></key>",
+            if key == "_Self" { "<flag name=\"ExcludeFromFile\" value=\"1\"/>" } else { "" }));
+    }
+    type_info.push_str("</keyFlags></global></rvTypesInfo>");
+    let specifications = [
+        ("http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata", "xl/metadata.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml", format!("<metadata xmlns=\"{SPREADSHEET_METADATA_NS}\"/>")),
+        ("http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure", "xl/richData/rdrichvaluestructure.xml", "application/vnd.ms-excel.rdrichvaluestructure+xml", format!("<rvStructures xmlns=\"{RICH_DATA_NS}\" count=\"0\"/>")),
+        ("http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue", "xl/richData/rdrichvalue.xml", "application/vnd.ms-excel.rdrichvalue+xml", format!("<rvData xmlns=\"{RICH_DATA_NS}\" count=\"0\"/>")),
+        ("http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueTypes", "xl/richData/rdRichValueTypes.xml", "application/vnd.ms-excel.rdrichvaluetypes+xml", type_info),
+    ];
+    let mut parts = Vec::new();
+    for (kind, default, content_type, empty) in specifications {
+        let relation = relationships.values().find(|rel| rel.rel_type == kind && rel.target_mode.as_deref() != Some("External"));
+        let path = match relation {
+            Some(rel) => oxidocs_common::security::sanitize_rel_target("xl", &rel.target).map_err(|e| XlsxError::InvalidData(e.to_string()))?,
+            None => {
+                let mut path = default.to_string();
+                let mut index = 1;
+                while source.try_read_part(&path)?.is_some() { path = format!("{}{index}.xml", default.trim_end_matches(".xml")); index += 1; }
+                path
+            }
+        };
+        let xml = source.try_read_part(&path)?.unwrap_or(empty);
+        if relation.is_none() {
+            let target = path.strip_prefix("xl/").ok_or_else(|| XlsxError::InvalidData("rich-data part is outside the workbook directory".into()))?;
+            rels = append_relationship(Some(&rels), kind, target)?;
+        }
+        types = append_content_type(&types, &path, content_type)?;
+        parts.push((path, xml));
+    }
+    let original = crate::parser::rich_error_metadata(&parts[0].1, &parts[1].1, &parts[2].1)?;
+    let paths = XlsxEditor::sheet_paths_in(data)?;
+    if paths.len() != clear_plan.len() { return Err(XlsxError::InvalidData("value metadata plan does not match the sheet order".into())); }
+    let mut sheets = Vec::new();
+    let mut requests = std::collections::BTreeSet::new();
+    let mut clearing = std::collections::BTreeSet::new();
+    for (path, clears) in paths.into_iter().zip(clear_plan) {
+        let xml = source.read_part(&path)?;
+        let cells = rich_error_cells(&xml, clears, &original.errors)?;
+        if cells.is_empty() { continue; }
+        for cell in cells {
+            if let Some(kind) = cell.kind { requests.insert((kind, cell.metadata)); }
+            else if let Some(index) = cell.metadata { clearing.insert(index); }
+        }
+        sheets.push((path, xml, clears));
+    }
+    if sheets.is_empty() { return Ok(data.to_vec()); }
+    let mut structures = parts[1].1.clone();
+    let mut values = parts[2].1.clone();
+    let (metadata, ids) = rich_error_records(&parts[0].1, &mut structures, &mut values, &requests)?;
+    let (metadata, clear_ids) = clear_rich_error_records(&metadata, &structures, &values, &clearing)?;
+    parts[0].1 = metadata;
+    parts[1].1 = structures;
+    parts[2].1 = values;
+    let mut replacements = BTreeMap::new();
+    for (path, xml, clears) in sheets {
+        let mut edits = Vec::new();
+        for cell in rich_error_cells(&xml, clears, &original.errors)? {
+            let (body, id) = if let Some(kind) = cell.kind {
+                (replace_direct_xml_child(cell.xml, "v", Some(&format!("<v xmlns=\"{SPREADSHEET_METADATA_NS}\">#VALUE!</v>")))?, Some(ids[&(kind, cell.metadata)]))
+            } else {
+                (cell.xml.to_string(), clear_ids[&cell.metadata.unwrap()])
+            };
+            let patched = xml_root_attributes(&body, &[("vm", id.map(|id| id.to_string()))])?;
+            let start = cell.xml.as_ptr() as usize - xml.as_ptr() as usize;
+            edits.push((start, start + cell.xml.len(), patched));
+        }
+        let mut result = String::new();
+        let mut from = 0;
+        for (start, end, body) in edits { result.push_str(&xml[from..start]); result.push_str(&body); from = end; }
+        result.push_str(&xml[from..]);
+        replacements.insert(path, result.into_bytes());
+    }
+    for (path, xml) in parts { replacements.insert(path, xml.into_bytes()); }
+    replacements.insert("xl/_rels/workbook.xml.rels".into(), rels.into_bytes());
+    replacements.insert("[Content_Types].xml".into(), types.into_bytes());
+    replace_package_parts(data, replacements)
 }
 
 fn same_content(before: &crate::ir::Cell, after: &crate::ir::Cell) -> bool {
@@ -11726,6 +11995,102 @@ mod tests {
                 assert_eq!(crate::parse_xlsx_preserving_values(&bytes).unwrap().calculation, workbook.calculation);
             }
         }
+    }
+
+    #[test]
+    fn rich_error_metadata_resolves_fields_and_preserves_other_records() {
+        let metadata = format!(r#"<m:metadata xmlns:m="{SPREADSHEET_METADATA_NS}" xmlns:q="urn:other" xmlns:r="{RICH_DATA_NS}"><m:metadataTypes count="2"><m:metadataType name="OTHER"/><m:metadataType name="XLRICHVALUE"/></m:metadataTypes><m:futureMetadata name="OTHER" count="1"><m:bk/></m:futureMetadata><m:futureMetadata name="XLRICHVALUE" count="3"><m:bk><m:extLst><m:ext><r:rvb i="0"/></m:ext></m:extLst></m:bk><m:bk><m:extLst><m:ext><r:rvb i="1"/></m:ext></m:extLst></m:bk><m:bk><m:extLst><m:ext><r:rvb i="2"/></m:ext></m:extLst></m:bk></m:futureMetadata><m:valueMetadata count="4"><m:bk><m:rc t="1" v="0"/></m:bk><m:bk><m:rc t="1" v="0"/><m:rc t="2" v="0"/><m:extLst><q:keep attr="a&amp;b"/></m:extLst></m:bk><m:bk><m:rc t="2" v="1"/></m:bk><m:bk><m:rc t="2" v="2"/></m:bk></m:valueMetadata></m:metadata>"#);
+        let mut structures = format!(r#"<rvStructures xmlns="{RICH_DATA_NS}" count="3"><s t="_error"><k n="colOffset" t="i"/><k n="errorType" t="i"/><k n="rwOffset" t="i"/><k n="subType" t="i"/></s><s t="unsupported"><k n="errorType" t="i"/></s><s t="_error"><k n="errorType" t="i"/><k n="subType" t="i"/></s><extLst><q:keep xmlns:q="urn:other"/></extLst></rvStructures>"#);
+        let mut values = format!(r#"<rvData xmlns="{RICH_DATA_NS}" count="3"><rv s="0"><v>0</v><v>8</v><v>2</v><v>1</v></rv><rv s="1"><v>13</v></rv><rv s="2"><v>13</v><v>3</v></rv></rvData>"#);
+        let info = crate::parser::rich_error_metadata(&metadata, &structures, &values).unwrap();
+        assert_eq!(info.errors, [(2, "#SPILL!"), (4, "#CALC!")].into_iter().collect());
+        let old_structures = structures.clone();let old_values = values.clone();
+        let (changed, ids) = rich_error_records(&metadata, &mut structures, &mut values, &[(9, Some(2)), (13, Some(4))].into_iter().collect()).unwrap();
+        assert_eq!(ids[&(13, Some(4))], 4);
+        assert_eq!(structures, old_structures);
+        assert_eq!(crate::parser::metadata_elements(&old_values).unwrap().iter().map(|(_, xml)| *xml).collect::<Vec<_>>(), crate::parser::metadata_elements(&values).unwrap().iter().take(3).map(|(_, xml)| *xml).collect::<Vec<_>>());
+        let after = crate::parser::rich_error_metadata(&changed, &structures, &values).unwrap();
+        let added = ids[&(9, Some(2))];
+        assert_eq!(after.errors[&added], "#CONNECT!");
+        assert!(after.blocks[added - 1].contains(r#"t="1" v="0""#));
+        assert!(after.blocks[added - 1].contains(r#"<q:keep attr="a&amp;b"/>"#));
+        assert_eq!(after.errors[&2], "#SPILL!");
+        let (cleared, ids) = clear_rich_error_records(&changed, &structures, &values, &[2, 4].into_iter().collect()).unwrap();
+        assert_eq!(ids[&4], None);
+        let after = crate::parser::rich_error_metadata(&cleared, &structures, &values).unwrap();
+        let retained = ids[&2].unwrap();
+        assert!(!after.errors.contains_key(&retained));
+        assert!(after.blocks[retained - 1].contains(r#"<q:keep attr="a&amp;b"/>"#));
+        assert!(after.blocks[retained - 1].contains(r#"t="1" v="0""#));
+    }
+
+    #[test]
+    fn rich_error_values_and_dynamic_caches_survive_save_and_replacement() {
+        use crate::ir::CellValue;
+        let errors = ["#SPILL!", "#CONNECT!", "#BLOCKED!", "#UNKNOWN!", "#FIELD!", "#CALC!"];
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut base = XlsxEditor::new(original).unwrap();
+        for (index, error) in errors.iter().enumerate() { base.set_cell_value(0, index as u32 + 1, 25, CellEditValue::Error((*error).into())); }
+        for (row, value) in [(1, 10.), (2, 20.), (3, 30.)] { base.set_cell_value(0, row, 0, CellEditValue::Number(value)); }
+        base.set_cell_value(0, 2, 3, CellEditValue::Formula("A1:A3".into()));
+        base.set_cell_value(0, 3, 3, CellEditValue::Number(99.));
+        base.set_cell_value(0, 6, 3, CellEditValue::Formula("SEQUENCE(0)".into()));
+        let seed = base.save().unwrap();
+        let mut book = crate::parse_xlsx_preserving_values(&seed).unwrap();
+        for index in [2, 6] {
+            let cell = book.sheets[0].rows.iter_mut().find(|row| row.index == index).unwrap().cells.iter_mut().find(|cell| cell.col == 3).unwrap();
+            cell.spill = crate::ir::Spill::Dynamic;
+        }
+        crate::formula::evaluate_workbook_formulas(&mut book);
+        let mut editor = XlsxEditor::new(&seed).unwrap();editor.apply_workbook(&book).unwrap();
+        let saved = editor.save().unwrap();
+        let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        let cell = |book: &Workbook, row, col| book.sheets[0].rows.iter().find(|held| held.index == row).unwrap().cells.iter().find(|held| held.col == col).unwrap().clone();
+        for (index, error) in errors.iter().enumerate() { assert!(same_value(&cell(&reopened, index as u32 + 1, 25).value, &CellValue::Error((*error).into()))); }
+        for (row, error) in [(2, "#SPILL!"), (6, "#CALC!")] {
+            let anchor = cell(&reopened, row, 3);
+            assert!(same_value(&anchor.value, &CellValue::Error(error.into())), "{row}: {:?}", anchor.value);
+            assert_eq!(anchor.spill, crate::ir::Spill::Dynamic);
+            assert!(anchor.array_block.is_none());
+        }
+        let mut archive = OoxmlArchive::new(&saved).unwrap();
+        let xml = archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+        assert!(!xml.contains("<v>#SPILL!</v>") && !xml.contains("<v>#CALC!</v>"));
+        let metadata = archive.read_part("xl/metadata.xml").unwrap();
+        assert!(metadata.contains("XLDAPR") && metadata.contains("XLRICHVALUE"));
+        if std::env::var_os("OXI_EXPORT_RICH_XLSX").is_some() {
+            println!("OXI_RICH_ERROR_XLSX_HEX:{}", saved.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
+        }
+        if let Some(path) = std::env::var_os("OXI_IMPORT_RICH_XLSX") {
+            let native = crate::parse_xlsx_preserving_values(&std::fs::read(path).unwrap()).unwrap();
+            for (index, error) in errors.iter().enumerate() { assert!(same_value(&cell(&native, index as u32 + 2, 1).value, &CellValue::Error((*error).into()))); }
+        }
+        let mut editor = XlsxEditor::new(&saved).unwrap();
+        for (row, value) in [(1, CellEditValue::Number(7.)), (2, CellEditValue::Error("#VALUE!".into())),
+            (3, CellEditValue::String("#BLOCKED!".into())), (4, CellEditValue::Error("#FIELD!".into())),
+            (5, CellEditValue::Empty), (6, CellEditValue::Error("#CALC!".into()))] { editor.set_cell_value(0, row, 25, value); }
+        let replaced = editor.save().unwrap();
+        let changed = crate::parse_xlsx_preserving_values(&replaced).unwrap();
+        for (row, expected) in [(1, CellValue::Number(7.)), (2, CellValue::Error("#VALUE!".into())),
+            (3, CellValue::String("#BLOCKED!".into())), (4, CellValue::Error("#FIELD!".into())),
+            (5, CellValue::Empty), (6, CellValue::Error("#CALC!".into()))] { assert!(same_value(&cell(&changed, row, 25).value, &expected), "{row}: {:?}", cell(&changed, row, 25).value); }
+        let mut unchanged = XlsxEditor::new(&saved).unwrap();unchanged.set_cell_value(0, 1, 25, CellEditValue::Error("#SPILL!".into()));
+        let retained = unchanged.save().unwrap();
+        let mut after = OoxmlArchive::new(&retained).unwrap();
+        assert_eq!(after.read_part("xl/metadata.xml").unwrap(), metadata);
+        for part in ["xl/richData/rdrichvalue.xml", "xl/richData/rdrichvaluestructure.xml", "xl/richData/rdRichValueTypes.xml"] { assert_eq!(after.read_part(part).unwrap(), archive.read_part(part).unwrap()); }
+        // The metadata edit follows the original sheet when a copied sheet
+        // is inserted before it. Added sheets get independent cell records.
+        let mut moved = reopened.clone();
+        let mut copy = moved.sheets[0].clone();copy.name = "Copied".into();copy.origin_id = None;
+        moved.sheets[0].rows.iter_mut().find(|row| row.index == 1).unwrap().cells.iter_mut().find(|cell| cell.col == 25).unwrap().value = CellValue::Number(7.);
+        moved.sheets.insert(0, copy);
+        let mut editor = XlsxEditor::new(&saved).unwrap();editor.apply_workbook(&moved).unwrap();
+        let moved = crate::parse_xlsx_preserving_values(&editor.save().unwrap()).unwrap();
+        assert_eq!(moved.sheets[0].name, "Copied");
+        assert!(same_value(&cell(&moved, 1, 25).value, &CellValue::Error("#SPILL!".into())));
+        let original = moved.sheets[1].rows.iter().find(|row| row.index == 1).unwrap().cells.iter().find(|cell| cell.col == 25).unwrap();
+        assert!(same_value(&original.value, &CellValue::Number(7.)));
     }
 
     #[test]

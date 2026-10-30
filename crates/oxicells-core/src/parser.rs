@@ -5166,6 +5166,147 @@ fn resolve_cell_value(
     }
 }
 
+/// Direct XML children, including each child's original bytes. Metadata
+/// indices count records, including records whose payload we do not support.
+pub(crate) fn metadata_elements(xml: &str) -> Result<Vec<(quick_xml::events::BytesStart<'static>, &str)>, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut depth = 0usize;
+    let mut current = None;
+    let mut result = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(e) => {
+                if depth == 1 { current = Some((start, e.into_owned())); }
+                depth += 1;
+            }
+            Event::Empty(e) if depth == 1 => result.push((e.into_owned(), &xml[start..reader.buffer_position() as usize])),
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 1 {
+                    if let Some((start, tag)) = current.take() { result.push((tag, &xml[start..reader.buffer_position() as usize])); }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
+const RICH_ERRORS: [&str; 6] = ["#SPILL!", "#CONNECT!", "#BLOCKED!", "#UNKNOWN!", "#FIELD!", "#CALC!"];
+
+pub(crate) fn rich_error_type(error: &str) -> Option<u32> {
+    RICH_ERRORS.iter().position(|held| *held == error).map(|index| index as u32 + 8)
+}
+
+#[derive(Default)]
+pub(crate) struct RichErrorMetadata {
+    pub type_index: Option<usize>,
+    pub type_count: usize,
+    pub future_count: usize,
+    pub blocks: Vec<String>,
+    /// One-based value-metadata indices, not rich-value record indices.
+    pub errors: std::collections::BTreeMap<usize, &'static str>,
+}
+
+pub(crate) fn rich_error_metadata(xml: &str, structures: &str, values: &str) -> Result<RichErrorMetadata, XlsxError> {
+    let sections = metadata_elements(xml)?;
+    let mut result = RichErrorMetadata::default();
+    if let Some((_, types)) = sections.iter().find(|(tag, _)| local_name(tag.name().as_ref()) == "metadataTypes") {
+        for (tag, _) in metadata_elements(types)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "metadataType") {
+            result.type_count += 1;
+            if get_attr(&tag, "name").as_deref() == Some("XLRICHVALUE") { result.type_index = Some(result.type_count); }
+        }
+    }
+    // An error's fields are named by its structure. Offsets and subtype can
+    // precede errorType, and other rich-value types use the same record table.
+    let mut error_fields = Vec::new();
+    for (tag, structure) in metadata_elements(structures)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "s") {
+        let keys = metadata_elements(structure)?;
+        error_fields.push((get_attr(&tag, "t").as_deref() == Some("_error"))
+            .then(|| keys.iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "k")
+                .position(|(tag, _)| get_attr(tag, "n").as_deref() == Some("errorType") && get_attr(tag, "t").as_deref() == Some("i")))
+            .flatten());
+    }
+    let mut errors = Vec::new();
+    for (tag, value) in metadata_elements(values)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "rv") {
+        let field = get_attr(&tag, "s").and_then(|s| s.parse::<usize>().ok()).and_then(|index| error_fields.get(index)).copied().flatten();
+        let fields = metadata_elements(value)?;
+        let error = field.and_then(|field| fields.iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "v").nth(field))
+            .and_then(|(_, xml)| {
+                let mut reader = Reader::from_str(xml);
+                match reader.read_event().ok()? {
+                    Event::Start(tag) => reader.read_text(tag.name()).ok()?.trim().parse::<usize>().ok(),
+                    _ => None,
+                }
+            }).and_then(|kind| kind.checked_sub(8)).and_then(|index| RICH_ERRORS.get(index)).copied();
+        errors.push(error);
+    }
+    let mut future = Vec::new();
+    for (_, section) in sections.iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "futureMetadata" && get_attr(tag, "name").as_deref() == Some("XLRICHVALUE")) {
+        for (_, record) in metadata_elements(section)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "bk") {
+            let mut reader = Reader::from_str(record);
+            let mut value = None;
+            loop {
+                match reader.read_event().map_err(XlsxError::Xml)? {
+                    Event::Start(tag) | Event::Empty(tag) if local_name(tag.name().as_ref()) == "rvb" => {
+                        value = get_attr(&tag, "i").and_then(|s| s.parse::<usize>().ok()).and_then(|index| errors.get(index)).copied().flatten();
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+            future.push(value);
+        }
+    }
+    result.future_count = future.len();
+    if let Some((_, section)) = sections.iter().find(|(tag, _)| local_name(tag.name().as_ref()) == "valueMetadata") {
+        for (_, record) in metadata_elements(section)?.into_iter().filter(|(tag, _)| local_name(tag.name().as_ref()) == "bk") {
+            result.blocks.push(record.to_string());
+            for (tag, _) in metadata_elements(record)? {
+                if result.type_index.is_some() && local_name(tag.name().as_ref()) == "rc" && get_attr(&tag, "t").and_then(|s| s.parse().ok()) == result.type_index {
+                    if let Some(error) = get_attr(&tag, "v").and_then(|s| s.parse::<usize>().ok()).and_then(|index| future.get(index)).copied().flatten() {
+                        result.errors.insert(result.blocks.len(), error);
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn restore_rich_errors(sheet: &mut Sheet, xml: &str, metadata: &RichErrorMetadata) -> Result<(), XlsxError> {
+    if metadata.errors.is_empty() { return Ok(()); }
+    let mut reader = Reader::from_str(xml);
+    let mut path = Vec::new();
+    let mut errors = HashMap::new();
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        match &event {
+            Event::Start(tag) | Event::Empty(tag) => {
+                let name = local_name(tag.name().as_ref());
+                if name == "c" && path.last().map(String::as_str) == Some("row")
+                    && path.iter().rev().nth(1).map(String::as_str) == Some("sheetData") && get_attr(tag, "t").as_deref() == Some("e") {
+                    if let Some(error) = get_attr(tag, "vm").and_then(|s| s.parse::<usize>().ok()).and_then(|index| metadata.errors.get(&index)) {
+                        if let Some(at) = get_attr(tag, "r").and_then(|s| oxicells_calc::reference::parse_a1(&s)) { errors.insert((at.col, at.row), *error); }
+                    }
+                }
+                if matches!(&event, Event::Start(_)) { path.push(name); }
+            }
+            Event::End(_) => { path.pop(); }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    for row in &mut sheet.rows {
+        for cell in &mut row.cells {
+            if let Some(error) = errors.get(&(cell.col, row.index.saturating_sub(1))) { cell.value = CellValue::Error((*error).to_string()); }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub(crate) struct DynamicMetadata {
     pub type_index: Option<usize>,
@@ -5356,12 +5497,17 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     // 4. Parse workbook relationships to map rIds to sheet file paths
     let rels_xml = archive.read_part("xl/_rels/workbook.xml.rels")?;
     let rels = parse_relationships(&rels_xml)?;
-    let dynamic = match rels.values().find(|rel| rel.rel_type.ends_with("/sheetMetadata") && rel.target_mode.as_deref() != Some("External")) {
-        Some(relation) => match archive.try_read_part(&part_beside("xl/workbook.xml", &relation.target))? {
-            Some(xml) => dynamic_metadata(&xml)?, None => DynamicMetadata::default(),
-        },
-        None => DynamicMetadata::default(),
+    let mut related_part = |kind: &str| -> Result<String, XlsxError> {
+        match rels.values().find(|rel| rel.rel_type.ends_with(kind) && rel.target_mode.as_deref() != Some("External")) {
+            Some(relation) => Ok(archive.try_read_part(&part_beside("xl/workbook.xml", &relation.target))?.unwrap_or_default()),
+            None => Ok(String::new()),
+        }
     };
+    let metadata = related_part("/sheetMetadata")?;
+    let dynamic = dynamic_metadata(&metadata)?;
+    let structures = related_part("/rdRichValueStructure")?;
+    let values = related_part("/rdRichValue")?;
+    let rich_errors = rich_error_metadata(&metadata, &structures, &values)?;
     let persons = match rels.values().find(|rel| rel.rel_type.ends_with("/person")) {
         Some(relation) => {
             let path = part_beside("xl/workbook.xml", &relation.target);
@@ -5426,6 +5572,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                 let mut sheet =
                     parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet, &theme)?;
                 restore_dynamic_arrays(&mut sheet, &sheet_xml, &dynamic)?;
+                restore_rich_errors(&mut sheet, &sheet_xml, &rich_errors)?;
                 sheet.kind=sheet_kinds.get(&info.r_id).copied().unwrap_or_default();
                 // What the sheet's own parts turn out to hold, which is only
                 // known once they have been read 遯ｶ繝ｻand which decides what the

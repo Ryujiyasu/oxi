@@ -5635,19 +5635,21 @@ fn reshaped(name: &str, args: &[Arg]) -> Result<RangeData, ExcelError> {
     match name {
         "SEQUENCE" => {
             expect(args, 1)?;
-            let rows = num(&args[0])?.trunc();
-            let cols = optional_count(args, 1)?.unwrap_or(1) as f64;
-            let start = match args.get(2).map(Arg::scalar) {
-                None | Some(Value::Blank) => 1.0,
-                Some(v) => v.to_number()?,
+            // An omitted argument defaults to one; a referenced empty cell
+            // supplies zero. Validate after coercing every argument, so an
+            // error in start/step takes precedence over an empty dimension.
+            let number = |at| match args.get(at) {
+                None | Some(Arg::Value(Value::Blank)) => Ok(1.0),
+                Some(arg) => num(arg),
             };
-            let step = match args.get(3).map(Arg::scalar) {
-                None | Some(Value::Blank) => 1.0,
-                Some(v) => v.to_number()?,
-            };
-            if rows < 1.0 || cols < 1.0 || rows * cols > 1_048_576.0 {
+            let rows = number(0)?;
+            let cols = number(1)?;
+            let start = number(2)?;
+            let step = number(3)?;
+            if rows < 0.0 || cols < 0.0 || rows.trunc() * cols.trunc() > 1_048_576.0 {
                 return Err(ExcelError::Value);
             }
+            if rows.trunc() == 0.0 || cols.trunc() == 0.0 { return Err(ExcelError::Calc); }
             let (rows, cols) = (rows as usize, cols as usize);
             Ok(RangeData {origin: crate::functions::BlockOrigin::Array,
                 width: cols,
@@ -6680,6 +6682,27 @@ impl Criteria {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequence_dimensions_distinguish_empty_arrays_defaults_and_invalid_counts() {
+        let number = |n| Arg::Value(Value::Number(n));
+        let sequence = |args: &[Arg]| call_arg("SEQUENCE", args).scalar();
+        for (rows, cols, error) in [(0., 1., ExcelError::Calc), (2., 0., ExcelError::Calc),
+            (-1., 1., ExcelError::Value), (-0.5, 1., ExcelError::Value), (0.5, 1., ExcelError::Calc),
+            (1., -0.5, ExcelError::Value), (1., 0.5, ExcelError::Calc), (0., -1., ExcelError::Value),
+            (-1., 0., ExcelError::Value), (0., 0., ExcelError::Calc)] {
+            assert_eq!(sequence( &[number(rows), number(cols)]), Value::Error(error));
+        }
+        let omitted = Arg::Value(Value::Blank);
+        let blank_cell = Arg::Range(RangeData { origin: Default::default(), width: 1, height: 1, cells: vec![Value::Blank] });
+        assert_eq!(sequence( &[omitted.clone(), omitted.clone()]), Value::Number(1.));
+        assert_eq!(sequence( &[blank_cell.clone()]), Value::Error(ExcelError::Calc));
+        assert_eq!(sequence( &[number(1.), blank_cell.clone()]), Value::Error(ExcelError::Calc));
+        assert_eq!(sequence( &[number(1.), number(1.), blank_cell.clone()]), Value::Number(0.));
+        for rows in [0., -1.] { assert_eq!(sequence( &[number(rows), number(1.), Arg::Value(Value::Error(ExcelError::NA))]), Value::Error(ExcelError::NA)); }
+        let Arg::Range(block) = call_arg("SEQUENCE", &[number(2.), omitted, number(1.), blank_cell]) else { panic!("expected a two-row array"); };
+        assert_eq!((block.width, block.height, block.cells), (1, 2, vec![Value::Number(1.), Value::Number(1.)]));
+    }
 
     /// Every quoted name a match arm of this file answers to is in
     /// KNOWN_FUNCTIONS, which is kept sorted for its binary search.
