@@ -4045,13 +4045,48 @@ impl<'a> PageLayouter<'a> {
                             false, // S916
                             None,
                         );
+                        let frame_el_start = elements.len();
                         elements.extend(frame_els);
                         // Band height: framePr h (hRule atLeast semantics — the
                         // content may exceed it).
                         let content_h_frame = (fcy.cursor_y - fy).max(14.0);
+                        // OXI_FRAME_HRULE_AUTO (2026-10-30, default ON, opt-out _DISABLE):
+                        // hRule="auto" sizes the frame to its text and ignores w:h
+                        // (`_pb_frame_border_height_gen.py` auto arms: h 71.3 and 20.0 give
+                        // the same box and the same next baseline).
+                        let hrule_auto = fp.height_rule.as_deref() == Some("auto")
+                            && std::env::var_os("OXI_FRAME_HRULE_AUTO_DISABLE").is_none();
                         let fh = if positioned_frame && fp.height_rule.as_deref() == Some("exact") {
                             fp.height.unwrap_or(content_h_frame)
+                        } else if hrule_auto {
+                            content_h_frame
                         } else { fp.height.unwrap_or(0.0).max(content_h_frame) };
+                        // OXI_FRAME_BORDER_H (2026-10-30, default ON, opt-out _DISABLE): a
+                        // bordered frame taller than its text draws its border box h tall
+                        // (hRule absent / atLeast / exact); the text stays at the top.
+                        // `_pb_frame_border_height_gen.py`: outer box 71.16 for h 71.3 with
+                        // border sz 6 space 1 and sz 24 space 8 alike; an h below the text
+                        // leaves the box round the text. ja/reports__60bc67b6's reply box
+                        // (h 1426tw): Word 71.28, Oxi 18.5.
+                        if !hrule_auto && std::env::var_os("OXI_FRAME_BORDER_H_DISABLE").is_none() {
+                            if let Some(h) = fp.height.filter(|_| positioned_frame) {
+                                let bdr: Vec<usize> = (frame_el_start..elements.len())
+                                    .filter(|&i| elements[i].paragraph_index.is_none()
+                                        && matches!(elements[i].content, LayoutContent::CellShading { .. }))
+                                    .collect();
+                                let top = bdr.iter().map(|&i| elements[i].y).fold(f32::INFINITY, f32::min);
+                                let bot = bdr.iter().map(|&i| elements[i].y + elements[i].height).fold(f32::NEG_INFINITY, f32::max);
+                                if top.is_finite() && bot - top + 0.01 < h {
+                                    let d = top + h - bot;
+                                    for &i in &bdr {
+                                        let e = &mut elements[i];
+                                        if (e.y + e.height - bot).abs() < 0.01 {
+                                            if e.height <= 3.0 && e.width > e.height { e.y += d; } else { e.height += d; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         let (hs, vs) = if positioned_frame { (fp.h_space, fp.v_space) } else { (9.0, 0.0) };
                         let text_not_beside = positioned_frame && fp.v_anchor.as_deref() == Some("text")
                             && fp.wrap.as_deref() == Some("notBeside");
