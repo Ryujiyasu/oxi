@@ -15760,6 +15760,13 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             let japanese = charset == Some(0x80)
                 || info.code_page_range.is_some_and(|bits| bits & (1 << 17) != 0);
             let target = by_charset.or(if japanese { Some("Yu Gothic") } else { None });
+            // OXI_KAI_NAME_FIRST (2026-10-31, default ON, opt-out _DISABLE): 標楷體 /
+            // DFKai-SB keep Word's own name substitution (Microsoft YaHei, see
+            // font::render_family_name) over the charset one. ja/reports__70c9c05e
+            // declares 標楷體 charset 88; Word's PDF draws MicrosoftYaHei throughout,
+            // Oxi took the charset-88 JhengHei.
+            let target = target.filter(|_| !(matches!(name.as_str(), "標楷體" | "DFKai-SB")
+                && std::env::var_os("OXI_KAI_NAME_FIRST_DISABLE").is_none()));
             if let Some(target) = target {
                 if !registry.supports_family(name)
                     && crate::font::runtime::resolve(name, false, false).is_none()
