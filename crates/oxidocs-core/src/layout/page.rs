@@ -940,6 +940,9 @@ impl<'a> PageLayouter<'a> {
         // safe). Reset per page. Default ON, opt-out OXI_S469_DISABLE.
         let s469_enabled = std::env::var("OXI_S469_DISABLE").is_err();
         let mut anchor_flow_offset: f32 = 0.0;
+        // OXI_TB_BAND_FLOW: the band a host paragraph left (page, top, bottom) for
+        // the block right after it, when that block is a table.
+        let mut tb_band_next: Option<(usize, usize, f32, f32)> = None;
         let mut anchor_offset_page: usize = 0;
         // Round 29: dynamic per-page footnote reservation. Tracks the sum of
         // estimated heights for footnotes whose references appear on the current
@@ -6479,7 +6482,23 @@ impl<'a> PageLayouter<'a> {
                             if let Some(stroke) = s_tb_shape_stroke.get(&block_idx) {
                                 bottom = s1486_wrap_bottom(bottom, *stroke);
                             }
-                            if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height {
+                            // OXI_TB_BAND_FLOW (2026-10-30, default ON, opt-out _DISABLE): a band
+                            // that starts below the host's last line is only a band: what
+                            // follows flows on and only the lines (rows, floats) that cross
+                            // it drop below. `_pb_tbhost_follow_gen.py` (33pt box at host
+                            // +121 / +30): at +121 the next paragraph, a floating table and an
+                            // inline table all stay right under the host (104.3); at +30 the
+                            // second paragraph and the floating table move below the box and
+                            // an inline table splits round it. en/technical__019d92d9 p3: the
+                            // flow table sat under the box at 232, Word 91.
+                            let band_top = fy + off;
+                            if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height
+                                && band_top > cursor.cursor_y + 0.01
+                                && std::env::var_os("OXI_TB_BAND_FLOW_DISABLE").is_none()
+                            {
+                                s758_bands.push((current_page_idx, band_top, bottom, 0.0, page.size.width, false, BodyWrapPolicy::OBJECT));
+                                tb_band_next = Some((block_idx + 1, current_page_idx, band_top, bottom));
+                            } else if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height {
                                 if std::env::var_os("OXI_S1500_DISABLE").is_none() {
                                     s1500_unpushed = Some((block_idx + 1, current_page_idx, cursor.cursor_y));
                                 }
@@ -7307,6 +7326,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     prev_keep_next = para.style.keep_next; // S739
                 }
                 Block::Table(table) => {
+                    // OXI_TB_BAND_FLOW: a table right after a band host moves below the
+                    // band only when it crosses it (a floating one as Word does; an
+                    // in-flow one Word splits round the band -- the whole table below
+                    // is the nearer approximation).
+                    let tb_band_here = tb_band_next.take()
+                        .filter(|b| b.0 == block_idx && b.1 == current_page_idx)
+                        .map(|b| (b.2, b.3));
                     // COM-confirmed: prev paragraph's space_after is always added before table
                     if std::env::var("OXI_DBG_TBLSTART").is_ok() {
                         eprintln!("[TBLARM] blk={} cur={:.2} prev_space_after={:.2}", block_idx, cursor.cursor_y, prev_space_after);
@@ -7759,6 +7785,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     }
 
+                    let tb_band_pages = pages.len();
                     // Floating table (tblpPr): position relative to anchor
                     let mut candidate_y_top: f32 = 0.0;
                     let mut is_body_floating: bool = false;
@@ -8490,6 +8517,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         };
                         if bw > 0.0 {
                             cursor.advance(bw);
+                        }
+                    }
+                    if let Some((bt, bb)) = tb_band_here {
+                        let tbl_top = table_elements.iter().map(|e| e.y).fold(f32::INFINITY, f32::min);
+                        if pages.len() == tb_band_pages && tbl_top.is_finite()
+                            && tbl_top < bb && cursor.cursor_y > bt + 0.01
+                        {
+                            let dy = bb - tbl_top;
+                            for e in table_elements.iter_mut() {
+                                e.y += dy;
+                                if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
+                                    *y1 += dy;
+                                    *y2 += dy;
+                                }
+                            }
+                            candidate_y_top += dy;
+                            cursor.advance(dy);
                         }
                     }
                     let candidate_y_bottom = cursor.cursor_y;
