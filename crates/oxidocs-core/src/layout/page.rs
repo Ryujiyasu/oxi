@@ -3326,6 +3326,18 @@ impl<'a> PageLayouter<'a> {
                 ).0.min(prev_space_after.max(0.0))
             } else { 0.0 };
             block_y_positions.push(natural_anchor_y + anchor_pending_after - anchor_flow_offset);
+            // OXI_S469_NEXT_ONLY (2026-10-30, default ON, opt-out _DISABLE): only the
+            // paragraph right after the wrap-below float resolves its anchored shapes at
+            // the pre-wrap y; the paragraphs after it carry them down with the text.
+            // `_pb_widefloat_anchor_gen.py` (tblpX 0 / -152, with and without
+            // doNotBreakWrappedTables): a box 20pt below the first paragraph after the
+            // table sits at the table top + 20, one in the third at that paragraph's
+            // own top + 20 (188.6, under the table); Oxi left both at the pre-wrap y.
+            if matches!(block, Block::Paragraph(_)) && anchor_flow_offset != 0.0
+                && std::env::var_os("OXI_S469_NEXT_ONLY_DISABLE").is_none()
+            {
+                anchor_flow_offset = 0.0;
+            }
             block_col_x.push(start_x); // S1222: the current column's left edge
             block_page_indices.push(current_page_idx);
             block_start_page_indices.push(current_page_idx);
@@ -8856,8 +8868,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 outer_left + table_w_pt + right_gap));
                             left_room.max(right_room) < 18.75
                         });
+                        // OXI_WIDE_FLOAT_COVERS (2026-10-30, default ON, opt-out _DISABLE): a
+                        // wide text-anchored float offset by tblpX that leaves no lane
+                        // (< 18.75pt either side) sends the following body below it
+                        // without doNotBreakWrappedTables too. Wide floats get no side
+                        // band, so the body was laid over the table: ja/reports__1dde6f31's
+                        // 8-row table (tblpX -152, w 495.9 in a 496.15 column) — Word sets
+                        // «6）安全性» at 612.0 under its bottom, Oxi at the table top 494.8.
                         let needs_wrap_below = needs_wrap_below
-                            || (self.keep_floating_tables_together && covers_body);
+                            || ((self.keep_floating_tables_together
+                                || (v_anchor_text && wide_table
+                                    && std::env::var_os("OXI_WIDE_FLOAT_COVERS_DISABLE").is_none()))
+                                && covers_body);
                         if self.keep_floating_tables_together && !covers_body {
                             if let Some((left, right)) = table_side_bounds {
                                 s758_bands.push((current_page_idx, candidate_y_top, float_text_bottom,
