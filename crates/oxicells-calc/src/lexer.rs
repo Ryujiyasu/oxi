@@ -855,7 +855,38 @@ pub fn legacy_formula(input: &str, multiple_name: &dyn Fn(&str) -> bool) -> Stri
 /// when today's result is a scalar or its spill is blocked.
 pub fn requires_array_storage(input: &str, multiple_name: &dyn Fn(&str) -> bool) -> bool {
     let shown = formula_from_ooxml(input).unwrap_or_else(|_| input.to_string());
-    implied_intersections(&shown, multiple_name) != shown
+    if implied_intersections(&shown, multiple_name) != shown { return true; }
+    // Formula and Formula2 can display identical text while retaining
+    // different evaluation modes: SUM(SEQUENCE(3)+1) is saved as an array
+    // only when assigned through Formula2. This function is called for
+    // modern formula cells; their array arithmetic must retain that mode.
+    let Ok(tokens) = tokenize_spanned(&shown) else { return false; };
+    let mut reader = AtReader { tokens: &tokens, pos: 0, multi_name: multiple_name };
+    let Some(mut node) = reader.expr() else { return false; };
+    if reader.pos != tokens.len() { return false; }
+    bind_intersection_shapes(&mut node, &std::collections::BTreeMap::new());
+    has_array_arithmetic(&node)
+}
+
+fn has_array_arithmetic(node: &AtNode) -> bool {
+    match node {
+        AtNode::Operation(parts) => parts.iter().any(modern_result_is_multiple) || parts.iter().any(has_array_arithmetic),
+        AtNode::Group(parts) => parts.iter().any(has_array_arithmetic),
+        AtNode::Written(operand) => has_array_arithmetic(operand),
+        AtNode::Call { args, .. } => args.iter().flatten().any(has_array_arithmetic),
+        AtNode::Invoke { callee, args, .. } => has_array_arithmetic(callee) || args.iter().flatten().any(has_array_arithmetic),
+        _ => false,
+    }
+}
+
+fn modern_result_is_multiple(node: &AtNode) -> bool {
+    match node {
+        AtNode::Block { .. } | AtNode::Symbol { multiple: true, .. } | AtNode::Invoke { .. } => true,
+        AtNode::Call { name, args, .. } => may_answer_a_block(name, args),
+        AtNode::Group(parts) => parts.len() > 1 || parts.iter().any(modern_result_is_multiple),
+        AtNode::Operation(parts) => parts.iter().any(modern_result_is_multiple),
+        _ => false,
+    }
 }
 
 /// What a place in a formula wants: one value, a range (which an expression
@@ -871,7 +902,7 @@ enum AtNode {
     /// A number, text, a single cell, or anything else that is one value.
     Plain { number: Option<f64>, cell: bool },
     /// A range, or a name standing for one.
-    Block { start: usize, shape: Option<(u32, u32)> },
+    Block { start: usize, shape: Option<(u32, u32)>, literal: bool },
     Symbol { start: usize, name: String, multiple: bool },
     /// Operators, whose operands are worked one value at a time.
     Operation(Vec<AtNode>),
@@ -948,11 +979,11 @@ impl AtReader<'_> {
                         self.primary()?;
                     }
                     let tokens: Vec<_> = self.tokens[first..self.pos].iter().map(|(t, _)| t.clone()).collect();
-                    node = AtNode::Block { start, shape: crate::parser::reference_extent(&tokens) };
+                    node = AtNode::Block { start, shape: crate::parser::reference_extent(&tokens), literal: false };
                 }
                 if self.peek() == Some(&Token::Hash) {
                     self.pos += 1;
-                    node = AtNode::Block { start, shape: None };
+                    node = AtNode::Block { start, shape: None, literal: false };
                 }
                 while self.peek() == Some(&Token::Intersect) {
                     self.pos += 1;
@@ -962,7 +993,7 @@ impl AtReader<'_> {
                         self.primary()?;
                     }
                     let tokens: Vec<_> = self.tokens[first..self.pos].iter().map(|(t, _)| t.clone()).collect();
-                    node = AtNode::Block { start, shape: crate::parser::reference_extent(&tokens) };
+                    node = AtNode::Block { start, shape: crate::parser::reference_extent(&tokens), literal: false };
                 }
                 if self.peek() == Some(&Token::Percent) {
                     while self.peek() == Some(&Token::Percent) {
@@ -1020,7 +1051,7 @@ impl AtReader<'_> {
                     self.pos += 1;
                 }
                 self.pos += 1;
-                Some(AtNode::Block { start, shape: None })
+                Some(AtNode::Block { start, shape: None, literal: true })
             }
             _ => None,
         }
@@ -1081,9 +1112,48 @@ fn bind_intersection_shapes(node: &mut AtNode, outer: &std::collections::BTreeMa
 fn intersection_result_is_multiple(node: &AtNode) -> bool {
     match node {
         AtNode::Block { .. } | AtNode::Symbol { multiple: true, .. } | AtNode::Invoke { .. } => true,
+        // CELL is intersected even when consumed by a range parameter. Its
+        // result bound by LET therefore already is a scalar in legacy mode.
+        AtNode::Call { name, .. } if name == "CELL" => false,
         AtNode::Call { name, args, .. } => may_answer_a_block(name, args),
         AtNode::Group(parts) => parts.len() > 1 || parts.first().is_some_and(intersection_result_is_multiple),
+        AtNode::Operation(_) => is_value_array(node),
         _ => false,
+    }
+}
+
+/// Intrinsic value arrays differ from references in legacy evaluation.
+/// Range consumers allow arithmetic on these arrays without intersecting
+/// them; IFERROR/IFNA preserve an array first argument but scalarize a ref.
+/// LET symbols and reference-returning calls retain reference semantics.
+fn is_value_array(node: &AtNode) -> bool {
+    match node {
+        AtNode::Block { literal, .. } => *literal,
+        AtNode::Operation(parts) => parts.iter().any(is_value_array),
+        AtNode::Group(parts) if parts.len() == 1 => is_value_array(&parts[0]),
+        AtNode::Call { name, .. } => returns_value_array(name),
+        _ => false,
+    }
+}
+
+fn returns_value_array(name: &str) -> bool {
+    matches!(name,
+            "BYCOL" | "BYROW" | "CHOOSECOLS" | "CHOOSEROWS" | "DROP" | "EXPAND"
+            | "FILTER" | "GROUPBY" | "GROWTH" | "HSTACK" | "IFS" | "LINEST" | "LOGEST"
+            | "MAKEARRAY" | "MAP" | "MINVERSE" | "MMULT" | "MODE.MULT" | "MUNIT"
+            | "PIVOTBY" | "RANDARRAY" | "REDUCE" | "REGEXEXTRACT" | "SCAN" | "SEQUENCE"
+            | "SORT" | "SORTBY" | "SWITCH" | "TAKE" | "TEXTSPLIT" | "TOCOL" | "TOROW"
+            | "TRANSPOSE" | "TREND" | "UNIQUE" | "VSTACK" | "WRAPCOLS" | "WRAPROWS")
+}
+
+// INDEX's array form leaves the column dimension open when it is omitted;
+// its reference form supplies a scalar default instead. Arithmetic turns a
+// reference into a value array, unlike grouping the reference alone.
+fn index_uses_array_form(node: &AtNode) -> bool {
+    match node {
+        AtNode::Operation(_) => modern_result_is_multiple(node),
+        AtNode::Group(parts) if parts.len() == 1 => index_uses_array_form(&parts[0]),
+        _ => is_value_array(node),
     }
 }
 
@@ -1095,7 +1165,7 @@ fn parameter_kinds(name: &str) -> Option<&'static str> {
     Some(match name {
         "LEN" | "LEFT" | "RIGHT" | "MID" | "LOWER" | "UPPER" | "PROPER" | "TRIM" | "TEXT" | "VALUE"
         | "ROUND" | "ROUNDUP" | "ROUNDDOWN" | "INT" | "ABS" | "MOD" | "ISNUMBER" | "ISTEXT"
-        | "ISBLANK" | "ISERROR" | "ISNA" | "IFERROR" | "IFNA" | "DATE" | "YEAR" | "MONTH" | "DAY"
+        | "ISBLANK" | "ISERROR" | "ISNA" | "DATE" | "YEAR" | "MONTH" | "DAY"
         | "WEEKDAY" | "FIND" | "SEARCH" | "SUBSTITUTE" | "REPT" | "EXACT" | "NOT" | "SQRT" | "CHAR"
         | "CONCATENATE" | "TRANSPOSE" => "V",
         "IF" | "CHOOSE" => "VR",
@@ -1107,6 +1177,7 @@ fn parameter_kinds(name: &str) -> Option<&'static str> {
         "RANK" => "VRV",
         "INDEX" => "AV",
         "OFFSET" => "RV",
+        "CELL" => "VR",
         "ROW" | "COLUMN" | "SUM" | "MAX" | "MIN" | "AVERAGE" | "COUNT" | "COUNTA" | "PRODUCT"
         | "MEDIAN" | "STDEV" | "AND" | "OR" | "N" => "R",
         "SUMPRODUCT" | "MMULT" | "CONCAT" | "TEXTJOIN" | "EOMONTH" | "EDATE" | "ROWS" | "COLUMNS"
@@ -1115,9 +1186,12 @@ fn parameter_kinds(name: &str) -> Option<&'static str> {
     })
 }
 
-fn parameter_kind(name: &str, index: usize) -> AtContext {
+fn parameter_kind(name: &str, index: usize, args: &[Option<AtNode>]) -> AtContext {
     // The pairs of COUNTIFS / SUMIFS: a range, then what to look for.
     match name {
+        "IFS" => return if index % 2 == 0 { AtContext::Value } else { AtContext::Range },
+        "SWITCH" => return if index == 0 || (index % 2 == 1 && index + 1 < args.len()) { AtContext::Value } else { AtContext::Range },
+        "IFERROR" | "IFNA" => return if index > 0 || args.first().and_then(Option::as_ref).is_some_and(is_value_array) { AtContext::Range } else { AtContext::Value },
         "COUNTIFS" => {
             return if index % 2 == 0 { AtContext::Range } else { AtContext::Value };
         }
@@ -1148,7 +1222,9 @@ fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
     };
     match name {
         "LET" => args.last().is_some_and(is_block),
-        "INDIRECT" | "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "SEQUENCE" | "TRANSPOSE" | "MMULT" => true,
+        "IFERROR" | "IFNA" => args.first().and_then(Option::as_ref).is_some_and(is_value_array) || args.get(1).is_some_and(is_block),
+        "CELL" | "INDIRECT" | "TRIMRANGE" => true,
+        _ if returns_value_array(name) => true,
         "OFFSET" => {
             let base = match args.first().and_then(Option::as_ref) {
                 Some(AtNode::Block { shape, .. }) => *shape,
@@ -1163,7 +1239,8 @@ fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
             dimension(3, base.map(|(_, h)| h)) != Some(1.0)
                 || dimension(4, base.map(|(w, _)| w)) != Some(1.0)
         }
-        "INDEX" => args.iter().skip(1).take(2).any(loose_index),
+        "INDEX" => args.iter().skip(1).take(2).any(loose_index)
+            || (args.len() == 2 && args.first().and_then(Option::as_ref).is_some_and(index_uses_array_form)),
         "IF" => args.iter().skip(1).any(is_block),
         "CHOOSE" => args.iter().skip(1).any(is_block),
         "ROW" | "COLUMN" => args.first().is_some_and(is_block),
@@ -1174,7 +1251,10 @@ fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
 fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>) {
     match node {
         AtNode::Plain { .. } | AtNode::Symbol { multiple: false, .. } => {}
-        AtNode::Written(operand) => mark_intersections(operand, AtContext::Range, marks),
+        AtNode::Written(operand) => {
+            let context = if matches!(operand.as_ref(), AtNode::Call { name, .. } if name == "CELL") { AtContext::Array } else { AtContext::Range };
+            mark_intersections(operand, context, marks);
+        }
         AtNode::Block { start, .. } | AtNode::Symbol { start, multiple: true, .. } => {
             if context == AtContext::Value {
                 marks.push(*start);
@@ -1183,7 +1263,8 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
         AtNode::Operation(parts) => {
             let inner = if context == AtContext::Array { AtContext::Array } else { AtContext::Value };
             for part in parts {
-                mark_intersections(part, inner, marks);
+                let context = if context == AtContext::Range && is_value_array(part) { AtContext::Range } else { inner };
+                mark_intersections(part, context, marks);
             }
         }
         AtNode::Group(inner) => {
@@ -1192,7 +1273,7 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
             }
         }
         AtNode::Call { start, name, args } => {
-            if context == AtContext::Value && may_answer_a_block(name, args) {
+            if (context == AtContext::Value && may_answer_a_block(name, args)) || (name == "CELL" && context == AtContext::Range) {
                 marks.push(*start);
             }
             for (index, arg) in args.iter().enumerate() {
@@ -1200,7 +1281,7 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
                     if (name == "LET" && index + 1 < args.len() && index % 2 == 0)
                         || (name == "LAMBDA" && index + 1 < args.len()) { continue; }
                     let context = if matches!(name.as_str(), "LET" | "LAMBDA") { AtContext::Range }
-                        else { parameter_kind(name, index) };
+                        else { parameter_kind(name, index, args) };
                     mark_intersections(arg, context, marks);
                 }
             }
@@ -1208,7 +1289,7 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
         AtNode::Invoke { start, callee, args } => {
             if context == AtContext::Value { marks.push(*start); }
             mark_intersections(callee, AtContext::Array, marks);
-            for arg in args.iter().flatten() { mark_intersections(arg, AtContext::Array, marks); }
+            for arg in args.iter().flatten() { mark_intersections(arg, AtContext::Range, marks); }
         }
     }
 }
@@ -3697,6 +3778,86 @@ mod shift_tests {
             assert_eq!(super::normalise_formula_ranges(written), stored, "{written}");
         }
     }
+    #[test]
+    fn array_modes_distinguish_references_value_arrays_and_argument_keywords() {
+        for (input, expected) in [
+            ("=HSTACK(A1)", "=@HSTACK(A1)"),
+            ("=SUM(HSTACK(A1:A3))", "=SUM(HSTACK(A1:A3))"),
+            ("=IF(FALSE,HSTACK(A1),7)", "=@IF(FALSE,HSTACK(A1),7)"),
+            ("=LET(x,HSTACK(A1),x)", "=@LET(x,HSTACK(A1),x)"),
+            ("=IFERROR(HSTACK(A1),7)", "=@IFERROR(HSTACK(A1),7)"),
+            ("=IFERROR(A1:A3,7)", "=IFERROR(@A1:A3,7)"),
+            ("=IFERROR(1,A1:A3)", "=@IFERROR(1,A1:A3)"),
+            ("=LET(x,SEQUENCE(3),IFERROR(x,7))", "=LET(x,SEQUENCE(3),IFERROR(@x,7))"),
+            ("=SUM(A1:A3+SEQUENCE(3))", "=SUM(@A1:A3+SEQUENCE(3))"),
+            ("=SUM({1;2;3}+1)", "=SUM({1;2;3}+1)"),
+            ("=IFS(A1:A3=1,B1:B3,TRUE,0)", "=@IFS(@A1:A3=1,B1:B3,TRUE,0)"),
+            ("=SWITCH(A1:A3,1,B1:B3,0)", "=@SWITCH(@A1:A3,1,B1:B3,0)"),
+            ("=MAP(A1:A3,LAMBDA(x,x+1))", "=@MAP(A1:A3,LAMBDA(x,@x+1))"),
+            ("=SUM(CELL(\"address\",A1))", "=SUM(@CELL(\"address\",A1))"),
+            ("=LET(x,CELL(\"address\",A1),x)", "=LET(x,@CELL(\"address\",A1),x)"),
+            ("=LAMBDA(x,x+1)(CELL(\"address\",A1))", "=@LAMBDA(x,@x+1)(@CELL(\"address\",A1))"),
+            ("=@CELL(1)", "=@CELL(1)"),
+            ("=@(CELL(1))", "=@(@CELL(1))"),
+            ("=D()", "=@D()"),
+            ("=INDEX(A1:A3+1,1)", "=@INDEX(A1:A3+1,1)"),
+            ("=INDEX(SEQUENCE(3),1)", "=@INDEX(SEQUENCE(3),1)"),
+            ("=INDEX(A1:B3,1)", "=INDEX(A1:B3,1)"),
+            ("=INDEX(A1:A3+1,1,1)", "=INDEX(A1:A3+1,1,1)"),
+        ] {
+            assert_eq!(super::implied_intersections(input, &|_| false), expected, "{input}");
+        }
+        for (input, expected) in [
+            ("=SUM(SEQUENCE(3)+1)", true),
+            ("=SUM({1;2;3}+1)", true),
+            ("=SUM({1}+1)", true),
+            ("=@(SEQUENCE(3)+1)", true),
+            ("=SUM(@(SEQUENCE(3)+1))", true),
+            ("=SUM(SEQUENCE(3))", false),
+            ("=SUM({1;2;3})", false),
+            ("=SUM(@SEQUENCE(3)+1)", false),
+            ("=SUM(@{1;2;3}+1)", false),
+            ("=SUM(SUM(SEQUENCE(3))+1)", false),
+            ("=SUMPRODUCT(A1:A3*B1:B3)", true),
+            ("=SUMPRODUCT(A1:A3)", false),
+            ("=SUMPRODUCT(@A1:A3+1)", false),
+            ("=LET(x,A1:A3,SUMPRODUCT(x+1))", true),
+            ("=LET(x,1,SUMPRODUCT(x+1))", false),
+            ("=LAMBDA(x,SUM(SEQUENCE(3)+1))", true),
+            ("=LAMBDA(x,SEQUENCE(3))", false),
+            ("=SUM(1+1)", false),
+        ] {
+            assert_eq!(super::requires_array_storage(input, &|_| false), expected, "{input}");
+        }
+        // The optional external oracle exercises the same assertions against
+        // locally measured Excel cases without adding a generated corpus file.
+        if std::env::var_os("OXI_INTERSECTION_ORACLE_STDIN").is_some() {
+            use std::io::Read;
+            let mut input = String::new();std::io::stdin().read_to_string(&mut input).unwrap();
+            let mut failures = Vec::new();
+            let mut count = 0;
+            for row in input.lines() {
+                let fields: Vec<_> = row.split('\t').collect();assert_eq!(fields.len(), 5);
+                let (property, written, legacy, modern, array) = (fields[0], fields[1], fields[2], fields[3], fields[4]);
+                if property == "Formula" {
+                    let actual = super::implied_intersections(written, &|_| false);
+                    if actual != modern { failures.push(format!("infer {written}: {actual} != {modern}")); }
+                }
+                let actual = super::legacy_formula(modern, &|_| false);
+                if actual != legacy { failures.push(format!("getter {modern}: {actual} != {legacy}")); }
+                // Formula assignment uses legacy evaluation even when its
+                // displayed Formula2 equals a modern formula's text.
+                if property == "Formula2" && !array.is_empty() {
+                    let actual = super::requires_array_storage(modern, &|_| false);
+                    if actual != (array == "true") { failures.push(format!("array mode {property} {modern}: {actual} != {array}")); }
+                }
+                count += 1;
+            }
+            println!("Native intersection oracle: {count} cases, {} mismatches", failures.len());
+            assert!(failures.is_empty(), "{}", failures.into_iter().take(40).collect::<Vec<_>>().join("\n"));
+        }
+    }
+
     #[test]
     fn future_functions_keep_storage_namespaces_and_lexical_bindings() {
         for (shown, xml) in [

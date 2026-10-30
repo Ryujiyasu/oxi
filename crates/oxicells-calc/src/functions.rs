@@ -676,7 +676,7 @@ fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
 
 /// Every function this build knows the name of: those the library answers
 /// and those the workbook works out itself. Kept in step with the match
-/// arms by `every_function_the_library_answers_is_known`.
+/// arms. This list contains callable names, not nested argument keywords.
 const KNOWN_FUNCTIONS: &[&str] = &[
     "ABS", "ACCRINT", "ACCRINTM", "ACOS", "ACOSH", "ACOT", "ACOTH", "ADDRESS", "AGGREGATE",
     "AMORDEGRC", "AMORLINC", "AND", "ARABIC", "AREAS", "ARRAYTOTEXT", "ASC", "ASIN", "ASINH",
@@ -690,7 +690,7 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "COMPLEX", "CONCAT", "CONCATENATE", "CONFIDENCE", "CONFIDENCE.NORM", "CONFIDENCE.T", "CONVERT",
     "CORREL", "COS", "COSH", "COT", "COTH", "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS",
     "COUPDAYBS", "COUPDAYS", "COUPDAYSNC", "COUPNCD", "COUPNUM", "COUPPCD", "COVAR", "COVARIANCE.P",
-    "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "D", "DATE", "DATEDIF",
+    "COVARIANCE.S", "CRITBINOM", "CSC", "CSCH", "CUMIPMT", "CUMPRINC", "DATE", "DATEDIF",
     "DATEVALUE", "DAVERAGE", "DAY", "DAYS", "DAYS360", "DB", "DBCS", "DCOUNT", "DCOUNTA", "DDB",
     "DEC2BIN", "DEC2HEX", "DEC2OCT", "DECIMAL", "DEGREES", "DELTA", "DEVSQ", "DGET", "DISC", "DMAX",
     "DMIN", "DOLLAR", "DOLLARDE", "DOLLARFR", "DPRODUCT", "DROP", "DSTDEV", "DSTDEVP", "DSUM",
@@ -710,7 +710,7 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "ISNONTEXT", "ISNUMBER", "ISO.CEILING", "ISODD", "ISOMITTED", "ISOWEEKNUM", "ISPMT", "ISREF",
     "ISTEXT", "KURT", "LAMBDA", "LARGE", "LCM", "LEFT", "LEFTB", "LEN", "LENB", "LET", "LINEST",
     "LN", "LOG", "LOG10", "LOGEST", "LOGINV", "LOGNORM.DIST", "LOGNORM.INV", "LOGNORMDIST",
-    "LOOKUP", "LOWER", "M", "MAKEARRAY", "MAP", "MATCH", "MAX", "MAXA", "MAXIFS", "MD", "MDETERM",
+    "LOOKUP", "LOWER", "MAKEARRAY", "MAP", "MATCH", "MAX", "MAXA", "MAXIFS", "MDETERM",
     "MDURATION", "MEDIAN", "MID", "MIDB", "MIN", "MINA", "MINIFS", "MINUTE", "MINVERSE", "MIRR",
     "MMULT", "MOD", "MODE", "MODE.MULT", "MODE.SNGL", "MONTH", "MROUND", "MULTINOMIAL", "MUNIT",
     "N", "NA", "NEGBINOM.DIST", "NEGBINOMDIST", "NETWORKDAYS", "NETWORKDAYS.INTL", "NOMINAL",
@@ -735,7 +735,7 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "UNICHAR", "UNICODE", "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S",
     "VARA", "VARP", "VARPA", "VDB", "VLOOKUP", "VSTACK", "WEEKDAY", "WEEKNUM", "WEIBULL",
     "WEIBULL.DIST", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XIRR", "XLOOKUP", "XMATCH",
-    "XNPV", "XOR", "Y", "YD", "YEAR", "YEARFRAC", "YIELD", "YIELDDISC", "YIELDMAT", "YM", "Z.TEST",
+    "XNPV", "XOR", "YEAR", "YEARFRAC", "YIELD", "YIELDDISC", "YIELDMAT", "Z.TEST",
     "ZTEST",
 ];
 
@@ -6704,27 +6704,19 @@ mod tests {
         assert_eq!((block.width, block.height, block.cells), (1, 2, vec![Value::Number(1.), Value::Number(1.)]));
     }
 
-    /// Every quoted name a match arm of this file answers to is in
-    /// KNOWN_FUNCTIONS, which is kept sorted for its binary search.
+    /// Argument keywords must not turn into builtin functions. Scanning all
+    /// string match arms also picked up DATEDIF's six unit names.
     #[test]
-    fn every_function_the_library_answers_is_known() {
+    fn function_catalog_excludes_argument_keywords() {
         let mut sorted = KNOWN_FUNCTIONS.to_vec();
         sorted.sort_unstable();
         assert_eq!(sorted, KNOWN_FUNCTIONS, "KNOWN_FUNCTIONS must stay sorted");
-        let source = include_str!("functions.rs");
-        for line in source.lines() {
-            let trimmed = line.trim_start().trim_start_matches('|').trim_start();
-            if !trimmed.starts_with('"') || !(trimmed.trim_end().ends_with("=>") || trimmed.trim_end().ends_with('|') || trimmed.contains("\" =>") || trimmed.contains("\" |")) {
-                continue;
-            }
-            for piece in trimmed.split('"').skip(1).step_by(2) {
-                let is_name = piece.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
-                    && piece.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '.' || ch == '_');
-                if is_name {
-                    assert!(is_known_function(piece), "{piece} is answered but not in KNOWN_FUNCTIONS");
-                }
-            }
+        for unit in ["D", "M", "MD", "Y", "YD", "YM"] {
+            assert!(!is_known_function(unit));
+            assert_eq!(call_arg(unit, &[]).scalar(), Value::Error(ExcelError::Name));
+            assert!(matches!(call("DATEDIF", &[v(1.), v(400.), Arg::Value(Value::text(unit))]), Value::Number(_)), "{unit}");
         }
+        for name in ["DATEDIF", "DATE", "DAY", "MONTH", "YEAR"] { assert!(is_known_function(name)); }
     }
 
     /// No function falls over when it is given too few arguments, which a

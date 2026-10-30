@@ -12208,6 +12208,37 @@ mod tests {
             let hex: String = saved.iter().map(|byte| format!("{byte:02x}")).collect();
             println!("OXI_DYNAMIC_XLSX_HEX:{hex}");
         }
+        // Excel distinguishes Formula from Formula2 even when both getters
+        // display SUM(SEQUENCE(3)+1). Array evaluation must survive saving
+        // the scalar result, not just a visibly spilling range.
+        for (formula, modern, saved_array) in [
+            ("SUM(SEQUENCE(3)+1)", true, true),
+            ("SUM(SEQUENCE(3)+1)", false, false),
+            ("SUM({1;2;3}+1)", true, true),
+            ("SUM({1;2;3}+1)", false, false),
+            ("SUMPRODUCT(A1:A3*B1:B3)", true, true),
+            ("SUMPRODUCT(A1:A3*B1:B3)", false, false),
+            ("SUM(SEQUENCE(3))", true, false),
+            ("SUM(@SEQUENCE(3)+1)", true, false),
+            ("HSTACK(A1)", true, true),
+            ("@HSTACK(A1)", false, false),
+            ("@(SEQUENCE(3)+1)", true, true),
+        ] {
+            let mut book = parse_xlsx(&data).unwrap();
+            let sheet = &mut book.sheets[0];
+            sheet.cached_spills = Some(vec![]);
+            let cell = sheet.rows.iter_mut().find(|row| row.index == 2).unwrap().cells.iter_mut().find(|cell| cell.col == 3).unwrap();
+            cell.formula = Some(formula.into());cell.formula_utf16 = None;cell.array_block = None;
+            cell.spill = if modern { crate::ir::Spill::Dynamic } else { crate::ir::Spill::None };
+            cell.value = crate::ir::CellValue::Number(9.);
+            let mut editor = XlsxEditor::new(&data).unwrap();editor.apply_workbook(&book).unwrap();
+            let saved = editor.save().unwrap();
+            let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+            let cell = reopened.sheets[0].rows.iter().find(|row| row.index == 2).unwrap().cells.iter().find(|cell| cell.col == 3).unwrap();
+            assert_eq!(cell.spill == crate::ir::Spill::Dynamic, saved_array, "{formula} modern={modern}");
+            assert!(cell.array_block.is_none());
+            assert!(matches!(cell.value, crate::ir::CellValue::Number(9.)));
+        }
     }
 
     #[test]
