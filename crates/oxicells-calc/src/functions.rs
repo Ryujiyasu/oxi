@@ -1410,6 +1410,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 ExcelError::Num => 6.0,
                 ExcelError::NA => 7.0,
                 ExcelError::Spill => 9.0,
+                ExcelError::Connect => 10.0,
+                ExcelError::Blocked => 11.0,
+                ExcelError::Unknown => 12.0,
+                ExcelError::Field => 13.0,
                 ExcelError::Calc => 14.0,
             })),
             _ => Err(ExcelError::NA),
@@ -6682,6 +6686,16 @@ impl Criteria {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_type_identifies_modern_cell_errors() {
+        for (error, expected) in [(ExcelError::Spill, 9.), (ExcelError::Connect, 10.),
+            (ExcelError::Blocked, 11.), (ExcelError::Unknown, 12.),
+            (ExcelError::Field, 13.), (ExcelError::Calc, 14.)] {
+            assert_eq!(call_arg("ERROR.TYPE", &[Arg::Value(Value::Error(error))]).scalar(),
+                Value::Number(expected), "{error}");
+        }
+    }
 
     #[test]
     fn sequence_dimensions_distinguish_empty_arrays_defaults_and_invalid_counts() {

@@ -12,7 +12,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-/// The seven Excel error values.
+/// Spreadsheet error values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExcelError {
     /// `#NULL!` — intersection of two ranges that do not intersect.
@@ -31,6 +31,14 @@ pub enum ExcelError {
     NA,
     /// `#SPILL!` — a dynamic array's answer has nowhere to spill.
     Spill,
+    /// `#CONNECT!`
+    Connect,
+    /// `#BLOCKED!`
+    Blocked,
+    /// `#UNKNOWN!`
+    Unknown,
+    /// `#FIELD!`
+    Field,
     /// `#CALC!` — a LAMBDA left uncalled, among other things.
     Calc,
 }
@@ -46,6 +54,10 @@ impl ExcelError {
             ExcelError::Num => "#NUM!",
             ExcelError::NA => "#N/A",
             ExcelError::Spill => "#SPILL!",
+            ExcelError::Connect => "#CONNECT!",
+            ExcelError::Blocked => "#BLOCKED!",
+            ExcelError::Unknown => "#UNKNOWN!",
+            ExcelError::Field => "#FIELD!",
             ExcelError::Calc => "#CALC!",
         }
     }

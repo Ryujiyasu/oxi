@@ -5476,6 +5476,9 @@ impl<'a> WorkbookHost<'a> {
         if args.is_empty() && DRESS.iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
             return self.get_from_every_block(handle, None, name);
         }
+        if args.is_empty() && name.eq_ignore_ascii_case("hasarray") {
+            return self.range_has_array(&areas).map(Some);
+        }
         // Where it sits and what it leads to is the first block's: measured,
         // ColumnWidth, RowHeight, Width and Top of D4:E5,A1:B2 are D4:E5's,
         // and of A1:B2,D4:E5 A1:B2's (Width 108, Height 37.5).
@@ -15218,18 +15221,17 @@ impl<'a> WorkbookHost<'a> {
             answer = self.evaluate_object_inner(sheet, args);
         }
         oxicells_calc::set_user_function_hook(None);
-        // Evaluate hands back #CALC! as #VALUE!, where a cell holding it says
-        // 2050: measured, CLng(Evaluate("FILTER(B1:B3,B1:B3>100)")) and
-        // CLng(Evaluate("LAMBDA(x,x)")) are 2015.
-        fn calc_as_value(value: &mut Value) {
+        // Scalar Evaluate results expose modern errors as #VALUE!. Range
+        // results keep their cell errors when their default member is read.
+        fn evaluate_error(value: &mut Value) {
             match value {
-                Value::Error(2050) => *value = Value::Error(2015),
-                Value::Array(array) => array.values.iter_mut().for_each(calc_as_value),
+                Value::Error(2045..=2050) => *value = Value::Error(2015),
+                Value::Array(array) => array.values.iter_mut().for_each(evaluate_error),
                 _ => {}
             }
         }
         answer.map(|mut value| {
-            calc_as_value(&mut value);
+            evaluate_error(&mut value);
             value
         })
     }
@@ -17418,6 +17420,38 @@ impl<'a> WorkbookHost<'a> {
     fn range_has_formula(&self, range: CellRange) -> Result<Value, String> {
         let (formulas, total) = self.range_formula_counts(range)?;
         Ok(Self::range_presence(formulas, total))
+    }
+
+    fn range_has_array(&self, areas: &[CellRange]) -> Result<Value, String> {
+        let Some(first) = areas.first() else { return Ok(Value::Boolean(false)); };
+        for area in areas {
+            Self::range_cell_count_large(*area)?;
+            if area.sheet != first.sheet { return Err(host_error(1004, "Application-defined or object-defined error")); }
+        }
+        if areas.len() == 1 && first.start_row == first.end_row && first.start_column == first.end_column {
+            return Ok(Value::Boolean(self.array_of(first.first()).is_some()));
+        }
+        let used = self.presence_used_range(first.sheet)?;
+        let intersects = |area: &CellRange| area.start_row <= used.end_row && area.end_row >= used.start_row
+            && area.start_column <= used.end_column && area.end_column >= used.start_column;
+        if !intersects(first) { return Ok(Value::Boolean(false)); }
+        let blocks: BTreeSet<_> = self.workbook.sheets[first.sheet].rows.iter().flat_map(|row| &row.cells)
+            .filter_map(|cell| cell.array_block).collect();
+        let mut covered = 0u64;
+        let mut total = 0u64;
+        for area in areas.iter().filter(|area| intersects(area)) {
+            // Leading blank cells participate; the trailing edge stops at
+            // the used extent. Preserve pending bounds until UsedRange is read.
+            let right = area.end_column.min(used.end_column);
+            let bottom = area.end_row.min(used.end_row);
+            total += u64::from(right - area.start_column + 1) * u64::from(bottom - area.start_row + 1);
+            for &(top, left, end_row, end_column) in &blocks {
+                let x0 = area.start_column.max(left);let x1 = right.min(end_column);
+                let y0 = area.start_row.max(top);let y1 = bottom.min(end_row);
+                if x0 <= x1 && y0 <= y1 { covered += u64::from(x1 - x0 + 1) * u64::from(y1 - y0 + 1); }
+            }
+        }
+        Ok(Self::range_presence(covered, total))
     }
 
     fn range_has_spill(&self, range: CellRange) -> Result<Value, String> {
@@ -28464,9 +28498,7 @@ impl Host for WorkbookHost<'_> {
             )));
         }
         if name.eq_ignore_ascii_case("hasarray") {
-            // Measured: C1:D2, with only C1:C2 an array, answers True -- a
-            // Boolean for its first cell, not Null for the disagreement.
-            return Ok(Some(Value::Boolean(self.array_of(range.first()).is_some())));
+            return self.range_has_array(std::slice::from_ref(&range)).map(Some);
         }
         if name.eq_ignore_ascii_case("formulaarray") {
             return self.range_formula_array(range).map(Some);
@@ -44168,6 +44200,99 @@ mod tests {
     }
 
     #[test]
+    fn legacy_array_presence_matches_excel_bounds_and_area_order() {
+        let module = parse_module(r#"Public Sub SeedMixed(ByVal mode As Long)
+            Range("D2").Formula2="=SEQUENCE(3)"
+            Range("E2").Formula2="=SUM(SEQUENCE(3)+1)"
+            Range("F2").Formula="=SUM(SEQUENCE(3)+1)"
+            Range("G2:G4").FormulaArray="=ROW(A1:A3)"
+            Range("H2").Value2=9:Range("I2").Formula2="=SEQUENCE(1)":Range("J2").Formula2="=1"
+            If mode=1 Then Range("A1").Value2=1
+            If mode=2 Then Range("D8").Value2=9
+            If mode=3 Then Range("D8").Font.Bold=True
+        End Sub
+        Public Sub SeedLegacy(ByVal mode As Long)
+            Range("C3:C4").FormulaArray="=ROW(A1:A2)"
+            If mode=1 Then Range("A1").Value2=1
+            If mode=2 Then Range("D8").Font.Bold=True
+            If mode=3 Then Range("K8").Value2=0
+        End Sub
+        Public Sub SeedClearing()
+            Range("C3:C4").FormulaArray="=ROW(A1:A2)"
+            Range("A1").Value2=1:Range("K8").Value2=1
+        End Sub
+        Public Sub ClearStep(ByVal phase As Long, ByVal all As Boolean)
+            If phase=1 Then
+                If all Then
+                    Range("K8").Clear
+                Else
+                    Range("K8").ClearContents
+                End If
+            ElseIf phase=2 Then
+                If all Then
+                    Range("A1").Clear
+                Else
+                    Range("A1").ClearContents
+                End If
+            ElseIf phase=3 Then
+                Dim observed As Object
+                Set observed=ActiveSheet.UsedRange
+            End If
+        End Sub
+        Public Function ReadArrayFlag(ByVal address As String) As Variant
+            ReadArrayFlag=Range(address).HasArray
+        End Function"#).unwrap();
+        let expected_flag = |flag| if flag == 2 { Value::Null } else { Value::Boolean(flag == 1) };
+        let mut failures = Vec::new();
+        let mut checked = 0;
+        let mixed_addresses = ["G2","G3","G2:G4","G1:G4","G2:G5","G1:G5","G:G","F2:G2","G2:H2","F2:H2","F1:H5","D2:J2","A:A","K2","G2,K2","K2,G2","G2,G3","G2:G3,G4","F2,G2:H2","G2:H2,F2","F2:H2,G3","G3,F2:H2","G1:G4,K2","K2,G1:G4"];
+        let mixed_expected = [
+            [1,1,1,2,1,2,2,2,2,2,2,2,0,0,1,0,1,1,2,2,2,2,2,0],
+            [1,1,1,2,1,2,2,2,2,2,2,2,0,0,1,0,1,1,2,2,2,2,2,0],
+            [1,1,1,2,2,2,2,2,2,2,2,2,0,0,1,0,1,1,2,2,2,2,2,0],
+            [1,1,1,2,2,2,2,2,2,2,2,2,0,0,1,0,1,1,2,2,2,2,2,0]
+        ];
+        let legacy_addresses = ["C3","C3:C4","C1:C4","C2:C4","C3:C5","C3:D4","B3:C4","B3:D4","C:C","C3,E3","E3,C3","B3,E3,C3","B3,C3,E3","C3,E3,B3","E3,B3:C4","B3,E8,C3","C3:C4,E3:E4","C3:C4,C8","C8,C3:C4","B3,B4,C3:C4","C3:C4,B3:B4","C1:C2,C3:C4"];
+        let legacy_expected = [
+            [1,1,2,2,1,1,2,2,2,1,0,0,0,1,0,0,1,1,0,0,1,0],
+            [1,1,2,2,1,1,2,2,2,1,0,2,2,2,0,2,1,1,0,2,2,2],
+            [1,1,2,2,2,2,2,2,2,1,0,0,0,1,0,0,1,2,2,0,1,0],
+            [1,1,2,2,2,2,2,2,2,2,2,0,0,2,2,0,2,2,2,0,1,0]
+        ];
+        for (procedure, addresses, expected) in [("SeedMixed", mixed_addresses.as_slice(), mixed_expected.iter().map(|row|row.as_slice()).collect::<Vec<_>>()),
+            ("SeedLegacy", legacy_addresses.as_slice(), legacy_expected.iter().map(|row|row.as_slice()).collect::<Vec<_>>())] {
+            for (mode, flags) in expected.iter().enumerate() {
+                let mut book=workbook();let mut host=WorkbookHost::new(&mut book,0).unwrap();
+                execute_with_host(&module,procedure,vec![Value::Integer(mode as i64)],&mut host).unwrap();
+                for (address, flag) in addresses.iter().zip(flags.iter()) {
+                    let actual=execute_with_host(&module,"ReadArrayFlag",vec![Value::String((*address).into())],&mut host).unwrap();
+                    let expected=expected_flag(*flag);checked+=1;
+                    if actual!=expected { failures.push(format!("{procedure} mode={mode} {address}: {actual:?} != {expected:?}")); }
+                }
+            }
+        }
+        let clear_addresses = ["C3:D4","B3,C3","C1:C4","C3,C8","C8,C3","B3:C4","C3:C8"];
+        let clear_expected = [
+            [[2,2,2,2,2,2,2],[2,2,2,2,2,2,2],[2,2,2,2,2,2,2],[1,0,2,1,0,2,1]],
+            [[2,2,2,2,2,2,2],[2,2,2,2,2,2,2],[2,2,2,2,2,2,2],[1,0,2,1,0,2,1]]
+        ];
+        for (mode, stages) in clear_expected.iter().enumerate() {
+            let mut book=workbook();let mut host=WorkbookHost::new(&mut book,0).unwrap();
+            execute_with_host(&module,"SeedClearing",vec![],&mut host).unwrap();
+            for (phase, flags) in stages.iter().enumerate() {
+                if phase>0 { execute_with_host(&module,"ClearStep",vec![Value::Integer(phase as i64),Value::Boolean(mode==1)],&mut host).unwrap(); }
+                for (address, flag) in clear_addresses.iter().zip(flags) {
+                    let actual=execute_with_host(&module,"ReadArrayFlag",vec![Value::String((*address).into())],&mut host).unwrap();
+                    let expected=expected_flag(*flag);checked+=1;
+                    if actual!=expected { failures.push(format!("clear={mode} phase={phase} {address}: {actual:?} != {expected:?}")); }
+                }
+            }
+        }
+        assert_eq!(checked,240);
+        assert!(failures.is_empty(),"{}",failures.into_iter().take(40).collect::<Vec<_>>().join("\n"));
+    }
+
+    #[test]
     fn named_formula_modes_and_saved_array_getters_survive_save() {
         let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         let invalid = parse_module(r#"Public Function ValidateName(ByVal operation As Long, ByVal formula As String) As String
@@ -45493,6 +45618,79 @@ mod tests {
             result,
             Value::String("2|2|30|3|A1|True|True|big".to_string())
         );
+    }
+
+    #[test]
+    fn modern_errors_distinguish_cell_values_from_evaluate_results() {
+        let module = parse_module(r#"Public Sub Seed()
+            Dim row As Long
+            For row=1 To 6
+                Range("Z" & row).Value2=CVErr(2044+row)
+            Next row
+        End Sub
+        Public Function CellAnswer(ByVal expression As String) As Variant
+            Range("B1").Formula2=expression
+            CellAnswer=Range("B1").Value2
+        End Function
+        Public Function Ask(ByVal expression As String, ByVal worksheet As Boolean) As Variant
+            If worksheet Then
+                Ask=ActiveSheet.Evaluate(expression)
+            Else
+                Ask=Application.Evaluate(expression)
+            End If
+        End Function"#).unwrap();
+        let mut book = workbook();
+        let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+        execute_with_host(&module, "Seed", vec![], &mut host).unwrap();
+        let mut checked = 0;
+        for row in 1..=6 {
+            let address = format!("Z{row}");
+            let error = Value::Error(2044 + row);
+            for (expression, expected) in [(address.clone(), error.clone()),
+                (format!("{address}+1"), error.clone()), (format!("SUM({address})"), error.clone()),
+                (format!("IFERROR({address},99)"), Value::Double(99.)),
+                (format!("ISERROR({address})"), Value::Boolean(true)),
+                (format!("ERROR.TYPE({address})"), Value::Double((row + 8) as f64)),
+                (format!("{address}={address}"), error.clone())] {
+                let actual = execute_with_host(&module, "CellAnswer",
+                    vec![Value::String(format!("={expression}"))], &mut host).unwrap();
+                assert_eq!(actual, expected, "cell {expression}");
+                checked += 1;
+            }
+            for worksheet in [false, true] {
+                for (expression, expected) in [(address.clone(), error.clone()),
+                    (format!("{address}+1"), Value::Error(2015)),
+                    (format!("SUM({address})"), Value::Error(2015)),
+                    (format!("ERROR.TYPE({address})"), Value::Double((row + 8) as f64)),
+                    (format!("IFERROR({address},99)"), Value::Double(99.)),
+                    (format!("ISERROR({address})"), Value::Boolean(true))] {
+                    let actual = execute_with_host(&module, "Ask", vec![Value::String(expression.clone()),
+                        Value::Boolean(worksheet)], &mut host).unwrap();
+                    assert_eq!(actual, expected, "worksheet={worksheet} {expression}");
+                    checked += 1;
+                }
+                for (expression, array, expected) in [(format!("IF(TRUE,{address},0)"), false, error.clone()),
+                    (format!("INDEX(Z1:Z6,{row},1)"), false, error.clone()),
+                    (format!("TRANSPOSE({address})"), false, Value::Error(2015)),
+                    (format!("CHOOSE({{1,2}},{address},{address})"), true, Value::Error(2015)),
+                    (format!("IF({{TRUE,FALSE}},{address},{address})"), true, Value::Error(2015)),
+                    (format!("{address}*{{1,2}}"), true, Value::Error(2015))] {
+                    let actual = execute_with_host(&module, "Ask", vec![Value::String(expression.clone()),
+                        Value::Boolean(worksheet)], &mut host).unwrap();
+                    if array {
+                        let Value::Array(answer) = actual else { panic!("expected an array: worksheet={worksheet} {expression}: {actual:?}"); };
+                        assert_eq!(answer.values, vec![expected.clone(), expected], "worksheet={worksheet} {expression}");
+                        assert_eq!(answer.dimensions.len(), 1);
+                        assert_eq!(answer.dimensions[0].lower_bound, 1);
+                        assert_eq!(answer.dimensions[0].length, 2);
+                    } else {
+                        assert_eq!(actual, expected, "worksheet={worksheet} {expression}");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 186);
     }
 
     /// Measured in Excel 16.0 on a book of three sheets: `Type` is -4167 for

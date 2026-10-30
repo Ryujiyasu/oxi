@@ -710,6 +710,10 @@ fn parse_error_text(s: &str) -> ExcelError {
         "#NUM!" => ExcelError::Num,
         "#N/A" => ExcelError::NA,
         "#SPILL!" => ExcelError::Spill,
+        "#CONNECT!" => ExcelError::Connect,
+        "#BLOCKED!" => ExcelError::Blocked,
+        "#UNKNOWN!" => ExcelError::Unknown,
+        "#FIELD!" => ExcelError::Field,
         "#CALC!" => ExcelError::Calc,
         _ => ExcelError::Value,
     }
@@ -719,6 +723,43 @@ fn parse_error_text(s: &str) -> ExcelError {
 mod tests {
     use super::*;
     use crate::ir::{Cell, CellStyle, Row, Sheet};
+
+    #[test]
+    fn modern_cell_errors_survive_formula_calculation() {
+        let errors = ["#SPILL!", "#CONNECT!", "#BLOCKED!", "#UNKNOWN!", "#FIELD!", "#CALC!"];
+        let mut data = Vec::new();
+        for (row, error) in errors.iter().enumerate() {
+            let address = format!("Z{}", row + 1);
+            data.push((row as u32, 25, CellValue::Error((*error).into()), None));
+            for (column, expression) in [address.clone(), format!("{address}+1"),
+                format!("SUM({address})"), format!("IFERROR({address},99)"),
+                format!("ISERROR({address})"), format!("ERROR.TYPE({address})"),
+                format!("{address}={address}")].into_iter().enumerate() {
+                data.push((row as u32, column as u32, CellValue::Empty, Some(expression)));
+            }
+        }
+        let mut sheet = make_sheet(data);
+        sheet.col_count = 26;
+        let mut book = Workbook { sheets: vec![sheet], ..Default::default() };
+        evaluate_workbook_formulas(&mut book);
+        let mut checked = 0;
+        for (row, error) in errors.iter().enumerate() {
+            let cells = &book.sheets[0].rows.iter().find(|held| held.index == row as u32 + 1).unwrap().cells;
+            for column in 0..7 {
+                let actual = &cells.iter().find(|held| held.col == column).unwrap().value;
+                let matches = match (column, actual) {
+                    (3, CellValue::Number(value)) => *value == 99.,
+                    (4, CellValue::Boolean(value)) => *value,
+                    (5, CellValue::Number(value)) => *value == (row + 9) as f64,
+                    (0..=2 | 6, CellValue::Error(value)) => value == error,
+                    _ => false,
+                };
+                assert!(matches, "row={} column={column}: {actual:?}", row + 1);
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 42);
+    }
 
     #[test]
     fn adjacent_dynamic_spills_keep_ownership_in_partial_calculation() {
