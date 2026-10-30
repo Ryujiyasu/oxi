@@ -7759,8 +7759,11 @@ impl LayoutEngine {
         for (ei, e) in elements.iter().enumerate() {
             let y = e.y - e.flow_line_offset;
             if y < top - 0.1 { continue; }
+            // OXI_FORMCHECKBOX: an inline check-box square rides its text line
+            let inline_box = matches!(e.content, LayoutContent::BoxRect { .. })
+                && e.paragraph_index.is_some() && e.flow_line_offset > 0.0;
             if e.paragraph_index.is_none() || e.cell_paragraph_index.is_some()
-                || !matches!(e.content, LayoutContent::Text { .. }) {
+                || !(matches!(e.content, LayoutContent::Text { .. }) || inline_box) {
                 if prefix_table && first_body.is_finite()
                     && (e.cell_paragraph_index.is_some() || matches!(e.content, LayoutContent::TableBorder { .. }))
                     && e.y + e.height <= first_body + 0.1 {

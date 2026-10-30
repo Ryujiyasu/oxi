@@ -748,6 +748,10 @@ pub struct RunStyle {
     /// by corpus scan; JP has 0 → byte-identical).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hr_rule: Option<(f32, String)>,
+    /// A legacy FORMCHECKBOX field (Some(checked)), drawn as a stroked square on
+    /// the run's U+FFFC object fragment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_checkbox: Option<bool>,
     /// S1252: a STRUCTURED inline `<m:oMath>` that flows in its host line.
     /// Carried on the same run whose `inline_object_extent` reserves the
     /// maths box (advance × ascent+descent); the emit draws the expression
@@ -844,6 +848,7 @@ impl Default for RunStyle {
             inline_object_extent: None,
             inline_object_image: None,
             hr_rule: None,
+            form_checkbox: None,
             inline_math: None,
             styleref: None,
             styleref_cont: false,

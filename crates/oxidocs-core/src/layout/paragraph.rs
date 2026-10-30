@@ -8273,6 +8273,43 @@ impl<'a> ParagraphLayouter<'a> {
                 // S773 fired, baseline = line_top + cy_max — else the normal
                 // S614 convention baseline from the line's first text frag).
                 if frag.text == "\u{FFFC}" && frag.style.inline_object_extent.is_some() {
+                    // OXI_FORMCHECKBOX (2026-10-30): `_pb_formcheckbox_gen.py` (Word PDF,
+                    // sizeAuto, 7.5 / 10 / 14 / 24pt): a 0.72pt stroked square of side
+                    // 1.15 fs - 2.28, its left edge 1pt after the preceding text, its
+                    // bottom at the baseline + 0.218 fs - 1.16. technical__019d92d9 has
+                    // 75 of them; Oxi drew nothing.
+                    if frag.style.form_checkbox.is_some() {
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        let baseline = if let Some(tf) = line
+                            .fragments
+                            .iter()
+                            .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        {
+                            let tfs = tf.style.font_size.unwrap_or(para_font_size);
+                            let m = &*self.metrics_for_text(&tf.text, &tf.style, &para.style);
+                            emit_y + text_y_off - 1.0 + m.win_ascent * tfs
+                        } else {
+                            let m = &*self.metrics_for_text(" ", &frag.style, &para.style);
+                            emit_y + text_y_off - 1.0 + m.win_ascent * fs
+                        };
+                        let side = (1.15 * fs - 2.28).max(1.0);
+                        let bottom = baseline + 0.218 * fs - 1.16;
+                        let mut e = LayoutElement::new(el_x + 1.0, bottom - side, side, side,
+                            LayoutContent::BoxRect {
+                                fill: None,
+                                stroke_color: Some("#000000".to_string()),
+                                stroke_width: 0.72,
+                                corner_radius: 0.0,
+                            });
+                        if let Some(pi) = body_para_index {
+                            e.paragraph_index = Some(pi);
+                        }
+                        // the line it belongs to (column balancing groups by line top)
+                        e.flow_line_offset = e.y - emit_y;
+                        elements.push(e);
+                        x += adjusted_width + frag_spacing_after[frag_idx];
+                        continue;
+                    }
                     // S852: an inline horizontal rule (o:hr) draws a full-width
                     // gray line centered in its own reserved line.
                     if let Some((thickness, color)) = frag.style.hr_rule.as_ref() {

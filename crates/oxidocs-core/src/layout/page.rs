@@ -3014,7 +3014,12 @@ impl<'a> PageLayouter<'a> {
                             } else {
                                 &mut rows2
                             };
-                            let yk = (e.y * 10.0).round() / 10.0;
+                            // OXI_FORMCHECKBOX: an inline check-box square counts as
+                            // the line it sits on, not as a row of its own
+                            let inline_box = matches!(e.content, LayoutContent::BoxRect { .. })
+                                && e.paragraph_index.is_some() && e.flow_line_offset > 0.0;
+                            let ey = if inline_box { e.y - e.flow_line_offset } else { e.y };
+                            let yk = (ey * 10.0).round() / 10.0;
                             if !dst.iter().any(|v| (v - yk).abs() < 0.5) {
                                 dst.push(yk);
                             }

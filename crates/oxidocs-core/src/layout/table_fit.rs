@@ -4975,6 +4975,11 @@ impl<'a> TableFitLayouter<'a> {
                                         // s982_cell → 0 hits in default (byte-identical).
                                         // S1252: a structured inline oMath run -> a U+F8FD{index}
                                         // atomic fragment of the maths ADVANCE, drawn at step 5.
+                                        // OXI_FORMCHECKBOX: the cell character loop has no object
+                                        // fragment for the square yet; leave it out of cells.
+                                        if run.style.form_checkbox.is_some() {
+                                            continue;
+                                        }
                                         if s982_cell {
                                             if let (Some((ow, _)), Some(mb)) = (
                                                 run.style.inline_object_extent,

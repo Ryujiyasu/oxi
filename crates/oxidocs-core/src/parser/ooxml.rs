@@ -6754,9 +6754,29 @@ fn parse_run(
     let mut comment_references: Vec<String> = Vec::new();
     let mut rpr_change: Option<PropertyChange> = None;
     let mut has_last_rendered_page_break = false;
+    // OXI_FORMCHECKBOX: a legacy check-box form field's begin run (w:ffData/w:checkBox).
+    let mut form_checkbox: Option<bool> = None;
+    let form_checkbox_on = std::env::var_os("OXI_FORMCHECKBOX_DISABLE").is_none();
 
     loop {
-        match reader.read_event()? {
+        let ev = reader.read_event()?;
+        if form_checkbox_on {
+            if let Event::Start(ref e) | Event::Empty(ref e) = ev {
+                let l = local_name(e.name().as_ref());
+                let val_on = || e.attributes().flatten()
+                    .find(|a| local_name(a.key.as_ref()) == "val")
+                    .map_or(true, |a| matches!(a.value.as_ref(), b"1" | b"true" | b"on"));
+                match l.as_str() {
+                    "checkBox" => form_checkbox = Some(form_checkbox.unwrap_or(false)),
+                    "default" | "checked" if form_checkbox.is_some() => {
+                        if val_on() { form_checkbox = Some(true); }
+                        else if l == "checked" { form_checkbox = Some(false); }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match ev {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "fldChar" && depth == 0 { ctx.field_control(&e, &mut text); }
@@ -7322,6 +7342,14 @@ fn parse_run(
     }
 
     if custom_note_reference { field_type = Some(FieldType::CustomNoteReference); }
+    // OXI_FORMCHECKBOX (2026-10-30, default ON, opt-out _DISABLE): Word draws a
+    // FORMCHECKBOX (no result) as a stroked square; the field's begin run carries
+    // it as a width-bearing object (sized and drawn by the layout).
+    if let Some(checked) = form_checkbox {
+        text.push('\u{FFFC}');
+        style.inline_object_extent = Some((0.0, 0.0));
+        style.form_checkbox = Some(checked);
+    }
     let run = Run {
             text,
             style,

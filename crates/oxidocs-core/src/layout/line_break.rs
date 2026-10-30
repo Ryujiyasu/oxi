@@ -2036,6 +2036,11 @@ impl<'a> LineBreaker<'a> {
             // (wpg = hmrc/framework only by corpus scan; framework's groups
             // are text-bearing → never marked → byte-identical elsewhere).
             if let Some((ow, _oh)) = style.inline_object_extent {
+                // OXI_FORMCHECKBOX: the square (1.15 fs - 2.28) plus 1pt each side
+                let ow = if style.form_checkbox.is_some() {
+                    let fs = self.resolve_font_size(style, para_style);
+                    (1.15 * fs - 2.28).max(1.0) + 2.0
+                } else { ow };
                 if std::env::var("OXI_S839_DISABLE").is_err() {
                     flush_word!(style);
                     // S852: a horizontal rule (o:hr) occupies its OWN line —
