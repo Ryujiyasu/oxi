@@ -1407,6 +1407,18 @@ impl FontMetricsRegistry {
             serde_json::from_str(kern_json).unwrap_or_default()
         };
 
+        // OXI_MEIRYO_KERN (2026-10-30, default ON, opt-out _DISABLE): Meiryo's GPOS
+        // kern pairs (`tools/metrics/_gen_meiryo_kern_pairs.py`). ja/reports__1dde6f31
+        // «WHOQOL-BREF» (Meiryo Italic 11, w:kern 2): Word advances L 5.30 before the
+        // hyphen = hmtx 6.13 + the L,hyphen pair -160/2048 em; without it the word
+        // measured 83.4 in an 83.06pt cell and broke after the hyphen.
+        if std::env::var_os("OXI_MEIRYO_KERN_DISABLE").is_none() {
+            let meiryo_pairs: HashMap<String, HashMap<String, i32>> =
+                serde_json::from_str(include_str!("data/meiryo_kern_pairs.json"))
+                    .expect("valid bundled Meiryo kerning metrics");
+            latin_kern.extend(meiryo_pairs);
+        }
+
         if std::env::var_os("OXI_YU_GOTHIC_KERN").is_some() {
             // GPOS kern-feature advances, in the same 2048-unit coordinates
             // as the corresponding font metrics. Used by layout and painting.

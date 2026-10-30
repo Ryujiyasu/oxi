@@ -20129,7 +20129,7 @@ cells={} pitch={:.2} text={:?}",
                         // render or the row height diverges (the S716/S751
                         // three-pass lesson).
                         && std::env::var("OXI_S1017_DISABLE").is_err()
-                        && !self.doc_body_has_real_cjk
+                        && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_CJK_CELL_KERN_DISABLE").is_none())
                         && !kinsoku::is_cjk(ch)
                         && cell_has_em_advance(cm, ch)
                     {

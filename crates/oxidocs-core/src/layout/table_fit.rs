@@ -5489,7 +5489,12 @@ impl<'a> TableFitLayouter<'a> {
                                         // lines → +13.799pt → +1. The estimate
                                         // mirror (count_cell_lines) MUST match.
                                         && std::env::var("OXI_S1017_DISABLE").is_err()
-                                        && !self.doc_body_has_real_cjk
+                                        // OXI_CJK_CELL_KERN (2026-10-30, default ON, opt-out
+                                        // _DISABLE): a Japanese document's kern-active Latin
+                                        // breaks at em + kern in cells too. ja/reports__1dde6f31
+                                        // «WHOQOL-BREF» (Meiryo Italic 11, kern 2): Word kerns
+                                        // L,hyphen -0.86 and keeps the word (82.5 in 83.06).
+                                        && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_CJK_CELL_KERN_DISABLE").is_none())
                                         && !kinsoku::is_cjk(ch)
                                         && cell_has_em_advance(cm, ch)
                                                 {
@@ -9668,7 +9673,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 && latinem_in_scope(self.doc_body_has_real_cjk);
                                             let grid_kern = std::env::var("OXI_S869_DISABLE").is_err()
                                                 && grid_kern_active && std::env::var("OXI_S1017_DISABLE").is_err()
-                                                && !self.doc_body_has_real_cjk;
+                                                && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_CJK_CELL_KERN_DISABLE").is_none());
                                             let ascell_split: Option<Vec<(String, f32, f32)>> =
                                                 if std::env::var("OXI_ASCELL_DISABLE").is_err() {
                                                     let fm = if single_byte_grid.is_some() {
